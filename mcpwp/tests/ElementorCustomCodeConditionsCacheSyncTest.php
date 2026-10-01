@@ -112,6 +112,59 @@ final class ElementorCustomCodeConditionsCacheSyncTest extends TestCase {
 	}
 
 	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_create_refuses_when_pro_cannot_load_the_new_document_for_conditions(): void {
+		$this->install_elementor_pro_doubles();
+		add_action( 'wp_insert_post', static function ( $post_id, $post ) {
+			if ( 'elementor_snippet' === $post->post_type ) {
+				$GLOBALS['mcpwp_theme_test_no_document_ids'][] = $post_id;
+			}
+		}, 1, 2 );
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+
+		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'No Pro document', 'code' => '<div>example</div>', 'status' => 'publish', 'conditions' => array( array( 'type' => 'include', 'name' => 'general' ) ) ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_create_refuses_when_pro_conditions_cache_cannot_save(): void {
+		$this->install_elementor_pro_doubles();
+		$GLOBALS['mcpwp_theme_test_cache_save_throws'] = true;
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+
+		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'No cache', 'code' => '<div>example</div>', 'status' => 'publish', 'conditions' => array( array( 'type' => 'include', 'name' => 'general' ) ) ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_create_refuses_when_the_cache_reports_a_value_the_database_lacks(): void {
+		$this->install_elementor_pro_doubles();
+		$GLOBALS['mcpwp_test_option_store_after_hook'] = static function ( $name ) {
+			if ( 'elementor_pro_theme_builder_conditions' === $name ) {
+				$GLOBALS['mcpwp_test_wpdb_options'][ $name ] = maybe_serialize( array() );
+			}
+		};
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+
+		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'False cache', 'code' => '<div>example</div>', 'status' => 'publish', 'conditions' => array( array( 'type' => 'include', 'name' => 'general' ) ) ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	/**
 	 * W1's exact shape: a snippet whose cache entry is missing (as it would
 	 * be for any pre-fix data, or any path that ever skipped the
 	 * chokepoint), enabled — the /enable route alone must add it.

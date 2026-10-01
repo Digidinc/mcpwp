@@ -1630,6 +1630,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				array( 'status' => 500, 'sections_submitted' => $input_count, 'sections_after_validation' => $post_validation_count )
 			);
 		}
+		$approved_json = Mcpwp_Elementor_Meta_Write::apply_policy( $page_id, '_elementor_data', $elementor_json );
 
 		// --- 3. Save via Elementor Document API (preferred) or meta fallback ---
 
@@ -1766,7 +1767,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		$stored_decoded = $stored ? json_decode( $stored, true ) : null;
 		$stored_count   = is_array( $stored_decoded ) ? count( $stored_decoded ) : 0;
-		$save_debug['meta_verified']    = ( $stored_count === $input_count );
+		$save_debug['meta_verified']    = ( $stored === $approved_json );
 		$save_debug['sections_saved']   = $stored_count;
 		if ( $db_error_on_verify ) {
 			$save_debug['db_error_on_verify'] = $db_error_on_verify;
@@ -1789,6 +1790,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 					'db_error'            => $db_error_on_verify,
 				)
 			);
+		}
+		if ( ! $save_debug['meta_verified'] ) {
+			return new WP_Error( 'meta_write_mismatch', __( 'The stored Elementor data does not match the approved write.', 'mcpwp' ), array( 'status' => 500, 'db_error' => $db_error_on_verify ) );
 		}
 
 		// --- 4. Rebuild CSS + HTML rendering cache ---
@@ -2585,6 +2589,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return new WP_Error( 'validation_corrupted', 'Data corrupted during validation.', array( 'status' => 500 ) );
 		}
 		$this->last_saved_elements = $post_val;
+		$approved_json = Mcpwp_Elementor_Meta_Write::apply_policy( $page_id, '_elementor_data', $elementor_json );
 
 		// Save via Elementor Document API (preferred) or meta fallback.
 		$document_saved = false;
@@ -2691,16 +2696,22 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		$debug['meta_written'] = true;
 
-		// Verify.
+		// Verify against the database, not an optimistic object cache.
+		global $wpdb;
+		$stored = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_elementor_data' ORDER BY meta_id DESC LIMIT 1",
+				$page_id
+			)
+		);
 		wp_cache_delete( $page_id, 'post_meta' );
-		// Read back in whatever form is stored (#845): a vetoed write leaves
-		// the array that was already there, and json_decode() on it was a
-		// TypeError.
-		$stored         = get_post_meta( $page_id, '_elementor_data', true );
 		$stored_decoded = Mcpwp_Elementor_Stored_Tree::read( $stored )['elements'];
 		$stored_count   = is_array( $stored_decoded ) ? count( $stored_decoded ) : 0;
 		$debug['sections_saved'] = $stored_count;
-		$debug['meta_verified']  = ( $stored_count === $input_count );
+		$debug['meta_verified']  = ( $stored === $approved_json );
+		if ( ! $debug['meta_verified'] ) {
+			return new WP_Error( 'meta_write_mismatch', __( 'The stored Elementor data does not match the approved write.', 'mcpwp' ), array( 'status' => 500, 'sections_submitted' => $input_count, 'sections_saved' => $stored_count, 'db_error' => $wpdb->last_error ?: null ) );
+		}
 
 		// Rebuild Elementor's CSS + HTML rendering cache.
 		// Always regenerate — Document::save() may have used stale data before

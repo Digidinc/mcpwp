@@ -1994,7 +1994,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		// sanitizer escaped `>` on every API write, so the repair below fired —
 		// and reported storage_repaired — on every write. custom_css is the one
 		// raw path; every other setting follows the caller's policy.
-		$written = Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings, array( 'raw_paths' => array( 'custom_css' ) ) );
+		$written = Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings, array( 'raw_paths' => array( 'custom_css' ), 'defer_readback' => true ) );
 		if ( is_wp_error( $written ) ) {
 			return $written;
 		}
@@ -2049,7 +2049,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		}
 
 		return array(
-			'verified'      => ( null !== $stored && $stored === $css ),
+			'verified'      => ( null !== $stored && $stored === $css && $this->read_kit_settings_from_db( $kit_id ) === $settings ),
 			'repaired'      => $repaired,
 			'altered_chars' => $altered,
 		);
@@ -2107,7 +2107,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Read the Kit's custom_css straight from the postmeta row.
+	 * Read the Kit's complete page settings straight from the postmeta row.
 	 *
 	 * Deliberately bypasses get_post_meta(): a persistent object cache can be
 	 * populated optimistically with the value we asked to write, independent of
@@ -2115,9 +2115,9 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	 * check above agree with itself and prove nothing.
 	 *
 	 * @param int $kit_id Kit post ID.
-	 * @return string|null Stored CSS, or null when the row cannot be read.
+	 * @return array|null Stored settings, or null when the row cannot be read.
 	 */
-	private function read_kit_css_from_db( $kit_id ) {
+	private function read_kit_settings_from_db( $kit_id ) {
 		global $wpdb;
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
@@ -2133,6 +2133,15 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		}
 
 		$settings = maybe_unserialize( $raw );
+		return is_array( $settings ) ? $settings : null;
+	}
+
+	/**
+	 * @param int $kit_id Kit post ID.
+	 * @return string|null Stored CSS, or null when the row cannot be read.
+	 */
+	private function read_kit_css_from_db( $kit_id ) {
+		$settings = $this->read_kit_settings_from_db( $kit_id );
 
 		return is_array( $settings ) && isset( $settings['custom_css'] ) ? (string) $settings['custom_css'] : null;
 	}
@@ -2387,6 +2396,9 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		$write = $this->set_kit_css_raw( $raw['kit_id'], $updated_css );
 		if ( is_wp_error( $write ) ) {
 			return $this->error_response_from_wp_error( $write );
+		}
+		if ( ! $write['verified'] ) {
+			return $this->error_response( 'kit_css_write_unverified', __( 'The Kit CSS did not read back byte-for-byte, so the deletion was not confirmed.', 'mcpwp' ), 500 );
 		}
 
 		return $this->success_response(

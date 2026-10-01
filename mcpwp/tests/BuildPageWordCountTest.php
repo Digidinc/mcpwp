@@ -199,4 +199,44 @@ final class BuildPageWordCountTest extends TestCase {
 		$this->assertArrayHasKey( 'renders_via_elementor', $result, 'the flag-write outcome should pass through too, same as wp_set_elementor' );
 		$this->assertTrue( $result['renders_via_elementor'], 'the builder flag write itself succeeds in this environment' );
 	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_failed_elementor_data_write_leaves_no_built_page(): void {
+		$this->pretend_elementor_is_installed();
+		$status_during_write = null;
+		add_filter( 'add_post_metadata', static function ( $check, $post_id, $key ) use ( &$status_during_write ) {
+			if ( '_elementor_data' === $key ) {
+				$status_during_write = get_post_status( $post_id );
+				return false;
+			}
+			return $check;
+		}, 1, 3 );
+
+		$result = ( new Mcpwp_Page_Builder() )->build( 'Failed build', array( array( 'type' => 'text', 'heading' => 'Heading' ) ), 'publish' );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'draft', $status_during_write, 'The built page must stay private until its tree is verified.' );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'], 'The incomplete page must not remain published or draft.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_publish_hook_replacing_the_tree_with_the_same_count_is_refused(): void {
+		$this->pretend_elementor_is_installed();
+		add_action( 'post_updated', static function ( $post_id, $post ) {
+			if ( 'Mutation build' === $post->post_title && 'publish' === $post->post_status ) {
+				$GLOBALS['_mcpwp_test_meta'][ $post_id ]['_elementor_data'] = '[{"id":"mut0001","elType":"section","settings":{},"elements":[]}]';
+			}
+		}, 10, 2 );
+
+		$result = ( new Mcpwp_Page_Builder() )->build( 'Mutation build', array( array( 'type' => 'text', 'heading' => 'Safe heading' ) ), 'publish' );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+	}
 }

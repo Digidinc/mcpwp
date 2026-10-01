@@ -257,7 +257,10 @@ class Mcpwp_Elementor_Page_Settings {
 
 		// An MCPWP write: unedited settings kept in place, the rest sanitized
 		// for the acting principal (#829).
-		Mcpwp_Elementor_Meta_Write::update( $post_id, self::META_KEY, $settings );
+		$written = Mcpwp_Elementor_Meta_Write::update( $post_id, self::META_KEY, $settings );
+		if ( is_wp_error( $written ) ) {
+			return false;
+		}
 
 		// Read back rather than trusting update_post_meta()'s return, which is
 		// false both when the write failed and when the value was already what

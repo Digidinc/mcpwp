@@ -43,6 +43,7 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 		$GLOBALS['_mcpwp_test_posts']       = array();
 		$GLOBALS['_mcpwp_test_meta']        = array();
 		$GLOBALS['mcpwp_test_current_user'] = 1;
+		unset( $GLOBALS['mcpwp_test_meta_write_fails'] );
 	}
 
 	/**
@@ -154,6 +155,69 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 		$this->assertTrue( $snippet['code_may_be_altered'] );
 	}
 
+	public function test_failed_custom_code_meta_write_is_not_reported_as_created(): void {
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_code' );
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+
+		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'Failed code', 'code' => '<script>missing()</script>', 'status' => 'publish' ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	public function test_custom_code_stays_draft_until_its_code_is_stored(): void {
+		$status_during_write = null;
+		$refuse_code = static function ( $check, $post_id, $key ) use ( &$status_during_write ) {
+			if ( '_elementor_code' === $key ) {
+				$status_during_write = get_post_status( $post_id );
+				return false;
+			}
+			return $check;
+		};
+		add_filter( 'add_post_metadata', $refuse_code, 1, 3 );
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+
+		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'Premature code', 'code' => '<script>missing()</script>', 'status' => 'publish' ) ) );
+		remove_filter( 'add_post_metadata', $refuse_code, 1 );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'draft', $status_during_write );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	public function test_failed_custom_code_meta_write_is_not_reported_as_updated(): void {
+		$this->seed_published_snippet( 1083 );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_code' );
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+
+		$result = $controller->update_custom_code( new WP_REST_Request( 'PUT', '/mcpwp/v1/elementor/custom-code/1083', array( 'id' => 1083, 'code' => '<script>new()</script>' ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( '<script>console.log("original");</script>', get_post_meta( 1083, '_elementor_code', true ) );
+	}
+
+	public function test_failed_custom_code_update_does_not_publish_a_draft(): void {
+		$this->seed_published_snippet( 1084 );
+		$GLOBALS['_mcpwp_test_posts'][1084]->post_status = 'draft';
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_code' );
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+
+		$result = $controller->update_custom_code( new WP_REST_Request( 'PUT', '/mcpwp/v1/elementor/custom-code/1084', array( 'id' => 1084, 'code' => '<script>new()</script>', 'status' => 'publish' ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'draft', get_post_status( 1084 ) );
+	}
+
+	public function test_failed_custom_code_conditions_write_is_not_reported_as_created(): void {
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_conditions' );
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+
+		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'Failed conditions', 'code' => '<script>conditional()</script>', 'status' => 'publish', 'conditions' => array( array( 'type' => 'include', 'name' => 'singular', 'sub_name' => 'post' ) ) ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+	}
+
 	public function test_create_and_update_responses_also_read_back_from_elementor_code(): void {
 		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
 		$create     = $controller->create_custom_code(
@@ -167,6 +231,7 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 				)
 			)
 		);
+		$this->assertInstanceOf( WP_REST_Response::class, $create, $create instanceof WP_Error ? $create->get_error_message() : '' );
 		$post_id = $create->get_data()['id'];
 
 		$this->assertSame( '<script>created()</script>', $create->get_data()['snippet']['code'] );

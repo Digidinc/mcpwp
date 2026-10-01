@@ -199,8 +199,9 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @param int    $post_id  Post ID.
 	 * @param string $meta_key Meta key.
 	 * @param mixed  $value    Value to store, unslashed.
-	 * @param array  $options  raw_paths (page settings keys stored as sent) and
-	 *                         snapshot (a trusted rollback snapshot of this post).
+	 * @param array  $options  raw_paths (page settings keys stored as sent),
+	 *                         snapshot (a trusted rollback snapshot of this post),
+	 *                         and defer_readback for the Kit CSS repair path.
 	 * @return int|bool|WP_Error The write result or an explicit refusal.
 	 */
 	public static function update( $post_id, $meta_key, $value, array $options = array() ) {
@@ -211,10 +212,12 @@ final class Mcpwp_Elementor_Meta_Write {
 
 		$slot   = self::slot( $post_id, $meta_key );
 		$before = self::$refusals[ $slot ] ?? 0;
-		$result = self::as_writer(
+		$write = self::as_writer(
 			(int) $post_id,
 			static function () use ( $post_id, $meta_key, $value ) {
-				return update_post_meta( (int) $post_id, $meta_key, wp_slash( $value ) );
+				$approved = self::apply_policy( (int) $post_id, $meta_key, $value );
+				$result   = update_post_meta( (int) $post_id, $meta_key, wp_slash( $value ) );
+				return array( 'result' => $result, 'approved' => $approved );
 			},
 			$options
 		);
@@ -225,8 +228,24 @@ final class Mcpwp_Elementor_Meta_Write {
 				array( 'status' => 409 )
 			);
 		}
+		if ( '_elementor_page_settings' === $meta_key && ! empty( $options['defer_readback'] ) && in_array( 'custom_css', $options['raw_paths'] ?? array(), true ) ) {
+			return $write['result'];
+		}
 
-		return $result;
+		global $wpdb;
+		$raw = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s ORDER BY meta_id DESC LIMIT 1",
+				(int) $post_id,
+				$meta_key
+			)
+		);
+		wp_cache_delete( (int) $post_id, 'post_meta' );
+		if ( $write['approved'] !== maybe_unserialize( $raw ) ) {
+			return new WP_Error( 'elementor_meta_write_mismatch', __( 'The stored Elementor metadata does not match the approved write.', 'mcpwp' ), array( 'status' => 500 ) );
+		}
+
+		return $write['result'];
 	}
 
 	/**

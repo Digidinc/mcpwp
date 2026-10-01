@@ -224,6 +224,55 @@ final class ElementorTemplateTypeValidationTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
+	public function test_failed_template_data_write_leaves_no_published_template(): void {
+		$this->install_live_like_registry();
+		$status_during_write = null;
+		add_action( 'wp_insert_post', static function ( $post_id, $post ) use ( &$status_during_write ) {
+			if ( 'Failed template' === $post->post_title ) {
+				$status_during_write = $post->post_status;
+			}
+		}, 10, 2 );
+		add_filter( 'add_post_metadata', static function ( $check, $post_id, $key ) use ( &$status_during_write ) {
+			if ( '_elementor_data' === $key ) {
+				return false;
+			}
+			return $check;
+		}, 1, 3 );
+		$elements = array( array( 'id' => 'sec1083', 'elType' => 'section', 'settings' => array(), 'elements' => array() ) );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->create_template( array( 'title' => 'Failed template', 'type' => 'page', 'elementor_data' => $elements ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'draft', $status_during_write, 'The template must not be published while its data is still unverified.' );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'], 'A template with no saved data must not survive.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_settings_only_template_stays_draft_until_settings_are_stored(): void {
+		$this->install_live_like_registry();
+		$status_during_write = null;
+		add_filter( 'add_post_metadata', static function ( $check, $post_id, $key ) use ( &$status_during_write ) {
+			if ( '_elementor_page_settings' === $key ) {
+				$status_during_write = get_post_status( $post_id );
+				return false;
+			}
+			return $check;
+		}, 1, 3 );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->create_template( array( 'title' => 'Settings only', 'type' => 'page', 'page_settings' => array( 'hide_title' => 'yes' ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'draft', $status_during_write );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_an_unknown_type_is_refused_and_nothing_is_created(): void {
 		$this->install_live_like_registry();
 

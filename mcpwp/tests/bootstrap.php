@@ -800,6 +800,9 @@ function update_option($name, $value, $autoload = null)
         return false;
     }
     $GLOBALS['mcpwp_test_options'][ $name ] = $value;
+    if ('elementor_pro_theme_builder_conditions' === $name) {
+        $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = maybe_serialize($value);
+    }
     // Recorded so tests can assert a caller passed autoload=false explicitly
     // (e.g. a large/rarely-read option that must not load on every request).
     $GLOBALS['mcpwp_test_options_autoload'][ $name ] = $autoload;

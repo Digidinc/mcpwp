@@ -893,9 +893,14 @@ class Mcpwp_Theme_Builder {
 
 				// Always overwrite raw meta — Document::save() may silently fail or
 				// write to revision cache instead of post meta (#198).
+				$approved_json = Mcpwp_Elementor_Meta_Write::apply_policy( $template_id, '_elementor_data', $json );
 				$written = Mcpwp_Elementor_Meta_Write::update( $template_id, '_elementor_data', $json );
 				if ( is_wp_error( $written ) ) {
 					throw new RuntimeException( 'elementor_data_refused: ' . $written->get_error_message() );
+				}
+				wp_cache_delete( $template_id, 'post_meta' );
+				if ( $approved_json !== get_post_meta( $template_id, '_elementor_data', true ) ) {
+					throw new RuntimeException( 'elementor_data_not_persisted: Elementor data did not match the approved write.' );
 				}
 
 				// Clear post_content so Elementor owns the rendering.

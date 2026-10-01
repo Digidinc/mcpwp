@@ -360,6 +360,9 @@ namespace ElementorPro\Modules\ThemeBuilder {
 		}
 
 		public function save() {
+			if ( ! empty( $GLOBALS['mcpwp_theme_test_cache_save_throws'] ) ) {
+				throw new \RuntimeException( 'seeded conditions cache failure' );
+			}
 			return update_option( 'elementor_pro_theme_builder_conditions', $this->conditions );
 		}
 

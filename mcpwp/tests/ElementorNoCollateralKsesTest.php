@@ -635,6 +635,26 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
+	public function test_saved_section_stays_draft_until_its_tree_is_stored(): void {
+		$status_during_write = null;
+		add_filter( 'add_post_metadata', static function ( $check, $post_id, $key ) use ( &$status_during_write ) {
+			if ( '_elementor_data' === $key && null === $status_during_write ) {
+				$status_during_write = get_post_status( $post_id );
+			}
+			return $check;
+		}, 1, 3 );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->save_section_as_template( self::PAGE_ID, 'sec8291', 'saved section' );
+
+		$this->assert_ok( $result, 'saved section' );
+		$this->assertSame( 'draft', $status_during_write );
+		$this->assertSame( 'publish', get_post_status( (int) $result['template_id'] ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_block_2_chain_save_as_template_then_apply_stays_sanitized(): void {
 		// The chain the review built: raw script stored on a type Elementor
 		// does not sanitize (here, as a pre-existing row), saved as a
@@ -666,6 +686,35 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
+	public function test_template_apply_refuses_unstored_requested_page_settings(): void {
+		$this->seed( self::TEMPLATE_ID );
+		$GLOBALS['_mcpwp_test_meta'][ self::TEMPLATE_ID ]['_elementor_page_settings'] = array( 'hide_title' => 'yes' );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_page_settings' );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->apply_template_to_page( self::TARGET_ID, self::TEMPLATE_ID, 'replace' );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_template_update_refuses_unstored_requested_page_settings(): void {
+		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
+		$this->seed( self::TEMPLATE_ID );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_page_settings' );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->update_template( self::TEMPLATE_ID, array( 'page_settings' => array( 'hide_title' => 'yes' ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'elementor_settings_write_refused', $result->get_error_code() );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_inserting_a_part_is_a_sanitized_copy_for_a_key(): void {
 		$this->seed( self::TEMPLATE_ID );
 		$this->seed( self::TARGET_ID, array() );
@@ -690,13 +739,184 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 	public function test_cloning_a_page_is_a_sanitized_copy_for_a_key(): void {
 		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_element_cache'] = array( 'sc82901' => self::SCRIPT );
 		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_css'] = array( 'data' => self::STYLE );
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] = array( 'custom_css' => self::STYLE, 'hide_title' => 'yes' );
 		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'b829 clone' ) );
 
 		$this->assert_ok( $result, 'clone_page' );
 		$this->assert_html_widgets_sanitized( (int) $result['id'], 'wp_clone_elementor_page (the copy)' );
 		$this->assertSame( '', get_post_meta( (int) $result['id'], '_elementor_element_cache', true ), 'The clone must render from its sanitized data.' );
 		$this->assertSame( '', get_post_meta( (int) $result['id'], '_elementor_css', true ), 'The clone must regenerate derived CSS.' );
+		$this->assertSame( array( 'custom_css' => wp_kses_post( self::STYLE ), 'hide_title' => 'yes' ), get_post_meta( (int) $result['id'], '_elementor_page_settings', true ) );
 		$this->assert_html_widgets_intact( self::PAGE_ID, 'wp_clone_elementor_page (the source)' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_clone_refuses_when_initial_elementor_data_was_not_stored(): void {
+		$posts_before = count( $GLOBALS['_mcpwp_test_posts'] );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_data' );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'failed clone' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $posts_before, count( $GLOBALS['_mcpwp_test_posts'] ), 'A failed copy must not remain as a page.' );
+		$this->assert_html_widgets_intact( self::PAGE_ID, 'a refused clone' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_clone_distinguishes_an_empty_tree_from_missing_meta(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = '[]';
+		$posts_before = count( $GLOBALS['_mcpwp_test_posts'] );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_data' );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'failed empty clone' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $posts_before, count( $GLOBALS['_mcpwp_test_posts'] ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_clone_distinguishes_an_empty_array_tree_from_missing_meta(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = array();
+		$posts_before = count( $GLOBALS['_mcpwp_test_posts'] );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_data' );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'failed array clone' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $posts_before, count( $GLOBALS['_mcpwp_test_posts'] ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_pro_clone_stays_draft_until_its_tree_is_stored(): void {
+		$status_during_write = null;
+		add_filter( 'add_post_metadata', static function ( $check, $post_id, $key ) use ( &$status_during_write ) {
+			if ( '_elementor_data' === $key && null === $status_during_write ) {
+				$status_during_write = get_post_status( $post_id );
+			}
+			return $check;
+		}, 1, 3 );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'published copy', 'status' => 'publish' ) );
+
+		$this->assert_ok( $result, 'published clone' );
+		$this->assertSame( 'draft', $status_during_write );
+		$this->assertSame( 'publish', get_post_status( (int) $result['id'] ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_landing_page_stays_draft_until_its_tree_is_stored(): void {
+		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
+		$status_during_write = null;
+		add_filter( 'add_post_metadata', static function ( $check, $post_id, $key ) use ( &$status_during_write ) {
+			if ( '_elementor_data' === $key && null === $status_during_write ) {
+				$status_during_write = get_post_status( $post_id );
+			}
+			return $check;
+		}, 1, 3 );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->create_landing_page( array( 'title' => 'published landing', 'status' => 'publish', 'elementor_data' => wp_json_encode( self::tree() ) ) );
+
+		$this->assert_ok( $result, 'published landing' );
+		$this->assertSame( 'draft', $status_during_write );
+		$this->assertSame( 'publish', get_post_status( (int) $result['id'] ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_free_page_clone_stays_draft_until_its_tree_is_stored(): void {
+		$status_during_write = null;
+		add_filter( 'add_post_metadata', static function ( $check, $post_id, $key ) use ( &$status_during_write ) {
+			if ( '_elementor_data' === $key && null === $status_during_write ) {
+				$status_during_write = get_post_status( $post_id );
+			}
+			return $check;
+		}, 1, 3 );
+
+		$result = ( new Mcpwp_REST_Pages() )->clone_page( $this->rest_request( 'POST', '/mcpwp/v1/pages/' . self::PAGE_ID . '/clone', array( 'id' => self::PAGE_ID, 'title' => 'free published clone', 'status' => 'publish' ) ) );
+		$data = $this->data( $result );
+
+		$this->assertIsArray( $data );
+		$this->assertSame( 'draft', $status_during_write );
+		$this->assertSame( 'publish', get_post_status( (int) $data['id'] ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_free_page_clone_copies_settings_under_the_target_policy(): void {
+		$source_settings = array( 'hide_title' => 'yes', 'custom_css' => self::STYLE );
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] = $source_settings;
+
+		$result = ( new Mcpwp_REST_Pages() )->clone_page( $this->rest_request( 'POST', '/mcpwp/v1/pages/' . self::PAGE_ID . '/clone', array( 'id' => self::PAGE_ID, 'title' => 'free settings clone' ) ) );
+		$data = $this->data( $result );
+
+		$this->assertIsArray( $data );
+		$this->assertSame( array( 'hide_title' => 'yes', 'custom_css' => wp_kses_post( self::STYLE ) ), get_post_meta( (int) $data['id'], '_elementor_page_settings', true ) );
+		$this->assertSame( $source_settings, get_post_meta( self::PAGE_ID, '_elementor_page_settings', true ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_free_page_clone_refuses_failed_settings_copy(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] = array( 'hide_title' => 'yes' );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_page_settings' );
+		$posts_before = count( $GLOBALS['_mcpwp_test_posts'] );
+
+		$result = ( new Mcpwp_REST_Pages() )->clone_page( $this->rest_request( 'POST', '/mcpwp/v1/pages/' . self::PAGE_ID . '/clone', array( 'id' => self::PAGE_ID, 'title' => 'failed settings copy' ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $this->data( $result ) );
+		$this->assertSame( $posts_before, count( $GLOBALS['_mcpwp_test_posts'] ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_clone_refuses_when_page_settings_were_not_copied(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] = array( 'custom_css' => '<style>.clone{color:red}</style>' );
+		$posts_before = count( $GLOBALS['_mcpwp_test_posts'] );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_page_settings' );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'failed settings clone' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $posts_before, count( $GLOBALS['_mcpwp_test_posts'] ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_landing_page_refuses_and_cleans_up_when_initial_data_was_not_stored(): void {
+		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
+		$posts_before = count( $GLOBALS['_mcpwp_test_posts'] );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_data' );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->create_landing_page( array( 'title' => 'failed landing', 'elementor_data' => wp_json_encode( self::tree() ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'elementor_meta_write_mismatch', $result->get_error_code() );
+		$this->assertSame( $posts_before, count( $GLOBALS['_mcpwp_test_posts'] ), 'No incomplete landing page should remain.' );
 	}
 
 	/**
@@ -1476,6 +1696,66 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
+	public function test_set_elementor_refuses_a_silent_same_count_write_failure(): void {
+		$before = get_post_meta( self::PAGE_ID, '_elementor_data', true );
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][0]['settings']['title'] = 'New title';
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_data' );
+
+		$result = ( new Mcpwp_Elementor_Basic() )->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $tree ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $before, get_post_meta( self::PAGE_ID, '_elementor_data', true ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_direct_tree_update_refuses_a_silent_same_count_write_failure(): void {
+		$before = get_post_meta( self::PAGE_ID, '_elementor_data', true );
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][0]['settings']['title'] = 'New title';
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_data' );
+
+		$result = Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', wp_json_encode( $tree ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $before, get_post_meta( self::PAGE_ID, '_elementor_data', true ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_direct_settings_update_refuses_a_silent_write_failure(): void {
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] = array( 'hide_title' => 'no' );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_page_settings' );
+
+		$result = Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_page_settings', array( 'hide_title' => 'yes' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( array( 'hide_title' => 'no' ), get_post_meta( self::PAGE_ID, '_elementor_page_settings', true ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_edit_widget_refuses_a_silent_same_count_write_failure(): void {
+		$before = get_post_meta( self::PAGE_ID, '_elementor_data', true );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_data' );
+
+		$result = ( new Mcpwp_Elementor_Basic() )->edit_widget( self::PAGE_ID, 'hd82901', array( 'title' => 'New title' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $before, get_post_meta( self::PAGE_ID, '_elementor_data', true ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_a_script_the_caller_introduces_is_sanitized(): void {
 		$this->assert_ok( $this->edit_widget( self::PAGE_ID, 'sc82901', array( 'html' => '<script>window.__new829=1;</script><p>kept</p>' ) ), 'edit_widget' );
 
@@ -1668,6 +1948,20 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->assertTrue( $data['storage_repaired'] );
 		$this->assertSame( array( '>' ), $data['storage_altered_chars'] );
 		$this->assertStringContainsString( '.a>.b{color:red}', $this->kit_css() );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_kit_css_write_does_not_report_success_if_an_unchanged_setting_was_altered(): void {
+		$controller = $this->install_kit();
+		$GLOBALS['_mcpwp_test_meta'][ self::KIT_ID ]['_elementor_page_settings'] = array( 'custom_css' => '.old{color:blue}', 'html' => self::STYLE );
+		$GLOBALS['mcpwp_test_meta_escapes_html'] = true;
+
+		$result = $this->data( $controller->upsert_kit_css_block( $this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css/blocks', array( 'name' => 'b829safe', 'css' => '.new{color:red}' ) ) ) );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
 	}
 
 	/**
