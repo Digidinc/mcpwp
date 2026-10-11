@@ -70,6 +70,21 @@ class Mcpwp_OAuth_Well_Known {
 	const FRONT_CHANNEL_QUERY_VAR = 'mcpwp_oauth';
 
 	/**
+	 * Scopes the mumcp.com broker will grant (mumcp-broker ALLOWED_SCOPES).
+	 *
+	 * The broker rejects any other value with invalid_scope, and MCP clients
+	 * request every scope advertised in scopes_supported, so a broker-enrolled
+	 * site must never advertise more than this list.
+	 */
+	const BROKER_SCOPES = array( 'read', 'write' );
+
+	/**
+	 * Scopes this site's own self-issued OAuth server can grant: the broker set
+	 * plus 'admin' (clamped to the logged-in user's capability at issuance).
+	 */
+	const SELF_AS_SCOPES = array( 'read', 'write', 'admin' );
+
+	/**
 	 * Register WordPress hooks.
 	 *
 	 * Called once during plugin bootstrap.
@@ -287,14 +302,16 @@ class Mcpwp_OAuth_Well_Known {
 
 		if ( self::is_broker_enrolled() ) {
 			$authorization_servers = array( 'https://mumcp.com' );
+			$scopes_supported      = self::BROKER_SCOPES;
 		} else {
 			$authorization_servers = array( $origin . '/.well-known/oauth-authorization-server' . $prefix );
+			$scopes_supported      = self::SELF_AS_SCOPES;
 		}
 
 		return array(
 			'resource'                 => $resource,
 			'authorization_servers'    => $authorization_servers,
-			'scopes_supported'         => array( 'read', 'write', 'admin' ),
+			'scopes_supported'         => $scopes_supported,
 			'bearer_methods_supported' => array( 'header' ),
 		);
 	}
@@ -402,7 +419,7 @@ class Mcpwp_OAuth_Well_Known {
 			'grant_types_supported'                 => array( 'authorization_code', 'refresh_token' ),
 			'code_challenge_methods_supported'      => array( 'S256' ),
 			'token_endpoint_auth_methods_supported' => array( 'none', 'client_secret_post' ),
-			'scopes_supported'                      => array( 'read', 'write', 'admin' ),
+			'scopes_supported'                      => self::SELF_AS_SCOPES,
 		);
 	}
 

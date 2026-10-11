@@ -138,4 +138,36 @@ final class BrokerWellKnownTest extends TestCase {
 			'Not broker-enrolled: the site is still its own AS, exactly as before.'
 		);
 	}
+
+	// ── scopes_supported must equal what the AS will actually grant ────────
+
+	public function test_broker_enrolled_advertises_only_broker_grantable_scopes(): void {
+		$this->enroll();
+
+		$metadata = Mcpwp_OAuth_Well_Known::build_protected_resource_metadata();
+
+		// mumcp-broker ALLOWED_SCOPES = read, write; 'admin' => invalid_scope.
+		$this->assertSame( array( 'read', 'write' ), $metadata['scopes_supported'] );
+		$this->assertNotContains( 'admin', $metadata['scopes_supported'] );
+	}
+
+	public function test_not_enrolled_self_as_still_advertises_admin(): void {
+		update_option( 'mcpwp_settings', array( 'oauth_enabled' => true ) );
+
+		$resource = Mcpwp_OAuth_Well_Known::build_protected_resource_metadata();
+		$as       = Mcpwp_OAuth_Well_Known::build_authorization_server_metadata();
+
+		$this->assertSame( array( 'read', 'write', 'admin' ), $resource['scopes_supported'] );
+		$this->assertSame( $resource['scopes_supported'], $as['scopes_supported'] );
+	}
+
+	public function test_authorization_server_document_unchanged_when_broker_enrolled(): void {
+		// This document only describes the site's own AS (never reached via the
+		// broker chain), so it keeps admin even on an enrolled site.
+		$this->enroll();
+
+		$as = Mcpwp_OAuth_Well_Known::build_authorization_server_metadata();
+
+		$this->assertSame( array( 'read', 'write', 'admin' ), $as['scopes_supported'] );
+	}
 }
