@@ -965,8 +965,12 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		if ( null !== $client && 'registered' === $client['type'] ) {
 			$name        = '' !== $client['client_name'] ? $client['client_name'] : __( 'An unnamed app', 'mcpwp' );
 			$client_html = '<strong>' . esc_html( $name ) . '</strong> <em>' . esc_html__( '(name supplied by the app, not verified)', 'mcpwp' ) . '</em>';
-		} else {
+		} elseif ( null !== $client ) {
 			$client_html = '<strong>' . esc_html( $client_id ) . '</strong> <em>' . esc_html__( '(an app configured by this site\'s administrator)', 'mcpwp' ) . '</em>';
+		} else {
+			// Unreachable through the handlers (validate_authorize_params()
+			// refuses unknown clients first); never vouch for an unknown id.
+			$client_html = '<strong>' . esc_html( $client_id ) . '</strong> <em>' . esc_html__( '(unknown app)', 'mcpwp' ) . '</em>';
 		}
 
 		$redirect_uri  = isset( $params['redirect_uri'] ) ? (string) $params['redirect_uri'] : '';
