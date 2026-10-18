@@ -595,12 +595,6 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->oauth_error_response( 'invalid_grant', 'Authorization code has been revoked.', 400 );
 		}
 
-		// Every check passed: claim the code.  Only the request whose delete
-		// removed it may issue tokens.
-		if ( ! delete_transient( $transient_key ) ) {
-			return $this->oauth_error_response( 'invalid_grant', 'Authorization code is invalid or has expired.', 400 );
-		}
-
 		// Parse scopes from stored value.
 		// P0-B: Never fall back to get_default_api_key_scopes() here — that would
 		// grant read+write+admin when scope is absent. Use stored (already-clamped) scope.
@@ -608,9 +602,22 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$scopes       = $this->parse_oauth_scope_string( $scope_string );
 		$scopes       = $this->clamp_scope_array_to_user_id( $scopes, $stored_user_id );
 
-		// Issue token via existing backend: bound to this client, a new family.
+		// Mint first, claim second (#1101 PR-3b): the tokens are written to
+		// the table before the code is consumed, so a store that cannot
+		// write burns nothing (503, the code still redeemable), and a lost
+		// claim race revokes what this request minted.
 		$ttl            = (int) $oauth_settings['oauth_token_ttl'];
 		$token_response = $this->issue_oauth_access_token_with_user( $scopes, $ttl, $stored_user_id, $client_id, '', $checked_at );
+		if ( is_wp_error( $token_response ) ) {
+			return $this->no_store( $this->wpe_to_response( $token_response ) );
+		}
+
+		// Every check passed and the tokens exist: claim the code.  Only the
+		// request whose delete removed it keeps what it minted.
+		if ( ! delete_transient( $transient_key ) ) {
+			$this->discard_minted( $token_response );
+			return $this->oauth_error_response( 'invalid_grant', 'Authorization code is invalid or has expired.', 400 );
+		}
 
 		Mcpwp_OAuth_Clients::touch( $client_id );
 
@@ -673,27 +680,39 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $resource_err;
 		}
 
-		$transient_key = $this->get_oauth_refresh_token_transient_key( $refresh_token );
-		$record        = get_transient( $transient_key );
-		$checked_at    = Mcpwp_OAuth_Revocation::now(); // issued_at of what this mints (#1101 round 2).
+		// #1101 PR-3b: refresh tokens live in the hashed token table.
+		$row        = Mcpwp_OAuth_Token_Store::find( $refresh_token );
+		$checked_at = Mcpwp_OAuth_Revocation::now(); // issued_at of what this mints (#1101 round 2).
+		$record     = null;
 
-		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
+		if ( Mcpwp_OAuth_Token_Store::is_active( $row, Mcpwp_OAuth_Token_Store::TYPE_REFRESH ) ) {
+			$record = Mcpwp_OAuth_Token_Store::to_record( $row );
+		} elseif ( is_array( $row ) && Mcpwp_OAuth_Token_Store::TYPE_TOMBSTONE === $row['type'] && '' !== (string) $row['family_id'] ) {
 			// #1101 reuse detection: a token that was already rotated away is
 			// a replay — someone else holds a copy.  Kill its whole family
-			// (the legitimate holder reconnects; the copy is useless).
-			$used = get_transient( $this->get_oauth_refresh_token_reuse_key( $refresh_token ) );
-			if ( is_array( $used ) && ! empty( $used['family_id'] ) ) {
-				// A failed persist is reported inside revoke_family(); the
-				// family's transient marker is written regardless.
-				Mcpwp_OAuth_Revocation::revoke_family( (string) $used['family_id'] );
-				$this->log_oauth_event(
-					'oauth_refresh_reuse_detected',
-					array(
-						'client_id' => isset( $used['client_id'] ) ? (string) $used['client_id'] : '',
-						'user_id'   => isset( $used['user_id'] ) ? (int) $used['user_id'] : 0,
-					)
-				);
-			}
+			// (the legitimate holder reconnects; the copy is useless).  A
+			// failed persist is reported inside revoke_family(); the
+			// family's transient marker is written regardless.
+			Mcpwp_OAuth_Revocation::revoke_family( (string) $row['family_id'] );
+			$this->log_oauth_event(
+				'oauth_refresh_reuse_detected',
+				array(
+					'client_id' => (string) $row['client_id'],
+					'user_id'   => (int) $row['user_id'],
+				)
+			);
+		} elseif ( null === $row ) {
+			// Grace window: a refresh token issued before the table existed
+			// is moved into it on this use (refused if that write fails).
+			$record = Mcpwp_OAuth_Token_Store::migrate_from_transient(
+				$refresh_token,
+				Mcpwp_OAuth_Token_Store::TYPE_REFRESH,
+				$this->get_oauth_refresh_token_transient_key( $refresh_token ),
+				self::refresh_token_ttl()
+			);
+		}
+
+		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
 			return $this->oauth_error_response( 'invalid_grant', 'Refresh token is invalid or has expired.', 400 );
 		}
 
@@ -730,44 +749,20 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// stripped of every role, or demoted since consent cannot renew.  The
 		// token is removed: nothing a caller sends can cause this refusal.
 		if ( ! Mcpwp_OAuth_Well_Known::user_can_connect( $user_id ) ) {
-			delete_transient( $transient_key );
+			Mcpwp_OAuth_Token_Store::revoke( $refresh_token );
 			return $this->oauth_error_response( 'invalid_grant', 'The approving user can no longer connect AI apps on this site.', 400 );
 		}
 
 		// #1101: revoked by epoch (client, user, or family).  A revoked token
-		// is dead either way, so it is removed.
+		// is dead either way, so its row is marked revoked.
 		if ( Mcpwp_OAuth_Revocation::is_revoked( $record ) ) {
-			delete_transient( $transient_key );
+			Mcpwp_OAuth_Token_Store::revoke( $refresh_token );
 			return $this->oauth_error_response( 'invalid_grant', 'Refresh token has been revoked.', 400 );
 		}
 
-		// #1101: a family is one grant's chain of refresh tokens.  Pre-release
-		// records start one now.  The rotated-away token leaves a tombstone
-		// for the refresh lifetime: presenting it again is reuse, and
-		// revoking it (RFC 7009) still reaches the family.  Written BEFORE
-		// the claim (round 2): from the moment the record is gone, the
-		// tombstone is already there, so a revocation racing this refresh
-		// always finds one of the two.
-		$family_id = isset( $record['family_id'] ) && is_string( $record['family_id'] ) && '' !== $record['family_id']
-			? $record['family_id']
-			: Mcpwp_OAuth_Revocation::new_family_id();
-		set_transient(
-			$this->get_oauth_refresh_token_reuse_key( $refresh_token ),
-			array(
-				'family_id' => $family_id,
-				'client_id' => $client_id,
-				'user_id'   => $user_id,
-			),
-			self::refresh_token_ttl()
-		);
-
-		// Claim: of two concurrent refreshes with one token, only the one
-		// whose delete removed it proceeds (same reasoning as the code
-		// exchange).  P1-D: the presented token is gone before a new one is
-		// issued, so it cannot be reused even if issuance fails.
-		if ( ! delete_transient( $transient_key ) ) {
-			return $this->oauth_error_response( 'invalid_grant', 'Refresh token is invalid or has expired.', 400 );
-		}
+		// #1101: a family is one grant's chain of refresh tokens; a migrated
+		// pre-release record starts one now.
+		$family_id = '' !== (string) ( $record['family_id'] ?? '' ) ? (string) $record['family_id'] : Mcpwp_OAuth_Revocation::new_family_id();
 
 		// P0-B parity with the authorization_code path: resolve the stored scope
 		// list with parse_oauth_scope_string(), which falls back to array( 'read' )
@@ -789,8 +784,22 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$oauth_settings = $this->get_oauth_settings();
 		$ttl            = (int) $oauth_settings['oauth_token_ttl'];
 
-		// Issue a new access token + new refresh token, same client, same family.
+		// Mint first, claim second (#1101 PR-3b).  The new access + refresh
+		// tokens (same client, same family) are written before the old one
+		// is consumed, so a store that cannot write burns nothing.  Then the
+		// claim: ONE conditional UPDATE turns the old row into its own reuse
+		// tombstone, and only the request it affected (=== 1 row) keeps what
+		// it minted; a concurrent refresh with the same token gets 0 and its
+		// new tokens are revoked.  The tombstone IS the claimed row, so a
+		// revocation racing this refresh always finds the token's family.
 		$token_response = $this->issue_oauth_access_token_with_user( $scopes, $ttl, $user_id, $client_id, $family_id, $checked_at );
+		if ( is_wp_error( $token_response ) ) {
+			return $this->no_store( $this->wpe_to_response( $token_response ) );
+		}
+		if ( ! Mcpwp_OAuth_Token_Store::claim_refresh( $refresh_token ) ) {
+			$this->discard_minted( $token_response );
+			return $this->oauth_error_response( 'invalid_grant', 'Refresh token is invalid or has expired.', 400 );
+		}
 
 		$this->log_oauth_event(
 			'oauth_token_issued',
@@ -858,46 +867,22 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->no_store( $this->oauth_error_response( 'invalid_client', 'Invalid client_id.', 401 ) );
 		}
 
-		// The hint orders the lookups (§2.1); both are tried.
-		$kinds     = 'access_token' === $hint ? array( 'access', 'refresh' ) : array( 'refresh', 'access' );
+		// #1101 PR-3b: one table row, whatever the hint (§2.1 lets the
+		// server ignore it).  A refresh token — live, or already rotated away
+		// (its row is the reuse tombstone) — takes its family with it; an
+		// access token is marked revoked.  A token from before the table
+		// carries no client_id, so it belongs to no client and is left alone.
 		$persisted = true;
-		foreach ( $kinds as $kind ) {
-			if ( 'refresh' === $kind && $this->looks_like_oauth_refresh_token( $token ) ) {
-				$key    = $this->get_oauth_refresh_token_transient_key( $token );
-				$record = get_transient( $key );
-				if ( is_array( $record ) && $this->record_belongs_to_client( $record, $client_id ) ) {
-					if ( ! empty( $record['family_id'] ) && is_string( $record['family_id'] ) ) {
-						$persisted = Mcpwp_OAuth_Revocation::revoke_family( $record['family_id'] );
-					}
-					delete_transient( $key );
-					$this->log_oauth_event( 'oauth_token_revoked', array( 'client_id' => $client_id, 'user_id' => isset( $record['user_id'] ) ? (int) $record['user_id'] : 0, 'grant_type' => 'refresh_token' ) );
-					break;
-				}
-				// #1101 round 2: a refresh token already ROTATED AWAY still
-				// names its family through its tombstone.  Without this, a
-				// thief who refreshed first kept the chain alive after the
-				// victim revoked the token they hold — and a revocation
-				// racing a refresh (the record claimed, the new token not yet
-				// written) found nothing either.  The refresh writes the
-				// tombstone before its claim, so one of the two is always
-				// there.
-				$used = is_array( $record ) ? null : get_transient( $this->get_oauth_refresh_token_reuse_key( $token ) );
-				if ( is_array( $used ) && ! empty( $used['family_id'] ) && $this->record_belongs_to_client( $used, $client_id ) ) {
-					$persisted = Mcpwp_OAuth_Revocation::revoke_family( (string) $used['family_id'] );
-					$this->log_oauth_event( 'oauth_token_revoked', array( 'client_id' => $client_id, 'user_id' => isset( $used['user_id'] ) ? (int) $used['user_id'] : 0, 'grant_type' => 'refresh_token' ) );
-					break;
-				}
+		$row       = Mcpwp_OAuth_Token_Store::find( $token );
+		if ( is_array( $row ) && $this->record_belongs_to_client( $row, $client_id ) ) {
+			$kind = (string) $row['type'];
+			if ( in_array( $kind, array( Mcpwp_OAuth_Token_Store::TYPE_REFRESH, Mcpwp_OAuth_Token_Store::TYPE_TOMBSTONE ), true ) && '' !== (string) $row['family_id'] ) {
+				$persisted = Mcpwp_OAuth_Revocation::revoke_family( (string) $row['family_id'] );
 			}
-			if ( 'access' === $kind && 0 === strpos( $token, 'mcpwp_at_' ) ) {
-				$key    = $this->get_oauth_token_transient_key( $token );
-				$record = get_transient( $key );
-				if ( is_array( $record ) && $this->record_belongs_to_client( $record, $client_id ) ) {
-					delete_transient( $key );
-					$this->log_oauth_event( 'oauth_token_revoked', array( 'client_id' => $client_id, 'user_id' => isset( $record['user_id'] ) ? (int) $record['user_id'] : 0, 'grant_type' => 'access_token' ) );
-					break;
-				}
-			}
+			Mcpwp_OAuth_Token_Store::revoke( $token );
+			$this->log_oauth_event( 'oauth_token_revoked', array( 'client_id' => $client_id, 'user_id' => (int) $row['user_id'], 'grant_type' => Mcpwp_OAuth_Token_Store::TYPE_ACCESS === $kind ? 'access_token' : 'refresh_token' ) );
 		}
+		unset( $hint );
 
 		// The family's transient marker is already written, so the tokens
 		// stop working now; but a revocation that could not be made durable
@@ -990,6 +975,9 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$scopes = $this->apply_scope_ceiling( $scopes, $oauth_settings['oauth_client_credentials_max_scope'] );
 
 		$token_data = $this->issue_oauth_access_token( $scopes, $oauth_settings['oauth_token_ttl'], array( 'client_id' => $client_id ) );
+		if ( is_wp_error( $token_data ) ) {
+			return $this->no_store( $this->wpe_to_response( $token_data ) );
+		}
 
 		$this->log_oauth_event(
 			'oauth_token_issued',
@@ -1622,7 +1610,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 * @param string   $client_id Client the tokens are bound to (#1101).
 	 * @param string   $family_id Refresh family; a new one when empty.
 	 * @param int      $issued_at When the caller checked revocation (microseconds); now when 0.
-	 * @return array Token response payload including refresh_token.
+	 * @return array|WP_Error Token response payload including refresh_token, or 503 when it could not be stored.
 	 */
 	private function issue_oauth_access_token_with_user( $scopes, $ttl, $user_id, $client_id = '', $family_id = '', $issued_at = 0 ) {
 		// #1101: every token says which client it was issued to and which
@@ -1640,6 +1628,9 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 				'issued_at' => $issued_at,
 			)
 		);
+		if ( is_wp_error( $token_response ) ) {
+			return $token_response;
+		}
 
 		// Issue a refresh token (separate, longer-lived transient).
 		// P1-2: the refresh lifetime is its own setting, decoupled from the
@@ -1659,15 +1650,31 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			'expires_at' => time() + $refresh_ttl,
 		);
 
-		set_transient(
-			$this->get_oauth_refresh_token_transient_key( $refresh_token ),
-			$refresh_record,
-			$refresh_ttl
-		);
+		// #1101 PR-3b: the hashed token table, never a transient.  If the row
+		// cannot be written, the access token just issued is revoked and
+		// nothing is handed out (fail closed).
+		if ( ! Mcpwp_OAuth_Token_Store::insert( $refresh_token, Mcpwp_OAuth_Token_Store::TYPE_REFRESH, $refresh_record ) ) {
+			Mcpwp_OAuth_Token_Store::revoke( $token_response['access_token'] );
+			return new WP_Error( 'temporarily_unavailable', 'The token could not be stored. Try again.', array( 'status' => 503 ) );
+		}
 
 		$token_response['refresh_token'] = $refresh_token;
 
 		return $token_response;
+	}
+
+	/**
+	 * Revoke tokens this request minted but must not hand out (it lost a
+	 * claim race).
+	 *
+	 * @param array $token_response Issued tokens.
+	 */
+	private function discard_minted( array $token_response ) {
+		foreach ( array( 'access_token', 'refresh_token' ) as $field ) {
+			if ( ! empty( $token_response[ $field ] ) ) {
+				Mcpwp_OAuth_Token_Store::revoke( (string) $token_response[ $field ] );
+			}
+		}
 	}
 
 	/**
@@ -1752,17 +1759,6 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 */
 	public function get_oauth_refresh_token_transient_key( $refresh_token ) {
 		return 'mcpwp_oauth_rt_' . md5( (string) $refresh_token );
-	}
-
-	/**
-	 * Key of the tombstone a rotated-away refresh token leaves (#1101):
-	 * presenting that token again is reuse, and kills its family.
-	 *
-	 * @param string $refresh_token Refresh token string.
-	 * @return string Transient key.
-	 */
-	public function get_oauth_refresh_token_reuse_key( $refresh_token ) {
-		return 'mcpwp_oauth_rtu_' . substr( hash( 'sha256', (string) $refresh_token ), 0, 40 );
 	}
 
 	/**

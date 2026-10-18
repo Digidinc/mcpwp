@@ -302,14 +302,14 @@ final class OAuthServerTest extends TestCase {
 
 	/** Scopes actually persisted for an issued access token. */
 	private function stored_access_token_scopes( string $access_token ): array {
-		$record = get_transient( $this->controller()->access_token_transient_key( $access_token ) );
+		$record = mcpwp_test_oauth_record( $access_token ); // #1101 PR-3b: the token table.
 		$this->assertIsArray( $record, 'Issued access token must have a stored record' );
 		return $record['scopes'];
 	}
 
 	/** Scopes actually persisted for an issued refresh token. */
 	private function stored_refresh_token_scopes( string $refresh_token ): array {
-		$record = get_transient( $this->controller()->get_oauth_refresh_token_transient_key( $refresh_token ) );
+		$record = mcpwp_test_oauth_record( $refresh_token ); // #1101 PR-3b: the token table.
 		$this->assertIsArray( $record, 'Issued refresh token must have a stored record' );
 		return $record['scopes'];
 	}
@@ -1853,7 +1853,8 @@ final class OAuthServerTest extends TestCase {
 
 		$this->assertSame( 400, $response->get_status() );
 		$this->assertSame( 'invalid_grant', $response->get_data()['error'] );
-		$this->assertFalse( get_transient( $this->controller()->get_oauth_refresh_token_transient_key( $refresh ) ), 'The presented refresh token is burned either way.' );
+		$this->assertFalse( get_transient( $this->controller()->get_oauth_refresh_token_transient_key( $refresh ) ), 'The presented (pre-table) refresh token left its transient.' );
+		$this->assertNotNull( mcpwp_test_oauth_row( $refresh )['revoked_at'], 'And its row is revoked: burned either way.' );
 	}
 
 	/**

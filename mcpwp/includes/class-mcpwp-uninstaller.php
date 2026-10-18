@@ -145,6 +145,25 @@ class Mcpwp_Uninstaller {
 
 		wp_clear_scheduled_hook( 'mcpwp_approvals_retention' );
 		wp_clear_scheduled_hook( 'mcpwp_approvals_late_import' );
+
+		self::drop_oauth_tokens_for_current_site();
+	}
+
+	/**
+	 * Drop the OAuth token table (#1101 PR-3b), its options and its cron for
+	 * ONLY the current site.  Runs inside every per-site loop that drops the
+	 * approvals data (drop_approvals_data_for_current_site() calls it).
+	 */
+	public static function drop_oauth_tokens_for_current_site() {
+		global $wpdb;
+
+		$table = $wpdb->prefix . 'mcpwp_oauth_tokens';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe; the suffix is fixed.
+		$wpdb->query( "DROP TABLE IF EXISTS {$table}" );
+
+		delete_option( 'mcpwp_oauth_tokens_schema_version' );
+		delete_option( 'mcpwp_oauth_tokens_grace_until' );
+		wp_clear_scheduled_hook( 'mcpwp_oauth_tokens_cleanup' );
 	}
 
 	/**

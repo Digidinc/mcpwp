@@ -1052,6 +1052,10 @@ function delete_transient($name)
 
 function get_user_meta($user_id, $key = '', $single = false)
 {
+    // Test-only: observe a read (e.g. the moment a revocation is checked).
+    if (isset($GLOBALS['mcpwp_test_user_meta_read_hook']) && is_callable($GLOBALS['mcpwp_test_user_meta_read_hook'])) {
+        call_user_func($GLOBALS['mcpwp_test_user_meta_read_hook'], (int) $user_id, $key);
+    }
     $user_id = (int) $user_id;
     if ('' === $key) {
         return isset($GLOBALS['mcpwp_test_user_meta'][ $user_id ]) ? $GLOBALS['mcpwp_test_user_meta'][ $user_id ] : array();
@@ -2137,10 +2141,197 @@ if (! function_exists('mcpwp_test_sql_find')) {
     }
 }
 
+
+/**
+ * In-memory double of the OAuth token table (#1101 PR-3b).  Answers exactly
+ * the statement shapes Mcpwp_OAuth_Token_Store issues; anything else falls
+ * through.  token_hash is UNIQUE (a duplicate INSERT fails), every UPDATE
+ * returns its affected-row count, and the table can be made missing
+ * ($GLOBALS['mcpwp_test_oauth_tokens_exists'] = false) so every statement
+ * fails as a real missing table would.  `mcpwp_test_oauth_tokens_before`
+ * runs a callable before a statement, so a test can land a concurrent
+ * request first.
+ */
+final class Mcpwp_Test_OAuth_Tokens_Table
+{
+    public static function reset()
+    {
+        $GLOBALS['mcpwp_test_oauth_tokens']        = array();
+        $GLOBALS['mcpwp_test_oauth_tokens_exists'] = true;
+        $GLOBALS['mcpwp_test_oauth_tokens_fail']   = null;
+        $GLOBALS['mcpwp_test_oauth_tokens_before'] = null;
+        $GLOBALS['mcpwp_test_oauth_tokens_seq']    = 0;
+    }
+
+    private static function quoted($text)
+    {
+        return stripslashes($text);
+    }
+
+    private static function fails($kind)
+    {
+        $fail = $GLOBALS['mcpwp_test_oauth_tokens_fail'] ?? null;
+        return empty($GLOBALS['mcpwp_test_oauth_tokens_exists']) || (is_callable($fail) ? (bool) $fail($kind) : true === $fail);
+    }
+
+    private static function before($kind, $sql)
+    {
+        $hook = $GLOBALS['mcpwp_test_oauth_tokens_before'] ?? null;
+        if (is_callable($hook)) {
+            $hook($kind, $sql);
+        }
+    }
+
+    /** @return array{0:bool,1:mixed} */
+    public static function insert($table, array $data)
+    {
+        if (! preg_match('/mcpwp_oauth_tokens$/', (string) $table)) {
+            return array(false, null);
+        }
+        self::before('insert', '');
+        if (self::fails('insert')) {
+            return array(true, false);
+        }
+        foreach ($GLOBALS['mcpwp_test_oauth_tokens'] as $row) {
+            if ($row['token_hash'] === $data['token_hash']) {
+                return array(true, false); // UNIQUE token_hash.
+            }
+        }
+        $row       = array();
+        foreach (array('token_hash', 'type', 'client_id', 'user_id', 'family_id', 'scopes', 'aud', 'issued_at', 'expires_at', 'last_used_at', 'revoked_at') as $col) {
+            $v          = $data[ $col ] ?? null;
+            $row[ $col ] = null === $v ? null : (string) $v; // MySQL hands back strings.
+        }
+        $row['id'] = (string) ++$GLOBALS['mcpwp_test_oauth_tokens_seq'];
+        $GLOBALS['mcpwp_test_oauth_tokens'][ $row['id'] ] = $row;
+        return array(true, 1);
+    }
+
+    /** @return array{0:bool,1:mixed} */
+    public static function run($method, $sql, $wpdb)
+    {
+        $sql = trim((string) $sql);
+        if ('get_var' === $method && preg_match("/^SHOW TABLES LIKE '(.*)'$/s", $sql, $m) && false !== strpos($m[1], 'oauth') ) {
+            $name = str_replace('\\', '', $m[1]);
+            if (! preg_match('/mcpwp_oauth_tokens$/', $name)) {
+                return array(false, null);
+            }
+            self::before($method, $sql);
+            return array(true, empty($GLOBALS['mcpwp_test_oauth_tokens_exists']) ? null : $name);
+        }
+        if (! preg_match('/^(SELECT \* FROM|UPDATE|DELETE FROM|DROP TABLE IF EXISTS) (\S*mcpwp_oauth_tokens)\b(.*)$/s', $sql, $m)) {
+            return array(false, null);
+        }
+        self::before($method, $sql);
+        $rest = $m[3];
+        if (0 === strpos($sql, 'DROP TABLE')) {
+            $GLOBALS['mcpwp_test_oauth_tokens']        = array();
+            $GLOBALS['mcpwp_test_oauth_tokens_exists'] = false;
+            return array(true, true);
+        }
+        if (self::fails($method)) {
+            return array(true, 'query' === $method ? false : null);
+        }
+        $rows = &$GLOBALS['mcpwp_test_oauth_tokens'];
+
+        if (0 === strpos($sql, 'SELECT') && preg_match("/^ WHERE token_hash = '([0-9a-f]+)' LIMIT 1$/", $rest, $w)) {
+            foreach ($rows as $row) {
+                if ($row['token_hash'] === $w[1]) {
+                    return array(true, $row);
+                }
+            }
+            return array(true, null);
+        }
+        if (0 === strpos($sql, 'DELETE') && preg_match('/^ WHERE expires_at < (\d+)$/', $rest, $w)) {
+            $n = 0;
+            foreach ($rows as $id => $row) {
+                if ((int) $row['expires_at'] < (int) $w[1]) {
+                    unset($rows[ $id ]);
+                    ++$n;
+                }
+            }
+            return array(true, $n);
+        }
+        if (0 === strpos($sql, 'UPDATE') && preg_match("/^ SET (.+?) WHERE (.+)$/s", $rest, $w)) {
+            $sets = array();
+            foreach (preg_split('/,\s*/', $w[1]) as $assign) {
+                if (preg_match("/^(\w+) = (?:'((?:[^'\\\\]|\\\\.)*)'|(\d+))$/", trim($assign), $a)) {
+                    $sets[ $a[1] ] = isset($a[3]) && '' !== $a[3] ? $a[3] : self::quoted($a[2]);
+                }
+            }
+            $conds = array();
+            $live  = false;
+            foreach (preg_split('/\s+AND\s+/', $w[2]) as $cond) {
+                $cond = trim($cond);
+                if ('revoked_at IS NULL' === $cond) {
+                    $live = true;
+                } elseif (preg_match("/^(\w+) = (?:'((?:[^'\\\\]|\\\\.)*)'|(\d+))$/", $cond, $c)) {
+                    $conds[ $c[1] ] = isset($c[3]) && '' !== $c[3] ? $c[3] : self::quoted($c[2]);
+                } else {
+                    return array(false, null);
+                }
+            }
+            $n = 0;
+            foreach ($rows as $id => $row) {
+                if ($live && null !== $row['revoked_at']) {
+                    continue;
+                }
+                foreach ($conds as $col => $val) {
+                    if ((string) $row[ $col ] !== (string) $val) {
+                        continue 2;
+                    }
+                }
+                foreach ($sets as $col => $val) {
+                    $rows[ $id ][ $col ] = (string) $val;
+                }
+                ++$n;
+            }
+            return array(true, $n);
+        }
+        return array(false, null);
+    }
+}
+Mcpwp_Test_OAuth_Tokens_Table::reset();
+
+/** The OAuth token table row for a token (#1101 PR-3b), or null. */
+function mcpwp_test_oauth_row($token)
+{
+    $hash = hash('sha256', (string) $token);
+    foreach ($GLOBALS['mcpwp_test_oauth_tokens'] as $row) {
+        if ($row['token_hash'] === $hash) {
+            return $row;
+        }
+    }
+    return null;
+}
+
+/** The token record a row stands for (Mcpwp_OAuth_Token_Store::to_record()), or false. */
+function mcpwp_test_oauth_record($token)
+{
+    $row = mcpwp_test_oauth_row($token);
+    return is_array($row) ? Mcpwp_OAuth_Token_Store::to_record($row) : false;
+}
+
+/** Overwrite columns of a token's row, as a direct database edit would. */
+function mcpwp_test_oauth_set($token, array $columns)
+{
+    $hash = hash('sha256', (string) $token);
+    foreach ($GLOBALS['mcpwp_test_oauth_tokens'] as $id => $row) {
+        if ($row['token_hash'] === $hash) {
+            foreach ($columns as $col => $val) {
+                $GLOBALS['mcpwp_test_oauth_tokens'][ $id ][ $col ] = null === $val ? null : (string) $val;
+            }
+        }
+    }
+}
+
 if (! function_exists('dbDelta')) {
     function dbDelta($queries = '', $execute = true)
     {
         $GLOBALS['mcpwp_test_dbdelta'][] = $queries;
+        if (is_string($queries) && preg_match('/CREATE TABLE \S*mcpwp_oauth_tokens\b/', $queries)) {
+            $GLOBALS['mcpwp_test_oauth_tokens_exists'] = true;
+        }
         if (is_string($queries) && preg_match('/CREATE TABLE \S*mcpwp_approvals\b/', $queries)) {
             $GLOBALS['mcpwp_test_approvals_table_exists'] = true;
         }
@@ -2155,6 +2346,7 @@ if (interface_exists('PHPUnit\Runner\BeforeTestHook')) {
         public function executeBeforeTest(string $test): void
         {
             Mcpwp_Test_Approvals_Table::reset();
+            Mcpwp_Test_OAuth_Tokens_Table::reset();
         }
     }
 }
@@ -2320,6 +2512,10 @@ if (! isset($GLOBALS['wpdb'])) {
             if ($approvals[0]) {
                 return $approvals[1];
             }
+            $tokens = Mcpwp_Test_OAuth_Tokens_Table::run('get_row', $query, $this);
+            if ($tokens[0]) {
+                return $tokens[1];
+            }
             // Test-scoped interceptor (#943 S2 graph read surface): a test may
             // install a callable that sees every query and either answers it
             // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
@@ -2391,6 +2587,10 @@ if (! isset($GLOBALS['wpdb'])) {
             $approvals = Mcpwp_Test_Approvals_Table::run('get_var', $query, $this);
             if ($approvals[0]) {
                 return $approvals[1];
+            }
+            $tokens = Mcpwp_Test_OAuth_Tokens_Table::run('get_var', $query, $this);
+            if ($tokens[0]) {
+                return $tokens[1];
             }
             // Test-scoped interceptor (#943 S2 graph read surface): a test may
             // install a callable that sees every query and either answers it
@@ -2617,6 +2817,10 @@ if (! isset($GLOBALS['wpdb'])) {
             $approvals = Mcpwp_Test_Approvals_Table::run('query', $query, $this);
             if ($approvals[0]) {
                 return $approvals[1];
+            }
+            $tokens = Mcpwp_Test_OAuth_Tokens_Table::run('query', $query, $this);
+            if ($tokens[0]) {
+                return $tokens[1];
             }
             $trimmed         = trim((string) $query);
 
@@ -2879,6 +3083,10 @@ if (! isset($GLOBALS['wpdb'])) {
                 $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
                 $this->last_error = '';
                 return 1;
+            }
+            $tokens = Mcpwp_Test_OAuth_Tokens_Table::insert($table, (array) $data);
+            if ($tokens[0]) {
+                return $tokens[1];
             }
             // A test may make inserts into one table fail (e.g. the action
             // log, #981 review round 5: no audit row → no removal).
@@ -4747,6 +4955,7 @@ require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-signals.php';
 // OAuth 2.1 server (#531).
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-clients.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-revocation.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-token-store.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-route-capability-map.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-oauth.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-settings.php';

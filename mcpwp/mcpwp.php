@@ -440,6 +440,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-figma.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-oauth-clients.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-oauth-revocation.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-oauth-token-store.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-route-capability-map.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-oauth.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-broker.php';
@@ -711,6 +712,16 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// if the database later reuses the user id.
 	if ( class_exists( 'Mcpwp_OAuth_Revocation' ) ) {
 		Mcpwp_OAuth_Revocation::init();
+	}
+
+	// OAuth token table (#1101 PR-3b): created/upgraded on its OWN schema
+	// option (Mcpwp_OAuth_Token_Store::SCHEMA_OPTION), not the
+	// mcpwp_db_version compare — an already-current site must still get
+	// it.  One autoloaded option read once current.  Expired rows go daily.
+	if ( class_exists( 'Mcpwp_OAuth_Token_Store' ) ) {
+		Mcpwp_OAuth_Token_Store::ensure_table();
+		add_action( Mcpwp_OAuth_Token_Store::CLEANUP_CRON_HOOK, array( 'Mcpwp_OAuth_Token_Store', 'cleanup' ) );
+		Mcpwp_OAuth_Token_Store::schedule_cleanup();
 	}
 
 	// Initialize white-label (shortcode, branding hooks, Elementor widget).

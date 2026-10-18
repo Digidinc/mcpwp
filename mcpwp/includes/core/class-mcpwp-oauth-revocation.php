@@ -328,6 +328,11 @@ class Mcpwp_OAuth_Revocation {
 		}
 		set_transient( self::family_transient_key( $family_id ), 1, self::retention() );
 		$ok = self::write_map_entry( self::FAMILIES_OPTION, $family_id, self::now() );
+		// #1101 PR-3b: the family's rows are marked revoked too, so a list of
+		// live tokens no longer shows them.
+		if ( class_exists( 'Mcpwp_OAuth_Token_Store' ) && ! Mcpwp_OAuth_Token_Store::revoke_family( $family_id ) ) {
+			$ok = false;
+		}
 		if ( ! $ok ) {
 			self::report_write_failure( 'family', $family_id );
 		}

@@ -176,7 +176,9 @@ final class OAuthRevocation1101Test extends TestCase {
 	}
 
 	private function refresh_record( string $refresh_token ) {
-		return get_transient( $this->ctrl()->get_oauth_refresh_token_transient_key( $refresh_token ) );
+		// #1101 PR-3b: the live row, or false (spent, revoked or missing).
+		$row = mcpwp_test_oauth_row( $refresh_token );
+		return Mcpwp_OAuth_Token_Store::is_active( $row, 'refresh' ) ? Mcpwp_OAuth_Token_Store::to_record( $row ) : false;
 	}
 
 	private function assert_grant_error( WP_REST_Response $response, string $error, string $context = '' ): void {
@@ -188,7 +190,7 @@ final class OAuthRevocation1101Test extends TestCase {
 
 	public function test_access_and_refresh_records_store_the_client_and_family(): void {
 		$data    = $this->grant( self::DCR_CLIENT );
-		$access  = get_transient( $this->ctrl()->access_key( $data['access_token'] ) );
+		$access  = mcpwp_test_oauth_record( $data['access_token'] );
 		$refresh = $this->refresh_record( $data['refresh_token'] );
 
 		$this->assertSame( self::DCR_CLIENT, $access['client_id'] );
@@ -342,6 +344,38 @@ final class OAuthRevocation1101Test extends TestCase {
 		$this->assertFalse( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'issued_at' => $epoch + 1 ) ), 'Not rounded: a token one microsecond later lives.' );
 	}
 
+	/**
+	 * #1101 round 2 (3b), pinned on the stamp itself: what a grant mints
+	 * carries, as issued_at, a moment no later than its revocation check —
+	 * never the (later) mint time.  Observed at the check's user-epoch read.
+	 *
+	 * @dataProvider grant_kinds
+	 */
+	public function test_minted_tokens_carry_the_check_time_not_the_mint_time( string $kind ): void {
+		$first   = 'refresh' === $kind ? $this->grant( self::DCR_CLIENT ) : null;
+		$code    = 'code' === $kind ? $this->seed_code( self::DCR_CLIENT ) : '';
+		$checked = null;
+		$GLOBALS['mcpwp_test_user_meta_read_hook'] = function ( $uid, $key ) use ( &$checked ) {
+			if ( Mcpwp_OAuth_Revocation::USER_META === $key && null === $checked ) {
+				$checked = Mcpwp_OAuth_Revocation::now();
+				usleep( 50 ); // the mint is measurably later
+			}
+		};
+		try {
+			$minted = 'refresh' === $kind ? $this->refresh( $first['refresh_token'], self::DCR_CLIENT )->get_data() : $this->redeem( $code, self::DCR_CLIENT )->get_data();
+		} finally {
+			unset( $GLOBALS['mcpwp_test_user_meta_read_hook'] );
+		}
+		$this->assertNotNull( $checked, 'The revocation check ran.' );
+		foreach ( array( 'access_token', 'refresh_token' ) as $field ) {
+			$this->assertLessThanOrEqual( $checked, (int) mcpwp_test_oauth_row( $minted[ $field ] )['issued_at'], $field );
+		}
+	}
+
+	public static function grant_kinds(): array {
+		return array( 'refresh' => array( 'refresh' ), 'code' => array( 'code' ) );
+	}
+
 	/** M24/M28: an epoch is never lowered — by a user, client or map write. */
 	public function test_an_epoch_can_never_be_lowered(): void {
 		$future = Mcpwp_OAuth_Revocation::now() + 3600 * 1000000;
@@ -362,18 +396,21 @@ final class OAuthRevocation1101Test extends TestCase {
 	/** #1101 round 2 (3b): a revocation between the check and the mint covers the new tokens. */
 	public function test_a_revocation_landing_between_check_and_mint_covers_a_refresh(): void {
 		$first = $this->grant( self::DCR_CLIENT );
-		// The refresh writes its reuse tombstone after every check and before
-		// it mints: land the user's revocation exactly there.
-		$GLOBALS['mcpwp_test_transient_write_fails'] = function ( $name ) {
-			if ( 0 === strpos( $name, 'mcpwp_oauth_rtu_' ) ) {
+		// #1101 PR-3b: the refresh mints (inserts its token rows) after every
+		// check: land the user's revocation right before the first insert.
+		$done = false;
+		$GLOBALS['mcpwp_test_oauth_tokens_before'] = function ( $kind ) use ( &$done ) {
+			if ( ! $done && 'insert' === $kind ) {
+				$done = true;
+				usleep( 5 );
 				Mcpwp_OAuth_Revocation::revoke_user( 1 );
+				usleep( 5 );
 			}
-			return false;
 		};
 		try {
 			$minted = $this->refresh( $first['refresh_token'], self::DCR_CLIENT )->get_data();
 		} finally {
-			unset( $GLOBALS['mcpwp_test_transient_write_fails'] );
+			$GLOBALS['mcpwp_test_oauth_tokens_before'] = null;
 		}
 		$this->assertArrayHasKey( 'access_token', $minted, 'The refresh itself went through.' );
 		$this->assertFalse( $this->works( $minted['access_token'] ), 'The new access token is covered.' );
@@ -382,15 +419,19 @@ final class OAuthRevocation1101Test extends TestCase {
 
 	public function test_a_revocation_landing_between_check_and_mint_covers_a_code_redemption(): void {
 		$code = $this->seed_code( self::DCR_CLIENT );
-		$GLOBALS['mcpwp_test_transient_delete_hook'] = function ( $name ) {
-			if ( 0 === strpos( $name, 'mcpwp_oauth_code_' ) ) {
+		$done = false;
+		$GLOBALS['mcpwp_test_oauth_tokens_before'] = function ( $kind ) use ( &$done ) {
+			if ( ! $done && 'insert' === $kind ) {
+				$done = true;
+				usleep( 5 );
 				Mcpwp_OAuth_Revocation::revoke_client( self::DCR_CLIENT );
+				usleep( 5 );
 			}
 		};
 		try {
 			$minted = $this->redeem( $code, self::DCR_CLIENT )->get_data();
 		} finally {
-			unset( $GLOBALS['mcpwp_test_transient_delete_hook'] );
+			$GLOBALS['mcpwp_test_oauth_tokens_before'] = null;
 		}
 		$this->assertArrayHasKey( 'access_token', $minted );
 		$this->assertFalse( $this->works( $minted['access_token'] ) );
@@ -432,26 +473,33 @@ final class OAuthRevocation1101Test extends TestCase {
 		$this->assertTrue( $this->works( $next['access_token'] ) );
 	}
 
-	/** #1101 round 2 (P1): a revocation landing after the refresh's claim, before its new token exists. */
+	/**
+	 * #1101 round 2 (P1), with the table: a revocation landing after the
+	 * refresh minted its new tokens and before it claims the old one.  The
+	 * revoke finds the live row and kills the family; the claim then
+	 * affects 0 rows, and what the refresh minted is discarded.
+	 */
 	public function test_a_revocation_racing_a_refresh_still_kills_what_the_refresh_mints(): void {
 		$victim = $this->grant( self::DCR_CLIENT );
-		$key    = $this->ctrl()->get_oauth_refresh_token_transient_key( $victim['refresh_token'] );
 		$self   = $this;
 		$status = null;
-		$GLOBALS['mcpwp_test_transient_delete_hook'] = function ( $name, $existed ) use ( $key, $victim, $self, &$status ) {
-			if ( $name === $key && $existed && null === $status ) {
+		$GLOBALS['mcpwp_test_oauth_tokens_before'] = function ( $kind, $sql ) use ( $victim, $self, &$status ) {
+			if ( null === $status && 'query' === $kind && false !== strpos( $sql, "SET type = 'reuse_tombstone'" ) ) {
+				$status = 0;
 				$status = $self->ctrl_revoke( $victim['refresh_token'] );
 			}
 		};
 		try {
-			$minted = $this->refresh( $victim['refresh_token'], self::DCR_CLIENT )->get_data();
+			$response = $this->refresh( $victim['refresh_token'], self::DCR_CLIENT );
 		} finally {
-			unset( $GLOBALS['mcpwp_test_transient_delete_hook'] );
+			$GLOBALS['mcpwp_test_oauth_tokens_before'] = null;
 		}
-		$this->assertSame( 200, $status, 'The revoke ran between the claim and the mint.' );
-		$this->assertArrayHasKey( 'refresh_token', $minted );
-		$this->assert_grant_error( $this->refresh( $minted['refresh_token'], self::DCR_CLIENT ), 'invalid_grant' );
-		$this->assertFalse( $this->works( $minted['access_token'] ) );
+		$this->assertSame( 200, $status, 'The revoke ran between the mint and the claim.' );
+		$this->assert_grant_error( $response, 'invalid_grant' );
+		$this->assertFalse( $this->works( $victim['access_token'] ) );
+		foreach ( $GLOBALS['mcpwp_test_oauth_tokens'] as $row ) {
+			$this->assertNotNull( $row['revoked_at'], 'Nothing the refresh minted is alive.' );
+		}
 	}
 
 	/** Helper for the race test. */
@@ -636,17 +684,20 @@ final class OAuthRevocation1101Test extends TestCase {
 		$this->assertFalse( $this->works( $second['access_token'] ), 'The option still knows.' );
 	}
 
-	public function test_rotation_leaves_a_tombstone_for_the_refresh_lifetime(): void {
-		$first = $this->grant( self::DCR_CLIENT );
+	public function test_rotation_turns_the_old_row_into_its_reuse_tombstone(): void {
+		$first   = $this->grant( self::DCR_CLIENT );
+		$expires = (int) mcpwp_test_oauth_row( $first['refresh_token'] )['expires_at'];
 		$this->refresh( $first['refresh_token'], self::DCR_CLIENT );
-		$key = $this->ctrl()->get_oauth_refresh_token_reuse_key( $first['refresh_token'] );
-		$this->assertArrayHasKey( $key, $GLOBALS['mcpwp_test_transients'] );
-		$this->assertSame( Mcpwp_REST_OAuth::refresh_token_ttl(), $GLOBALS['mcpwp_test_transients'][ $key ]['ttl'] );
+		$row = mcpwp_test_oauth_row( $first['refresh_token'] );
+		$this->assertSame( 'reuse_tombstone', $row['type'] );
+		$this->assertNotNull( $row['revoked_at'] );
+		$this->assertSame( $expires, (int) $row['expires_at'], 'Kept for the refresh lifetime.' );
+		$this->assertNotSame( '', $row['family_id'] );
 	}
 
 	private function tombstone_family( string $refresh_token ): string {
-		$t = get_transient( $this->ctrl()->get_oauth_refresh_token_reuse_key( $refresh_token ) );
-		return is_array( $t ) ? (string) $t['family_id'] : '';
+		$row = mcpwp_test_oauth_row( $refresh_token );
+		return is_array( $row ) ? (string) $row['family_id'] : '';
 	}
 
 	// ── 6. DCR per-address ceiling ────────────────────────────────────────
