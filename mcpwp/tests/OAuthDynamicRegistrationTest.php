@@ -422,7 +422,8 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 	}
 
 	public function test_lock_held_answers_503_and_stores_nothing(): void {
-		$this->hold_lock( time() + 60 );
+		$held_until = time() + 60;
+		$this->hold_lock( $held_until );
 
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/register' );
 		$request->set_body( wp_json_encode( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) ) );
@@ -434,7 +435,7 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		$this->assertArrayHasKey( 'Retry-After', $response->get_headers() );
 		$this->assertArrayNotHasKey( 'client_id', $response->get_data() );
 		$this->assertSame( array(), Mcpwp_OAuth_Clients::all() );
-		$this->assertSame( time() + 60 . '|deadbeef', $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_OAuth_Clients::LOCK_OPTION ], 'A held lock is never deleted by the loser.' );
+		$this->assertSame( $held_until . '|deadbeef', $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_OAuth_Clients::LOCK_OPTION ], 'A held lock is never deleted by the loser.' );
 	}
 
 	public function test_stale_lock_is_broken_after_its_timeout(): void {

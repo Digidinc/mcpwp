@@ -23,6 +23,7 @@ use PHPUnit\Framework\TestCase;
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-posts.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-oauth.php';
+require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-oauth-local-admin.php';
 
 final class OAuthRunAsUserTest extends TestCase {
 
@@ -146,7 +147,10 @@ final class OAuthRunAsUserTest extends TestCase {
 		$put = $this->auth( $this->token( self::AUTHOR ), 'PUT', '/mcpwp/v1/posts/' . self::PUB_ID, array( 'id' => self::PUB_ID, 'title' => 'Hijack' ) );
 		$this->assert_error_code( $put, 'rest_cannot_edit', 403 ); // …but not change it.
 
+		// DELETE asks delete_post, not edit_post: allowed to edit, not to delete.
+		$GLOBALS['mcpwp_test_user_caps'][ self::AUTHOR ]['edit_post']   = true;
 		$GLOBALS['mcpwp_test_user_caps'][ self::AUTHOR ]['delete_post'] = false;
+		$this->assertTrue( $this->auth( $this->token( self::AUTHOR ), 'PUT', '/mcpwp/v1/posts/' . self::PUB_ID, array( 'id' => self::PUB_ID, 'title' => 'Fine' ) ) );
 		$delete = $this->auth( $this->token( self::AUTHOR ), 'DELETE', '/mcpwp/v1/posts/' . self::PUB_ID, array( 'id' => self::PUB_ID ) );
 		$this->assert_error_code( $delete, 'rest_cannot_edit', 403 );
 
@@ -184,6 +188,35 @@ final class OAuthRunAsUserTest extends TestCase {
 		update_option( Mcpwp_OAuth_Well_Known::MIN_ROLE_OPTION, 'administrator' );
 		$this->assertFalse( Mcpwp_OAuth_Well_Known::user_meets_min_role( self::EDITOR ) );
 		$this->assertFalse( Mcpwp_OAuth_Well_Known::user_meets_min_role( 0 ) );
+	}
+
+	public function test_list_level_non_public_visibility_follows_the_users_caps(): void {
+		$probe = new class() extends Mcpwp_Api_Auth_Test_Harness {
+			public function can_see_non_public() {
+				return $this->requester_can_see_non_public();
+			}
+		};
+		$token = $this->token( self::EDITOR );
+		$this->assertTrue( $probe->verify_api_key( new WP_REST_Request( 'GET', '/mcpwp/v1/posts', array(), array( 'Authorization' => 'Bearer ' . $token ) ) ) );
+		$this->assertTrue( $probe->can_see_non_public(), 'An Editor with a write token lists drafts, as in wp-admin.' );
+
+		$GLOBALS['mcpwp_test_user_caps'][ self::EDITOR ]['read_private_posts'] = false;
+		$this->assertFalse( $probe->can_see_non_public(), 'Without read_private_posts, lists clamp to published.' );
+	}
+
+	public function test_setup_switch_stores_only_a_listed_minimum_role(): void {
+		$GLOBALS['mcpwp_test_current_user']                 = 1;
+		$GLOBALS['mcpwp_test_user_caps'][1]                 = array( 'activate_plugins' => true );
+		$post = array( Mcpwp_OAuth_Local_Admin::NONCE_FIELD => 'test-nonce', 'mcpwp_local_oauth' => '1' );
+
+		Mcpwp_OAuth_Local_Admin::process_toggle( $post + array( 'mcpwp_local_oauth_min_role' => 'author' ) );
+		$this->assertSame( 'author', get_option( Mcpwp_OAuth_Well_Known::MIN_ROLE_OPTION ) );
+
+		Mcpwp_OAuth_Local_Admin::process_toggle( $post + array( 'mcpwp_local_oauth_min_role' => 'subscriber' ) );
+		$this->assertSame( 'author', get_option( Mcpwp_OAuth_Well_Known::MIN_ROLE_OPTION ), 'An unlisted role is never stored.' );
+
+		Mcpwp_OAuth_Local_Admin::process_toggle( $post + array( 'mcpwp_local_oauth_min_role' => 'administrator' ) );
+		$this->assertSame( 'administrator', Mcpwp_OAuth_Well_Known::get_min_role() );
 	}
 
 	// ── Sub-request path (batch / tools/call fan-out) ──────────────────────
