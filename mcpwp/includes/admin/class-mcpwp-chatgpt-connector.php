@@ -222,24 +222,26 @@ class Mcpwp_ChatGPT_Connector {
 	}
 
 	/**
-	 * Which OAuth discovery, if any, this site advertises to clients.
+	 * Whether OAuth discovery would send ChatGPT to the wrong sign-in.
 	 *
-	 * When either is on, a request with a missing, mistyped or revoked key
-	 * answers 401 + WWW-Authenticate pointing at an authorization server, and
-	 * ChatGPT switches to an OAuth sign-in instead of failing plainly. With the
-	 * broker that sign-in is the parked mumcp.com flow.
+	 * Only the mumcp.com broker is a conflict, and only while this site's own
+	 * OAuth is off: then a request with a missing, mistyped or revoked key
+	 * answers 401 + WWW-Authenticate pointing at mumcp.com, and ChatGPT asks
+	 * for a mumcp.com sign-in instead of failing plainly.
 	 *
-	 * @return string 'broker', 'legacy' or ''.
+	 * With local OAuth on (the default since PR-2, D10), discovery names this
+	 * site as the authorization server (D11), so the sign-in ChatGPT shows is
+	 * the WordPress login — the second, intended connection path, not a
+	 * conflict.  The former 'legacy' warning is therefore gone (D14).
+	 *
+	 * @return string 'broker' or ''.
 	 */
 	public static function oauth_discovery_conflict() {
 		if ( ! class_exists( 'Mcpwp_OAuth_Well_Known' ) ) {
 			return '';
 		}
-		if ( Mcpwp_OAuth_Well_Known::is_broker_enrolled() ) {
+		if ( ! Mcpwp_OAuth_Well_Known::is_legacy_oauth_enabled() && Mcpwp_OAuth_Well_Known::is_broker_enrolled() ) {
 			return 'broker';
-		}
-		if ( Mcpwp_OAuth_Well_Known::is_legacy_oauth_enabled() ) {
-			return 'legacy';
 		}
 		return '';
 	}

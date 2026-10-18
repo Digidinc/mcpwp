@@ -295,16 +295,27 @@ final class ChatGptConnectorTest extends TestCase {
 		$this->assertNull( $connector->handle_request( array( 'mcpwp_regenerate_key' => '1' ) ) );
 	}
 
+	/**
+	 * PR-2 D11/D14: local OAuth on is no longer a conflict ('legacy' is gone —
+	 * the WordPress sign-in is the intended second path).  The broker is a
+	 * conflict only while local OAuth is off.
+	 */
 	public function test_oauth_discovery_conflict_is_detected(): void {
 		$this->assertSame( '', Mcpwp_ChatGPT_Connector::oauth_discovery_conflict() );
 
 		update_option( 'mcpwp_settings', array( 'oauth_enabled' => true ) );
-		$this->assertSame( 'legacy', Mcpwp_ChatGPT_Connector::oauth_discovery_conflict() );
+		$this->assertSame( '', Mcpwp_ChatGPT_Connector::oauth_discovery_conflict() );
 
 		update_option(
 			'mcpwp_broker_enrollment',
 			array( 'site_id' => 's1', 'site_credential' => 'c', 'audience' => 'https://example.com' )
 		);
+		$this->assertSame( '', Mcpwp_ChatGPT_Connector::oauth_discovery_conflict(), 'Local OAuth on: the local AS wins, no mumcp.com sign-in.' );
+
+		update_option( 'mcpwp_settings', array() );
+		$this->assertSame( '', Mcpwp_ChatGPT_Connector::oauth_discovery_conflict(), 'Never stored = on (D10).' );
+
+		update_option( 'mcpwp_settings', array( 'oauth_enabled' => false ) );
 		$this->assertSame( 'broker', Mcpwp_ChatGPT_Connector::oauth_discovery_conflict() );
 	}
 }

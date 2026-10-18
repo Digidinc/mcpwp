@@ -661,9 +661,11 @@ final class OAuthServerTest extends TestCase {
 	}
 
 	/**
-	 * P0-A: An administrator (manage_options) requesting admin scope gets admin.
+	 * PR-2 D8 (was: "admin requesting admin gets admin"): OAuth never grants
+	 * admin, even to a manage_options user.  A requested admin is clamped to
+	 * write — not refused — so a client asking for every scope still connects.
 	 */
-	public function test_scope_escalation_admin_requesting_admin_gets_admin(): void {
+	public function test_scope_escalation_admin_requesting_admin_gets_write_never_admin(): void {
 		$GLOBALS['mcpwp_test_current_user'] = 1;
 		$GLOBALS['mcpwp_test_user_caps'][1] = array(
 			'edit_posts'     => true,
@@ -673,7 +675,7 @@ final class OAuthServerTest extends TestCase {
 		$ctrl   = $this->controller();
 		$result = $ctrl->clamp_scope_to_user_capability( 'admin' );
 
-		$this->assertContains( 'admin', $result, 'Admin must receive admin scope' );
+		$this->assertSame( array( 'read', 'write' ), $result, 'D8: an administrator is capped at write over OAuth' );
 	}
 
 	/**
@@ -1483,8 +1485,12 @@ final class OAuthServerTest extends TestCase {
 		$ctrl = $this->controller();
 		$html = $this->render_consent( $ctrl, 'read write admin' );
 
-		$post_params           = $this->hidden_fields_from( $html );
-		$post_params['action'] = 'approve';
+		$post_params                = $this->hidden_fields_from( $html );
+		$post_params['action']      = 'approve';
+		// PR-2: write is a consent-screen checkbox, ticked by default.  A
+		// browser submits it only while ticked, and hidden_fields_from()
+		// collects hidden inputs only, so the tick is posted explicitly here.
+		$post_params['scope_write'] = '1';
 
 		$response = $ctrl->handle_authorize_post(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $post_params )
@@ -1809,8 +1815,12 @@ final class OAuthServerTest extends TestCase {
 		$this->assertSame( array( 'read' ), $this->stored_access_token_scopes( $data['access_token'] ) );
 	}
 
-	/** A legitimate admin refresh still works — the fix must not clamp everyone to read. */
-	public function test_refresh_token_admin_user_keeps_admin_scope(): void {
+	/**
+	 * A legitimate admin refresh still works — the fix must not clamp everyone
+	 * to read.  PR-2 D8: it works at write; a pre-PR-2 admin refresh token is
+	 * narrowed to write on its next use (was: keeps admin).
+	 */
+	public function test_refresh_token_admin_user_keeps_write_scope_never_admin(): void {
 		$GLOBALS['mcpwp_test_user_caps'][34] = array( 'edit_posts' => true, 'manage_options' => true );
 		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 34 );
 
@@ -1821,7 +1831,8 @@ final class OAuthServerTest extends TestCase {
 			) )
 		)->get_data();
 
-		$this->assertSame( 'read write admin', $data['scope'] );
+		$this->assertSame( 'read write', $data['scope'] );
+		$this->assertSame( array( 'read', 'write' ), $this->stored_access_token_scopes( $data['access_token'] ) );
 	}
 
 	// ── Refresh grant scope-list shape handling ───────────────────────────
@@ -1849,12 +1860,15 @@ final class OAuthServerTest extends TestCase {
 
 		$this->assertSame( 200, $response->get_status() );
 		$data = $response->get_data();
+		// PR-2 D8: the surviving "admin" is then capped at write by the
+		// clamp (was 'read write admin').  Still discriminating: had the
+		// filter dropped every member, the grant would be bare 'read'.
 		$this->assertSame(
-			'read write admin',
+			'read write',
 			$data['scope'],
-			'Only the string scope member "admin" may survive the is_string filter'
+			'Only the string scope member "admin" may survive the is_string filter (then capped at write, D8)'
 		);
-		$this->assertSame( array( 'read', 'write', 'admin' ), $this->stored_access_token_scopes( $data['access_token'] ) );
+		$this->assertSame( array( 'read', 'write' ), $this->stored_access_token_scopes( $data['access_token'] ) );
 	}
 
 	/**
@@ -1890,12 +1904,14 @@ final class OAuthServerTest extends TestCase {
 
 		$this->assertSame( 200, $response->get_status() );
 		$data = $response->get_data();
+		// PR-2 D8: parsed to read+write+admin, then capped at write (was
+		// 'read write admin').  A failed parse would yield bare 'read'.
 		$this->assertSame(
-			'read write admin',
+			'read write',
 			$data['scope'],
-			'A bare-string stored scope list must parse to read+write+admin'
+			'A bare-string stored scope list must parse (then cap at write, D8)'
 		);
-		$this->assertSame( array( 'read', 'write', 'admin' ), $this->stored_access_token_scopes( $data['access_token'] ) );
+		$this->assertSame( array( 'read', 'write' ), $this->stored_access_token_scopes( $data['access_token'] ) );
 	}
 
 	// ── client_credentials server-side scope ceiling ──────────────────────

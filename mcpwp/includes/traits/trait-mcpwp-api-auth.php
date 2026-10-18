@@ -3440,6 +3440,25 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
+		// RFC 8707 audience binding (PR-2 D2).  Every token issued since PR-2
+		// carries `aud` = this site's MCP endpoint URL; one carrying anything
+		// else (a different site's URL, a value altered in storage, an empty
+		// string) is refused.  The key's PRESENCE decides — array_key_exists,
+		// not isset/empty — so a null or empty `aud` fails closed instead of
+		// passing as "no audience".
+		//
+		// A record with no `aud` key at all was minted before this release.
+		// Access tokens live at most a day (issue_oauth_access_token() clamps
+		// the TTL to 86400), so that grace period ends on its own.
+		if ( array_key_exists( 'aud', $record ) && ! $this->oauth_audience_matches( $record['aud'] ) ) {
+			$this->log_auth_failure( $request );
+			return new WP_Error(
+				'invalid_token',
+				__( 'This access token was issued for a different resource.', 'mcpwp' ),
+				array( 'status' => 401 )
+			);
+		}
+
 		if ( $metered ) {
 			$rate_limit_check = $this->meter_request( $request, 'oauth:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), $this->rate_limit_method( $request ) );
 			if ( is_wp_error( $rate_limit_check ) ) {
@@ -5949,8 +5968,14 @@ trait Mcpwp_Api_Auth {
 			$cc_max_scope = 'write';
 		}
 
+		// D10: absent means ON; a stored value (on or off) is respected.  One
+		// resolver for every reader — see Mcpwp_OAuth_Well_Known::resolve_oauth_enabled().
+		$oauth_enabled = class_exists( 'Mcpwp_OAuth_Well_Known' )
+			? Mcpwp_OAuth_Well_Known::resolve_oauth_enabled( $settings )
+			: ( ! array_key_exists( 'oauth_enabled', $settings ) || ! empty( $settings['oauth_enabled'] ) );
+
 		return array(
-			'oauth_enabled'                      => ! empty( $settings['oauth_enabled'] ),
+			'oauth_enabled'                      => $oauth_enabled,
 			'oauth_client_id'                    => isset( $settings['oauth_client_id'] ) ? sanitize_key( (string) $settings['oauth_client_id'] ) : 'site_pilot_ai',
 			'oauth_client_secret_hash'           => isset( $settings['oauth_client_secret_hash'] ) ? (string) $settings['oauth_client_secret_hash'] : '',
 			'oauth_token_ttl'                    => isset( $settings['oauth_token_ttl'] ) ? max( 300, min( 86400, absint( $settings['oauth_token_ttl'] ) ) ) : 3600,
@@ -5993,6 +6018,10 @@ trait Mcpwp_Api_Auth {
 
 		$payload = array(
 			'scopes'     => $scopes,
+			// RFC 8707 audience (PR-2 D1/D2): always this site's MCP endpoint,
+			// whatever `resource` form the client used.  Enforced on every
+			// request in authenticate_oauth_access_token().
+			'aud'        => $this->get_oauth_canonical_resource(),
 			'created_at' => time(),
 			'expires_at' => time() + $ttl,
 		);
@@ -6016,6 +6045,34 @@ trait Mcpwp_Api_Auth {
 			'expires_in'   => $ttl,
 			'scope'        => implode( ' ', $scopes ),
 		);
+	}
+
+	/**
+	 * The canonical OAuth resource / token audience: the MCP endpoint URL.
+	 *
+	 * @return string
+	 */
+	protected function get_oauth_canonical_resource() {
+		if ( class_exists( 'Mcpwp_OAuth_Well_Known' ) ) {
+			return Mcpwp_OAuth_Well_Known::get_canonical_resource();
+		}
+		return (string) rest_url( 'mcpwp/v1/mcp' );
+	}
+
+	/**
+	 * Whether a stored token audience names this site's MCP endpoint.
+	 *
+	 * Fails closed when the comparison helper is unavailable: an `aud` that
+	 * cannot be checked is not accepted.
+	 *
+	 * @param mixed $aud Stored audience.
+	 * @return bool
+	 */
+	protected function oauth_audience_matches( $aud ) {
+		if ( ! class_exists( 'Mcpwp_OAuth_Well_Known' ) ) {
+			return false;
+		}
+		return Mcpwp_OAuth_Well_Known::audience_matches( $aud );
 	}
 
 	/**

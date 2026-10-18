@@ -124,6 +124,11 @@ class Mcpwp_Loader {
 		$this->add_action( 'admin_post_mcpwp_broker_connect', $broker_admin, 'handle_connect' );
 		$this->add_action( 'admin_post_mcpwp_broker_disconnect', $broker_admin, 'handle_disconnect' );
 
+		// Local OAuth (PR-2 D10): Setup → Advanced switch + one-time notice.
+		$this->add_action( 'admin_notices', 'Mcpwp_OAuth_Local_Admin', 'render_notice' );
+		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Local_Admin::TOGGLE_ACTION, 'Mcpwp_OAuth_Local_Admin', 'handle_toggle' );
+		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Local_Admin::DISMISS_ACTION, 'Mcpwp_OAuth_Local_Admin', 'handle_dismiss' );
+
 		// WebMCP in wp-admin (#981): script + origin-trial meta, both no-ops
 		// unless switched on and the user qualifies.
 		$this->add_action( 'admin_enqueue_scripts', 'Mcpwp_WebMCP', 'enqueue' );

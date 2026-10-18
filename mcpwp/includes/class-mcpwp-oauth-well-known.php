@@ -23,16 +23,20 @@
  * already resolved: wp-settings.php sets up the current user before wp() calls
  * WP::parse_request().
  *
- * The oauth-authorization-server document remains gated on the legacy
- * `oauth_enabled` setting alone.  The oauth-protected-resource document is
- * gated on `oauth_enabled` OR mumcp.com broker enrollment
- * (`mcpwp_broker_enrollment` option, non-empty with a `site_id`) — broker
- * enrollment independently enables protected-resource discovery, and when
- * enrolled its `authorization_servers` points at `https://mumcp.com` instead
- * of this site's own authorization-server document (the broker is the AS,
- * not the site). When neither is active the filter returns true (WordPress
- * processes the request normally, resulting in a 404 from the theme or
- * rewrite fallback).
+ * The oauth-authorization-server document is gated on the `oauth_enabled`
+ * setting alone, which defaults to ON when it was never stored (PR-2 D10).
+ * The oauth-protected-resource document is gated on `oauth_enabled` OR
+ * mumcp.com broker enrollment.  Its `authorization_servers` names this site's
+ * own issuer whenever local OAuth is on, and mumcp.com only when local OAuth
+ * is off and the site is broker-enrolled (D11: the local AS takes precedence;
+ * broker bearer tokens are still accepted).  When neither is active the filter
+ * returns true (WordPress processes the request normally, resulting in a 404
+ * from the theme or rewrite fallback).
+ *
+ * The protected resource is the MCP endpoint itself, rest_url('mcpwp/v1/mcp')
+ * (D1), and its metadata is also served at the RFC 9728 §3.1 path-insertion
+ * URL a strictly compliant client derives from that URL (D12):
+ *   /.well-known/oauth-protected-resource/wp-json/mcpwp/v1/mcp
  *
  * Security note: these documents contain NO secrets — only public metadata
  * (endpoint URLs, supported algorithms, resource identifier).  They are always
@@ -125,8 +129,9 @@ class Mcpwp_OAuth_Well_Known {
 			return $response;
 		}
 
-		$resource_metadata_url = self::get_site_origin() . '/.well-known/oauth-protected-resource' . self::get_site_path_prefix();
-		$response->header( 'WWW-Authenticate', 'Bearer resource_metadata="' . $resource_metadata_url . '"' );
+		// D12: point at the RFC 9728 path-insertion URL for the MCP resource —
+		// the same URL a strictly compliant client would derive by itself.
+		$response->header( 'WWW-Authenticate', 'Bearer resource_metadata="' . self::get_protected_resource_metadata_url() . '"' );
 
 		return $response;
 	}
@@ -166,34 +171,43 @@ class Mcpwp_OAuth_Well_Known {
 		$path_only = strtok( $request_path, '?' );
 		$path_only = '/' . ltrim( (string) $path_only, '/' );
 
-		$prefix = self::get_site_path_prefix();
+		// Cheap reject: every discovery path carries the well-known segment,
+		// and building the candidate list below costs option reads on every
+		// front-end request.  Only the front-channel check remains otherwise.
+		if ( false !== strpos( $path_only, '/.well-known/oauth-' ) ) {
+			$prefix = self::get_site_path_prefix();
 
-		$protected_resource_paths = array(
-			'/.well-known/oauth-protected-resource' . $prefix,
-			$prefix . '/.well-known/oauth-protected-resource',
-		);
-		if ( in_array( $path_only, $protected_resource_paths, true ) ) {
-			// Broker enrollment independently enables this document, regardless
-			// of the legacy `oauth_enabled` setting — see should_serve_protected_resource_metadata().
-			if ( ! self::should_serve_protected_resource_metadata() ) {
-				return $do_parse;
+			$protected_resource_paths = array(
+				'/.well-known/oauth-protected-resource' . $prefix,
+				$prefix . '/.well-known/oauth-protected-resource',
+				// D12: RFC 9728 §3.1 path insertion for the MCP resource URL
+				// (pretty permalinks: /.well-known/oauth-protected-resource/wp-json/mcpwp/v1/mcp;
+				// plain permalinks: /.well-known/oauth-protected-resource/index.php).
+				self::get_protected_resource_metadata_path(),
+			);
+			if ( in_array( untrailingslashit( $path_only ), $protected_resource_paths, true ) ) {
+				// Broker enrollment independently enables this document, regardless
+				// of the `oauth_enabled` setting — see should_serve_protected_resource_metadata().
+				if ( ! self::should_serve_protected_resource_metadata() ) {
+					return $do_parse;
+				}
+				self::serve_protected_resource_metadata();
+				exit;
 			}
-			self::serve_protected_resource_metadata();
-			exit;
-		}
 
-		$authorization_server_paths = array(
-			'/.well-known/oauth-authorization-server' . $prefix,
-			$prefix . '/.well-known/oauth-authorization-server',
-		);
-		if ( in_array( $path_only, $authorization_server_paths, true ) ) {
-			// Unchanged: this document only ever describes this site's own
-			// self-issued AS, so it stays gated on the legacy setting alone.
-			if ( ! self::is_legacy_oauth_enabled() ) {
-				return $do_parse;
+			$authorization_server_paths = array(
+				'/.well-known/oauth-authorization-server' . $prefix,
+				$prefix . '/.well-known/oauth-authorization-server',
+			);
+			if ( in_array( $path_only, $authorization_server_paths, true ) ) {
+				// This document only ever describes this site's own AS, so it
+				// stays gated on the local OAuth setting alone.
+				if ( ! self::is_legacy_oauth_enabled() ) {
+					return $do_parse;
+				}
+				self::serve_authorization_server_metadata();
+				exit;
 			}
-			self::serve_authorization_server_metadata();
-			exit;
 		}
 
 		if ( self::is_front_channel_authorize_request( $path_only ) ) {
@@ -272,29 +286,27 @@ class Mcpwp_OAuth_Well_Known {
 	 * Split out from serve_protected_resource_metadata() so unit tests can
 	 * assert on the exact shape without going through emit_json()'s exit().
 	 *
-	 * When this site is enrolled with the mumcp.com broker
-	 * (`mcpwp_broker_enrollment` option, non-empty with a `site_id` —
-	 * see is_broker_enrolled()), `authorization_servers` points at mumcp.com:
-	 * the broker is the authorization server, not this site. Otherwise the
-	 * site remains its own AS, exactly as before broker support existed.
+	 * - `resource` is the MCP endpoint URL (D1).  RFC 9728 §3.3 requires it
+	 *   to equal the URL the client is protecting — the URL the user pasted.
+	 * - `authorization_servers` lists ISSUER identifiers (RFC 9728 §2), not
+	 *   metadata URLs.  It is this site's issuer whenever local OAuth is on
+	 *   (D11); mumcp.com only when local OAuth is off and the site is
+	 *   broker-enrolled.
+	 * - `scopes_supported` never lists admin: OAuth never grants it (D8).
 	 *
 	 * @return array{resource:string,authorization_servers:string[],scopes_supported:string[],bearer_methods_supported:string[]}
 	 */
 	public static function build_protected_resource_metadata() {
-		$origin   = self::get_site_origin();
-		$prefix   = self::get_site_path_prefix();
-		$resource = $origin . $prefix;
-
-		if ( self::is_broker_enrolled() ) {
+		if ( ! self::is_legacy_oauth_enabled() && self::is_broker_enrolled() ) {
 			$authorization_servers = array( 'https://mumcp.com' );
 		} else {
-			$authorization_servers = array( $origin . '/.well-known/oauth-authorization-server' . $prefix );
+			$authorization_servers = array( self::get_issuer() );
 		}
 
 		return array(
-			'resource'                 => $resource,
+			'resource'                 => self::get_canonical_resource(),
 			'authorization_servers'    => $authorization_servers,
-			'scopes_supported'         => array( 'read', 'write', 'admin' ),
+			'scopes_supported'         => array( 'read', 'write' ),
 			'bearer_methods_supported' => array( 'header' ),
 		);
 	}
@@ -314,13 +326,46 @@ class Mcpwp_OAuth_Well_Known {
 	}
 
 	/**
-	 * Whether the legacy self-issued OAuth AS is enabled.
+	 * Whether this site's own (local) OAuth authorization server is enabled.
+	 *
+	 * D10: ON when `oauth_enabled` was never stored — new installs and
+	 * upgrades that never touched the setting.  A stored value, on or off, is
+	 * respected exactly; an explicit opt-out stays off.
+	 *
+	 * The name predates PR-2 (when local OAuth was the "legacy" path next to
+	 * the broker) and is kept because callers outside this class use it.
 	 *
 	 * @return bool
 	 */
 	public static function is_legacy_oauth_enabled() {
-		$settings = get_option( 'mcpwp_settings', array() );
+		return self::resolve_oauth_enabled( get_option( 'mcpwp_settings', array() ) );
+	}
+
+	/**
+	 * Resolve `oauth_enabled` from a stored settings value (pure, testable).
+	 *
+	 * The single rule every reader uses (this class, the auth trait's
+	 * get_oauth_settings(), the admin notice), so "absent means on" cannot
+	 * drift between the discovery documents and the token endpoint.
+	 *
+	 * @param mixed $settings Stored mcpwp_settings value.
+	 * @return bool
+	 */
+	public static function resolve_oauth_enabled( $settings ) {
+		if ( ! is_array( $settings ) || ! array_key_exists( 'oauth_enabled', $settings ) ) {
+			return true;
+		}
 		return ! empty( $settings['oauth_enabled'] );
+	}
+
+	/**
+	 * Whether `oauth_enabled` is ON only because it was never stored (D10).
+	 *
+	 * @return bool
+	 */
+	public static function oauth_enabled_by_default() {
+		$settings = get_option( 'mcpwp_settings', array() );
+		return ! is_array( $settings ) || ! array_key_exists( 'oauth_enabled', $settings );
 	}
 
 	/**
@@ -395,14 +440,19 @@ class Mcpwp_OAuth_Well_Known {
 		$rest_base = rest_url( 'mcpwp/v1' );
 
 		return array(
-			'issuer'                                => $origin . self::get_site_path_prefix(),
+			'issuer'                                => self::get_issuer(),
 			'authorization_endpoint'                => self::get_front_channel_authorize_url( $origin ),
 			'token_endpoint'                        => $rest_base . '/oauth/token',
+			// D3: RFC 7591 Dynamic Client Registration (public clients only).
+			'registration_endpoint'                 => $rest_base . '/oauth/register',
 			'response_types_supported'              => array( 'code' ),
 			'grant_types_supported'                 => array( 'authorization_code', 'refresh_token' ),
 			'code_challenge_methods_supported'      => array( 'S256' ),
 			'token_endpoint_auth_methods_supported' => array( 'none', 'client_secret_post' ),
-			'scopes_supported'                      => array( 'read', 'write', 'admin' ),
+			// D8: OAuth never grants admin.
+			'scopes_supported'                      => array( 'read', 'write' ),
+			// D13: RFC 9207 — every authorization response carries `iss`.
+			'authorization_response_iss_parameter_supported' => true,
 		);
 	}
 
@@ -491,6 +541,150 @@ class Mcpwp_OAuth_Well_Known {
 		$parsed = wp_parse_url( get_site_url() );
 		$path   = isset( $parsed['path'] ) ? rtrim( $parsed['path'], '/' ) : '';
 		return $path;
+	}
+
+	/**
+	 * This authorization server's issuer identifier (RFC 8414 §2).
+	 *
+	 * One builder for the AS metadata `issuer`, the PRM `authorization_servers`
+	 * entry and the RFC 9207 `iss` authorization-response parameter, so the
+	 * three can never disagree — a client compares them byte for byte.
+	 *
+	 * @return string
+	 */
+	public static function get_issuer() {
+		return self::get_site_origin() . self::get_site_path_prefix();
+	}
+
+	/**
+	 * The canonical protected-resource identifier: the MCP endpoint URL (D1).
+	 *
+	 * rest_url() is the source, but its scheme follows the CURRENT request's
+	 * is_ssl() (core's 'rest' scheme), so behind a proxy that does not report
+	 * TLS the same site could name itself http:// on one request and https://
+	 * on the next — and a token's stored `aud` would stop matching.  The scheme
+	 * is therefore pinned to the one configured in the `home` option.
+	 *
+	 * @return string
+	 */
+	public static function get_canonical_resource() {
+		$url  = (string) rest_url( 'mcpwp/v1/mcp' );
+		$home = function_exists( 'get_option' ) ? (string) get_option( 'home', '' ) : '';
+		$home_scheme = '' !== $home ? strtolower( (string) wp_parse_url( $home, PHP_URL_SCHEME ) ) : '';
+
+		if ( in_array( $home_scheme, array( 'http', 'https' ), true ) ) {
+			$url = (string) preg_replace( '#^https?://#i', $home_scheme . '://', $url );
+		}
+
+		return $url;
+	}
+
+	/**
+	 * The resource identifier PRM advertised before PR-2: origin + site path.
+	 *
+	 * Still accepted as a `resource` value at authorize/token (D1) so a client
+	 * that discovered the old PRM keeps working.  Tokens minted for it still
+	 * carry the canonical `aud`.
+	 *
+	 * @return string
+	 */
+	public static function get_legacy_resource() {
+		return self::get_issuer();
+	}
+
+	/**
+	 * Normalise a resource URI for comparison (RFC 8707 / RFC 3986 §6.2.2).
+	 *
+	 * Lower-cases scheme and host, drops a default port and a trailing slash
+	 * on the path; keeps the query (plain-permalink sites address the MCP
+	 * endpoint by ?rest_route=).  Anything that is not an absolute http(s)
+	 * URI, or that carries a fragment or userinfo, normalises to '' — which
+	 * matches nothing.
+	 *
+	 * @param mixed $uri Candidate URI.
+	 * @return string Normalised URI, or '' when invalid.
+	 */
+	public static function normalize_resource( $uri ) {
+		if ( ! is_string( $uri ) || '' === $uri || strlen( $uri ) > 2000 ) {
+			return '';
+		}
+		$parts = wp_parse_url( $uri );
+		if ( ! is_array( $parts ) || empty( $parts['scheme'] ) || empty( $parts['host'] ) ) {
+			return '';
+		}
+		if ( isset( $parts['fragment'] ) || isset( $parts['user'] ) || isset( $parts['pass'] ) || false !== strpos( $uri, '#' ) ) {
+			return '';
+		}
+
+		$scheme = strtolower( (string) $parts['scheme'] );
+		if ( ! in_array( $scheme, array( 'http', 'https' ), true ) ) {
+			return '';
+		}
+
+		$out = $scheme . '://' . strtolower( (string) $parts['host'] );
+		if ( isset( $parts['port'] ) ) {
+			$port = (int) $parts['port'];
+			if ( ! ( ( 'https' === $scheme && 443 === $port ) || ( 'http' === $scheme && 80 === $port ) ) ) {
+				$out .= ':' . $port;
+			}
+		}
+
+		$out .= isset( $parts['path'] ) ? rtrim( (string) $parts['path'], '/' ) : '';
+		if ( isset( $parts['query'] ) && '' !== $parts['query'] ) {
+			$out .= '?' . $parts['query'];
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Whether a client-supplied `resource` names this MCP endpoint (D1).
+	 *
+	 * Accepts the canonical MCP URL or the pre-PR-2 origin+prefix identifier;
+	 * everything else is `invalid_target`.
+	 *
+	 * @param mixed $resource Value of the `resource` parameter.
+	 * @return bool
+	 */
+	public static function is_acceptable_resource( $resource ) {
+		$candidate = self::normalize_resource( $resource );
+		if ( '' === $candidate ) {
+			return false;
+		}
+		return $candidate === self::normalize_resource( self::get_canonical_resource() )
+			|| $candidate === self::normalize_resource( self::get_legacy_resource() );
+	}
+
+	/**
+	 * Whether a stored token audience is this site's canonical resource (D2).
+	 *
+	 * @param mixed $aud Stored `aud`.
+	 * @return bool
+	 */
+	public static function audience_matches( $aud ) {
+		$stored = self::normalize_resource( $aud );
+		return '' !== $stored && $stored === self::normalize_resource( self::get_canonical_resource() );
+	}
+
+	/**
+	 * Path of the RFC 9728 §3.1 path-insertion metadata URL for the MCP
+	 * resource: the well-known segment spliced between the host and the MCP
+	 * URL's path (query dropped).
+	 *
+	 * @return string Path beginning with '/'.
+	 */
+	public static function get_protected_resource_metadata_path() {
+		$path = (string) wp_parse_url( self::get_canonical_resource(), PHP_URL_PATH );
+		return '/.well-known/oauth-protected-resource' . rtrim( $path, '/' );
+	}
+
+	/**
+	 * Absolute path-insertion metadata URL (advertised in WWW-Authenticate).
+	 *
+	 * @return string
+	 */
+	public static function get_protected_resource_metadata_url() {
+		return self::get_site_origin() . self::get_protected_resource_metadata_path();
 	}
 
 	/**
