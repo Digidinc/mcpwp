@@ -572,7 +572,9 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 	 * The read-time evidence check is environment-based, not just
 	 * DISALLOW_UNFILTERED_HTML-based: multisite without super admin is the
 	 * other structurally-inert case (custom_code_environment_can_hold_unfiltered_html()),
-	 * and it needs no constant, so it runs without @runInSeparateProcess.
+	 * and it needs no constant, so it runs in-process. (Written without the
+	 * at-sign: PHPUnit reads an annotation anywhere on a docblock line, so
+	 * naming it here used to isolate this test with preserved global state.)
 	 */
 	public function test_get_flags_stored_code_on_multisite_without_super_admin_too(): void {
 		$GLOBALS['mcpwp_test_is_multisite']   = true;

@@ -134,6 +134,22 @@ trait Mcpwp_Admin_Setup_Trait {
 			);
 		}
 
+		// "Add to ChatGPT": create/rotate or revoke the one connector key.
+		$chatgpt_connector = new Mcpwp_ChatGPT_Connector( $this );
+		$chatgpt_new_url   = null;
+		if ( isset( $_POST['mcpwp_chatgpt_connector_action'] ) ) {
+			check_admin_referer( Mcpwp_ChatGPT_Connector::NONCE_ACTION, 'mcpwp_chatgpt_connector_nonce' );
+			$chatgpt_result = $chatgpt_connector->handle_request( wp_unslash( $_POST ) );
+			if ( is_array( $chatgpt_result ) ) {
+				add_settings_error( 'mcpwp_messages', 'mcpwp_chatgpt_connector', $chatgpt_result['message'], $chatgpt_result['type'] );
+				if ( ! empty( $chatgpt_result['url'] ) ) {
+					$chatgpt_new_url = $chatgpt_result['url'];
+				}
+			}
+		}
+		$chatgpt_oauth_conflict = Mcpwp_ChatGPT_Connector::oauth_discovery_conflict();
+		$chatgpt_active_key = $chatgpt_connector->get_active_key();
+
 		$scoped_keys = $this->list_scoped_api_keys( true );
 
 		// mumcp.com broker connection status for the Connections UI.

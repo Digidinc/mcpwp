@@ -1441,7 +1441,10 @@ class Mcpwp_Content_Guardrails {
 		unset( self::$pending_elementor_old_text[ $object_id ] );
 
 		$post = get_post( $object_id );
-		if ( ! $post || 'publish' !== $post->post_status || ! in_array( $post->post_type, self::COVERED_POST_TYPES, true ) ) {
+		// get_post() can return a filtered or stub object without these
+		// properties; read them defensively so the guard never warns or fatals
+		// on the shape of the thing it is protecting.
+		if ( ! $post || 'publish' !== ( $post->post_status ?? '' ) || ! in_array( $post->post_type ?? '', self::COVERED_POST_TYPES, true ) ) {
 			return;
 		}
 
