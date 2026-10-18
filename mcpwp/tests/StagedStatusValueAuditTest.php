@@ -135,6 +135,9 @@ final class StagedStatusValueAuditTest extends TestCase {
 			'purely for graph filtering/display) — the update_option() calls in this file are unrelated backfill-cursor/' .
 			'dirty-set bookkeeping, and the graph write path never calls wp_insert_post()/->set_status() or anything else ' .
 			'that would let a stored graph value change a post\'s or product\'s actual visibility. #943 S1.',
+		'core/class-mcpwp-oauth-clients.php' => 'no staged status at all: the quoted \'status\' literals are the HTTP ' .
+			'status codes in WP_Error data (400/429/500) for the DCR endpoint, and the update_option() calls store OAuth ' .
+			'client registrations (mcpwp_oauth_clients). Nothing here reaches a post/product status write. PR-2 D3/D5.',
 		'core/class-mcpwp-seo-audit-store.php' => 'staged value is a stored SEO issue\'s open/resolved/dismissed status — ' .
 			'never fed into a WordPress or WooCommerce post/product status write.',
 		'core/class-mcpwp-design-references.php' => 'staged value is a design-reference library entry\'s own metadata ' .

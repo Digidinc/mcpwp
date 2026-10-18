@@ -1,0 +1,985 @@
+<?php
+/**
+ * OAuth 2.1 client store — RFC 7591 Dynamic Client Registration.
+ *
+ * ChatGPT and Claude do not use a client id an administrator typed in: they
+ * register themselves (DCR) and then send the user to the authorize endpoint
+ * with the id they were given.  This class is the store behind
+ * POST /wp-json/mcpwp/v1/oauth/register and the lookup the authorize and
+ * token endpoints use.
+ *
+ * Design constraints (PR-2 design D3-D5):
+ *  - Public clients only (token_endpoint_auth_method "none").  PKCE S256 is
+ *    the proof of possession, so no client secret is ever minted or stored.
+ *  - The registration endpoint is unauthenticated by design, so everything it
+ *    can write is bounded: at most 5 redirect URIs of at most 2,000 characters
+ *    each, a 100-character plain-text name, 10 registrations per (IP, redirect
+ *    hosts) per hour, 50 per site per rolling day, a purge of never-authorized
+ *    clients older than 7 days, and a cap of 500 clients enforced by evicting
+ *    the oldest never-authorized client (refusing only when all 500 have
+ *    been authorized).
+ *  - Every read-modify-write of the store runs under a lock row, and a
+ *    registration is verified in storage before its id is returned; a lost
+ *    race is a 503 "retry", never a later invalid_client.
+ *  - Redirect URIs are shape-checked here (https, or http on a loopback host
+ *    for native apps; no fragment; no userinfo).  What actually stops an
+ *    attacker-registered redirect is the consent screen, which shows the
+ *    redirect host the code will go to (D7).
+ *  - The store is its own non-autoloaded option, NEVER a key inside
+ *    mcpwp_settings: Mcpwp_Settings::sanitize_settings() rebuilds that array
+ *    from a fixed key list and silently drops everything else, which is how
+ *    the old `oauth_redirect_uris` allow-list was deleted by any Settings save.
+ *
+ * @package MCPWP
+ * @since   3.14.11
+ */
+
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
+/**
+ * Registered OAuth clients: validation, registration, lookup, purge.
+ */
+class Mcpwp_OAuth_Clients {
+
+	/**
+	 * Option holding the client records, keyed by client_id.  Not autoloaded:
+	 * it is read only on the OAuth endpoints, never on an ordinary page view.
+	 *
+	 * @var string
+	 */
+	const OPTION = 'mcpwp_oauth_clients';
+
+	/**
+	 * Prefix of every registered client id.  `mcpwpc_` + 32 lowercase hex
+	 * characters survives sanitize_key() unchanged, which every endpoint
+	 * applies to client_id.
+	 *
+	 * @var string
+	 */
+	const CLIENT_ID_PREFIX = 'mcpwpc_';
+
+	/** Hard cap on stored clients. */
+	const MAX_CLIENTS = 500;
+
+	/** Redirect URIs per client. */
+	const MAX_REDIRECT_URIS = 5;
+
+	/** Characters per redirect URI. */
+	const MAX_REDIRECT_URI_LENGTH = 2000;
+
+	/** Characters in a client name. */
+	const MAX_CLIENT_NAME_LENGTH = 100;
+
+	/**
+	 * A client never authorized (no code ever issued for it) and older than
+	 * this (24 hours) is purged — kasra-review P1-B: a real client completes
+	 * consent within minutes of registering, so a day bounds the junk an
+	 * anonymous caller can park in the store.  An authorized client is never
+	 * purged or evicted.
+	 */
+	const UNUSED_CLIENT_MAX_AGE = 86400;
+
+	/** Registrations allowed per (IP address, redirect hosts) per window. */
+	const REGISTRATIONS_PER_WINDOW = 10;
+
+	/** Registrations allowed per site in any rolling day. */
+	const SITE_REGISTRATIONS_PER_DAY = 50;
+
+	/** The rolling window for the per-site cap (1 day). */
+	const SITE_WINDOW = 86400;
+
+	/** Option holding the per-site registration timestamps (not autoloaded). */
+	const SITE_WINDOW_OPTION = 'mcpwp_oauth_dcr_site_window';
+
+	/** Lock row guarding every read-modify-write of the store. */
+	const LOCK_OPTION = 'mcpwp_oauth_clients_lock';
+
+	/** Seconds a lock holder is trusted before the lock may be stolen. */
+	const LOCK_TTL = 10;
+
+	/** Lock attempts before giving up with a 503. */
+	const LOCK_ATTEMPTS = 3;
+
+	/** Pause between lock attempts (50 ms). */
+	const LOCK_RETRY_MICROSECONDS = 50000;
+
+	/** Rate-limit window (1 hour). */
+	const RATE_LIMIT_WINDOW = 3600;
+
+	/**
+	 * last_used_at is rewritten at most this often (1 hour), so a busy client
+	 * does not turn every token exchange into an option write.
+	 */
+	const TOUCH_INTERVAL = 3600;
+
+	/**
+	 * Hosts that count as loopback for native-app redirects (RFC 8252 §7.3).
+	 * IPv6 appears bracketed because that is how wp_parse_url() reports it.
+	 *
+	 * @var string[]
+	 */
+	const LOOPBACK_HOSTS = array( 'localhost', '127.0.0.1', '[::1]' );
+
+	// -------------------------------------------------------------------------
+	// Validation
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Whether a string is shaped like a client id this store issues.
+	 *
+	 * @param string $client_id Candidate id.
+	 * @return bool
+	 */
+	public static function looks_like_client_id( $client_id ) {
+		return is_string( $client_id ) && 1 === preg_match( '/^mcpwpc_[0-9a-f]{32}$/', $client_id );
+	}
+
+	/**
+	 * Validate one redirect URI for registration.
+	 *
+	 * Deliberately stricter than a URL parser: anything a browser, PHP and a
+	 * proxy might read differently is refused rather than normalised, so the
+	 * string that is stored is exactly the string a later authorize request
+	 * must present.
+	 *
+	 * @param mixed $uri Candidate redirect URI.
+	 * @return true|WP_Error
+	 */
+	public static function validate_redirect_uri( $uri ) {
+		if ( ! is_string( $uri ) || '' === $uri ) {
+			return self::redirect_error( 'Each redirect URI must be a non-empty string.' );
+		}
+		if ( strlen( $uri ) > self::MAX_REDIRECT_URI_LENGTH ) {
+			return self::redirect_error( 'A redirect URI may be at most 2000 characters.' );
+		}
+		// Printable ASCII only: whitespace, control characters and raw
+		// non-ASCII must arrive percent-encoded.  Backslash is refused too —
+		// browsers treat it as "/" in the authority and PHP does not.
+		if ( preg_match( '/[^\x21-\x7E]/', $uri ) || false !== strpos( $uri, '\\' ) ) {
+			return self::redirect_error( 'A redirect URI may contain only printable ASCII characters (percent-encode anything else).' );
+		}
+		if ( false !== strpos( $uri, '#' ) ) {
+			return self::redirect_error( 'A redirect URI must not contain a fragment.' );
+		}
+
+		// Lowercase scheme only, so exact matching never has to case-fold.
+		if ( 0 === strpos( $uri, 'https://' ) ) {
+			$scheme = 'https';
+		} elseif ( 0 === strpos( $uri, 'http://' ) ) {
+			$scheme = 'http';
+		} else {
+			return self::redirect_error( 'A redirect URI must use https:// (or http:// on localhost, 127.0.0.1 or [::1]).' );
+		}
+
+		// Authority = everything between "://" and the first "/" or "?".
+		$rest      = substr( $uri, strlen( $scheme ) + 3 );
+		$authority = preg_split( '#[/?]#', $rest, 2 );
+		$authority = (string) $authority[0];
+		if ( false !== strpos( $authority, '@' ) ) {
+			return self::redirect_error( 'A redirect URI must not contain user information.' );
+		}
+
+		$parts = wp_parse_url( $uri );
+		if ( ! is_array( $parts ) || empty( $parts['host'] ) ) {
+			return self::redirect_error( 'A redirect URI must be an absolute URL with a host.' );
+		}
+		if ( isset( $parts['user'] ) || isset( $parts['pass'] ) || isset( $parts['fragment'] ) ) {
+			return self::redirect_error( 'A redirect URI must not contain user information or a fragment.' );
+		}
+
+		$host = (string) $parts['host'];
+		if ( ! preg_match( '/^(\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.-]+)$/', $host ) ) {
+			return self::redirect_error( 'A redirect URI has an invalid host.' );
+		}
+		if ( isset( $parts['port'] ) && ( (int) $parts['port'] < 1 || (int) $parts['port'] > 65535 ) ) {
+			return self::redirect_error( 'A redirect URI has an invalid port.' );
+		}
+
+		if ( 'http' === $scheme && ! in_array( strtolower( $host ), self::LOOPBACK_HOSTS, true ) ) {
+			return self::redirect_error( 'Plain http:// redirect URIs are allowed only on localhost, 127.0.0.1 or [::1].' );
+		}
+
+		// The authorize endpoint reads redirect_uri through esc_url_raw().  A
+		// URI that esc_url_raw() would rewrite could never match exactly, so
+		// refuse it here rather than store something unusable.
+		if ( esc_url_raw( $uri ) !== $uri ) {
+			return self::redirect_error( 'A redirect URI contains characters WordPress would rewrite.' );
+		}
+
+		return true;
+	}
+
+	/**
+	 * Validate the redirect_uris member of a registration request.
+	 *
+	 * @param mixed $uris Candidate list.
+	 * @return string[]|WP_Error De-duplicated list, in the order given.
+	 */
+	public static function validate_redirect_uris( $uris ) {
+		if ( ! is_array( $uris ) || empty( $uris ) || array_values( $uris ) !== $uris ) {
+			return self::redirect_error( 'redirect_uris must be a non-empty JSON array of strings.' );
+		}
+		if ( count( $uris ) > self::MAX_REDIRECT_URIS ) {
+			return self::redirect_error( 'At most 5 redirect URIs may be registered per client.' );
+		}
+
+		$clean = array();
+		foreach ( $uris as $uri ) {
+			$valid = self::validate_redirect_uri( $uri );
+			if ( is_wp_error( $valid ) ) {
+				return $valid;
+			}
+			if ( ! in_array( $uri, $clean, true ) ) {
+				$clean[] = $uri;
+			}
+		}
+
+		return $clean;
+	}
+
+	/**
+	 * Whether a URI is an http:// loopback redirect (port-agnostic per RFC 8252).
+	 *
+	 * @param string $uri URI.
+	 * @return bool
+	 */
+	public static function is_loopback_redirect( $uri ) {
+		if ( ! is_string( $uri ) || 0 !== strpos( $uri, 'http://' ) ) {
+			return false;
+		}
+		$host = wp_parse_url( $uri, PHP_URL_HOST );
+		return is_string( $host ) && in_array( strtolower( $host ), self::LOOPBACK_HOSTS, true );
+	}
+
+	/**
+	 * Whether a presented redirect_uri matches one registered URI.
+	 *
+	 * Exact string match, with the single RFC 8252 §7.3 exception: for an
+	 * http loopback URI the port is ignored, because a native app picks a free
+	 * port at run time.  Scheme, host, path and query must still be identical,
+	 * and the presented URI must itself pass registration validation.
+	 *
+	 * @param string $registered Registered URI.
+	 * @param string $presented  URI from the authorize request.
+	 * @return bool
+	 */
+	public static function redirect_uri_matches( $registered, $presented ) {
+		if ( ! is_string( $registered ) || ! is_string( $presented ) || '' === $presented ) {
+			return false;
+		}
+		if ( hash_equals( $registered, $presented ) ) {
+			return true;
+		}
+		if ( ! self::is_loopback_redirect( $registered ) || ! self::is_loopback_redirect( $presented ) ) {
+			return false;
+		}
+		if ( true !== self::validate_redirect_uri( $presented ) ) {
+			return false;
+		}
+
+		$a = wp_parse_url( $registered );
+		$b = wp_parse_url( $presented );
+		if ( ! is_array( $a ) || ! is_array( $b ) ) {
+			return false;
+		}
+
+		foreach ( array( 'scheme', 'path', 'query' ) as $part ) {
+			$left  = isset( $a[ $part ] ) ? (string) $a[ $part ] : '';
+			$right = isset( $b[ $part ] ) ? (string) $b[ $part ] : '';
+			if ( $left !== $right ) {
+				return false;
+			}
+		}
+
+		return strtolower( (string) $a['host'] ) === strtolower( (string) $b['host'] );
+	}
+
+	/**
+	 * Validate a registration request body (RFC 7591 §2) into a record draft.
+	 *
+	 * Only public clients are accepted.  Members this server does not use
+	 * (scope, logo_uri, contacts, …) are ignored, which RFC 7591 §3.2.1
+	 * permits; members it does use must be values it can honour.
+	 *
+	 * @param mixed $metadata Decoded JSON body.
+	 * @return array|WP_Error {client_name:string, redirect_uris:string[]}
+	 */
+	public static function validate_registration_metadata( $metadata ) {
+		if ( ! is_array( $metadata ) ) {
+			return self::metadata_error( 'The registration request must be a JSON object.' );
+		}
+
+		$redirect_uris = self::validate_redirect_uris( isset( $metadata['redirect_uris'] ) ? $metadata['redirect_uris'] : null );
+		if ( is_wp_error( $redirect_uris ) ) {
+			return $redirect_uris;
+		}
+
+		// RFC 7591 §3.2.1: the server may replace requested metadata with
+		// values it supports.  Only public clients exist here, so any
+		// requested token_endpoint_auth_method is replaced with "none" (and
+		// the 201 response says so) instead of refusing a client that merely
+		// asked for client_secret_post.  No secret is ever issued.
+		if ( array_key_exists( 'token_endpoint_auth_method', $metadata ) && ! is_string( $metadata['token_endpoint_auth_method'] ) ) {
+			return self::metadata_error( 'token_endpoint_auth_method must be a string.' );
+		}
+
+		if ( array_key_exists( 'grant_types', $metadata ) ) {
+			$grants = $metadata['grant_types'];
+			if ( ! is_array( $grants ) || array_diff( $grants, array( 'authorization_code', 'refresh_token' ) ) || ! in_array( 'authorization_code', $grants, true ) ) {
+				return self::metadata_error( 'grant_types must include "authorization_code" and may add only "refresh_token".' );
+			}
+		}
+
+		if ( array_key_exists( 'response_types', $metadata ) ) {
+			$types = $metadata['response_types'];
+			if ( ! is_array( $types ) || array( 'code' ) !== array_values( array_unique( $types ) ) ) {
+				return self::metadata_error( 'response_types may only be ["code"].' );
+			}
+		}
+
+		$name = '';
+		if ( array_key_exists( 'client_name', $metadata ) ) {
+			if ( ! is_string( $metadata['client_name'] ) ) {
+				return self::metadata_error( 'client_name must be a string.' );
+			}
+			$name = self::clean_client_name( $metadata['client_name'] );
+		}
+
+		return array(
+			'client_name'   => $name,
+			'redirect_uris' => $redirect_uris,
+		);
+	}
+
+	/**
+	 * Reduce a client-supplied name to short plain text.
+	 *
+	 * The name is attacker-controlled (DCR is anonymous), and it is shown on
+	 * the consent screen.  Tags go, and so do control and format characters —
+	 * the latter include the Unicode bidi overrides that make "ChatGPT\u{202E}…"
+	 * render as something else.
+	 *
+	 * @param string $name Raw name.
+	 * @return string
+	 */
+	public static function clean_client_name( $name ) {
+		$name = sanitize_text_field( (string) $name );
+		$name = (string) preg_replace( '/[\p{Cc}\p{Cf}]+/u', '', $name );
+		$name = trim( $name );
+		if ( function_exists( 'mb_substr' ) ) {
+			return mb_substr( $name, 0, self::MAX_CLIENT_NAME_LENGTH, 'UTF-8' );
+		}
+		return substr( $name, 0, self::MAX_CLIENT_NAME_LENGTH );
+	}
+
+	// -------------------------------------------------------------------------
+	// Store
+	// -------------------------------------------------------------------------
+
+	/**
+	 * All stored client records, keyed by client id.  Malformed entries are
+	 * dropped on read, so a corrupt row can never be mistaken for a client.
+	 *
+	 * @return array<string,array>
+	 */
+	public static function all() {
+		$stored = get_option( self::OPTION, array() );
+		if ( ! is_array( $stored ) ) {
+			return array();
+		}
+
+		$clients = array();
+		foreach ( $stored as $client_id => $record ) {
+			if ( self::is_valid_record( $client_id, $record ) ) {
+				$clients[ $client_id ] = $record;
+			}
+		}
+
+		return $clients;
+	}
+
+	/**
+	 * Look up one registered client.
+	 *
+	 * @param string $client_id Client id (already sanitize_key()ed by the caller).
+	 * @return array|null Record, or null when unknown or malformed.
+	 */
+	public static function find( $client_id ) {
+		if ( ! self::looks_like_client_id( $client_id ) ) {
+			return null;
+		}
+		$clients = self::all();
+		return isset( $clients[ $client_id ] ) ? $clients[ $client_id ] : null;
+	}
+
+	/**
+	 * Whether a presented redirect_uri is registered for a client.
+	 *
+	 * @param array  $client    Client record from find().
+	 * @param string $presented redirect_uri from the request.
+	 * @return bool
+	 */
+	public static function client_allows_redirect( $client, $presented ) {
+		if ( ! is_array( $client ) || empty( $client['redirect_uris'] ) || ! is_array( $client['redirect_uris'] ) ) {
+			return false;
+		}
+		foreach ( $client['redirect_uris'] as $registered ) {
+			if ( self::redirect_uri_matches( $registered, $presented ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Whether a client has ever been authorized (a code was issued for it).
+	 *
+	 * `last_used_at` counts too: records written before authorized_at existed
+	 * were only ever touched on approval or redemption.
+	 *
+	 * @param array $record Client record.
+	 * @return bool
+	 */
+	public static function has_been_authorized( $record ) {
+		return is_array( $record ) && ( ! empty( $record['authorized_at'] ) || ! empty( $record['last_used_at'] ) );
+	}
+
+	/**
+	 * Whether any registered client has ever been authorized.
+	 *
+	 * @return bool
+	 */
+	public static function any_client_authorized() {
+		foreach ( self::all() as $record ) {
+			if ( self::has_been_authorized( $record ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * Register a client.
+	 *
+	 * Order matters:
+	 *  1. validate (no state touched by a malformed request);
+	 *  2. per-requester bucket — (caller IP, redirect host set), so many real
+	 *     users behind one Cloudflare or OpenAI egress address do not share
+	 *     one bucket, and a spoofable X-Forwarded-For is still ignored unless
+	 *     MCPWP_TRUST_PROXY_HEADERS says otherwise;
+	 *  3. under the store lock: the per-site rolling-day cap, the 7-day purge,
+	 *     LRU eviction of a never-authorized client at the 500 cap, the write,
+	 *     and a re-read that proves the new client landed.
+	 *
+	 * The id is returned only once the record is verified in storage.  Any
+	 * failure to get the lock or to verify is a 503 "try again" — never a
+	 * client_id that later turns out not to exist.
+	 *
+	 * @param mixed  $metadata Decoded JSON body.
+	 * @param string $ip       Caller IP (REMOTE_ADDR unless proxy headers are trusted).
+	 * @param int    $now      Current time (testable).
+	 * @return array|WP_Error RFC 7591 §3.2.1 client information response.
+	 */
+	public static function register( $metadata, $ip, $now = 0 ) {
+		$now = $now > 0 ? (int) $now : time();
+
+		$draft = self::validate_registration_metadata( $metadata );
+		if ( is_wp_error( $draft ) ) {
+			return $draft;
+		}
+
+		$rate = self::consume_registration_slot( $ip, self::redirect_hosts( $draft['redirect_uris'] ), $now );
+		if ( is_wp_error( $rate ) ) {
+			return $rate;
+		}
+
+		$client_id = self::CLIENT_ID_PREFIX . bin2hex( random_bytes( 16 ) );
+		$record    = array(
+			'client_id'            => $client_id,
+			'client_name'          => $draft['client_name'],
+			'redirect_uris'        => $draft['redirect_uris'],
+			'created_at'           => $now,
+			'last_used_at'         => 0,
+			'authorized_at'        => 0,
+			'registration_ip_hash' => self::hash_ip( $ip ),
+		);
+
+		$token = self::acquire_lock( $now );
+		if ( false === $token ) {
+			return self::busy_error();
+		}
+
+		$result = self::register_locked( $record, $now );
+
+		self::release_lock( $token );
+
+		return $result;
+	}
+
+	/**
+	 * The part of register() that runs under the store lock.
+	 *
+	 * @param array $record New client record.
+	 * @param int   $now    Current time.
+	 * @return array|WP_Error
+	 */
+	private static function register_locked( array $record, $now ) {
+		self::flush_option_cache( self::OPTION );
+		self::flush_option_cache( self::SITE_WINDOW_OPTION );
+
+		// Per-site cap: at most SITE_REGISTRATIONS_PER_DAY in any rolling day.
+		$window = self::site_window( $now );
+		if ( count( $window ) >= self::SITE_REGISTRATIONS_PER_DAY ) {
+			return new WP_Error(
+				'temporarily_unavailable',
+				'Too many app registrations right now; try again later.',
+				array(
+					'status'      => 429,
+					'retry_after' => max( 1, (int) min( $window ) + self::SITE_WINDOW - $now ),
+				)
+			);
+		}
+
+		$clients = self::purge_stale( self::all(), $now );
+
+		// At the cap, evict the oldest never-authorized client to make room.
+		// An authorized client is never evicted: someone is using it.
+		while ( count( $clients ) >= self::MAX_CLIENTS ) {
+			$victim = self::oldest_never_authorized( $clients );
+			if ( null === $victim ) {
+				return new WP_Error(
+					'temporarily_unavailable',
+					'Too many app registrations right now; try again later.',
+					array( 'status' => 429 )
+				);
+			}
+			unset( $clients[ $victim ] );
+		}
+
+		$clients[ $record['client_id'] ] = $record;
+		update_option( self::OPTION, $clients, false );
+
+		// Verify from storage, not from the write's return value: update_option()
+		// answers false for "unchanged" as well as "failed", and an object
+		// cache can make a lost write look present.  Only a client that is
+		// really there gets its id back.
+		self::flush_option_cache( self::OPTION );
+		if ( null === self::find( $record['client_id'] ) ) {
+			return self::busy_error();
+		}
+
+		$window[] = $now;
+		update_option( self::SITE_WINDOW_OPTION, array_values( $window ), false );
+
+		return array(
+			'client_id'                  => $record['client_id'],
+			'client_id_issued_at'        => $now,
+			'client_name'                => $record['client_name'],
+			'redirect_uris'              => $record['redirect_uris'],
+			'grant_types'                => array( 'authorization_code', 'refresh_token' ),
+			'response_types'             => array( 'code' ),
+			'token_endpoint_auth_method' => 'none',
+		);
+	}
+
+	/**
+	 * Registration timestamps inside the rolling day, oldest first.
+	 *
+	 * @param int $now Current time.
+	 * @return int[]
+	 */
+	private static function site_window( $now ) {
+		$stored = get_option( self::SITE_WINDOW_OPTION, array() );
+		$window = array();
+		foreach ( is_array( $stored ) ? $stored : array() as $at ) {
+			if ( is_numeric( $at ) && (int) $at > $now - self::SITE_WINDOW ) {
+				$window[] = (int) $at;
+			}
+		}
+		sort( $window );
+		return $window;
+	}
+
+	/**
+	 * Id of the oldest (by created_at) client never authorized, or null.
+	 *
+	 * @param array $clients Records keyed by id.
+	 * @return string|null
+	 */
+	private static function oldest_never_authorized( array $clients ) {
+		$victim = null;
+		$oldest = PHP_INT_MAX;
+		foreach ( $clients as $client_id => $record ) {
+			if ( self::has_been_authorized( $record ) ) {
+				continue;
+			}
+			if ( (int) $record['created_at'] < $oldest ) {
+				$oldest = (int) $record['created_at'];
+				$victim = $client_id;
+			}
+		}
+		return $victim;
+	}
+
+	/**
+	 * Drop clients never authorized and older than 7 days.
+	 *
+	 * @param array $clients Records keyed by id.
+	 * @param int   $now     Current time.
+	 * @return array
+	 */
+	public static function purge_stale( array $clients, $now ) {
+		$cutoff = (int) $now - self::UNUSED_CLIENT_MAX_AGE;
+		foreach ( $clients as $client_id => $record ) {
+			if ( ! self::has_been_authorized( $record ) && (int) $record['created_at'] < $cutoff ) {
+				unset( $clients[ $client_id ] );
+			}
+		}
+		return $clients;
+	}
+
+	/**
+	 * Record that a code is being issued for a client — BEFORE the code is
+	 * minted, so an authorized client is never evicted while it holds one.
+	 *
+	 * @param string $client_id Client id.
+	 * @param int    $now       Current time (testable).
+	 * @return bool True when recorded (or already recorded); false when the
+	 *              store could not be updated — the caller must not mint.
+	 */
+	public static function mark_authorized( $client_id, $now = 0 ) {
+		$now = $now > 0 ? (int) $now : time();
+		if ( ! self::looks_like_client_id( $client_id ) ) {
+			return false;
+		}
+
+		$existing = self::find( $client_id );
+		if ( null === $existing ) {
+			return false;
+		}
+		if ( ! empty( $existing['authorized_at'] ) ) {
+			return true;
+		}
+
+		$token = self::acquire_lock( $now );
+		if ( false === $token ) {
+			return false;
+		}
+
+		self::flush_option_cache( self::OPTION );
+		$clients = self::all();
+		$ok      = false;
+		if ( isset( $clients[ $client_id ] ) ) {
+			$clients[ $client_id ]['authorized_at'] = $now;
+			$clients[ $client_id ]['last_used_at']  = $now;
+			update_option( self::OPTION, $clients, false );
+			self::flush_option_cache( self::OPTION );
+			$check = self::find( $client_id );
+			$ok    = is_array( $check ) && ! empty( $check['authorized_at'] );
+		}
+
+		self::release_lock( $token );
+
+		return $ok;
+	}
+
+	/**
+	 * Record that a client was used (a code was redeemed), at most once per
+	 * TOUCH_INTERVAL.  Best effort: skipped when the lock is busy, because
+	 * last_used_at only orders reporting, never eviction.
+	 *
+	 * @param string $client_id Client id.
+	 * @param int    $now       Current time (testable).
+	 */
+	public static function touch( $client_id, $now = 0 ) {
+		$now = $now > 0 ? (int) $now : time();
+		if ( ! self::looks_like_client_id( $client_id ) ) {
+			return;
+		}
+		$existing = self::find( $client_id );
+		if ( null === $existing || (int) $existing['last_used_at'] > $now - self::TOUCH_INTERVAL ) {
+			return;
+		}
+
+		$token = self::acquire_lock( $now );
+		if ( false === $token ) {
+			return;
+		}
+		self::flush_option_cache( self::OPTION );
+		$clients = self::all();
+		if ( isset( $clients[ $client_id ] ) ) {
+			$clients[ $client_id ]['last_used_at'] = $now;
+			update_option( self::OPTION, $clients, false );
+		}
+		self::release_lock( $token );
+	}
+
+	// -------------------------------------------------------------------------
+	// Store lock
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Take the store lock: a plain INSERT of a lock row.
+	 *
+	 * Not add_option(): in WordPress that is a cached read-then-write whose
+	 * INSERT uses ON DUPLICATE KEY UPDATE, so two concurrent callers can both
+	 * "succeed" (see Mcpwp_Idempotency_Claim).  A plain INSERT against the
+	 * UNIQUE key on option_name lets exactly one win.  The row holds its
+	 * expiry; a holder that died is stolen after LOCK_TTL by a
+	 * compare-and-swap UPDATE, so two stealers cannot both win.  A few short
+	 * retries absorb ordinary contention.
+	 *
+	 * @param int $now Current time.
+	 * @return string|false Token for release_lock(), or false.
+	 */
+	public static function acquire_lock( $now = 0 ) {
+		global $wpdb;
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'insert' ) ) {
+			return false; // Nothing to arbitrate with: refuse rather than run unlocked.
+		}
+
+		for ( $attempt = 0; $attempt < self::LOCK_ATTEMPTS; $attempt++ ) {
+			if ( $attempt > 0 ) {
+				usleep( self::LOCK_RETRY_MICROSECONDS );
+			}
+			$t     = $now > 0 ? (int) $now : time();
+			$token = (string) ( $t + self::LOCK_TTL ) . '|' . bin2hex( random_bytes( 4 ) );
+
+			$suppressed = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
+			$inserted   = $wpdb->insert(
+				$wpdb->options,
+				array(
+					'option_name'  => self::LOCK_OPTION,
+					'option_value' => $token,
+					'autoload'     => 'no',
+				),
+				array( '%s', '%s', '%s' )
+			);
+			if ( null !== $suppressed ) {
+				$wpdb->suppress_errors( $suppressed );
+			}
+			if ( 1 === (int) $inserted ) {
+				return $token;
+			}
+
+			// Held.  Steal only an expired lock, by compare-and-swap.
+			if ( ! method_exists( $wpdb, 'get_var' ) || ! method_exists( $wpdb, 'update' ) ) {
+				continue;
+			}
+			$current = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::LOCK_OPTION ) );
+			if ( ! is_string( $current ) || '' === $current ) {
+				continue;
+			}
+			$expires = (int) strtok( $current, '|' );
+			if ( $expires >= $t ) {
+				continue;
+			}
+			$stolen = $wpdb->update(
+				$wpdb->options,
+				array( 'option_value' => $token ),
+				array(
+					'option_name'  => self::LOCK_OPTION,
+					'option_value' => $current,
+				),
+				array( '%s' ),
+				array( '%s', '%s' )
+			);
+			if ( 1 === (int) $stolen ) {
+				return $token;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Release the store lock — compare-and-delete, so a holder that overran
+	 * LOCK_TTL never deletes the lock someone else has since stolen.
+	 *
+	 * @param string $token Token from acquire_lock().
+	 */
+	public static function release_lock( $token ) {
+		global $wpdb;
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'delete' ) ) {
+			return;
+		}
+		$wpdb->delete(
+			$wpdb->options,
+			array(
+				'option_name'  => self::LOCK_OPTION,
+				'option_value' => (string) $token,
+			),
+			array( '%s', '%s' )
+		);
+	}
+
+	/**
+	 * Drop the object-cache copy of an option so the next get_option() reads
+	 * the database (the option is not autoloaded, so it is cached on its own).
+	 *
+	 * @param string $name Option name.
+	 */
+	private static function flush_option_cache( $name ) {
+		if ( function_exists( 'wp_cache_delete' ) ) {
+			wp_cache_delete( $name, 'options' );
+		}
+	}
+
+	/**
+	 * The "store busy, retry" answer.
+	 *
+	 * @return WP_Error
+	 */
+	private static function busy_error() {
+		return new WP_Error(
+			'temporarily_unavailable',
+			'The app could not be registered because the site was busy. Nothing was saved; retry the registration.',
+			array(
+				'status'      => 503,
+				'retry_after' => 1,
+			)
+		);
+	}
+
+	// -------------------------------------------------------------------------
+	// Rate limit
+	// -------------------------------------------------------------------------
+
+	/**
+	 * The distinct, lower-cased hosts of a redirect list, sorted.
+	 *
+	 * @param string[] $uris Validated redirect URIs.
+	 * @return string[]
+	 */
+	public static function redirect_hosts( array $uris ) {
+		$hosts = array();
+		foreach ( $uris as $uri ) {
+			$host = strtolower( (string) wp_parse_url( $uri, PHP_URL_HOST ) );
+			if ( '' !== $host ) {
+				$hosts[ $host ] = true;
+			}
+		}
+		$hosts = array_keys( $hosts );
+		sort( $hosts );
+		return $hosts;
+	}
+
+	/**
+	 * Count one registration against the (caller IP, redirect hosts) bucket.
+	 *
+	 * Fixed one-hour window in a transient keyed by a keyed hash, so neither
+	 * the address nor the hosts are stored in clear.  Varying the hosts buys
+	 * an attacker new buckets, which is what the per-site daily cap is for.
+	 *
+	 * @param string   $ip    Caller IP.
+	 * @param string[] $hosts Redirect hosts (redirect_hosts()).
+	 * @param int      $now   Current time.
+	 * @return true|WP_Error
+	 */
+	public static function consume_registration_slot( $ip, array $hosts, $now ) {
+		$key    = 'mcpwp_oauth_dcr_' . substr( self::hash_ip( self::rate_limit_address( $ip ) . '|' . implode( ',', $hosts ) ), 0, 32 );
+		$bucket = get_transient( $key );
+
+		if ( ! is_array( $bucket ) || ! isset( $bucket['count'], $bucket['reset'] ) || (int) $bucket['reset'] <= $now ) {
+			$bucket = array(
+				'count' => 0,
+				'reset' => $now + self::RATE_LIMIT_WINDOW,
+			);
+		}
+
+		if ( (int) $bucket['count'] >= self::REGISTRATIONS_PER_WINDOW ) {
+			return new WP_Error(
+				'temporarily_unavailable',
+				'Too many app registrations right now; try again later.',
+				array(
+					'status'      => 429,
+					'retry_after' => max( 1, (int) $bucket['reset'] - $now ),
+				)
+			);
+		}
+
+		$bucket['count'] = (int) $bucket['count'] + 1;
+		set_transient( $key, $bucket, max( 1, (int) $bucket['reset'] - $now ) );
+
+		return true;
+	}
+
+	/**
+	 * The address a rate-limit bucket is keyed on (P1-B).
+	 *
+	 * IPv4: the address itself.  IPv6: its /64 prefix — one end site is
+	 * normally handed a whole /64, so keying on the full address would give
+	 * every caller 2^64 fresh buckets.  An IPv4-mapped IPv6 address
+	 * (::ffff:a.b.c.d) is the IPv4 address it carries.  Anything that does
+	 * not parse is keyed as given (all unparseable callers share it).
+	 *
+	 * @param string $ip Caller IP.
+	 * @return string
+	 */
+	public static function rate_limit_address( $ip ) {
+		$ip     = trim( (string) $ip );
+		$binary = '' !== $ip ? @inet_pton( $ip ) : false; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- inet_pton warns on garbage; false is the answer.
+		if ( false === $binary ) {
+			return $ip;
+		}
+		if ( 4 === strlen( $binary ) ) {
+			return (string) inet_ntop( $binary );
+		}
+		if ( 16 !== strlen( $binary ) ) {
+			return $ip;
+		}
+		if ( str_repeat( "\0", 10 ) . "\xff\xff" === substr( $binary, 0, 12 ) ) {
+			return (string) inet_ntop( substr( $binary, 12, 4 ) );
+		}
+		return (string) inet_ntop( substr( $binary, 0, 8 ) . str_repeat( "\0", 8 ) ) . '/64';
+	}
+
+	/**
+	 * Keyed hash of an IP address (never stored in clear).
+	 *
+	 * @param string $ip IP address.
+	 * @return string 64 hex characters.
+	 */
+	public static function hash_ip( $ip ) {
+		$secret = function_exists( 'wp_salt' ) ? wp_salt( 'auth' ) : 'mcpwp-oauth-clients';
+		return hash_hmac( 'sha256', (string) $ip, $secret );
+	}
+
+	// -------------------------------------------------------------------------
+	// Internals
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Whether a stored entry is a well-formed client record.
+	 *
+	 * @param mixed $client_id Array key.
+	 * @param mixed $record    Stored value.
+	 * @return bool
+	 */
+	private static function is_valid_record( $client_id, $record ) {
+		return self::looks_like_client_id( $client_id )
+			&& is_array( $record )
+			&& isset( $record['client_id'] ) && $client_id === $record['client_id']
+			&& isset( $record['redirect_uris'] ) && is_array( $record['redirect_uris'] ) && ! empty( $record['redirect_uris'] )
+			&& isset( $record['created_at'] )
+			&& array_key_exists( 'last_used_at', $record );
+	}
+
+	/**
+	 * @param string $message Description.
+	 * @return WP_Error
+	 */
+	private static function redirect_error( $message ) {
+		return new WP_Error( 'invalid_redirect_uri', $message, array( 'status' => 400 ) );
+	}
+
+	/**
+	 * @param string $message Description.
+	 * @return WP_Error
+	 */
+	private static function metadata_error( $message ) {
+		return new WP_Error( 'invalid_client_metadata', $message, array( 'status' => 400 ) );
+	}
+}

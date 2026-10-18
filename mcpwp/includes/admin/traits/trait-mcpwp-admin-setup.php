@@ -148,6 +148,7 @@ trait Mcpwp_Admin_Setup_Trait {
 			}
 		}
 		$chatgpt_oauth_conflict = Mcpwp_ChatGPT_Connector::oauth_discovery_conflict();
+		$local_oauth_enabled    = Mcpwp_OAuth_Well_Known::is_legacy_oauth_enabled();
 		$chatgpt_active_key = $chatgpt_connector->get_active_key();
 
 		$scoped_keys = $this->list_scoped_api_keys( true );

@@ -9,6 +9,7 @@
  *   GET  /mcpwp-oauth/authorize                  (consent screen — front channel)
  *   POST /mcpwp-oauth/authorize                  (consent submission — front channel)
  *   POST /wp-json/mcpwp/v1/oauth/token           (token exchange — WP REST)
+ *   POST /wp-json/mcpwp/v1/oauth/register        (RFC 7591 Dynamic Client Registration — WP REST)
  *
  * The consent endpoint is deliberately NOT a REST route.  WordPress core's
  * rest_cookie_check_errors() calls wp_set_current_user( 0 ) for any cookie-
@@ -27,7 +28,21 @@
  *
  * Security properties enforced here:
  *  - PKCE S256 mandatory; plain/absent rejected at authorize AND token steps.
- *  - redirect_uri must exact-match an entry in oauth_redirect_uris allow-list.
+ *  - client_id resolves to a DCR-registered client first (Mcpwp_OAuth_Clients),
+ *    then to the single legacy settings client (PR-2 D6).
+ *  - redirect_uri must exact-match the client's registered list (loopback:
+ *    port-agnostic, RFC 8252 §7.3) or, for the legacy client, the
+ *    oauth_redirect_uris allow-list.  A mismatch is a JSON error, never a
+ *    redirect.
+ *  - `resource` (RFC 8707), when sent, must name this MCP endpoint or the
+ *    pre-PR-2 origin identifier, else invalid_target; every token carries
+ *    aud = the MCP endpoint URL (D1/D2).
+ *  - OAuth never grants admin: authorization_code and refresh grants are
+ *    capped at write (D8).  No scope requested means read+write, still
+ *    clamped to the user's capability (D9).  The consent screen lets the
+ *    user untick write; the POST is HMAC-bound to what was shown, so a
+ *    tampered form can only narrow the grant.
+ *  - Authorization responses carry `iss` (RFC 9207, D13).
  *  - Auth codes are single-use (transient deleted on first use) with 60s TTL.
  *  - Code bound to client_id + redirect_uri + code_challenge + user_id + CLAMPED scope.
  *  - Scope clamped to user capability at authorize time and re-validated at token time.
@@ -38,7 +53,7 @@
  *  - Consent POST protected by a wp_nonce.
  *  - constant-time comparison (hash_equals) everywhere.
  *  - No token/secret material written to any log or query-string persistence.
- *  - All endpoints gated on oauth_enabled setting.
+ *  - All endpoints gated on oauth_enabled setting (absent = on, D10).
  *
  * @package MCPWP
  * @since   3.2.0
@@ -90,6 +105,22 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			)
 		);
 
+		// RFC 7591 Dynamic Client Registration (PR-2 D3).  Unauthenticated by
+		// design — ChatGPT and Claude register before any user is involved —
+		// and therefore bounded in Mcpwp_OAuth_Clients (rate limit, cap,
+		// purge, strict redirect validation).
+		register_rest_route(
+			$this->namespace,
+			'/oauth/register',
+			array(
+				array(
+					'methods'             => WP_REST_Server::CREATABLE,
+					'callback'            => array( $this, 'handle_register' ),
+					'permission_callback' => '__return_true',
+				),
+			)
+		);
+
 		register_rest_route(
 			$this->namespace,
 			'/oauth/token',
@@ -103,6 +134,53 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 				),
 			)
 		);
+	}
+
+	// -------------------------------------------------------------------------
+	// POST /oauth/register — RFC 7591 Dynamic Client Registration
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Register a public OAuth client (RFC 7591 §3).
+	 *
+	 * Success is 201 with the client information response; failure is an
+	 * RFC 7591 §3.2.2 error body (invalid_redirect_uri /
+	 * invalid_client_metadata), or 429 temporarily_unavailable at the rate
+	 * limit or the client cap.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response
+	 */
+	public function handle_register( $request ) {
+		if ( ! $this->is_oauth_enabled() ) {
+			return $this->oauth_error_response( 'server_error', 'OAuth is not enabled on this site.', 501 );
+		}
+
+		$metadata = $request->get_json_params();
+		if ( ! is_array( $metadata ) ) {
+			// Some clients omit or mislabel Content-Type; the body is still
+			// required to be a JSON object (RFC 7591 §3.1).
+			$decoded  = json_decode( (string) $request->get_body(), true );
+			$metadata = is_array( $decoded ) ? $decoded : null;
+		}
+
+		$result = Mcpwp_OAuth_Clients::register( $metadata, $this->get_client_ip() );
+
+		if ( is_wp_error( $result ) ) {
+			$response = $this->wpe_to_response( $result );
+			$data     = $result->get_error_data();
+			if ( is_array( $data ) && ! empty( $data['retry_after'] ) ) {
+				$response->header( 'Retry-After', (string) (int) $data['retry_after'] );
+			}
+			$response->header( 'Cache-Control', 'no-store' );
+			return $response;
+		}
+
+		$response = new WP_REST_Response( $result, 201 );
+		$response->header( 'Cache-Control', 'no-store' );
+		$response->header( 'Pragma', 'no-cache' );
+
+		return $response;
 	}
 
 	// -------------------------------------------------------------------------
@@ -138,8 +216,22 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// (core strips cookie auth on REST requests without an X-WP-Nonce),
 		// which is the wp-login loop this endpoint moved to escape.
 		if ( ! function_exists( 'is_user_logged_in' ) || ! is_user_logged_in() ) {
-			$callback_url = add_query_arg( $params, Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url() );
+			// Percent-encode first: add_query_arg() does not, and redirect_uri
+			// and resource are themselves URLs (a plain-permalink resource
+			// carries its own ?rest_route=…), which would otherwise bleed into
+			// the callback's query string.
+			$encoded = array();
+			foreach ( array_filter( $params, 'strlen' ) as $key => $value ) {
+				$encoded[ $key ] = rawurlencode( (string) $value );
+			}
+			$callback_url = add_query_arg( $encoded, Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url() );
 			return $this->oauth_redirect_response( wp_login_url( $callback_url ) );
+		}
+
+		// P0b: below the site's minimum role, there is no consent screen at
+		// all — a plain page, never a redirect carrying a code.
+		if ( ! Mcpwp_OAuth_Well_Known::user_can_connect( get_current_user_id() ) ) {
+			return $this->min_role_refusal_response();
 		}
 
 		// Clamp scope to what the current user is actually capable of before
@@ -180,6 +272,12 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->oauth_error_response( 'access_denied', 'Authentication required.', 401 );
 		}
 
+		// P0b: enforced on the POST too — a forged or replayed form from a
+		// user below the minimum role mints nothing.
+		if ( ! Mcpwp_OAuth_Well_Known::user_can_connect( get_current_user_id() ) ) {
+			return $this->min_role_refusal_response();
+		}
+
 		// Verify CSRF nonce.
 		$nonce = $request->get_param( '_mcpwp_oauth_nonce' );
 		if ( ! wp_verify_nonce( (string) $nonce, 'mcpwp_oauth_consent' ) ) {
@@ -192,6 +290,17 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->wpe_to_response( $validate_err );
 		}
 
+		// The consent form is bound to exactly what was shown: client,
+		// redirect, PKCE challenge, resource, state and the (clamped) scope.
+		// Any edited hidden field fails here, before anything is minted — so a
+		// tampered form cannot ask for more than the screen offered.  The
+		// nonce proves the POST came from this user's session; this proves the
+		// session saw these parameters.
+		$binding = $this->stringify_param_value( $request->get_param( '_mcpwp_oauth_binding' ) );
+		if ( '' === $binding || ! hash_equals( $this->consent_binding( $params ), $binding ) ) {
+			return $this->oauth_error_response( 'invalid_request', 'The consent form was altered or has expired. Start the connection again.', 400 );
+		}
+
 		// Consent outcome.  Anything that is not an EXPLICIT approval is a
 		// denial: this endpoint mints an authorization code, so an absent,
 		// misspelled or attacker-truncated `action` must collapse toward
@@ -201,20 +310,60 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// empty string.)
 		$action = sanitize_key( (string) $request->get_param( 'action' ) );
 		if ( 'approve' !== $action ) {
+			$this->log_oauth_event( 'oauth_consent_denied', array( 'client_id' => $params['client_id'] ) );
 			$redirect = add_query_arg(
 				array(
 					'error'             => 'access_denied',
-					'error_description' => 'User denied access.',
-					'state'             => $params['state'],
+					'error_description' => rawurlencode( 'User denied access.' ),
+					'state'             => '' !== $params['state'] ? rawurlencode( $params['state'] ) : false,
+					// D13: RFC 9207 — error responses carry iss too.
+					'iss'               => rawurlencode( Mcpwp_OAuth_Well_Known::get_issuer() ),
 				),
 				$params['redirect_uri']
 			);
 			return $this->oauth_redirect_response( $redirect );
 		}
 
-		// P0-A: Clamp the requested scope to the logged-in user's capability.
-		// Store only the clamped scope in the auth code — never the raw requested scope.
+		// P0-A: Clamp the requested scope to the logged-in user's capability
+		// (capped at write, D8).  Store only the clamped scope in the auth
+		// code — never the raw requested scope.
 		$clamped_scope = $this->clamp_scope_to_user_capability( $params['scope'] );
+
+		// The user may untick write on the consent screen.  An unticked box is
+		// absent from the POST, so absence means read-only: the only way to
+		// keep write is an explicit tick, and the tick can never ADD write —
+		// it only keeps what the clamped request already contained.
+		$keep_write = '1' === $this->stringify_param_value( $request->get_param( 'scope_write' ) );
+		if ( ! $keep_write ) {
+			$clamped_scope = array( 'read' );
+		}
+
+		// A registered client is marked authorized BEFORE its code exists, so
+		// LRU eviction (which only takes never-authorized clients) can never
+		// remove a client that holds a live code.  If the store is busy the
+		// approval is not lost silently: the client is told to retry, at its
+		// already-validated redirect_uri (RFC 6749 §4.1.2.1).
+		if ( Mcpwp_OAuth_Clients::looks_like_client_id( $params['client_id'] ) && ! Mcpwp_OAuth_Clients::mark_authorized( $params['client_id'] ) ) {
+			return $this->oauth_redirect_response(
+				add_query_arg(
+					array(
+						'error'             => 'temporarily_unavailable',
+						'error_description' => rawurlencode( 'The site was busy. Try connecting again.' ),
+						'state'             => '' !== $params['state'] ? rawurlencode( $params['state'] ) : false,
+						'iss'               => rawurlencode( Mcpwp_OAuth_Well_Known::get_issuer() ),
+					),
+					$params['redirect_uri']
+				)
+			);
+		}
+
+		// Remember the resource this site was authorized under, so a later
+		// permalink or home-URL change (which changes every token's audience)
+		// can be shown to the administrator.  First authorization only; the
+		// Setup notice's dismiss moves it on.
+		if ( class_exists( 'Mcpwp_OAuth_Local_Admin' ) ) {
+			Mcpwp_OAuth_Local_Admin::remember_resource_if_unset();
+		}
 
 		// Approval path — generate auth code.
 		$code          = bin2hex( random_bytes( 32 ) );
@@ -229,16 +378,29 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 				'code_challenge' => $params['code_challenge'],
 				'scope'          => implode( ' ', $clamped_scope ),
 				'user_id'        => $user_id,
+				// D1: the audience the token will carry.  Whatever accepted
+				// `resource` form was sent, it is the canonical MCP URL.
+				'aud'            => Mcpwp_OAuth_Well_Known::get_canonical_resource(),
 				'expires'        => time() + 60,
 			),
 			60
 		);
 
+		$this->log_oauth_event(
+			'oauth_consent_approved',
+			array(
+				'client_id' => $params['client_id'],
+				'scope'     => implode( ' ', $clamped_scope ),
+			)
+		);
+
 		$redirect = add_query_arg(
-			array_filter( array(
+			array(
 				'code'  => $code,
-				'state' => $params['state'],
-			) ),
+				'state' => '' !== $params['state'] ? rawurlencode( $params['state'] ) : false,
+				// D13: RFC 9207 issuer identification.
+				'iss'   => rawurlencode( Mcpwp_OAuth_Well_Known::get_issuer() ),
+			),
 			$params['redirect_uri']
 		);
 
@@ -317,12 +479,26 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->oauth_error_response( 'invalid_request', 'code_verifier is required (PKCE mandatory).', 400 );
 		}
 
-		// Read + immediately delete the code transient (single-use).
+		// RFC 8707: a `resource` on the token request must name this MCP
+		// endpoint (D1).  Checked before the code is consumed so a client
+		// that only got the resource wrong can retry with the same code.
+		$resource_err = $this->check_token_request_resource( $request );
+		if ( null !== $resource_err ) {
+			return $resource_err;
+		}
+
+		// Single use, claimed atomically (kasra-review P2-1).  Two concurrent
+		// redemptions can both READ the code; only the one whose DELETE
+		// actually removed it may proceed.  delete_transient() reports that
+		// on both backends: on the options table it is delete_option(), whose
+		// DELETE affects one row for exactly one caller (the other gets 0 and
+		// false); on an object cache it is wp_cache_delete(), which Redis
+		// (DEL's count) and Memcached (NOT_FOUND) answer per key atomically.
 		$transient_key = 'mcpwp_oauth_code_' . $code;
 		$stored        = get_transient( $transient_key );
-		delete_transient( $transient_key );
+		$claimed       = delete_transient( $transient_key );
 
-		if ( ! is_array( $stored ) || empty( $stored['code_challenge'] ) ) {
+		if ( ! $claimed || ! is_array( $stored ) || empty( $stored['code_challenge'] ) ) {
 			return $this->oauth_error_response( 'invalid_grant', 'Authorization code is invalid or has expired.', 400 );
 		}
 
@@ -361,8 +537,9 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 				return $this->oauth_error_response( 'invalid_client', 'Invalid client credentials.', 401 );
 			}
 		} elseif ( ! empty( $client_id ) ) {
-			// Public client path — validate client_id only (no secret check).
-			if ( ! hash_equals( $oauth_settings['oauth_client_id'], sanitize_key( $client_id ) ) ) {
+			// Public client path — the client_id must still exist: a client
+			// registered by DCR (D3), or the legacy settings client (D6).
+			if ( null === $this->resolve_client( $client_id ) ) {
 				return $this->oauth_error_response( 'invalid_client', 'Invalid client_id.', 401 );
 			}
 		}
@@ -378,13 +555,34 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// externally (e.g. seeded via wp eval in tests or by older code).
 		// Use the user_id stored in the code — that was the user who consented.
 		$stored_user_id = isset( $stored['user_id'] ) ? (int) $stored['user_id'] : 0;
+
+		// P0b: the approving user must still meet the minimum role when the
+		// code is redeemed (a demotion inside the code's 60 s counts).
+		if ( ! Mcpwp_OAuth_Well_Known::user_can_connect( $stored_user_id ) ) {
+			return $this->oauth_error_response( 'invalid_grant', 'The approving user can no longer connect AI apps on this site.', 400 );
+		}
+
 		$scopes         = $this->clamp_scope_array_to_user_id( $scopes, $stored_user_id );
 
 		// Issue token via existing backend.
 		$ttl            = (int) $oauth_settings['oauth_token_ttl'];
 		$token_response = $this->issue_oauth_access_token_with_user( $scopes, $ttl, $stored_user_id );
 
-		return new WP_REST_Response( $token_response, 200 );
+		if ( isset( $stored['client_id'] ) ) {
+			Mcpwp_OAuth_Clients::touch( (string) $stored['client_id'] );
+		}
+
+		$this->log_oauth_event(
+			'oauth_token_issued',
+			array(
+				'grant_type' => 'authorization_code',
+				'client_id'  => isset( $stored['client_id'] ) ? (string) $stored['client_id'] : '',
+				'user_id'    => $stored_user_id,
+				'scope'      => isset( $token_response['scope'] ) ? (string) $token_response['scope'] : '',
+			)
+		);
+
+		return $this->no_store( new WP_REST_Response( $token_response, 200 ) );
 	}
 
 	// -------------------------------------------------------------------------
@@ -421,15 +619,30 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->oauth_error_response( 'invalid_grant', 'Invalid refresh token format.', 400 );
 		}
 
+		$resource_err = $this->check_token_request_resource( $request );
+		if ( null !== $resource_err ) {
+			return $resource_err;
+		}
+
 		$transient_key = $this->get_oauth_refresh_token_transient_key( $refresh_token );
 		$record        = get_transient( $transient_key );
 
 		// P1-D: Delete the presented refresh token immediately (rotate before issuing new one).
 		// This ensures that even if the new issuance fails, the old token is gone.
-		delete_transient( $transient_key );
+		// The delete is also the claim (same reasoning as the code exchange):
+		// of two concurrent refreshes with one token, only one proceeds.
+		$claimed = delete_transient( $transient_key );
 
-		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
+		if ( ! $claimed || ! is_array( $record ) || empty( $record['scopes'] ) ) {
 			return $this->oauth_error_response( 'invalid_grant', 'Refresh token is invalid or has expired.', 400 );
+		}
+
+		// D2 parity: a refresh token bound to another resource (the site's
+		// URL changed, or the stored record was altered) cannot mint a new
+		// access token here.  Records from before PR-2 carry no `aud` and are
+		// re-bound to the canonical audience by the new tokens.
+		if ( array_key_exists( 'aud', $record ) && ! Mcpwp_OAuth_Well_Known::audience_matches( $record['aud'] ) ) {
+			return $this->oauth_error_response( 'invalid_grant', 'Refresh token was issued for a different resource.', 400 );
 		}
 
 		// P0-B parity with the authorization_code path: resolve the stored scope
@@ -448,6 +661,12 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$scopes        = $this->parse_oauth_scope_string( implode( ' ', $stored_scopes ) );
 
 		$user_id = isset( $record['user_id'] ) ? (int) $record['user_id'] : 0;
+
+		// P0b / P1-A: refresh carries its OWN live-user check — a user deleted,
+		// stripped of every role, or demoted since consent cannot renew.
+		if ( ! Mcpwp_OAuth_Well_Known::user_can_connect( $user_id ) ) {
+			return $this->oauth_error_response( 'invalid_grant', 'The approving user can no longer connect AI apps on this site.', 400 );
+		}
 
 		// P0-A parity: re-clamp to the stored user's CURRENT capabilities on every
 		// refresh. A refresh token outlives the consent that minted it (up to 30
@@ -472,7 +691,16 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// Issue a new access token + new refresh token.
 		$token_response = $this->issue_oauth_access_token_with_user( $scopes, $ttl, $user_id );
 
-		return new WP_REST_Response( $token_response, 200 );
+		$this->log_oauth_event(
+			'oauth_token_issued',
+			array(
+				'grant_type' => 'refresh_token',
+				'user_id'    => $user_id,
+				'scope'      => isset( $token_response['scope'] ) ? (string) $token_response['scope'] : '',
+			)
+		);
+
+		return $this->no_store( new WP_REST_Response( $token_response, 200 ) );
 	}
 
 	// -------------------------------------------------------------------------
@@ -542,6 +770,16 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
 		$token_data = $this->issue_oauth_access_token( $scopes, $oauth_settings['oauth_token_ttl'], array( 'client_id' => $client_id ) );
 
+		$this->log_oauth_event(
+			'oauth_token_issued',
+			array(
+				'grant_type' => 'client_credentials',
+				'client_id'  => $client_id,
+				'user_id'    => 0,
+				'scope'      => isset( $token_data['scope'] ) ? (string) $token_data['scope'] : '',
+			)
+		);
+
 		return new WP_REST_Response( $token_data, 200 );
 	}
 
@@ -556,15 +794,127 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 * @return array Param map.
 	 */
 	public function extract_authorize_params( $request ) {
-		return array(
-			'response_type'         => sanitize_key( (string) $request->get_param( 'response_type' ) ),
-			'client_id'             => sanitize_key( (string) $request->get_param( 'client_id' ) ),
-			'redirect_uri'          => esc_url_raw( (string) $request->get_param( 'redirect_uri' ) ),
-			'code_challenge'        => sanitize_text_field( (string) $request->get_param( 'code_challenge' ) ),
-			'code_challenge_method' => strtoupper( sanitize_key( (string) $request->get_param( 'code_challenge_method' ) ) ),
-			'scope'                 => sanitize_text_field( (string) $request->get_param( 'scope' ) ),
-			'state'                 => sanitize_text_field( (string) $request->get_param( 'state' ) ),
+		$params = array(
+			'response_type'         => sanitize_key( $this->scalar_param( $request, 'response_type' ) ),
+			'client_id'             => sanitize_key( $this->scalar_param( $request, 'client_id' ) ),
+			'redirect_uri'          => esc_url_raw( $this->scalar_param( $request, 'redirect_uri' ) ),
+			'code_challenge'        => sanitize_text_field( $this->scalar_param( $request, 'code_challenge' ) ),
+			'code_challenge_method' => strtoupper( sanitize_key( $this->scalar_param( $request, 'code_challenge_method' ) ) ),
+			'scope'                 => sanitize_text_field( $this->scalar_param( $request, 'scope' ) ),
+			// Echoed back byte-exact (RFC 6749 §4.1.2), so validated in
+			// validate_authorize_params() instead of sanitised: sanitize_text_field()
+			// strips %xx sequences and would hand the client a different state.
+			'state'                 => $this->scalar_param( $request, 'state' ),
+			// RFC 8707.  Read raw (trimmed), not through esc_url_raw(): it is
+			// only ever compared after normalize_resource(), never echoed
+			// unescaped or followed, and esc_url_raw() could turn an invalid
+			// value into a valid-looking one.  A non-scalar (resource[]=…)
+			// becomes a value that matches nothing.
+			'resource'              => $this->resource_param( $request ),
 		);
+
+		return $params;
+	}
+
+	/** Maximum length of the `state` parameter. */
+	const STATE_MAX_LENGTH = 1024;
+
+	/**
+	 * Whether a `state` value may be echoed back as-is.
+	 *
+	 * @param mixed $state Value.
+	 * @return bool
+	 */
+	public static function is_valid_state( $state ) {
+		if ( ! is_string( $state ) ) {
+			return false;
+		}
+		if ( strlen( $state ) > self::STATE_MAX_LENGTH ) {
+			return false;
+		}
+		return '' === $state || 1 === preg_match( '/^[\x20-\x7E]+$/', $state );
+	}
+
+	/**
+	 * Read a request parameter as a string; arrays and objects become ''.
+	 *
+	 * A crafted `client_id[]=…` must fail validation, not raise an
+	 * "Array to string conversion" warning and continue as "Array".
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @param string          $key     Parameter name.
+	 * @return string
+	 */
+	private function scalar_param( $request, $key ) {
+		$value = $request->get_param( $key );
+		return is_scalar( $value ) ? (string) $value : '';
+	}
+
+	/**
+	 * Read the `resource` parameter (RFC 8707).
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return string '' when absent; a non-matching marker when not a string.
+	 */
+	private function resource_param( $request ) {
+		$value = $request->get_param( 'resource' );
+		if ( null === $value ) {
+			return '';
+		}
+		if ( ! is_string( $value ) ) {
+			return 'invalid:resource';
+		}
+		return trim( $value );
+	}
+
+	/**
+	 * Validate the `resource` of a token request (RFC 8707 §2.2).
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return WP_REST_Response|null Error response, or null when acceptable or absent.
+	 */
+	private function check_token_request_resource( $request ) {
+		$resource = $this->resource_param( $request );
+		if ( '' !== $resource && ! Mcpwp_OAuth_Well_Known::is_acceptable_resource( $resource ) ) {
+			return $this->oauth_error_response( 'invalid_target', 'resource must be this site\'s MCP endpoint URL.', 400 );
+		}
+		return null;
+	}
+
+	/**
+	 * Resolve a client_id: a DCR-registered client first, then the single
+	 * legacy client configured in settings (PR-2 D6).
+	 *
+	 * @param string $client_id sanitize_key()ed client id.
+	 * @return array|null {type:'registered'|'legacy', client_id, client_name, redirect_uris?}
+	 */
+	public function resolve_client( $client_id ) {
+		$client_id = (string) $client_id;
+		if ( '' === $client_id ) {
+			return null;
+		}
+
+		$registered = Mcpwp_OAuth_Clients::find( $client_id );
+		if ( null !== $registered ) {
+			return array(
+				'type'          => 'registered',
+				'client_id'     => $client_id,
+				'client_name'   => (string) $registered['client_name'],
+				'redirect_uris' => (array) $registered['redirect_uris'],
+				'record'        => $registered,
+			);
+		}
+
+		$oauth_settings = $this->get_oauth_settings();
+		if ( '' !== $oauth_settings['oauth_client_id'] && hash_equals( $oauth_settings['oauth_client_id'], $client_id ) ) {
+			return array(
+				'type'        => 'legacy',
+				'client_id'   => $client_id,
+				'client_name' => $client_id,
+			);
+		}
+
+		return null;
 	}
 
 	/**
@@ -582,18 +932,31 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return new WP_Error( 'invalid_request', 'response_type must be "code".', array( 'status' => 400 ) );
 		}
 
-		$oauth_settings = $this->get_oauth_settings();
+		// state round-trips byte-exact, so it is validated, never rewritten:
+		// visible ASCII plus space (RFC 6749 VSCHAR, %x20-7E), at most
+		// STATE_MAX_LENGTH bytes.  Anything else is refused as JSON — before
+		// the redirect_uri is trusted, so never by redirect.
+		if ( ! self::is_valid_state( $params['state'] ) ) {
+			return new WP_Error( 'invalid_request', 'state must be printable ASCII of at most 1024 characters.', array( 'status' => 400 ) );
+		}
 
-		// Validate client_id (constant-time).
-		if ( empty( $params['client_id'] ) || ! hash_equals( $oauth_settings['oauth_client_id'], $params['client_id'] ) ) {
+		// Resolve client_id: registered (DCR) first, legacy settings client second.
+		$client = $this->resolve_client( $params['client_id'] );
+		if ( null === $client ) {
 			return new WP_Error( 'invalid_client', 'Unknown or missing client_id.', array( 'status' => 400 ) );
 		}
 
-		// Validate redirect_uri against allow-list.
+		// Validate redirect_uri against THIS client's list.  Never fall back
+		// to the other store: a registered client cannot borrow the legacy
+		// allow-list, and the legacy client cannot borrow a registration.
 		if ( empty( $params['redirect_uri'] ) ) {
 			return new WP_Error( 'invalid_request', 'redirect_uri is required.', array( 'status' => 400 ) );
 		}
-		if ( ! $this->is_redirect_uri_allowed( $params['redirect_uri'] ) ) {
+		if ( 'registered' === $client['type'] ) {
+			if ( ! Mcpwp_OAuth_Clients::client_allows_redirect( $client['record'], $params['redirect_uri'] ) ) {
+				return new WP_Error( 'invalid_request', 'redirect_uri is not registered for this client.', array( 'status' => 400 ) );
+			}
+		} elseif ( ! $this->is_redirect_uri_allowed( $params['redirect_uri'] ) ) {
 			return new WP_Error( 'invalid_request', 'redirect_uri is not on the allow-list.', array( 'status' => 400 ) );
 		}
 
@@ -605,6 +968,14 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// PKCE: code_challenge must be present.
 		if ( empty( $params['code_challenge'] ) ) {
 			return new WP_Error( 'invalid_request', 'code_challenge is required.', array( 'status' => 400 ) );
+		}
+
+		// RFC 8707 (D1): optional, but when present it must name this MCP
+		// endpoint (or the pre-PR-2 origin identifier).  Returned as JSON,
+		// not redirected, like every other error here.
+		$resource = isset( $params['resource'] ) ? (string) $params['resource'] : '';
+		if ( '' !== $resource && ! Mcpwp_OAuth_Well_Known::is_acceptable_resource( $resource ) ) {
+			return new WP_Error( 'invalid_target', 'resource must be this site\'s MCP endpoint URL.', array( 'status' => 400 ) );
 		}
 
 		return true;
@@ -658,11 +1029,48 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * HMAC binding the consent form to the parameters it displayed.
+	 *
+	 * Covers every authorize parameter that decides what is minted and where
+	 * it goes, plus the approving user.  The scope covered is the CLAMPED
+	 * scope shown on screen, so the POST can only narrow it (by unticking
+	 * write), never widen it.  Keyed with the site's nonce salt; a value from
+	 * another site, user or request does not verify.
+	 *
+	 * @param array $params Authorize parameters (scope already clamped).
+	 * @return string 64 hex characters.
+	 */
+	private function consent_binding( $params ) {
+		$fields = array( 'response_type', 'client_id', 'redirect_uri', 'code_challenge', 'code_challenge_method', 'scope', 'state', 'resource' );
+		$parts  = array( 'mcpwp-oauth-consent-v1', (string) get_current_user_id() );
+		foreach ( $fields as $field ) {
+			$value   = isset( $params[ $field ] ) ? $this->stringify_param_value( $params[ $field ] ) : '';
+			$parts[] = $field . '=' . $value;
+		}
+		// Length-prefixed join: no field value can forge a boundary.
+		$message = '';
+		foreach ( $parts as $part ) {
+			$message .= strlen( $part ) . ':' . $part . ';';
+		}
+
+		$secret = function_exists( 'wp_salt' ) ? wp_salt( 'nonce' ) : 'mcpwp-oauth-consent';
+		return hash_hmac( 'sha256', $message, $secret );
+	}
+
+	/**
 	 * Build the minimal HTML consent screen.
 	 *
-	 * All OAuth parameters are embedded as hidden fields.  The CSRF nonce is
-	 * generated fresh per render and is the sole CSRF defence on the consent
-	 * POST — see handle_authorize_post().
+	 * What it shows (PR-2 D7), because with DCR the client name is chosen by
+	 * whoever registered it:
+	 *  - the client name, marked as supplied by the app and not verified;
+	 *  - the HOST the authorization code will be sent to, in bold — that, not
+	 *    the name, is what decides who receives access;
+	 *  - this site, the WordPress user who is approving, and the scope in
+	 *    words, with write as a box the user can untick (read is fixed).
+	 *
+	 * All OAuth parameters are embedded as hidden fields, bound by an HMAC
+	 * (consent_binding()).  The CSRF nonce is generated fresh per render and
+	 * is the sole CSRF defence on the consent POST — see handle_authorize_post().
 	 *
 	 * @param array $params Validated authorize parameters (scope already clamped to a string).
 	 * @return string HTML document.
@@ -670,13 +1078,32 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	public function build_consent_screen_html( $params ) {
 		$nonce       = wp_create_nonce( 'mcpwp_oauth_consent' );
 		$site_name   = function_exists( 'get_bloginfo' ) ? esc_html( get_bloginfo( 'name' ) ) : 'this site';
-		$client_id   = esc_html( $params['client_id'] );
 		$scope_value = $this->stringify_param_value( isset( $params['scope'] ) ? $params['scope'] : '' );
-		$scope_label = esc_html( '' !== $scope_value ? $scope_value : 'read' );
+		$scopes      = $this->parse_oauth_scope_string( $scope_value );
 		$user_login  = '';
 		if ( function_exists( 'wp_get_current_user' ) ) {
 			$current_user = wp_get_current_user();
 			$user_login   = esc_html( $current_user->user_login );
+		}
+
+		$client_id = isset( $params['client_id'] ) ? (string) $params['client_id'] : '';
+		$client    = $this->resolve_client( $client_id );
+		if ( null !== $client && 'registered' === $client['type'] ) {
+			$name        = '' !== $client['client_name'] ? $client['client_name'] : __( 'An unnamed app', 'mcpwp' );
+			$client_html = '<strong>' . esc_html( $name ) . '</strong> <em>' . esc_html__( '(name supplied by the app, not verified)', 'mcpwp' ) . '</em>';
+		} elseif ( null !== $client ) {
+			$client_html = '<strong>' . esc_html( $client_id ) . '</strong> <em>' . esc_html__( '(an app configured by this site\'s administrator)', 'mcpwp' ) . '</em>';
+		} else {
+			// Unreachable through the handlers (validate_authorize_params()
+			// refuses unknown clients first); never vouch for an unknown id.
+			$client_html = '<strong>' . esc_html( $client_id ) . '</strong> <em>' . esc_html__( '(unknown app)', 'mcpwp' ) . '</em>';
+		}
+
+		$redirect_uri  = isset( $params['redirect_uri'] ) ? (string) $params['redirect_uri'] : '';
+		$redirect_host = (string) wp_parse_url( $redirect_uri, PHP_URL_HOST );
+		$redirect_port = wp_parse_url( $redirect_uri, PHP_URL_PORT );
+		if ( $redirect_port ) {
+			$redirect_host .= ':' . (int) $redirect_port;
 		}
 
 		$post_url = esc_url( Mcpwp_OAuth_Well_Known::get_front_channel_authorize_url() );
@@ -686,8 +1113,19 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			$hidden_fields .= sprintf(
 				'<input type="hidden" name="%s" value="%s">',
 				esc_attr( $key ),
-				esc_attr( $this->stringify_param_value( $value ) )
+				// Byte-exact round trip: esc_attr() does not re-encode an
+				// existing entity, so a state containing "&amp;" would come
+				// back as "&".  Always-encode escaping is just as safe here.
+				htmlspecialchars( $this->stringify_param_value( $value ), ENT_QUOTES, 'UTF-8', true )
 			);
+		}
+		$hidden_fields .= '<input type="hidden" name="_mcpwp_oauth_binding" value="' . esc_attr( $this->consent_binding( $params ) ) . '">';
+
+		$scope_items = '<li><label><input type="checkbox" checked disabled> '
+			. esc_html__( 'Read your site\'s content', 'mcpwp' ) . '</label></li>';
+		if ( in_array( 'write', $scopes, true ) ) {
+			$scope_items .= '<li><label><input type="checkbox" name="scope_write" value="1" checked> '
+				. esc_html__( 'Create and edit content (drafts, pages, posts, media, SEO, Elementor)', 'mcpwp' ) . '</label></li>';
 		}
 
 		return '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">'
@@ -695,15 +1133,20 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		   . '<title>Authorize &mdash; ' . $site_name . '</title>'
 		   . '<style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 16px}'
 		   . 'h1{font-size:1.2rem}.scope{background:#f0f4ff;border:1px solid #c7d2fe;border-radius:6px;padding:10px 14px;margin:16px 0}'
+		   . '.scope ul{list-style:none;padding:0;margin:8px 0 0}.scope li{margin:4px 0}'
+		   . '.redirect{background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;padding:10px 14px;margin:16px 0}'
 		   . '.btn{display:inline-block;padding:10px 24px;border:none;border-radius:4px;cursor:pointer;font-size:1rem}'
 		   . '.btn-allow{background:#2563eb;color:#fff;margin-right:8px}'
 		   . '.btn-deny{background:#e5e7eb;color:#111}'
 		   . '</style></head><body>'
 		   . '<h1>Authorize access to <strong>' . $site_name . '</strong></h1>'
-		   . '<p><strong>' . $client_id . '</strong> is requesting access'
-		   . ( $user_login ? ' as <strong>' . $user_login . '</strong>' : '' ) . '.</p>'
-		   . '<div class="scope"><strong>Scopes requested:</strong> ' . $scope_label . '</div>'
+		   . '<p>' . $client_html . ' ' . esc_html__( 'is asking to connect to this site', 'mcpwp' )
+		   . ( $user_login ? ' ' . esc_html__( 'as', 'mcpwp' ) . ' <strong>' . $user_login . '</strong>' : '' ) . '.</p>'
+		   . '<div class="redirect">' . esc_html__( 'If you approve, access is sent to', 'mcpwp' ) . ' <strong>' . esc_html( $redirect_host ) . '</strong>. '
+		   . esc_html__( 'Approve only if you started this connection from that app.', 'mcpwp' ) . '</div>'
 		   . '<form method="POST" action="' . $post_url . '">'
+		   . '<div class="scope"><strong>' . esc_html__( 'It will be able to:', 'mcpwp' ) . '</strong><ul>' . $scope_items . '</ul>'
+		   . '<p style="margin:8px 0 0;font-size:.9em">' . esc_html__( 'Never administrator access: settings, API keys and approvals stay out of reach.', 'mcpwp' ) . '</p></div>'
 		   . $hidden_fields
 		   . '<input type="hidden" name="_mcpwp_oauth_nonce" value="' . esc_attr( $nonce ) . '">'
 		   . '<button type="submit" name="action" value="approve" class="btn btn-allow">Approve</button>'
@@ -719,18 +1162,27 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 * Clamp a requested scope string to the current logged-in user's capability.
 	 *
 	 * Mapping (highest grant wins, silently downgrade if not capable):
-	 *   admin  — requires current_user_can('manage_options')
 	 *   write  — requires current_user_can('edit_posts')
 	 *   read   — always granted for any logged-in user
+	 *   admin  — never (D8): a requested admin is clamped to write, not
+	 *            refused, so a client asking for every scope still connects.
 	 *
-	 * P0-B: Empty/absent scope defaults to ['read'] only (never admin).
+	 * D9: Empty/absent scope requests read + write (never admin), clamped.
 	 *
 	 * @param string $scope_string Space-separated requested scopes (may be empty).
 	 * @return string[] Clamped scope array.
 	 */
 	public function clamp_scope_to_user_capability( $scope_string ) {
-		// P0-B: empty scope must default to read only — never call get_default_api_key_scopes().
-		$requested = $this->parse_oauth_scope_string( $scope_string );
+		// D9: an authorization request with NO scope asks for read + write.
+		// ChatGPT and Claude often send none, and a read-only token makes the
+		// connector look broken on the first write.  The capability clamp
+		// below still applies, so a Subscriber still gets read.  (Never via
+		// get_default_api_key_scopes(), which would include admin — P0-B.)
+		if ( '' === trim( (string) $scope_string ) ) {
+			$requested = array( 'read', 'write' );
+		} else {
+			$requested = $this->parse_oauth_scope_string( $scope_string );
+		}
 
 		return $this->clamp_scope_array_to_user_cap_current( $requested );
 	}
@@ -744,10 +1196,10 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 * @return string[] Clamped scope array.
 	 */
 	private function clamp_scope_array_to_user_cap_current( $requested ) {
-		// Determine the ceiling for this user.
-		if ( function_exists( 'current_user_can' ) && current_user_can( 'manage_options' ) ) {
-			$ceiling = 'admin';
-		} elseif ( function_exists( 'current_user_can' ) && current_user_can( 'edit_posts' ) ) {
+		// Determine the ceiling for this user.  D8: OAuth never grants admin,
+		// so an administrator's ceiling is write, the same as an editor's.
+		// Admin stays behind a deliberately created API key.
+		if ( function_exists( 'current_user_can' ) && current_user_can( 'edit_posts' ) ) {
 			$ceiling = 'write';
 		} else {
 			$ceiling = 'read';
@@ -778,11 +1230,12 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		}
 
 		// Ask WordPress about this specific user's caps.
+		// D8: the ceiling is write at most, even for manage_options — this
+		// path serves the authorization_code exchange and every refresh, so a
+		// pre-PR-2 admin refresh token is narrowed to write on its next use.
 		$ceiling = 'read';
 		if ( function_exists( 'user_can' ) ) {
-			if ( user_can( $user_id, 'manage_options' ) ) {
-				$ceiling = 'admin';
-			} elseif ( user_can( $user_id, 'edit_posts' ) ) {
+			if ( user_can( $user_id, 'edit_posts' ) ) {
 				$ceiling = 'write';
 			}
 		} elseif ( function_exists( 'get_userdata' ) ) {
@@ -790,9 +1243,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			$user = get_userdata( $user_id );
 			if ( $user ) {
 				$roles = isset( $user->roles ) ? (array) $user->roles : array();
-				if ( in_array( 'administrator', $roles, true ) ) {
-					$ceiling = 'admin';
-				} elseif ( array_intersect( $roles, array( 'editor', 'author', 'contributor' ) ) ) {
+				if ( array_intersect( $roles, array( 'administrator', 'editor', 'author', 'contributor' ) ) ) {
 					$ceiling = 'write';
 				}
 			}
@@ -953,12 +1404,16 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$token_response = $this->issue_oauth_access_token( $scopes, $ttl, array( 'user_id' => (int) $user_id ) );
 
 		// Issue a refresh token (separate, longer-lived transient).
-		// Refresh TTL = 30 days max or 10x access TTL, whichever is smaller.
-		$refresh_ttl    = min( 30 * DAY_IN_SECONDS, $ttl * 10 );
+		// P1-2: the refresh lifetime is its own setting, decoupled from the
+		// access TTL (it used to be min(30 d, 10 x access TTL) — 10 hours at
+		// the default 3600, so connections died overnight).  Rotation on
+		// every use is unchanged.
+		$refresh_ttl    = self::refresh_token_ttl();
 		$refresh_token  = 'mcpwp_rt_' . bin2hex( random_bytes( 32 ) );
 		$refresh_record = array(
 			'scopes'     => $scopes,
 			'user_id'    => $user_id,
+			'aud'        => Mcpwp_OAuth_Well_Known::get_canonical_resource(),
 			'created_at' => time(),
 			'expires_at' => time() + $refresh_ttl,
 		);
@@ -972,6 +1427,70 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$token_response['refresh_token'] = $refresh_token;
 
 		return $token_response;
+	}
+
+	/**
+	 * Refresh-token lifetime: 30 days by default, clamped to 14-30 days.
+	 *
+	 * Configurable through the `mcpwp_oauth_refresh_ttl_days` filter only —
+	 * no UI, and never shorter than 14 days or longer than 30.
+	 *
+	 * @return int Seconds.
+	 */
+	public static function refresh_token_ttl() {
+		$days = function_exists( 'apply_filters' ) ? (int) apply_filters( 'mcpwp_oauth_refresh_ttl_days', 30 ) : 30;
+		$days = max( 14, min( 30, $days ) );
+		return $days * DAY_IN_SECONDS;
+	}
+
+	/**
+	 * Write an OAuth decision to the activity log: who, which client, what
+	 * scope.  A synthetic request carrying ONLY those fields is logged, so a
+	 * code, verifier, token, nonce or consent binding can never reach the log.
+	 *
+	 * @param string $action Log action.
+	 * @param array  $fields Safe fields (client_id, scope, user_id, grant_type).
+	 */
+	private function log_oauth_event( $action, array $fields ) {
+		if ( ! isset( $fields['user_id'] ) ) {
+			$fields['user_id'] = get_current_user_id();
+		}
+		$entry = new WP_REST_Request( 'POST', '/' . $this->namespace . '/oauth/' . str_replace( 'oauth_', '', $action ) );
+		$entry->set_body_params( $fields );
+		$this->log_activity( $action, $entry );
+	}
+
+	/**
+	 * The plain refusal page for a user below the minimum role (P0b).
+	 *
+	 * @return WP_REST_Response
+	 */
+	private function min_role_refusal_response() {
+		$labels = array(
+			'editor'        => __( 'Editor', 'mcpwp' ),
+			'author'        => __( 'Author', 'mcpwp' ),
+			'administrator' => __( 'Administrator', 'mcpwp' ),
+		);
+		$role = Mcpwp_OAuth_Well_Known::get_min_role();
+
+		$html = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+			. '<title>' . esc_html__( 'Not allowed', 'mcpwp' ) . '</title>'
+			. '<style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 16px}</style></head><body>'
+			. '<h1>' . esc_html__( 'Your WordPress role can\'t connect AI apps on this site; ask an administrator.', 'mcpwp' ) . '</h1>'
+			. '<p>' . esc_html(
+				sprintf(
+					/* translators: %s: role name */
+					__( 'Connecting an AI app needs the %s role or higher.', 'mcpwp' ),
+					$labels[ $role ]
+				)
+			) . '</p></body></html>';
+
+		$response = new WP_REST_Response( $html, 403 );
+		$response->header( 'Content-Type', 'text/html; charset=utf-8' );
+		$response->header( 'X-Frame-Options', 'DENY' );
+		$response->header( 'Content-Security-Policy', "frame-ancestors 'none'" );
+		$response->header( 'Cache-Control', 'no-store, private' );
+		return $response;
 	}
 
 	/**
@@ -1020,6 +1539,18 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			),
 			$status
 		);
+	}
+
+	/**
+	 * Mark a token response uncacheable (RFC 6749 §5.1).
+	 *
+	 * @param WP_REST_Response $response Response.
+	 * @return WP_REST_Response
+	 */
+	private function no_store( $response ) {
+		$response->header( 'Cache-Control', 'no-store' );
+		$response->header( 'Pragma', 'no-cache' );
+		return $response;
 	}
 
 	/**

@@ -127,6 +127,7 @@ final class AllRegisteredRoutesCategoryTest extends TestCase {
 		'/openapi.json',          // Mcpwp_REST_OpenAPI: public machine-readable schema, no API key.
 		'/oauth/authorize',       // Mcpwp_REST_OAuth: pre-token OAuth 2.1 authorize step.
 		'/oauth/token',           // Mcpwp_REST_OAuth: pre-token OAuth 2.1 token exchange.
+		'/oauth/register',        // Mcpwp_REST_OAuth: RFC 7591 Dynamic Client Registration (public by design, PR-2 D3).
 		'/broker/enroll-callback', // Mcpwp_REST_Broker: mumcp.com enrollment handshake (public by design).
 		'/broker/enroll-confirm',  // Mcpwp_REST_Broker: mumcp.com enrollment handshake (public by design).
 		'/broker/enroll-store',    // Mcpwp_REST_Broker: mumcp.com enrollment handshake (public by design).

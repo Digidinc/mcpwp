@@ -50,20 +50,23 @@ final class BrokerWellKnownTest extends TestCase {
 
 	public function test_broker_enrolled_points_authorization_servers_at_mumcp(): void {
 		$this->enroll();
+		// PR-2 D10/D11: local OAuth is on unless stored off, and when on it
+		// takes precedence — so the broker is named only with local OAuth off.
+		update_option( 'mcpwp_settings', array( 'oauth_enabled' => false ) );
 
 		$metadata = Mcpwp_OAuth_Well_Known::build_protected_resource_metadata();
 
 		$this->assertSame( array( 'https://mumcp.com' ), $metadata['authorization_servers'] );
 	}
 
-	public function test_broker_enrolled_resource_is_site_canonical_url(): void {
+	/** PR-2 D1: the protected resource is the MCP endpoint URL (was origin + prefix). */
+	public function test_broker_enrolled_resource_is_the_mcp_endpoint_url(): void {
 		$this->enroll();
+		update_option( 'mcpwp_settings', array( 'oauth_enabled' => false ) );
 
 		$metadata = Mcpwp_OAuth_Well_Known::build_protected_resource_metadata();
-		$origin   = Mcpwp_OAuth_Well_Known::get_site_origin();
-		$prefix   = Mcpwp_OAuth_Well_Known::get_site_path_prefix();
 
-		$this->assertSame( $origin . $prefix, $metadata['resource'] );
+		$this->assertSame( rest_url( 'mcpwp/v1/mcp' ), $metadata['resource'] );
 	}
 
 	public function test_broker_enrolled_serves_regardless_of_legacy_oauth_setting(): void {
@@ -76,16 +79,32 @@ final class BrokerWellKnownTest extends TestCase {
 		);
 	}
 
-	public function test_broker_enrolled_and_legacy_oauth_also_on_still_points_at_mumcp(): void {
+	/**
+	 * PR-2 D11 (inverted from "broker wins"): with local OAuth on, the local
+	 * AS is named even while broker-enrolled.  Enrollment is not deleted and
+	 * broker bearer tokens are still accepted (BrokerAuthIntegrationTest).
+	 */
+	public function test_broker_enrolled_and_local_oauth_on_points_at_local_issuer(): void {
 		$this->enroll();
 		update_option( 'mcpwp_settings', array( 'oauth_enabled' => true ) );
 
 		$metadata = Mcpwp_OAuth_Well_Known::build_protected_resource_metadata();
 
 		$this->assertSame(
-			array( 'https://mumcp.com' ),
+			array( Mcpwp_OAuth_Well_Known::get_issuer() ),
 			$metadata['authorization_servers'],
-			'Broker enrollment must win over the legacy self-issued AS when both are active.'
+			'D11: the local AS takes precedence over the broker whenever local OAuth is on.'
+		);
+		$this->assertNotEmpty( get_option( 'mcpwp_broker_enrollment' ), 'Enrollment is kept.' );
+	}
+
+	/** D10 + D11: never-stored setting = local on = local issuer, even when enrolled. */
+	public function test_broker_enrolled_and_setting_absent_points_at_local_issuer(): void {
+		$this->enroll();
+
+		$this->assertSame(
+			array( Mcpwp_OAuth_Well_Known::get_issuer() ),
+			Mcpwp_OAuth_Well_Known::build_protected_resource_metadata()['authorization_servers']
 		);
 	}
 
@@ -132,10 +151,15 @@ final class BrokerWellKnownTest extends TestCase {
 		$origin   = Mcpwp_OAuth_Well_Known::get_site_origin();
 		$prefix   = Mcpwp_OAuth_Well_Known::get_site_path_prefix();
 
+		// PR-2: RFC 9728 §2 — authorization_servers lists ISSUER identifiers
+		// (was the AS metadata URL, origin + /.well-known/oauth-authorization-server
+		// + prefix, which a compliant client would treat as the issuer and
+		// derive a metadata URL from that 404s).
 		$this->assertSame(
-			array( $origin . '/.well-known/oauth-authorization-server' . $prefix ),
+			array( $origin . $prefix ),
 			$metadata['authorization_servers'],
-			'Not broker-enrolled: the site is still its own AS, exactly as before.'
+			'Not broker-enrolled: the site is its own AS, named by its issuer.'
 		);
+		$this->assertSame( Mcpwp_OAuth_Well_Known::build_authorization_server_metadata()['issuer'], $metadata['authorization_servers'][0] );
 	}
 }

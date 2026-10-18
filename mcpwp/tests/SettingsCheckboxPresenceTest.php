@@ -29,12 +29,14 @@ final class SettingsCheckboxPresenceTest extends TestCase {
 
 	/**
 	 * Checkbox => documented default. null: no default is written, because
-	 * Mcpwp_Analytics::is_enabled() reads "not set" as "the plan decides".
+	 * Mcpwp_Analytics::is_enabled() reads "not set" as "the plan decides" —
+	 * and, since PR-2 D10, Mcpwp_OAuth_Well_Known::resolve_oauth_enabled()
+	 * reads an absent oauth_enabled as ON (the one-time notice keys on it).
 	 */
 	private const FLAGS = array(
 		'enable_logging'          => true,
 		'log_store_response_data' => true,
-		'oauth_enabled'           => false,
+		'oauth_enabled'           => null,
 		'alerts_enabled'          => false,
 		'mupot_enabled'           => false,
 		'webmcp_admin_enabled'    => false,

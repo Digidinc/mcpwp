@@ -201,6 +201,8 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 		</div>
 		<?php endif; ?>
 
+		<?php Mcpwp_OAuth_Local_Admin::render_address_notice(); ?>
+
 		<!-- ============================= ADD TO CHATGPT ============================= -->
 		<div class="mcpwp-card" id="mcpwp-add-to-chatgpt">
 			<h2>
@@ -223,13 +225,6 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 						<button type="submit" class="button"><?php esc_html_e( 'Disconnect mumcp.com', 'mcpwp' ); ?></button>
 						<span class="description"><?php esc_html_e( 'Also under Connect Your AI → Claude Desktop → Advanced.', 'mcpwp' ); ?></span>
 					</form>
-				</div>
-			<?php elseif ( 'legacy' === $chatgpt_oauth_conflict ) : ?>
-				<div class="notice notice-warning inline" style="margin:10px 0;">
-					<p>
-						<strong><?php esc_html_e( 'OAuth is turned on for this site.', 'mcpwp' ); ?></strong>
-						<?php esc_html_e( 'While it is, a mistyped or replaced link makes ChatGPT ask you to sign in instead of showing a plain error. Turn OAuth off under MCPWP → Settings if you only use this link.', 'mcpwp' ); ?>
-					</p>
 				</div>
 			<?php endif; ?>
 
@@ -306,6 +301,19 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				<li><?php esc_html_e( 'Authentication: choose "No authentication". The key is already inside the link.', 'mcpwp' ); ?></li>
 				<li><?php esc_html_e( 'Accept the risk notice ("I understand and want to continue"), then create it. Ask ChatGPT to "list my pages" to check.', 'mcpwp' ); ?></li>
 			</ol>
+			<?php if ( $local_oauth_enabled ) : ?>
+			<p>
+				<strong><?php esc_html_e( 'Or connect with WordPress sign-in:', 'mcpwp' ); ?></strong>
+				<?php esc_html_e( 'paste this URL into ChatGPT and choose OAuth as the authentication. ChatGPT sends you to this site\'s WordPress login and a consent screen; no link and no key to keep safe.', 'mcpwp' ); ?>
+			</p>
+			<div class="mcpwp-code-wrapper">
+				<pre class="mcpwp-code-block" id="mcpwp-chatgpt-oauth-url"><?php echo esc_url( Mcpwp_ChatGPT_Connector::endpoint_url() ); ?></pre>
+				<button type="button" class="button mcpwp-copy-code-btn" data-target="mcpwp-chatgpt-oauth-url">
+					<span class="dashicons dashicons-clipboard"></span>
+					<?php esc_html_e( 'Copy URL', 'mcpwp' ); ?>
+				</button>
+			</div>
+			<?php endif; ?>
 			<p class="description">
 				<?php esc_html_e( 'Custom MCP servers depend on your ChatGPT plan, and in a Business or Enterprise workspace an admin may have to allow them first.', 'mcpwp' ); ?>
 			</p>
@@ -315,7 +323,11 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				<ul style="list-style:disc;margin-left:20px;">
 					<li><?php esc_html_e( 'No "Add custom MCP server" option: your ChatGPT plan or workspace does not allow custom MCP servers. A workspace admin can turn it on.', 'mcpwp' ); ?></li>
 					<li><?php esc_html_e( 'Connection failed: a security plugin, firewall/WAF (for example Cloudflare bot rules) or a disabled REST API is blocking ChatGPT from reaching /wp-json/mcpwp/v1/mcp.', 'mcpwp' ); ?></li>
-					<li><?php esc_html_e( 'ChatGPT asks you to sign in: this site is enrolled with mumcp.com. Open Advanced under Connect Your AI below and click Disconnect, then add the link again.', 'mcpwp' ); ?></li>
+					<?php if ( 'broker' === $chatgpt_oauth_conflict ) : ?>
+					<li><?php esc_html_e( 'ChatGPT asks you to sign in to mumcp.com: this site is enrolled with mumcp.com. Disconnect it (above), then add the link again.', 'mcpwp' ); ?></li>
+					<?php else : ?>
+					<li><?php esc_html_e( 'ChatGPT asks you to sign in: with OAuth chosen, that is this site\'s WordPress sign-in and it is expected. If you used the link with "No authentication" and it still asks, the link\'s key was revoked or replaced; make a new link.', 'mcpwp' ); ?></li>
+					<?php endif; ?>
 				</ul>
 			</div>
 
@@ -849,6 +861,42 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				</p>
 			</div>
 			<?php endif; // ! MCPWP_WPORG_BUILD ?>
+		</div>
+
+		<!-- ============================= ADVANCED ============================= -->
+		<div class="mcpwp-card" id="mcpwp-setup-advanced">
+			<h2>
+				<span class="dashicons dashicons-admin-generic"></span>
+				<?php esc_html_e( 'Advanced', 'mcpwp' ); ?>
+			</h2>
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+				<input type="hidden" name="action" value="<?php echo esc_attr( Mcpwp_OAuth_Local_Admin::TOGGLE_ACTION ); ?>" />
+				<?php wp_nonce_field( Mcpwp_OAuth_Local_Admin::TOGGLE_ACTION, Mcpwp_OAuth_Local_Admin::NONCE_FIELD ); ?>
+				<input type="hidden" name="mcpwp_local_oauth" value="0" />
+				<label>
+					<input type="checkbox" name="mcpwp_local_oauth" value="1" <?php checked( $local_oauth_enabled ); ?> />
+					<strong><?php esc_html_e( 'Allow AI apps to connect by signing in with WordPress (OAuth)', 'mcpwp' ); ?></strong>
+				</label>
+				<p class="description">
+					<?php esc_html_e( 'An app such as ChatGPT or Claude sends you to this site\'s WordPress login and a consent screen. It acts as the WordPress user who approved it, with read and write access at most, never administrator access, and only for this site\'s MCP endpoint. Links and API keys keep working either way.', 'mcpwp' ); ?>
+				</p>
+				<p>
+					<label for="mcpwp_local_oauth_min_role"><strong><?php esc_html_e( 'Who may connect an AI app', 'mcpwp' ); ?></strong></label><br />
+					<select id="mcpwp_local_oauth_min_role" name="mcpwp_local_oauth_min_role">
+						<?php
+						$mcpwp_min_role_labels = array(
+							'author'        => __( 'Authors and above', 'mcpwp' ),
+							'editor'        => __( 'Editors and above (default)', 'mcpwp' ),
+							'administrator' => __( 'Administrators only', 'mcpwp' ),
+						);
+						foreach ( $mcpwp_min_role_labels as $mcpwp_role => $mcpwp_label ) :
+							?>
+							<option value="<?php echo esc_attr( $mcpwp_role ); ?>" <?php selected( Mcpwp_OAuth_Well_Known::get_min_role(), $mcpwp_role ); ?>><?php echo esc_html( $mcpwp_label ); ?></option>
+						<?php endforeach; ?>
+					</select>
+				</p>
+				<p><button type="submit" class="button"><?php esc_html_e( 'Save', 'mcpwp' ); ?></button></p>
+			</form>
 		</div>
 
 		<!-- ============================= SECTION 4: QUICK LINKS ============================= -->

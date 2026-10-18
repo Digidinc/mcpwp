@@ -39,7 +39,20 @@ class Mcpwp_Auth_Category_Gate_Harness {
 
 final class AuthPlaneCategoryGateTest extends TestCase {
 
+
+	/** @var array */
+	private $pr2_saved_users;
+
+	/** @var array */
+	private $pr2_saved_caps;
+
 	protected function setUp(): void {
+		// PR-2 P0: an OAuth token acts as its approving user, who must exist
+		// and meet the minimum role (default Editor). User 7 is that Editor.
+		$this->pr2_saved_users                = $GLOBALS['mcpwp_test_users'];
+		$this->pr2_saved_caps                 = $GLOBALS['mcpwp_test_user_caps'] ?? array();
+		$GLOBALS['mcpwp_test_users'][]        = (object) array( 'ID' => 7, 'roles' => array( 'editor' ), 'user_login' => 'editor7' );
+		$GLOBALS['mcpwp_test_user_caps'][7]   = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'publish_posts' => true, 'read_private_posts' => true );
 		$GLOBALS['mcpwp_test_options']      = array();
 		$GLOBALS['mcpwp_test_transients']   = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
@@ -56,6 +69,8 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_users']      = $this->pr2_saved_users;
+		$GLOBALS['mcpwp_test_user_caps'] = $this->pr2_saved_caps;
 		// PHPUnit does not reset statics between tests; a mid-test failure must not
 		// leak the batch context into the rest of the suite.
 		if ( class_exists( 'Mcpwp_REST_Batch' ) ) {

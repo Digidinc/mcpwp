@@ -438,6 +438,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-integrations.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-cloudflare.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-figma.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-oauth-clients.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-oauth.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-broker.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-broker-auth.php';
@@ -460,6 +461,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-integrations-admin.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-broker-admin.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-chatgpt-connector.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-oauth-local-admin.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-tools-admin.php';
 
 	// Bridge migration: copy spai_* options + tables → mcpwp_* (idempotent).
@@ -530,6 +532,14 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 			}
 		}
 	);
+
+	// One-time (PR-2 D10): a stored oauth_enabled=false written by an older
+	// version's settings save is not an opt-out — remove it so the default
+	// (on) applies.  Runs here, before admin_init registers the settings
+	// sanitizer, which would otherwise put the stored false back.
+	if ( ! get_option( Mcpwp_OAuth_Local_Admin::MIGRATED_FLAG ) ) {
+		Mcpwp_OAuth_Local_Admin::migrate_default_on();
+	}
 
 	// One-time reset of the destructive-approval switch. An early build of
 	// the gate exposed destructive_requires_approval through the settings
