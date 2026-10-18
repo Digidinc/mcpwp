@@ -805,7 +805,7 @@ trait Mcpwp_Api_Auth {
 		$matched_key = $this->find_scoped_api_key( $api_key );
 		$legacy_key  = get_option( 'mcpwp_api_key' );
 
-		if ( ! $matched_key && ! empty( $legacy_key ) && $this->is_api_key_match( $api_key, $legacy_key ) ) {
+		if ( ! $matched_key && ! empty( $legacy_key ) && $this->legacy_api_key_option_is_honoured() && $this->is_api_key_match( $api_key, $legacy_key ) ) {
 			// Auto-migrate legacy plain text keys to hashed storage.
 			if ( hash_equals( $legacy_key, $api_key ) ) {
 				$legacy_key = wp_hash_password( $api_key );
@@ -3120,7 +3120,7 @@ trait Mcpwp_Api_Auth {
 		$matched_key = $this->find_scoped_api_key( $api_key );
 		$legacy_key  = get_option( 'mcpwp_api_key' );
 
-		if ( ! $matched_key && ! empty( $legacy_key ) && $this->is_api_key_match( $api_key, $legacy_key ) ) {
+		if ( ! $matched_key && ! empty( $legacy_key ) && $this->legacy_api_key_option_is_honoured() && $this->is_api_key_match( $api_key, $legacy_key ) ) {
 			$matched_key = $this->migrate_legacy_key_to_scoped_store( $legacy_key );
 		}
 
@@ -3830,6 +3830,44 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Whether the legacy single-key option `mcpwp_api_key` may authenticate.
+	 *
+	 * Only on a site whose scoped store is still empty: a genuine
+	 * pre-multi-key install, whose key is migrated into the store on first use
+	 * and matched there from then on. Once the store holds any record, every
+	 * live key has a record, so a legacy hash with no live record can only
+	 * belong to a REVOKED key — find_scoped_api_key() skips revoked records,
+	 * and honouring the option here used to re-create a revoked primary key
+	 * as a brand-new active admin record (migrate_legacy_key_to_scoped_store()).
+	 *
+	 * @return bool
+	 */
+	protected function legacy_api_key_option_is_honoured() {
+		return array() === $this->get_scoped_api_keys_raw();
+	}
+
+	/**
+	 * Whether a stored hash belongs to a REVOKED record in the scoped store.
+	 *
+	 * Exact string compare: the 2.8 migration copies hashes verbatim, so a
+	 * revoked mcpwp copy of a spai key carries the identical hash (#1097).
+	 *
+	 * @param string $hash Stored hash.
+	 * @return bool
+	 */
+	protected function hash_is_revoked_in_scoped_store( $hash ) {
+		if ( '' === $hash ) {
+			return false;
+		}
+		foreach ( $this->get_scoped_api_keys_raw() as $record ) {
+			if ( is_array( $record ) && ! empty( $record['revoked_at'] ) && isset( $record['hash'] ) && hash_equals( (string) $record['hash'], $hash ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Find an active scoped API key record matching a plaintext key.
 	 *
 	 * @param string $api_key Incoming plaintext API key.
@@ -3991,6 +4029,16 @@ trait Mcpwp_Api_Auth {
 	 * @return array|null Matching (normalized) key record, or null.
 	 */
 	protected function find_legacy_spai_key( $api_key ) {
+		// #1097: the 2.8 migration copies spai_api_keys / spai_api_key into the
+		// mcpwp stores VERBATIM (same hash) and never deletes the originals. So
+		// a key revoked in the mcpwp store is still live in its spai copy — and
+		// used to authenticate here as admin. A spai credential whose exact hash
+		// belongs to a REVOKED mcpwp record is therefore refused. A spai key with
+		// no mcpwp copy at all (e.g. a single spai_api_key the migration skipped
+		// because the activator had already minted mcpwp_api_key) keeps working,
+		// as before. Checked here, at the chokepoint, so every caller (main
+		// path, sub-request path, rate-limit diagnostics) gets it.
+
 		// 1. Check the spai_api_keys scoped multi-key store.
 		$spai_keys = get_option( 'spai_api_keys', array() );
 		if ( is_array( $spai_keys ) ) {
@@ -4005,6 +4053,9 @@ trait Mcpwp_Api_Auth {
 				if ( empty( $key['hash'] ) ) {
 					continue;
 				}
+				if ( $this->hash_is_revoked_in_scoped_store( (string) $key['hash'] ) ) {
+					continue;
+				}
 				if ( $this->is_api_key_match( $api_key, $key['hash'] ) ) {
 					$record = $this->normalize_api_key_record( $key );
 					return '' === $record['id'] ? null : $record;
@@ -4014,7 +4065,7 @@ trait Mcpwp_Api_Auth {
 
 		// 2. Fall back to the single-key spai_api_key option.
 		$spai_single = get_option( 'spai_api_key' );
-		if ( ! empty( $spai_single ) && $this->is_api_key_match( $api_key, $spai_single ) ) {
+		if ( ! empty( $spai_single ) && ! $this->hash_is_revoked_in_scoped_store( (string) $spai_single ) && $this->is_api_key_match( $api_key, $spai_single ) ) {
 			// Synthesise a minimal key record consistent with normalize_api_key_record().
 			return $this->normalize_api_key_record(
 				array(
@@ -5209,6 +5260,13 @@ trait Mcpwp_Api_Auth {
 		}
 		unset( $key );
 
+		// The legacy `mcpwp_api_key` hash is deliberately LEFT in place: three
+		// surfaces read it as "this site has been set up" (Setup page, the
+		// activator's first-key mint, test-connection), and deleting it made
+		// the Setup page offer a hero "Generate API Key" that revokes every
+		// key (#1097 review round 2). It cannot authenticate any more —
+		// legacy_api_key_option_is_honoured() refuses it once the scoped store
+		// holds any record, revoked records included.
 		if ( $updated ) {
 			update_option( $this->get_scoped_api_keys_option_name(), $keys );
 		}
