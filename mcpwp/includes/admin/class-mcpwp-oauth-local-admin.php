@@ -98,9 +98,15 @@ class Mcpwp_OAuth_Local_Admin {
 			return false;
 		}
 
+		// Re-read from the database, not this process's caches: the flag and
+		// the settings are autoloaded (alloptions), and a name found missing
+		// earlier in this request sits in `notoptions` — without a
+		// persistent cache that is where a stale "not migrated" would come
+		// from (#1101 round 2).
 		Mcpwp_OAuth_Clients::flush_option_cache( self::MIGRATED_FLAG );
 		Mcpwp_OAuth_Clients::flush_option_cache( 'mcpwp_settings' );
 		Mcpwp_OAuth_Clients::flush_option_cache( 'alloptions' );
+		Mcpwp_OAuth_Clients::flush_option_cache( 'notoptions' );
 		if ( get_option( self::MIGRATED_FLAG ) ) {
 			Mcpwp_OAuth_Clients::release_lock( $token, self::MIGRATION_LOCK_OPTION );
 			return false;

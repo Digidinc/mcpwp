@@ -680,6 +680,14 @@ function mcpwp_test_cap_filters_grant($capability, $user_id)
 
 function get_option($name, $default = false)
 {
+    // Core's `notoptions` cache: a name this process already found missing
+    // answers $default from the object cache without asking the database,
+    // until update_option()/add_option() for that name (or a delete of the
+    // `notoptions` key) clears it. Only populated by a test (#1101 round 2),
+    // so no other test's reads change.
+    if (isset($GLOBALS['mcpwp_test_object_cache']['options:notoptions'][ $name ])) {
+        return $default;
+    }
     if (array_key_exists($name, $GLOBALS['mcpwp_test_options'])) {
         return $GLOBALS['mcpwp_test_options'][ $name ];
     }
@@ -778,6 +786,7 @@ function update_option($name, $value, $autoload = null)
         return false;
     }
     $GLOBALS['mcpwp_test_options'][ $name ] = $value;
+    unset($GLOBALS['mcpwp_test_object_cache']['options:notoptions'][ $name ]);
     // Recorded so tests can assert a caller passed autoload=false explicitly
     // (e.g. a large/rarely-read option that must not load on every request).
     $GLOBALS['mcpwp_test_options_autoload'][ $name ] = $autoload;
@@ -939,6 +948,11 @@ function delete_transient($name)
     // and refresh-token exchanges use that answer as their atomic claim.
     $existed = isset($GLOBALS['mcpwp_test_transients'][ $name ]);
     unset($GLOBALS['mcpwp_test_transients'][ $name ]);
+    // Test-only: runs AFTER the delete, so a test can land a concurrent
+    // request between a claim and what the claimant does next.
+    if (isset($GLOBALS['mcpwp_test_transient_delete_hook']) && is_callable($GLOBALS['mcpwp_test_transient_delete_hook'])) {
+        call_user_func($GLOBALS['mcpwp_test_transient_delete_hook'], $name, $existed);
+    }
     return $existed;
 }
 
@@ -954,6 +968,14 @@ function get_user_meta($user_id, $key = '', $single = false)
 
 function update_user_meta($user_id, $key, $value)
 {
+    // Like core: a scalar is stored — and read back — as a string (a float
+    // through PHP's 14-digit `precision`), an array/object serialized.
+    // #1101 round 2: a microsecond epoch stored as a float came back rounded.
+    if (is_bool($value)) {
+        $value = $value ? '1' : '';
+    } elseif (is_scalar($value)) {
+        $value = (string) $value;
+    }
     $GLOBALS['mcpwp_test_user_meta'][ (int) $user_id ][ $key ] = $value;
     return true;
 }

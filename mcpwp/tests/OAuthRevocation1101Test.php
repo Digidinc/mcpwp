@@ -194,7 +194,7 @@ final class OAuthRevocation1101Test extends TestCase {
 		$this->assertSame( self::DCR_CLIENT, $access['client_id'] );
 		$this->assertSame( self::DCR_CLIENT, $refresh['client_id'] );
 		$this->assertSame( 1, (int) $access['user_id'] );
-		$this->assertIsFloat( $access['issued_at'] );
+		$this->assertIsInt( $access['issued_at'], 'Integer microseconds.' );
 		$this->assertNotEmpty( $refresh['family_id'] );
 		$this->assertSame( $refresh['family_id'], $access['family_id'] );
 	}
@@ -318,13 +318,82 @@ final class OAuthRevocation1101Test extends TestCase {
 	}
 
 	public function test_the_epoch_comparison_is_strict_and_fails_closed(): void {
-		update_user_meta( 1, Mcpwp_OAuth_Revocation::USER_META, 1000.5 );
-		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'issued_at' => 1000.5 ) ), 'Issued AT the epoch: revoked.' );
-		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'issued_at' => 999.0 ) ) );
-		$this->assertFalse( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'issued_at' => 1000.501 ) ) );
+		$epoch = 1760000000123456;
+		update_user_meta( 1, Mcpwp_OAuth_Revocation::USER_META, (string) $epoch );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'issued_at' => $epoch ) ), 'Issued AT the epoch: revoked.' );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'issued_at' => $epoch - 1 ) ) );
+		$this->assertFalse( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'issued_at' => $epoch + 1 ) ), 'One microsecond later: alive.' );
 		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1 ) ), 'No issued_at / created_at: any epoch catches it.' );
-		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'created_at' => 1000 ) ), 'created_at is the fallback.' );
-		$this->assertFalse( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 2, 'issued_at' => 1.0 ) ), 'No epoch: not revoked.' );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'created_at' => 1760000000 ) ), 'created_at (seconds) is the fallback.' );
+		$this->assertFalse( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'created_at' => 1760000001 ) ) );
+		$this->assertFalse( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 2, 'issued_at' => 1 ) ), 'No epoch: not revoked.' );
+	}
+
+	/** #1101 round 2 (3a): epochs survive WordPress's string storage exactly. */
+	public function test_a_user_epoch_round_trips_through_meta_to_the_microsecond(): void {
+		$this->assertTrue( Mcpwp_OAuth_Revocation::revoke_user( 1 ) );
+		$stored = get_user_meta( 1, Mcpwp_OAuth_Revocation::USER_META, true );
+		$this->assertIsString( $stored, 'WordPress hands meta back as a string.' );
+		$this->assertMatchesRegularExpression( '/^[0-9]{16}$/', $stored, 'An integer of microseconds.' );
+
+		$epoch = Mcpwp_OAuth_Revocation::user_epoch( 1 );
+		$this->assertSame( (int) $stored, $epoch );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'issued_at' => $epoch ) ) );
+		$this->assertFalse( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => 1, 'issued_at' => $epoch + 1 ) ), 'Not rounded: a token one microsecond later lives.' );
+	}
+
+	/** M24/M28: an epoch is never lowered — by a user, client or map write. */
+	public function test_an_epoch_can_never_be_lowered(): void {
+		$future = Mcpwp_OAuth_Revocation::now() + 3600 * 1000000;
+
+		update_user_meta( 1, Mcpwp_OAuth_Revocation::USER_META, (string) $future );
+		Mcpwp_OAuth_Revocation::revoke_user( 1 );
+		$this->assertSame( $future, Mcpwp_OAuth_Revocation::user_epoch( 1 ) );
+
+		$this->assertTrue( Mcpwp_OAuth_Clients::set_revoked_before( self::DCR_CLIENT, $future ) );
+		Mcpwp_OAuth_Revocation::revoke_client( self::DCR_CLIENT );
+		$this->assertSame( $future, Mcpwp_OAuth_Revocation::to_micros( Mcpwp_OAuth_Clients::find( self::DCR_CLIENT )['revoked_before'] ) );
+
+		update_option( Mcpwp_OAuth_Revocation::CLIENT_EPOCHS_OPTION, array( 'test_client' => $future ), false );
+		Mcpwp_OAuth_Revocation::revoke_client( 'test_client' );
+		$this->assertSame( $future, Mcpwp_OAuth_Revocation::client_epoch( 'test_client' ) );
+	}
+
+	/** #1101 round 2 (3b): a revocation between the check and the mint covers the new tokens. */
+	public function test_a_revocation_landing_between_check_and_mint_covers_a_refresh(): void {
+		$first = $this->grant( self::DCR_CLIENT );
+		// The refresh writes its reuse tombstone after every check and before
+		// it mints: land the user's revocation exactly there.
+		$GLOBALS['mcpwp_test_transient_write_fails'] = function ( $name ) {
+			if ( 0 === strpos( $name, 'mcpwp_oauth_rtu_' ) ) {
+				Mcpwp_OAuth_Revocation::revoke_user( 1 );
+			}
+			return false;
+		};
+		try {
+			$minted = $this->refresh( $first['refresh_token'], self::DCR_CLIENT )->get_data();
+		} finally {
+			unset( $GLOBALS['mcpwp_test_transient_write_fails'] );
+		}
+		$this->assertArrayHasKey( 'access_token', $minted, 'The refresh itself went through.' );
+		$this->assertFalse( $this->works( $minted['access_token'] ), 'The new access token is covered.' );
+		$this->assert_grant_error( $this->refresh( $minted['refresh_token'], self::DCR_CLIENT ), 'invalid_grant', 'And the new refresh token.' );
+	}
+
+	public function test_a_revocation_landing_between_check_and_mint_covers_a_code_redemption(): void {
+		$code = $this->seed_code( self::DCR_CLIENT );
+		$GLOBALS['mcpwp_test_transient_delete_hook'] = function ( $name ) {
+			if ( 0 === strpos( $name, 'mcpwp_oauth_code_' ) ) {
+				Mcpwp_OAuth_Revocation::revoke_client( self::DCR_CLIENT );
+			}
+		};
+		try {
+			$minted = $this->redeem( $code, self::DCR_CLIENT )->get_data();
+		} finally {
+			unset( $GLOBALS['mcpwp_test_transient_delete_hook'] );
+		}
+		$this->assertArrayHasKey( 'access_token', $minted );
+		$this->assertFalse( $this->works( $minted['access_token'] ) );
 	}
 
 	// ── 3. RFC 7009 ───────────────────────────────────────────────────────
@@ -343,6 +412,131 @@ final class OAuthRevocation1101Test extends TestCase {
 
 		$other = $this->grant( self::DCR_CLIENT );
 		$this->assertTrue( $this->works( $other['access_token'] ), 'Another family of the same client is untouched.' );
+	}
+
+	/** #1101 round 2 (P1): the victim revokes the token the thief already rotated. */
+	public function test_revoking_a_rotated_away_refresh_token_reaches_the_family(): void {
+		$victim = $this->grant( self::DCR_CLIENT );
+		$thief  = $this->refresh( $victim['refresh_token'], self::DCR_CLIENT )->get_data(); // RT1 -> RT2
+
+		$this->assertSame( 200, $this->revoke( array( 'token' => $victim['refresh_token'], 'client_id' => self::DCR_CLIENT ) )->get_status() );
+
+		$this->assert_grant_error( $this->refresh( $thief['refresh_token'], self::DCR_CLIENT ), 'invalid_grant', 'RT2 is dead.' );
+		$this->assertFalse( $this->works( $thief['access_token'] ) );
+	}
+
+	public function test_a_rotated_away_token_of_another_client_is_not_revoked(): void {
+		$victim = $this->grant( self::DCR_CLIENT );
+		$next   = $this->refresh( $victim['refresh_token'], self::DCR_CLIENT )->get_data();
+		$this->assertSame( 200, $this->revoke( array( 'token' => $victim['refresh_token'], 'client_id' => 'test_client' ) )->get_status() );
+		$this->assertTrue( $this->works( $next['access_token'] ) );
+	}
+
+	/** #1101 round 2 (P1): a revocation landing after the refresh's claim, before its new token exists. */
+	public function test_a_revocation_racing_a_refresh_still_kills_what_the_refresh_mints(): void {
+		$victim = $this->grant( self::DCR_CLIENT );
+		$key    = $this->ctrl()->get_oauth_refresh_token_transient_key( $victim['refresh_token'] );
+		$self   = $this;
+		$status = null;
+		$GLOBALS['mcpwp_test_transient_delete_hook'] = function ( $name, $existed ) use ( $key, $victim, $self, &$status ) {
+			if ( $name === $key && $existed && null === $status ) {
+				$status = $self->ctrl_revoke( $victim['refresh_token'] );
+			}
+		};
+		try {
+			$minted = $this->refresh( $victim['refresh_token'], self::DCR_CLIENT )->get_data();
+		} finally {
+			unset( $GLOBALS['mcpwp_test_transient_delete_hook'] );
+		}
+		$this->assertSame( 200, $status, 'The revoke ran between the claim and the mint.' );
+		$this->assertArrayHasKey( 'refresh_token', $minted );
+		$this->assert_grant_error( $this->refresh( $minted['refresh_token'], self::DCR_CLIENT ), 'invalid_grant' );
+		$this->assertFalse( $this->works( $minted['access_token'] ) );
+	}
+
+	/** Helper for the race test. */
+	public function ctrl_revoke( string $token ): int {
+		return $this->revoke( array( 'token' => $token, 'client_id' => self::DCR_CLIENT ) )->get_status();
+	}
+
+	// ── 5. fail-closed revocation writes ──────────────────────────────────
+
+	private function hold_revocation_lock(): void {
+		$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_OAuth_Revocation::LOCK_OPTION ] = ( time() + 60 ) . '|deadbeef';
+	}
+
+	/** @return array<int,array> Failures reported while $fn ran. */
+	private function failures_during( callable $fn ): array {
+		$seen = array();
+		add_action(
+			Mcpwp_OAuth_Revocation::WRITE_FAILED_ACTION,
+			function ( $kind, $id ) use ( &$seen ) {
+				$seen[] = array( $kind, $id );
+			},
+			10,
+			2
+		);
+		$log = ini_set( 'error_log', '/dev/null' );
+		try {
+			$fn();
+		} finally {
+			ini_set( 'error_log', (string) $log );
+			unset( $GLOBALS['mcpwp_test_actions'][ Mcpwp_OAuth_Revocation::WRITE_FAILED_ACTION ] );
+		}
+		return $seen;
+	}
+
+	public function test_a_revoke_that_cannot_be_persisted_is_503_not_a_false_200(): void {
+		$data = $this->grant( self::DCR_CLIENT );
+		$this->hold_revocation_lock();
+		$response = null;
+		$seen     = $this->failures_during(
+			function () use ( $data, &$response ) {
+				$response = $this->revoke( array( 'token' => $data['refresh_token'], 'client_id' => self::DCR_CLIENT ) );
+			}
+		);
+		$this->assertSame( 503, $response->get_status() );
+		$this->assertSame( 'temporarily_unavailable', $response->get_data()['error'] );
+		$this->assertArrayHasKey( 'Retry-After', $response->get_headers() );
+		$this->assertSame( 'family', $seen[0][0] ?? null, 'Reported.' );
+		$this->assertFalse( $this->works( $data['access_token'] ), 'The transient marker still stops the family now.' );
+	}
+
+	public function test_a_deleted_users_tombstone_failure_is_reported(): void {
+		$this->hold_revocation_lock();
+		$ok   = null;
+		$seen = $this->failures_during(
+			function () use ( &$ok ) {
+				$ok = Mcpwp_OAuth_Revocation::on_user_deleted( 2 );
+			}
+		);
+		$this->assertFalse( $ok );
+		$this->assertSame( array( array( 'deleted_user', '2' ) ), $seen );
+	}
+
+	public function test_a_client_whose_tombstone_cannot_be_written_is_not_deleted(): void {
+		$this->hold_revocation_lock();
+		$ok   = null;
+		$seen = $this->failures_during(
+			function () use ( &$ok ) {
+				$ok = Mcpwp_OAuth_Clients::delete( self::DCR_CLIENT );
+			}
+		);
+		$this->assertFalse( $ok );
+		$this->assertNotNull( Mcpwp_OAuth_Clients::find( self::DCR_CLIENT ), 'Nothing deleted.' );
+		$this->assertSame( 'client', $seen[0][0] ?? null );
+	}
+
+	public function test_a_reuse_detection_whose_family_write_fails_is_reported(): void {
+		$first = $this->grant( self::DCR_CLIENT );
+		$this->refresh( $first['refresh_token'], self::DCR_CLIENT );
+		$this->hold_revocation_lock();
+		$seen = $this->failures_during(
+			function () use ( $first ) {
+				$this->assert_grant_error( $this->refresh( $first['refresh_token'], self::DCR_CLIENT ), 'invalid_grant' );
+			}
+		);
+		$this->assertSame( 'family', $seen[0][0] ?? null );
 	}
 
 	public function test_revoking_an_access_token_deletes_only_that_token(): void {
@@ -479,6 +673,49 @@ final class OAuthRevocation1101Test extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://v6last.example.com/cb' ) ), '2001:db8:1:2:ffff::1' ) );
 	}
 
+	/** #1101 round 2 (P1): the buckets are read, checked and counted under the store lock. */
+	public function test_dcr_buckets_are_counted_under_the_store_lock(): void {
+		$under = array();
+		$GLOBALS['mcpwp_test_transient_write_fails'] = function ( $name ) use ( &$under ) {
+			if ( 0 === strpos( $name, 'mcpwp_oauth_dcr_' ) ) {
+				$under[] = isset( $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_OAuth_Clients::LOCK_OPTION ] );
+			}
+			return false;
+		};
+		try {
+			$this->assertIsArray( Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://a.example.com/cb' ) ), '198.51.100.20' ) );
+		} finally {
+			unset( $GLOBALS['mcpwp_test_transient_write_fails'] );
+		}
+		$this->assertSame( array( true, true ), $under, 'Both buckets written while the lock is held.' );
+	}
+
+	public function test_a_parallel_registration_from_one_address_cannot_read_a_stale_count(): void {
+		$ip = '198.51.100.21';
+		for ( $i = 0; $i < Mcpwp_OAuth_Clients::ADDRESS_REGISTRATIONS_PER_DAY - 1; $i++ ) {
+			$this->assertIsArray( Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://p' . $i . '.example.com/cb' ) ), $ip ) );
+		}
+		// One slot left.  A second request from the same address arrives
+		// while the first is between reading the address bucket and counting.
+		$nested = null;
+		$GLOBALS['mcpwp_test_transient_hook'] = function ( $name ) use ( $ip, &$nested ) {
+			if ( null === $nested && 0 === strpos( $name, 'mcpwp_oauth_dcr_addr_' ) ) {
+				$nested = false;
+				$nested = Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://nested.example.com/cb' ) ), $ip );
+			}
+			return null;
+		};
+		try {
+			$first = Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://last.example.com/cb' ) ), $ip );
+		} finally {
+			unset( $GLOBALS['mcpwp_test_transient_hook'] );
+		}
+		$this->assertIsArray( $first );
+		$this->assertInstanceOf( WP_Error::class, $nested, 'The parallel request did not get a slot.' );
+		$this->assertSame( 503, $nested->get_error_data()['status'], 'It waited on the lock (busy), it did not read the same count.' );
+		$this->assertInstanceOf( WP_Error::class, Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://after.example.com/cb' ) ), $ip ), 'And the day is spent at exactly the ceiling.' );
+	}
+
 	// ── 7. small items ────────────────────────────────────────────────────
 
 	public function test_the_d10_migration_waits_for_its_lock(): void {
@@ -522,6 +759,53 @@ final class OAuthRevocation1101Test extends TestCase {
 			$GLOBALS['wpdb'] = $real;
 		}
 		$this->assertSame( array( 'oauth_enabled' => false ), get_option( 'mcpwp_settings' ), 'The later explicit "off" is kept.' );
+	}
+
+	public function test_the_d10_recheck_clears_notoptions(): void {
+		update_option( 'mcpwp_settings', array( 'oauth_enabled' => false ) );
+		// This process already found the flag missing (notoptions); another
+		// request then migrates and writes the flag straight to the database.
+		$GLOBALS['mcpwp_test_object_cache']['options:notoptions'] = array( Mcpwp_OAuth_Local_Admin::MIGRATED_FLAG => true );
+		$real            = $GLOBALS['wpdb'];
+		$GLOBALS['wpdb'] = new class( $real ) {
+			private $real;
+			public function __construct( $real ) {
+				$this->real = $real;
+			}
+			public function insert( ...$args ) {
+				$GLOBALS['mcpwp_test_options'][ Mcpwp_OAuth_Local_Admin::MIGRATED_FLAG ] = 1;
+				return $this->real->insert( ...$args );
+			}
+			public function __call( $name, $args ) {
+				return $this->real->$name( ...$args );
+			}
+			public function __get( $name ) {
+				return $this->real->$name;
+			}
+		};
+		try {
+			$this->assertFalse( Mcpwp_OAuth_Local_Admin::migrate_default_on() );
+		} finally {
+			$GLOBALS['wpdb']                          = $real;
+			$GLOBALS['mcpwp_test_object_cache']       = array();
+		}
+		$this->assertSame( array( 'oauth_enabled' => false ), get_option( 'mcpwp_settings' ) );
+	}
+
+	/** M35/M20: a code whose stored client_id is empty is refused. */
+	public function test_a_code_with_an_empty_stored_client_id_is_refused(): void {
+		$code = 'code_' . bin2hex( random_bytes( 8 ) );
+		set_transient( 'mcpwp_oauth_code_' . $code, array( 'client_id' => '', 'redirect_uri' => self::REDIRECT, 'code_challenge' => $this->ctrl()->compute_pkce_challenge( self::VERIFIER ), 'scope' => 'read', 'user_id' => 1, 'issued_at' => Mcpwp_OAuth_Revocation::now(), 'expires' => time() + 60 ), 60 );
+		$this->assert_grant_error( $this->redeem( $code, 'test_client' ), 'invalid_grant' );
+	}
+
+	/** M36: a revoked code is deleted, not left to be retried. */
+	public function test_a_revoked_code_is_deleted(): void {
+		$code = $this->seed_code( self::DCR_CLIENT );
+		usleep( 20 );
+		Mcpwp_OAuth_Revocation::revoke_client( self::DCR_CLIENT );
+		$this->assert_grant_error( $this->redeem( $code, self::DCR_CLIENT ), 'invalid_grant' );
+		$this->assertFalse( get_transient( 'mcpwp_oauth_code_' . $code ) );
 	}
 
 	/** The two OAuth read_post branches (Kasra, #1101), each pinned on its own. */

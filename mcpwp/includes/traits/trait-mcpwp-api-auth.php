@@ -6666,8 +6666,10 @@ trait Mcpwp_Api_Auth {
 			'aud'        => $this->get_oauth_canonical_resource(),
 			'created_at' => time(),
 			// #1101: what revocation epochs are compared against
-			// (Mcpwp_OAuth_Revocation::is_revoked()).
-			'issued_at'  => Mcpwp_OAuth_Revocation::now(),
+			// (Mcpwp_OAuth_Revocation::is_revoked()) — integer microseconds,
+			// the moment the issuing request checked revocation when it
+			// passes one (context issued_at), else now.
+			'issued_at'  => isset( $context['issued_at'] ) && is_int( $context['issued_at'] ) ? $context['issued_at'] : Mcpwp_OAuth_Revocation::now(),
 			'expires_at' => time() + $ttl,
 		);
 
