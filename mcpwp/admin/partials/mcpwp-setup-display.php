@@ -897,6 +897,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				</p>
 				<p><button type="submit" class="button"><?php esc_html_e( 'Save', 'mcpwp' ); ?></button></p>
 			</form>
+			<?php Mcpwp_OAuth_Apps_Admin::render_clients_list(); ?>
 		</div>
 
 		<!-- ============================= SECTION 4: QUICK LINKS ============================= -->

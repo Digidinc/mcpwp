@@ -275,6 +275,130 @@ class Mcpwp_OAuth_Token_Store {
 	}
 
 	/**
+	 * Mark every live row of a client revoked (#1101 PR-3b: the client is
+	 * deleted from the admin list).  The client's epoch tombstone stays the
+	 * primary guard; this keeps the rows honest for the lists.
+	 *
+	 * @param string $client_id Client id.
+	 * @return bool False when the UPDATE failed (0 rows is success).
+	 */
+	public static function revoke_client_rows( $client_id ) {
+		global $wpdb;
+		$affected = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE ' . self::table() . ' SET revoked_at = %d WHERE client_id = %s AND revoked_at IS NULL', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- see claim_refresh().
+				Mcpwp_OAuth_Revocation::now(),
+				(string) $client_id
+			)
+		);
+		return false !== $affected;
+	}
+
+	/**
+	 * Mark every live row of one user revoked, optionally for one client.
+	 *
+	 * @param int    $user_id   User id.
+	 * @param string $client_id Client id; '' for every client.
+	 * @return bool False when the UPDATE failed (0 rows is success).
+	 */
+	public static function revoke_user_rows( $user_id, $client_id = '' ) {
+		global $wpdb;
+		if ( '' === (string) $client_id ) {
+			$sql = $wpdb->prepare(
+				'UPDATE ' . self::table() . ' SET revoked_at = %d WHERE user_id = %d AND revoked_at IS NULL', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- see claim_refresh().
+				Mcpwp_OAuth_Revocation::now(),
+				(int) $user_id
+			);
+		} else {
+			$sql = $wpdb->prepare(
+				'UPDATE ' . self::table() . ' SET revoked_at = %d WHERE user_id = %d AND client_id = %s AND revoked_at IS NULL', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- see claim_refresh().
+				Mcpwp_OAuth_Revocation::now(),
+				(int) $user_id,
+				(string) $client_id
+			);
+		}
+		return false !== $wpdb->query( $sql );
+	}
+
+	/**
+	 * Live access/refresh rows — not revoked, not expired, and not caught by
+	 * any revocation epoch — optionally for one user.
+	 *
+	 * @param int $user_id User id; 0 for every user.
+	 * @return array[] Rows.
+	 */
+	public static function live_rows( $user_id = 0 ) {
+		global $wpdb;
+		$columns = 'client_id, user_id, family_id, scopes, aud, issued_at, expires_at, last_used_at';
+		if ( (int) $user_id > 0 ) {
+			$sql = $wpdb->prepare(
+				'SELECT ' . $columns . ' FROM ' . self::table() . " WHERE user_id = %d AND revoked_at IS NULL AND expires_at > %d AND type IN ('access','refresh')", // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- see claim_refresh().
+				(int) $user_id,
+				time()
+			);
+		} else {
+			$sql = $wpdb->prepare(
+				'SELECT ' . $columns . ' FROM ' . self::table() . " WHERE revoked_at IS NULL AND expires_at > %d AND type IN ('access','refresh')", // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- see claim_refresh().
+				time()
+			);
+		}
+		$rows = $wpdb->get_results( $sql, ARRAY_A );
+		$live = array();
+		foreach ( is_array( $rows ) ? $rows : array() as $row ) {
+			if ( ! Mcpwp_OAuth_Revocation::is_revoked( self::to_record( $row ) ) ) {
+				$live[] = $row;
+			}
+		}
+		return $live;
+	}
+
+	/**
+	 * The apps holding live tokens for a user, one entry per client:
+	 * client_id, client_name, scopes (union), last_used_at (latest),
+	 * issued_at (earliest live token).
+	 *
+	 * @param int $user_id User id.
+	 * @return array<string,array>
+	 */
+	public static function live_apps_for_user( $user_id ) {
+		$apps = array();
+		foreach ( self::live_rows( (int) $user_id ) as $row ) {
+			$client_id = (string) $row['client_id'];
+			if ( '' === $client_id ) {
+				continue; // A pre-binding token belongs to no app it could be revoked from.
+			}
+			if ( ! isset( $apps[ $client_id ] ) ) {
+				$record             = class_exists( 'Mcpwp_OAuth_Clients' ) ? Mcpwp_OAuth_Clients::find( $client_id ) : null;
+				$apps[ $client_id ] = array(
+					'client_id'    => $client_id,
+					'client_name'  => is_array( $record ) && '' !== (string) $record['client_name'] ? (string) $record['client_name'] : $client_id,
+					'scopes'       => array(),
+					'last_used_at' => 0,
+					'issued_at'    => PHP_INT_MAX,
+				);
+			}
+			$apps[ $client_id ]['scopes']       = array_values( array_unique( array_merge( $apps[ $client_id ]['scopes'], array_filter( explode( ' ', (string) $row['scopes'] ) ) ) ) );
+			$apps[ $client_id ]['last_used_at'] = max( $apps[ $client_id ]['last_used_at'], (int) $row['last_used_at'] );
+			$apps[ $client_id ]['issued_at']    = min( $apps[ $client_id ]['issued_at'], (int) $row['issued_at'] );
+		}
+		return $apps;
+	}
+
+	/**
+	 * Live token count per client.
+	 *
+	 * @return array<string,int>
+	 */
+	public static function active_counts_by_client() {
+		$counts = array();
+		foreach ( self::live_rows() as $row ) {
+			$client_id            = (string) $row['client_id'];
+			$counts[ $client_id ] = ( $counts[ $client_id ] ?? 0 ) + 1;
+		}
+		return $counts;
+	}
+
+	/**
 	 * Record a use, at most once per TOUCH_INTERVAL (best effort).
 	 *
 	 * @param array $row Row from find().

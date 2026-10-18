@@ -60,6 +60,9 @@ class Mcpwp_OAuth_Revocation {
 	/** client_id => epoch for the legacy client and for deleted clients. */
 	const CLIENT_EPOCHS_OPTION = 'mcpwp_oauth_client_epochs';
 
+	/** "user_id|client_id" => epoch: one app's access for one user (#1101 PR-3b). */
+	const PAIRS_OPTION = 'mcpwp_oauth_revoked_pairs';
+
 	/** family_id => epoch for revoked refresh families. */
 	const FAMILIES_OPTION = 'mcpwp_oauth_revoked_families';
 
@@ -155,6 +158,14 @@ class Mcpwp_OAuth_Revocation {
 			}
 		}
 
+		if ( $user_id > 0 && '' !== $client_id ) {
+			$pairs = self::read_map( self::PAIRS_OPTION );
+			$epoch = $pairs[ $user_id . '|' . $client_id ] ?? 0;
+			if ( $epoch > 0 && $at <= $epoch ) {
+				return true;
+			}
+		}
+
 		$family_id = isset( $record['family_id'] ) && is_string( $record['family_id'] ) ? $record['family_id'] : '';
 		if ( '' !== $family_id && self::family_revoked( $family_id ) ) {
 			return true;
@@ -238,8 +249,38 @@ class Mcpwp_OAuth_Revocation {
 		// An integer string: WordPress stores meta as a string either way.
 		update_user_meta( $user_id, self::USER_META, (string) $epoch );
 		$ok = self::user_epoch( $user_id ) >= $epoch;
+		// #1101 PR-3b: the user's rows too, so their list empties at once.
+		if ( class_exists( 'Mcpwp_OAuth_Token_Store' ) && ! Mcpwp_OAuth_Token_Store::revoke_user_rows( $user_id ) ) {
+			$ok = false;
+		}
 		if ( ! $ok ) {
 			self::report_write_failure( 'user', (string) $user_id );
+		}
+		return $ok;
+	}
+
+	/**
+	 * Revoke one app's access for one user (#1101 PR-3b, "Connected AI
+	 * apps"): a per-(user, client) epoch, plus the pair's rows marked
+	 * revoked.  Fails closed and reports like every other revocation: false
+	 * when either write did not land.
+	 *
+	 * @param int    $user_id   User id.
+	 * @param string $client_id Client id.
+	 * @return bool
+	 */
+	public static function revoke_user_client( $user_id, $client_id ) {
+		$user_id   = (int) $user_id;
+		$client_id = (string) $client_id;
+		if ( $user_id <= 0 || '' === $client_id ) {
+			return false;
+		}
+		$ok = self::write_map_entry( self::PAIRS_OPTION, $user_id . '|' . $client_id, self::now() );
+		if ( class_exists( 'Mcpwp_OAuth_Token_Store' ) && ! Mcpwp_OAuth_Token_Store::revoke_user_rows( $user_id, $client_id ) ) {
+			$ok = false;
+		}
+		if ( ! $ok ) {
+			self::report_write_failure( 'user_client', $user_id . '|' . $client_id );
 		}
 		return $ok;
 	}
@@ -344,7 +385,7 @@ class Mcpwp_OAuth_Revocation {
 	 * error_log line (no token material — ids only) and an action a
 	 * monitor can hook.
 	 *
-	 * @param string $kind 'user' | 'deleted_user' | 'client' | 'family'.
+	 * @param string $kind 'user' | 'deleted_user' | 'client' | 'family' | 'user_client'.
 	 * @param string $id   The id whose revocation was not persisted.
 	 */
 	public static function report_write_failure( $kind, $id ) {

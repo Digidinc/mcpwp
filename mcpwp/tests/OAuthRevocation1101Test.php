@@ -412,9 +412,14 @@ final class OAuthRevocation1101Test extends TestCase {
 		} finally {
 			$GLOBALS['mcpwp_test_oauth_tokens_before'] = null;
 		}
-		$this->assertArrayHasKey( 'access_token', $minted, 'The refresh itself went through.' );
-		$this->assertFalse( $this->works( $minted['access_token'] ), 'The new access token is covered.' );
-		$this->assert_grant_error( $this->refresh( $minted['refresh_token'], self::DCR_CLIENT ), 'invalid_grant', 'And the new refresh token.' );
+		// #1101 PR-3b: revoke_user() also marks the user's rows, so the old
+		// refresh row is revoked before this request claims it: the claim
+		// affects 0 rows and what was minted is discarded.  Either way,
+		// nothing this refresh produced is alive.
+		$this->assertSame( 'invalid_grant', $minted['error'] ?? null );
+		foreach ( $GLOBALS['mcpwp_test_oauth_tokens'] as $row ) {
+			$this->assertNotNull( $row['revoked_at'], 'Nothing alive.' );
+		}
 	}
 
 	public function test_a_revocation_landing_between_check_and_mint_covers_a_code_redemption(): void {

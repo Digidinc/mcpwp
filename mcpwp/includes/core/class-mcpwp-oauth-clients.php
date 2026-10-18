@@ -795,6 +795,11 @@ class Mcpwp_OAuth_Clients {
 		self::flush_option_cache( self::OPTION );
 		$gone = null === self::find( $client_id );
 		self::release_lock( $token );
+		// #1101 PR-3b: the client's rows are marked revoked too (the
+		// tombstone above is what refuses them; this keeps lists honest).
+		if ( $gone && class_exists( 'Mcpwp_OAuth_Token_Store' ) && ! Mcpwp_OAuth_Token_Store::revoke_client_rows( $client_id ) ) {
+			Mcpwp_OAuth_Revocation::report_write_failure( 'client', $client_id );
+		}
 		return $gone;
 	}
 

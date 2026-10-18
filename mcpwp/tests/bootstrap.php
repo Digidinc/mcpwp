@@ -564,6 +564,11 @@ function sanitize_textarea_field($value)
 if (! function_exists('wp_create_nonce')) {
     function wp_create_nonce($action = -1)
     {
+        // Strict mode (#1101 PR-3b): a nonce bound to its action, so a test
+        // can prove a nonce for one action (user A) fails for another (user B).
+        if (! empty($GLOBALS['mcpwp_test_nonce_strict'])) {
+            return 'nonce|' . $action;
+        }
         return 'test-nonce';
     }
 }
@@ -571,6 +576,9 @@ if (! function_exists('wp_create_nonce')) {
 if (! function_exists('wp_verify_nonce')) {
     function wp_verify_nonce($nonce, $action = -1)
     {
+        if (! empty($GLOBALS['mcpwp_test_nonce_strict'])) {
+            return is_string($nonce) && 'nonce|' . $action === $nonce ? 1 : false;
+        }
         return 'test-nonce' === $nonce ? 1 : false;
     }
 }
@@ -578,7 +586,7 @@ if (! function_exists('wp_verify_nonce')) {
 if (! function_exists('wp_nonce_field')) {
     function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo = true)
     {
-        $field = '<input type="hidden" name="' . $name . '" value="test-nonce" />';
+        $field = '<input type="hidden" name="' . $name . '" value="' . wp_create_nonce($action) . '" />';
         if ($echo) {
             echo $field;
         }
@@ -2219,6 +2227,41 @@ final class Mcpwp_Test_OAuth_Tokens_Table
             self::before($method, $sql);
             return array(true, empty($GLOBALS['mcpwp_test_oauth_tokens_exists']) ? null : $name);
         }
+        if (preg_match('/^SELECT ([a-z_, ]+) FROM (\S*mcpwp_oauth_tokens) WHERE (.+)$/s', $sql, $sel) && 'get_results' === $method) {
+            self::before($method, $sql);
+            if (self::fails($method)) {
+                return array(true, null);
+            }
+            $want = array_map('trim', explode(',', $sel[1]));
+            $out  = array();
+            foreach ($GLOBALS['mcpwp_test_oauth_tokens'] as $row) {
+                foreach (preg_split('/\s+AND\s+/', trim($sel[3])) as $cond) {
+                    $cond = trim($cond);
+                    if ('revoked_at IS NULL' === $cond) {
+                        if (null !== $row['revoked_at']) {
+                            continue 2;
+                        }
+                    } elseif (preg_match("/^(\w+) = (\d+)$/", $cond, $c) || preg_match("/^(\w+) = '((?:[^'\\\\]|\\\\.)*)'$/", $cond, $c)) {
+                        if ((string) $row[ $c[1] ] !== stripslashes($c[2])) {
+                            continue 2;
+                        }
+                    } elseif (preg_match('/^(\w+) > (\d+)$/', $cond, $c)) {
+                        if ((int) $row[ $c[1] ] <= (int) $c[2]) {
+                            continue 2;
+                        }
+                    } elseif (preg_match("/^(\w+) IN \((.+)\)$/", $cond, $c)) {
+                        $set = array_map(function ($v) { return trim($v, " '"); }, explode(',', $c[2]));
+                        if (! in_array((string) $row[ $c[1] ], $set, true)) {
+                            continue 2;
+                        }
+                    } else {
+                        return array(false, null);
+                    }
+                }
+                $out[] = array_intersect_key($row, array_flip($want));
+            }
+            return array(true, $out);
+        }
         if (! preg_match('/^(SELECT \* FROM|UPDATE|DELETE FROM|DROP TABLE IF EXISTS) (\S*mcpwp_oauth_tokens)\b(.*)$/s', $sql, $m)) {
             return array(false, null);
         }
@@ -2410,6 +2453,10 @@ if (! isset($GLOBALS['wpdb'])) {
             $approvals = Mcpwp_Test_Approvals_Table::run('get_results', $query, $this);
             if ($approvals[0]) {
                 return $approvals[1];
+            }
+            $tokens = Mcpwp_Test_OAuth_Tokens_Table::run('get_results', $query, $this);
+            if ($tokens[0]) {
+                return $tokens[1];
             }
             // Test-scoped interceptor (#943 S2 graph read surface): a test may
             // install a callable that sees every query and either answers it
