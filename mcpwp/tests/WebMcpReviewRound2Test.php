@@ -292,10 +292,13 @@ final class WebMcpReviewRound2Test extends TestCase {
 
 	/**
 	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
 	public function test_onboard_inventory_counts_only_published_for_webmcp(): void {
 		require_once __DIR__ . '/fixtures/onboard-inventory-stubs.php';
 		require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-core.php';
+		require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-design-references.php';
+		require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-media.php';
 		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-info.php';
 
 		$GLOBALS['_mcpwp_test_posts'][9831] = new WP_Post( array( 'ID' => 9831, 'post_type' => 'post', 'post_status' => 'draft', 'post_title' => 'D' ) );

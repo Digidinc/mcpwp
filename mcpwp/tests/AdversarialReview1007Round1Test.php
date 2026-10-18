@@ -127,6 +127,7 @@ final class AdversarialReview1007Round1Test extends TestCase {
 
 	/**
 	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
 	public function test_introspect_includes_site_context_for_an_author_key(): void {
 		$this->stubThemeLookup();
@@ -144,6 +145,7 @@ final class AdversarialReview1007Round1Test extends TestCase {
 
 	/**
 	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
 	public function test_introspect_includes_site_context_for_a_key_with_site_category(): void {
 		$this->stubThemeLookup();
@@ -160,6 +162,7 @@ final class AdversarialReview1007Round1Test extends TestCase {
 
 	/**
 	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
 	public function test_introspect_includes_site_context_even_when_site_category_is_disabled(): void {
 		$this->stubThemeLookup();
@@ -180,6 +183,7 @@ final class AdversarialReview1007Round1Test extends TestCase {
 
 	/**
 	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
 	public function test_onboard_full_includes_site_context_for_an_author_key(): void {
 		$this->stubThemeLookup();
@@ -195,6 +199,7 @@ final class AdversarialReview1007Round1Test extends TestCase {
 
 	/**
 	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
 	public function test_onboard_full_includes_site_context_for_a_key_with_site_category(): void {
 		$this->stubThemeLookup();
@@ -216,6 +221,7 @@ final class AdversarialReview1007Round1Test extends TestCase {
 	 * suggested to a key that cannot call it.
 	 *
 	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
 	public function test_onboard_full_suggestions_filter_wp_get_guide_but_keep_site_context_for_an_author_key(): void {
 		$this->stubThemeLookup();
@@ -240,6 +246,7 @@ final class AdversarialReview1007Round1Test extends TestCase {
 
 	/**
 	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
 	public function test_onboard_full_suggestions_keep_site_category_tools_for_a_designer_key(): void {
 		$this->stubThemeLookup();
@@ -257,6 +264,7 @@ final class AdversarialReview1007Round1Test extends TestCase {
 
 	/**
 	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
 	public function test_onboard_slim_more_filters_guide_but_keeps_site_context_pointer_for_an_author_key(): void {
 		$this->stubThemeLookup();
@@ -274,6 +282,7 @@ final class AdversarialReview1007Round1Test extends TestCase {
 
 	/**
 	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
 	public function test_onboard_slim_more_keeps_guide_pointer_for_a_designer_key(): void {
 		$this->stubThemeLookup();

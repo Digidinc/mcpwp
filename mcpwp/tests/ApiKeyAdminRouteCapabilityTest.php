@@ -18,6 +18,9 @@ final class ApiKeyAdminRouteCapabilityTest extends TestCase {
 		$GLOBALS['mcpwp_test_options']    = array();
 		$GLOBALS['mcpwp_test_transients'] = array();
 		$GLOBALS['mcpwp_test_current_user'] = 2;
+		// test_falls_back_* relies on no per-user cap map being configured;
+		// another test can leave one behind under --order-by=random.
+		$GLOBALS['mcpwp_test_user_caps'] = array();
 		$GLOBALS['mcpwp_test_filters']     = array();
 		if ( method_exists( 'Mcpwp_REST_MCP', 'reset_verdict_memo' ) ) {
 			Mcpwp_REST_MCP::reset_verdict_memo();

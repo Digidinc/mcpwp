@@ -454,6 +454,7 @@ final class ToolListBudgetTest extends TestCase {
 	 * compact list it replaced is still one detail=full away.
 	 *
 	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
 	 */
 	public function test_introspect_default_is_a_summary_within_budget(): void {
 		require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-media.php';
