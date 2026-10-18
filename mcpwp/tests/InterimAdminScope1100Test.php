@@ -84,7 +84,9 @@ final class InterimAdminScope1100Test extends TestCase {
 			'signal settings (POST)'      => array( 'POST', '/mcpwp/v1/signals/settings', array() ),
 			'signal settings (PUT)'       => array( 'PUT', '/mcpwp/v1/signals/settings', array() ),
 			'set site context'            => array( 'POST', '/mcpwp/v1/site-context', array( 'context' => 'x' ) ),
-			'feedback relay'              => array( 'POST', '/mcpwp/v1/feedback/relay', array() ),
+			// POST /feedback/relay is NOT here: it is registered with
+			// __return_true (public by design), so the scope row for it is
+			// inert — see Gate1103Round2Test.
 			'create site blueprint'       => array( 'POST', '/mcpwp/v1/site-blueprints', array( 'name' => 'x' ) ),
 			'delete site blueprint'       => array( 'DELETE', '/mcpwp/v1/site-blueprints/abc', array() ),
 		);

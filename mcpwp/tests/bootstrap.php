@@ -3495,6 +3495,7 @@ function get_post_type_object($post_type)
             array(
                 'create_posts' => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
                 'edit_posts'   => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
+                'delete_posts' => 'page' === (string) $post_type ? 'delete_pages' : 'delete_posts',
             ),
             (array) ($GLOBALS['mcpwp_test_post_type_caps'][ (string) $post_type ] ?? array())
         ),

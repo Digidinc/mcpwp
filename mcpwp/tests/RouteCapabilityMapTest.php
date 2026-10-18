@@ -384,7 +384,7 @@ final class RouteCapabilityMapTest extends TestCase {
 
 	public function test_every_capability_value_is_well_formed_and_every_row_has_a_reason(): void {
 		foreach ( Mcpwp_Route_Capability_Map::rows() as $key => $row ) {
-			$this->assertMatchesRegularExpression( '/^(none|TODO|forms:(forms|entries)|[a-z_]+)$/', $row[1], $key );
+			$this->assertMatchesRegularExpression( '/^(none|TODO|forms:(forms|entries)|[a-z_]+(\+[a-z_]+)*)$/', $row[1], $key );
 			$this->assertContains( $row[0], array( 'read', 'write', 'admin' ), $key );
 			$this->assertNotSame( '', trim( $row[2] ), "$key needs a reason" );
 		}
@@ -440,25 +440,58 @@ final class RouteCapabilityMapTest extends TestCase {
 		$this->assertSame(
 			array(
 				'TODO'                 => 155,
+				'delete_others_posts+delete_others_pages' => 1,
 				'delete_pages'         => 1,
 				'delete_posts'         => 1,
-				'edit_pages'           => 7,
-				'edit_posts'           => 34,
+				'edit_pages'           => 12,
+				'edit_posts'           => 28,
 				'edit_products'        => 12,
 				'edit_theme_options'   => 29,
 				'forms:entries'        => 1,
 				'forms:forms'          => 4,
 				'manage_categories'    => 4,
-				'manage_options'       => 139,
+				'manage_options'       => 138,
 				'manage_product_terms' => 3,
 				'manage_woocommerce'   => 7,
-				'none'                 => 37,
+				'none'                 => 38,
 				'read'                 => 7,
 				'upload_files'         => 8,
 			),
 			$counts
 		);
-		$this->assertSame( '87d994c490eba54c724fdbcaed7a42a3ccfe98a2422c6e75737c6794093f687e', hash( 'sha256', implode( "\n", $lines ) ) );
+		$this->assertSame( '7ae6cd14c5a043ab62ddd1aebff41cbf18a51098f6f2418956d6f711ce117a01', hash( 'sha256', implode( "\n", $lines ) ) );
+	}
+
+	/**
+	 * #1103 round 2 (c): rows whose patterns overlap — one path that both
+	 * would route — must agree on scope AND capability, so whichever one
+	 * WordPress picks, the decision is the same. Pinned: the overlapping
+	 * pairs present today (all agree; none had to be resolved).
+	 */
+	public function test_overlapping_rows_agree_on_scope_and_capability(): void {
+		$rows     = Mcpwp_Route_Capability_Map::rows();
+		$pairs    = array();
+		$disagree = array();
+		foreach ( array_keys( $rows ) as $a ) {
+			list( $method, $concrete ) = $this->concrete_for( $a );
+			$path = (string) substr( $concrete, strlen( '/mcpwp/v1' ) );
+			foreach ( array_keys( $rows ) as $b ) {
+				if ( $a === $b || 0 !== strpos( $b, $method . ' ' ) ) {
+					continue;
+				}
+				if ( ! preg_match( '@^' . explode( ' ', $b, 2 )[1] . '$@i', $path ) ) {
+					continue;
+				}
+				$pair = array( $a, $b );
+				sort( $pair );
+				$pairs[ implode( ' <> ', $pair ) ] = true;
+				if ( $rows[ $a ][0] !== $rows[ $b ][0] || $rows[ $a ][1] !== $rows[ $b ][1] ) {
+					$disagree[] = "$a {$rows[$a][0]}/{$rows[$a][1]} vs $b {$rows[$b][0]}/{$rows[$b][1]}";
+				}
+			}
+		}
+		$this->assertSame( array(), $disagree );
+		$this->assertCount( 9, $pairs, implode( "\n", array_keys( $pairs ) ) );
 	}
 
 	// ── The predicate ──────────────────────────────────────────────────────
@@ -510,7 +543,8 @@ final class RouteCapabilityMapTest extends TestCase {
 	public function test_editor_acting_as_a_user_gets_what_an_editor_gets_in_wp_admin( string $key, string $capability ): void {
 		$result = $this->check_as( self::EDITOR, $key, $this->editor_record() );
 
-		if ( 'none' === $capability || ( ! in_array( $capability, array( 'TODO' ), true ) && 0 !== strpos( $capability, 'forms:' ) && in_array( $capability, self::EDITOR_CAPS, true ) ) ) {
+		$editor_holds_all = 'TODO' !== $capability && 0 !== strpos( $capability, 'forms:' ) && array() === array_diff( explode( '+', $capability ), self::EDITOR_CAPS );
+		if ( 'none' === $capability || $editor_holds_all ) {
 			$this->assertTrue( $result, "$key ($capability): an Editor can do this in wp-admin" );
 			return;
 		}
@@ -567,6 +601,12 @@ final class RouteCapabilityMapTest extends TestCase {
 		$this->assertSame( 'edit_theme_options', $rows['POST /elementor/kit-css'][1] );
 		$this->assertSame( 'write', $rows['POST /elementor/kit-css'][0] );
 		$this->assertSame( 'manage_woocommerce', $rows['GET /woocommerce/orders'][1] );
+		// #1103 round 2: F2, F3, (a).
+		foreach ( array( 'POST /elementor/page', 'POST /elementor/build-page', 'POST /elementor/landing-page', 'POST /elementor/clone', 'POST /elementor/blueprints/build' ) as $key ) {
+			$this->assertSame( 'edit_pages', $rows[ $key ][1], $key );
+		}
+		$this->assertSame( 'delete_others_posts+delete_others_pages', $rows['DELETE /drafts/delete-all'][1] );
+		$this->assertSame( 'none', $rows['POST /feedback/relay'][1] );
 		// (D) First-connection discovery: read.
 		foreach ( array( 'GET /site-info', 'GET /onboard', 'GET /introspect' ) as $key ) {
 			$this->assertSame( 'read', $rows[ $key ][1], $key );

@@ -17,10 +17,23 @@
  *                      (manage_options); never a pass-through
  *      'forms:forms' / 'forms:entries'  the forms plugin's own capability,
  *                      resolved from the {plugin} route segment
- *      any other string, a WordPress capability for current_user_can()
+ *      any other string, a WordPress capability for current_user_can();
+ *                      'a+b' requires every listed capability (used only by
+ *                      DELETE /drafts/delete-all)
  *
  * The scope table stays the outer gate for everyone; the capability column
  * only ever narrows what a user-run principal may do.
+ *
+ * GENERIC POST DOORS (/posts*, /pages*, /content*) — one rule, two branches,
+ * enforced in Mcpwp_Api_Auth::check_generic_post_type_access() (next to
+ * check_user_run_post_type_capability()), for CREATE (the post_type param)
+ * and for UPDATE / DELETE (the type of the existing post the id names):
+ *  - a BOT principal writing any post type other than 'post' or 'page' needs
+ *    an ADMIN-scoped key, whatever this table's scope column says;
+ *  - a USER-RUN principal needs that post type's own create_posts /
+ *    edit_posts / delete_posts capability.
+ * A custom post type's own routes (WooCommerce, LearnPress, ...) are the door
+ * for non-admin keys.
  *
  * GENERATED from the #1100 inventory (handoff/2026-10-18-1100-capability-
  * inventory, regenerated at f7901dec): edit a row by hand only together with
@@ -177,7 +190,7 @@ class Mcpwp_Route_Capability_Map {
 			'PUT /posts/bulk' => array( 'write', 'edit_posts', 'create: wp-admin needs edit_posts' ),
 			'POST /posts/(?P<id>\\d+)/featured-image' => array( 'write', 'edit_posts', 'content write by id; the per-post edit_post/delete_post check also applies' ),
 			'GET /drafts' => array( 'read', 'none', 'public content; non-public is per-post read_post (#1099 chokepoint)' ),
-			'DELETE /drafts/delete-all' => array( 'write', 'edit_posts', 'create: wp-admin needs edit_posts' ),
+			'DELETE /drafts/delete-all' => array( 'write', 'delete_others_posts+delete_others_pages', 'F3: deletes every user\'s post and page drafts; needs both' ),
 			'GET /pages' => array( 'read', 'none', 'public content; non-public is per-post read_post (#1099 chokepoint)' ),
 			'POST /pages' => array( 'write', 'edit_pages', 'Kasra: page creation needs edit_pages' ),
 			'GET /pages/(?P<id>\\d+)' => array( 'read', 'none', 'public content; non-public is per-post read_post (#1099 chokepoint)' ),
@@ -226,7 +239,7 @@ class Mcpwp_Route_Capability_Map {
 			'POST /elementor/(?P<id>\\d+)/replace-section' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
 			'POST /elementor/(?P<id>\\d+)/patch' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
 			'POST /elementor/(?P<id>\\d+)/edit-widget' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
-			'POST /elementor/page' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
+			'POST /elementor/page' => array( 'write', 'edit_pages', 'F2: creates a page; the page type\'s create_posts is also checked' ),
 			'POST /elementor/(?P<id>\\d+)/find-replace' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
 			'POST /elementor/find-replace' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
 			'GET /elementor/widgets' => array( 'read', 'TODO', 'not yet decided: admin-only until decided' ),
@@ -258,7 +271,7 @@ class Mcpwp_Route_Capability_Map {
 			'POST /cloudflare/speed-settings' => array( 'admin', 'manage_options', 'admin scope: only an administrator principal reaches it as a user' ),
 			'POST /feedback' => array( 'write', 'TODO', 'not yet decided: admin-only until decided' ),
 			'GET /feedback' => array( 'read', 'TODO', 'not yet decided: admin-only until decided' ),
-			'POST /feedback/relay' => array( 'admin', 'manage_options', 'admin scope: only an administrator principal reaches it as a user' ),
+			'POST /feedback/relay' => array( 'admin', 'none', 'public by design (inert scope): registered with __return_true, so neither scope nor capability is consulted' ),
 			'GET /blocks/(?P<id>\\d+)' => array( 'read', 'TODO', 'not yet decided: admin-only until decided' ),
 			'POST /blocks/(?P<id>\\d+)' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
 			'GET /block-types' => array( 'read', 'TODO', 'not yet decided: admin-only until decided' ),
@@ -349,8 +362,8 @@ class Mcpwp_Route_Capability_Map {
 			'PUT /elementor/parts/(?P<id>\\d+)' => array( 'write', 'TODO', 'not yet decided: admin-only until decided' ),
 			'POST /elementor/parts/(?P<id>\\d+)/apply' => array( 'write', 'TODO', 'not yet decided: admin-only until decided' ),
 			'POST /elementor/parts/from-section' => array( 'write', 'TODO', 'not yet decided: admin-only until decided' ),
-			'POST /elementor/clone' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
-			'POST /elementor/landing-page' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
+			'POST /elementor/clone' => array( 'write', 'edit_pages', 'F2: creates a page; the page type\'s create_posts is also checked' ),
+			'POST /elementor/landing-page' => array( 'write', 'edit_pages', 'F2: creates a page; the page type\'s create_posts is also checked' ),
 			'GET /elementor/globals' => array( 'read', 'TODO', 'not yet decided: admin-only until decided' ),
 			'POST /elementor/globals' => array( 'write', 'edit_theme_options', 'Kasra: global colours, fonts and kit CSS are site-wide styling' ),
 			'GET /elementor/custom-code' => array( 'admin', 'edit_theme_options', 'Kasra: Elementor theme-builder parts render site-wide' ),
@@ -361,9 +374,9 @@ class Mcpwp_Route_Capability_Map {
 			'POST /elementor/custom-code/(?P<id>\\d+)/disable' => array( 'admin', 'edit_theme_options', 'Kasra: Elementor theme-builder parts render site-wide' ),
 			'POST /elementor/custom-code/(?P<id>\\d+)/enable' => array( 'admin', 'edit_theme_options', 'Kasra: Elementor theme-builder parts render site-wide' ),
 			'POST /elementor/custom-code/(?P<id>\\d+)/sanitize' => array( 'admin', 'edit_theme_options', 'Kasra: Elementor theme-builder parts render site-wide' ),
-			'POST /elementor/build-page' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
+			'POST /elementor/build-page' => array( 'write', 'edit_pages', 'F2: creates a page; the page type\'s create_posts is also checked' ),
 			'GET /elementor/blueprints' => array( 'read', 'TODO', 'not yet decided: admin-only until decided' ),
-			'POST /elementor/blueprints/build' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
+			'POST /elementor/blueprints/build' => array( 'write', 'edit_pages', 'F2: creates a page; the page type\'s create_posts is also checked' ),
 			'POST /elementor/save-section-as-template' => array( 'write', 'edit_posts', 'editing a layout = editing the post' ),
 			'GET /seo/status' => array( 'read', 'TODO', 'not yet decided: admin-only until decided' ),
 			'GET /seo/(?P<id>\\d+)' => array( 'read', 'edit_posts', 'Kasra: post SEO fields are editing data; the per-post read_post check applies (wp_get_seo)' ),
