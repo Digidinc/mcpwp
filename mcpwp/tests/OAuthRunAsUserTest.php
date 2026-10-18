@@ -381,7 +381,7 @@ final class OAuthRunAsUserTest extends TestCase {
 		$this->assertArrayHasKey( 'refresh_token', $data );
 
 		$GLOBALS['mcpwp_test_user_caps'][ self::EDITOR ]['edit_others_posts'] = false;
-		$response = ( new Mcpwp_REST_OAuth() )->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'refresh_token' => $data['refresh_token'] ) ) );
+		$response = ( new Mcpwp_REST_OAuth() )->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'client_id' => 'test_client', 'refresh_token' => $data['refresh_token'] ) ) );
 
 		$this->assertSame( 400, $response->get_status() );
 		$this->assertSame( 'invalid_grant', $response->get_data()['error'] );
@@ -390,7 +390,7 @@ final class OAuthRunAsUserTest extends TestCase {
 	// ── P1-A: refresh carries its own live-user check ──────────────────────
 
 	private function refresh( string $refresh_token ) {
-		return ( new Mcpwp_REST_OAuth() )->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'refresh_token' => $refresh_token ) ) );
+		return ( new Mcpwp_REST_OAuth() )->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'client_id' => 'test_client', 'refresh_token' => $refresh_token ) ) );
 	}
 
 	public function test_refresh_after_the_user_is_deleted_is_invalid_grant(): void {
@@ -491,7 +491,7 @@ final class OAuthRunAsUserTest extends TestCase {
 
 		// Simulate day 29: the stored record is near its end, the refresh still works and rotates.
 		$GLOBALS['mcpwp_test_transients'][ $key ]['expires'] = time() + 60;
-		$next = ( new Mcpwp_REST_OAuth() )->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'refresh_token' => $data['refresh_token'] ) ) )->get_data();
+		$next = ( new Mcpwp_REST_OAuth() )->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'client_id' => 'test_client', 'refresh_token' => $data['refresh_token'] ) ) )->get_data();
 		$this->assertArrayHasKey( 'refresh_token', $next );
 		$this->assertNotSame( $data['refresh_token'], $next['refresh_token'] );
 		$next_key = ( new Mcpwp_REST_OAuth() )->get_oauth_refresh_token_transient_key( $next['refresh_token'] );

@@ -524,6 +524,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -551,6 +552,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => 'wrong_verifier_that_does_not_match',
@@ -572,6 +574,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -596,6 +599,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -615,6 +619,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://evil.example.com/steal', // mismatch
 			'code_verifier' => $seed['verifier'],
@@ -634,6 +639,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'   => 'authorization_code',
+			'client_id'    => 'test_client',
 			'code'         => $code,
 			'redirect_uri' => 'https://client.example.com/callback',
 			// code_verifier intentionally absent
@@ -767,6 +773,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -809,26 +816,38 @@ final class OAuthServerTest extends TestCase {
 	}
 
 	/**
-	 * P0-C: A public client with NO client_id AND no client_secret must also
-	 * succeed — fully anonymous public PKCE exchange.
+	 * #1101 (was P0-C "fully anonymous public PKCE exchange succeeds"): a
+	 * code redeemed with no client_id is refused with invalid_request — the
+	 * client check is never skipped (RFC 6749 §4.1.3) — and the code is left
+	 * unconsumed, so the real client can still redeem it.
 	 */
-	public function test_public_client_no_client_id_no_secret_succeeds(): void {
+	public function test_code_redemption_without_client_id_is_invalid_request_and_leaves_the_code(): void {
 		$ctrl = $this->controller();
 		$seed = $this->seed_auth_code();
 
-		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+		foreach ( array( null, '' ) as $missing ) {
+			$params = array(
+				'grant_type'    => 'authorization_code',
+				'code'          => $seed['code'],
+				'redirect_uri'  => 'https://client.example.com/callback',
+				'code_verifier' => $seed['verifier'],
+			);
+			if ( null !== $missing ) {
+				$params['client_id'] = $missing;
+			}
+			$response = $ctrl->handle_token( $this->make_request( 'POST', '/mcpwp/v1/oauth/token', $params ) );
+			$this->assertSame( 400, $response->get_status() );
+			$this->assertSame( 'invalid_request', $response->get_data()['error'] );
+		}
+
+		$params              = array(
 			'grant_type'    => 'authorization_code',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
-			// No client_id, no client_secret
-		) );
-
-		$response = $ctrl->handle_token( $request );
-
-		$this->assertSame( 200, $response->get_status(), 'Fully anonymous PKCE exchange must succeed' );
-		$data = $response->get_data();
-		$this->assertArrayHasKey( 'access_token', $data );
+			'client_id'     => 'test_client',
+		);
+		$this->assertSame( 200, $ctrl->handle_token( $this->make_request( 'POST', '/mcpwp/v1/oauth/token', $params ) )->get_status(), 'The code was not burned.' );
 	}
 
 	/**
@@ -874,6 +893,7 @@ final class OAuthServerTest extends TestCase {
 		// First: exchange auth code to get tokens.
 		$token_request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -889,6 +909,7 @@ final class OAuthServerTest extends TestCase {
 		// Second: use the refresh token — must succeed and give a new token.
 		$refresh_request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'refresh_token',
+			'client_id'     => 'test_client',
 			'refresh_token' => $refresh_token,
 		) );
 
@@ -916,6 +937,7 @@ final class OAuthServerTest extends TestCase {
 		// Get initial tokens.
 		$token_response = $ctrl->handle_token( $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -926,6 +948,7 @@ final class OAuthServerTest extends TestCase {
 		// First use: get new tokens.
 		$rotate_response = $ctrl->handle_token( $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'refresh_token',
+			'client_id'     => 'test_client',
 			'refresh_token' => $refresh_token,
 		) ) );
 
@@ -934,6 +957,7 @@ final class OAuthServerTest extends TestCase {
 		// Second use: new refresh token must succeed.
 		$second_response = $ctrl->handle_token( $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'refresh_token',
+			'client_id'     => 'test_client',
 			'refresh_token' => $new_refresh_token,
 		) ) );
 
@@ -1067,6 +1091,7 @@ final class OAuthServerTest extends TestCase {
 		$ctrl    = $this->controller();
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type' => 'authorization_code',
+			'client_id'  => 'test_client',
 		) );
 		$response = $ctrl->handle_token( $request );
 		$this->assertSame( 501, $response->get_status() );
@@ -1779,6 +1804,7 @@ final class OAuthServerTest extends TestCase {
 		$response = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		);
@@ -1797,6 +1823,7 @@ final class OAuthServerTest extends TestCase {
 		$data = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		)->get_data();
@@ -1819,6 +1846,7 @@ final class OAuthServerTest extends TestCase {
 		$response = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		);
@@ -1841,6 +1869,7 @@ final class OAuthServerTest extends TestCase {
 		$response = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		);
@@ -1866,6 +1895,7 @@ final class OAuthServerTest extends TestCase {
 		$response = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		);
@@ -1888,6 +1918,7 @@ final class OAuthServerTest extends TestCase {
 		$data = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		)->get_data();
@@ -1915,6 +1946,7 @@ final class OAuthServerTest extends TestCase {
 		$response = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		);
@@ -1959,6 +1991,7 @@ final class OAuthServerTest extends TestCase {
 		$response = $ctrl->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $token,
 			) )
 		);

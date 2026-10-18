@@ -64,6 +64,9 @@ class Mcpwp_OAuth_Local_Admin {
 	/** admin-post action (and nonce action) for the address-changed line. */
 	const ADDRESS_DISMISS_ACTION = 'mcpwp_oauth_address_notice_dismiss';
 
+	/** Lock row for the D10 migration (the client store's lock pattern). */
+	const MIGRATION_LOCK_OPTION = 'mcpwp_oauth_default_migration_lock';
+
 	/**
 	 * One-time migration (PR-2 D10, round 2).
 	 *
@@ -75,10 +78,37 @@ class Mcpwp_OAuth_Local_Admin {
 	 * left alone.  The flag is set last and checked first, so it runs once:
 	 * a site switched off after this release stays off.
 	 *
+	 * #1101 (gate carry-over): the read-modify-write of mcpwp_settings runs
+	 * under a lock (Mcpwp_OAuth_Clients::acquire_lock(), its own row), with
+	 * the flag and the settings re-read from the database inside it.  Two
+	 * first loads after an upgrade no longer both rewrite the settings, and
+	 * the copy written back is the one read a moment before — not one read
+	 * before another request's settings save landed.  A load that cannot get
+	 * the lock skips; the next load runs the migration.
+	 *
 	 * @return bool True when it ran (flag was not set).
 	 */
 	public static function migrate_default_on() {
 		if ( get_option( self::MIGRATED_FLAG ) ) {
+			return false;
+		}
+
+		$token = Mcpwp_OAuth_Clients::acquire_lock( 0, self::MIGRATION_LOCK_OPTION );
+		if ( false === $token ) {
+			return false;
+		}
+
+		// Re-read from the database, not this process's caches: the flag and
+		// the settings are autoloaded (alloptions), and a name found missing
+		// earlier in this request sits in `notoptions` — without a
+		// persistent cache that is where a stale "not migrated" would come
+		// from (#1101 round 2).
+		Mcpwp_OAuth_Clients::flush_option_cache( self::MIGRATED_FLAG );
+		Mcpwp_OAuth_Clients::flush_option_cache( 'mcpwp_settings' );
+		Mcpwp_OAuth_Clients::flush_option_cache( 'alloptions' );
+		Mcpwp_OAuth_Clients::flush_option_cache( 'notoptions' );
+		if ( get_option( self::MIGRATED_FLAG ) ) {
+			Mcpwp_OAuth_Clients::release_lock( $token, self::MIGRATION_LOCK_OPTION );
 			return false;
 		}
 
@@ -89,6 +119,7 @@ class Mcpwp_OAuth_Local_Admin {
 		}
 
 		update_option( self::MIGRATED_FLAG, 1 );
+		Mcpwp_OAuth_Clients::release_lock( $token, self::MIGRATION_LOCK_OPTION );
 		return true;
 	}
 

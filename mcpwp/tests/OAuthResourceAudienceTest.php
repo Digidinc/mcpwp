@@ -303,7 +303,7 @@ final class OAuthResourceAudienceTest extends TestCase {
 		$token = 'mcpwp_rt_' . bin2hex( random_bytes( 16 ) );
 		set_transient( $ctrl->get_oauth_refresh_token_transient_key( $token ), array( 'scopes' => array( 'read' ), 'user_id' => 7, 'aud' => 'https://other.example/wp-json/mcpwp/v1/mcp' ), 3600 );
 
-		$response = $ctrl->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'refresh_token' => $token ) ) );
+		$response = $ctrl->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'client_id' => 'test_client', 'refresh_token' => $token ) ) );
 
 		$this->assertSame( 400, $response->get_status() );
 		$this->assertSame( 'invalid_grant', $response->get_data()['error'] );
@@ -314,7 +314,7 @@ final class OAuthResourceAudienceTest extends TestCase {
 		$token = 'mcpwp_rt_' . bin2hex( random_bytes( 16 ) );
 		set_transient( $ctrl->get_oauth_refresh_token_transient_key( $token ), array( 'scopes' => array( 'read' ), 'user_id' => 7 ), 3600 );
 
-		$response = $ctrl->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'refresh_token' => $token, 'resource' => 'https://evil.example/mcp' ) ) );
+		$response = $ctrl->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'client_id' => 'test_client', 'refresh_token' => $token, 'resource' => 'https://evil.example/mcp' ) ) );
 
 		$this->assertSame( 'invalid_target', $response->get_data()['error'] );
 		$this->assertNotFalse( get_transient( $ctrl->get_oauth_refresh_token_transient_key( $token ) ), 'Refused before rotation: the refresh token is not burned.' );

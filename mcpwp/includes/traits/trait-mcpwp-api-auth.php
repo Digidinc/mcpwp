@@ -3999,6 +3999,18 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
+		// #1101: revoked by epoch — its client was revoked or deleted, its
+		// user revoked or deleted, or its refresh family killed — at or after
+		// the moment it was issued.
+		if ( Mcpwp_OAuth_Revocation::is_revoked( $record ) ) {
+			$this->log_auth_failure( $request );
+			return new WP_Error(
+				'invalid_token',
+				__( 'This access token has been revoked.', 'mcpwp' ),
+				array( 'status' => 401 )
+			);
+		}
+
 		// PR-2 P0: a token minted for a user ACTS AS that user.  So the user
 		// must still exist and still meet the site's minimum role for AI
 		// connections (Mcpwp_OAuth_Well_Known::get_min_role()); a deleted or
@@ -6687,6 +6699,11 @@ trait Mcpwp_Api_Auth {
 			// request in authenticate_oauth_access_token().
 			'aud'        => $this->get_oauth_canonical_resource(),
 			'created_at' => time(),
+			// #1101: what revocation epochs are compared against
+			// (Mcpwp_OAuth_Revocation::is_revoked()) — integer microseconds,
+			// the moment the issuing request checked revocation when it
+			// passes one (context issued_at), else now.
+			'issued_at'  => isset( $context['issued_at'] ) && is_int( $context['issued_at'] ) ? $context['issued_at'] : Mcpwp_OAuth_Revocation::now(),
 			'expires_at' => time() + $ttl,
 		);
 
@@ -6699,6 +6716,11 @@ trait Mcpwp_Api_Auth {
 		}
 		if ( ! empty( $context['client_id'] ) ) {
 			$payload['client_id'] = sanitize_key( (string) $context['client_id'] );
+		}
+		// #1101: the refresh family this token was issued with, so revoking
+		// the family (RFC 7009, or refresh-token reuse) kills it too.
+		if ( ! empty( $context['family_id'] ) && is_string( $context['family_id'] ) ) {
+			$payload['family_id'] = $context['family_id'];
 		}
 
 		set_transient( $this->get_oauth_token_transient_key( $token ), $payload, $ttl );

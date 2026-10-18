@@ -315,6 +315,7 @@ class Mcpwp_Route_Capability_Map {
 			'POST /oauth/authorize' => array( 'write', 'none', 'public pre-authentication endpoint (no credential involved)' ),
 			'POST /oauth/register' => array( 'write', 'none', 'public pre-authentication endpoint (no credential involved)' ),
 			'POST /oauth/token' => array( 'write', 'none', 'public pre-authentication endpoint (no credential involved)' ),
+			'POST /oauth/revoke' => array( 'write', 'none', 'public pre-authentication endpoint (RFC 7009, #1101: the client identifies itself; only its own token is revoked)' ),
 			'GET /broker/enroll-callback' => array( 'read', 'none', 'public pre-authentication endpoint (no credential involved)' ),
 			'POST /broker/enroll-callback' => array( 'write', 'none', 'public pre-authentication endpoint (no credential involved)' ),
 			'POST /broker/enroll-confirm' => array( 'write', 'none', 'public pre-authentication endpoint (no credential involved)' ),

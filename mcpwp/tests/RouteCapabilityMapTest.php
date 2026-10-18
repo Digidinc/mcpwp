@@ -453,13 +453,13 @@ final class RouteCapabilityMapTest extends TestCase {
 				'manage_options'       => 138,
 				'manage_product_terms' => 3,
 				'manage_woocommerce'   => 7,
-				'none'                 => 38,
+				'none'                 => 39,
 				'read'                 => 7,
 				'upload_files'         => 8,
 			),
 			$counts
 		);
-		$this->assertSame( '7ae6cd14c5a043ab62ddd1aebff41cbf18a51098f6f2418956d6f711ce117a01', hash( 'sha256', implode( "\n", $lines ) ) );
+		$this->assertSame( 'cfdb1ddd52fc1cb83cfb9bb403175aa4b1bb797719a56e0e6e58ddf870552b40', hash( 'sha256', implode( "\n", $lines ) ) );
 	}
 
 	/**

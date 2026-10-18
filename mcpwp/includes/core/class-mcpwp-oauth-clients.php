@@ -84,6 +84,15 @@ class Mcpwp_OAuth_Clients {
 	/** Registrations allowed per (IP address, redirect hosts) per window. */
 	const REGISTRATIONS_PER_WINDOW = 10;
 
+	/**
+	 * Registrations one address (IPv4, or an IPv6 /64) may make in any
+	 * rolling day ACROSS ALL redirect hosts (#1101 PR-3a).  The hourly
+	 * (address, hosts) bucket alone let one address mint a fresh bucket per
+	 * redirect host and spend the whole per-site day; capped at 20 of the
+	 * site's 50, one address can no longer lock everyone else out.
+	 */
+	const ADDRESS_REGISTRATIONS_PER_DAY = 20;
+
 	/** Registrations allowed per site in any rolling day. */
 	const SITE_REGISTRATIONS_PER_DAY = 50;
 
@@ -465,11 +474,12 @@ class Mcpwp_OAuth_Clients {
 	 *
 	 * Order matters:
 	 *  1. validate (no state touched by a malformed request);
-	 *  2. per-requester bucket — (caller IP, redirect host set), so many real
-	 *     users behind one Cloudflare or OpenAI egress address do not share
-	 *     one bucket, and a spoofable X-Forwarded-For is still ignored unless
-	 *     MCPWP_TRUST_PROXY_HEADERS says otherwise;
-	 *  3. under the store lock: the per-site rolling-day cap, the 24-hour purge,
+	 *  2. under the store lock: the per-requester buckets — (caller IP,
+	 *     redirect host set) per hour, so many real users behind one
+	 *     Cloudflare or OpenAI egress address do not share one bucket, and
+	 *     the caller address across all hosts per day (a spoofable
+	 *     X-Forwarded-For is still ignored unless MCPWP_TRUST_PROXY_HEADERS
+	 *     says otherwise); then the per-site rolling-day cap, the 24-hour purge,
 	 *     LRU eviction of a never-authorized client at the 500 cap, the write,
 	 *     and a re-read that proves the new client landed.
 	 *
@@ -490,11 +500,6 @@ class Mcpwp_OAuth_Clients {
 			return $draft;
 		}
 
-		$rate = self::consume_registration_slot( $ip, self::redirect_hosts( $draft['redirect_uris'] ), $now );
-		if ( is_wp_error( $rate ) ) {
-			return $rate;
-		}
-
 		$client_id = self::CLIENT_ID_PREFIX . bin2hex( random_bytes( 16 ) );
 		$record    = array(
 			'client_id'            => $client_id,
@@ -511,7 +516,7 @@ class Mcpwp_OAuth_Clients {
 			return self::busy_error();
 		}
 
-		$result = self::register_locked( $record, $now );
+		$result = self::register_locked( $record, $now, $ip, self::redirect_hosts( $draft['redirect_uris'] ) );
 
 		self::release_lock( $token );
 
@@ -521,13 +526,26 @@ class Mcpwp_OAuth_Clients {
 	/**
 	 * The part of register() that runs under the store lock.
 	 *
-	 * @param array $record New client record.
-	 * @param int   $now    Current time.
+	 * #1101 round 2: the per-address and per-(address, hosts) buckets are
+	 * read, checked and counted HERE, under the store lock, like the site
+	 * window — a parallel burst from one address can no longer read the
+	 * same count N times and spend the site's day.  They are counted only
+	 * once the client is verified in storage, so a 503 costs no slot.
+	 *
+	 * @param array    $record New client record.
+	 * @param int      $now    Current time.
+	 * @param string   $ip     Caller IP.
+	 * @param string[] $hosts  Redirect hosts.
 	 * @return array|WP_Error
 	 */
-	private static function register_locked( array $record, $now ) {
+	private static function register_locked( array $record, $now, $ip, array $hosts ) {
 		self::flush_option_cache( self::OPTION );
 		self::flush_option_cache( self::SITE_WINDOW_OPTION );
+
+		$slot = self::check_registration_slot( $ip, $hosts, $now );
+		if ( is_wp_error( $slot ) ) {
+			return $slot;
+		}
 
 		// Per-site cap: at most SITE_REGISTRATIONS_PER_DAY in any rolling day.
 		$window = self::site_window( $now );
@@ -572,6 +590,7 @@ class Mcpwp_OAuth_Clients {
 
 		$window[] = $now;
 		update_option( self::SITE_WINDOW_OPTION, array_values( $window ), false );
+		self::commit_registration_slot( $slot, $now );
 
 		return array(
 			'client_id'                  => $record['client_id'],
@@ -717,6 +736,68 @@ class Mcpwp_OAuth_Clients {
 		self::release_lock( $token );
 	}
 
+	/**
+	 * Set a client's revocation epoch (#1101 PR-3a): every token issued to it
+	 * at or before $epoch stops working (Mcpwp_OAuth_Revocation::is_revoked()).
+	 * Never lowers an epoch already stored.
+	 *
+	 * @param string $client_id Client id.
+	 * @param int    $epoch     Revocation time, microseconds (Mcpwp_OAuth_Revocation::now()).
+	 * @return bool True when the record now carries an epoch >= $epoch.
+	 */
+	public static function set_revoked_before( $client_id, $epoch ) {
+		if ( null === self::find( $client_id ) ) {
+			return false;
+		}
+		$token = self::acquire_lock();
+		if ( false === $token ) {
+			return false;
+		}
+		self::flush_option_cache( self::OPTION );
+		$clients = self::all();
+		$ok      = false;
+		if ( isset( $clients[ $client_id ] ) ) {
+			$clients[ $client_id ]['revoked_before'] = max( (int) $epoch, Mcpwp_OAuth_Revocation::to_micros( $clients[ $client_id ]['revoked_before'] ?? 0 ) );
+			update_option( self::OPTION, $clients, false );
+			self::flush_option_cache( self::OPTION );
+			$check = self::find( $client_id );
+			$ok    = is_array( $check ) && Mcpwp_OAuth_Revocation::to_micros( $check['revoked_before'] ?? 0 ) >= (int) $epoch;
+		}
+		self::release_lock( $token );
+		return $ok;
+	}
+
+	/**
+	 * Delete a registered client (#1101 PR-3a).  Its tokens die with it: a
+	 * tombstone epoch is written first (Mcpwp_OAuth_Revocation), because the
+	 * record — and the revoked_before it could carry — is about to be gone,
+	 * and issued tokens live in transients that cannot be enumerated.  If the
+	 * tombstone cannot be written, nothing is deleted.
+	 *
+	 * @param string $client_id Client id.
+	 * @return bool True when the client is gone and its tokens are revoked.
+	 */
+	public static function delete( $client_id ) {
+		if ( null === self::find( $client_id ) ) {
+			return false;
+		}
+		if ( ! Mcpwp_OAuth_Revocation::tombstone_client( $client_id ) ) {
+			return false;
+		}
+		$token = self::acquire_lock();
+		if ( false === $token ) {
+			return false;
+		}
+		self::flush_option_cache( self::OPTION );
+		$clients = self::all();
+		unset( $clients[ $client_id ] );
+		update_option( self::OPTION, $clients, false );
+		self::flush_option_cache( self::OPTION );
+		$gone = null === self::find( $client_id );
+		self::release_lock( $token );
+		return $gone;
+	}
+
 	// -------------------------------------------------------------------------
 	// Store lock
 	// -------------------------------------------------------------------------
@@ -732,10 +813,14 @@ class Mcpwp_OAuth_Clients {
 	 * compare-and-swap UPDATE, so two stealers cannot both win.  A few short
 	 * retries absorb ordinary contention.
 	 *
-	 * @param int $now Current time.
+	 * The same lock pattern guards other OAuth stores under their own row
+	 * name (the D10 migration, Mcpwp_OAuth_Revocation): pass $name.
+	 *
+	 * @param int    $now  Current time.
+	 * @param string $name Lock row (option_name); the client store's by default.
 	 * @return string|false Token for release_lock(), or false.
 	 */
-	public static function acquire_lock( $now = 0 ) {
+	public static function acquire_lock( $now = 0, $name = self::LOCK_OPTION ) {
 		global $wpdb;
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'insert' ) ) {
 			return false; // Nothing to arbitrate with: refuse rather than run unlocked.
@@ -752,7 +837,7 @@ class Mcpwp_OAuth_Clients {
 			$inserted   = $wpdb->insert(
 				$wpdb->options,
 				array(
-					'option_name'  => self::LOCK_OPTION,
+					'option_name'  => $name,
 					'option_value' => $token,
 					'autoload'     => 'no',
 				),
@@ -769,7 +854,7 @@ class Mcpwp_OAuth_Clients {
 			if ( ! method_exists( $wpdb, 'get_var' ) || ! method_exists( $wpdb, 'update' ) ) {
 				continue;
 			}
-			$current = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::LOCK_OPTION ) );
+			$current = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $name ) );
 			if ( ! is_string( $current ) || '' === $current ) {
 				continue;
 			}
@@ -781,7 +866,7 @@ class Mcpwp_OAuth_Clients {
 				$wpdb->options,
 				array( 'option_value' => $token ),
 				array(
-					'option_name'  => self::LOCK_OPTION,
+					'option_name'  => $name,
 					'option_value' => $current,
 				),
 				array( '%s' ),
@@ -800,8 +885,9 @@ class Mcpwp_OAuth_Clients {
 	 * LOCK_TTL never deletes the lock someone else has since stolen.
 	 *
 	 * @param string $token Token from acquire_lock().
+	 * @param string $name  Lock row the token was taken on.
 	 */
-	public static function release_lock( $token ) {
+	public static function release_lock( $token, $name = self::LOCK_OPTION ) {
 		global $wpdb;
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'delete' ) ) {
 			return;
@@ -809,7 +895,7 @@ class Mcpwp_OAuth_Clients {
 		$wpdb->delete(
 			$wpdb->options,
 			array(
-				'option_name'  => self::LOCK_OPTION,
+				'option_name'  => $name,
 				'option_value' => (string) $token,
 			),
 			array( '%s', '%s' )
@@ -822,7 +908,7 @@ class Mcpwp_OAuth_Clients {
 	 *
 	 * @param string $name Option name.
 	 */
-	private static function flush_option_cache( $name ) {
+	public static function flush_option_cache( $name ) {
 		if ( function_exists( 'wp_cache_delete' ) ) {
 			wp_cache_delete( $name, 'options' );
 		}
@@ -872,7 +958,9 @@ class Mcpwp_OAuth_Clients {
 	 *
 	 * Fixed one-hour window in a transient keyed by a keyed hash, so neither
 	 * the address nor the hosts are stored in clear.  Varying the hosts buys
-	 * an attacker new buckets, which is what the per-site daily cap is for.
+	 * an attacker new hourly buckets but not more of the day: one address
+	 * (IPv6: one /64) may register at most ADDRESS_REGISTRATIONS_PER_DAY
+	 * clients across all hosts, under the per-site daily cap.
 	 *
 	 * @param string   $ip    Caller IP.
 	 * @param string[] $hosts Redirect hosts (redirect_hosts()).
@@ -880,31 +968,66 @@ class Mcpwp_OAuth_Clients {
 	 * @return true|WP_Error
 	 */
 	public static function consume_registration_slot( $ip, array $hosts, $now ) {
-		$key    = 'mcpwp_oauth_dcr_' . substr( self::hash_ip( self::rate_limit_address( $ip ) . '|' . implode( ',', $hosts ) ), 0, 32 );
-		$bucket = get_transient( $key );
-
-		if ( ! is_array( $bucket ) || ! isset( $bucket['count'], $bucket['reset'] ) || (int) $bucket['reset'] <= $now ) {
-			$bucket = array(
-				'count' => 0,
-				'reset' => $now + self::RATE_LIMIT_WINDOW,
-			);
+		$slot = self::check_registration_slot( $ip, $hosts, $now );
+		if ( is_wp_error( $slot ) ) {
+			return $slot;
 		}
-
-		if ( (int) $bucket['count'] >= self::REGISTRATIONS_PER_WINDOW ) {
-			return new WP_Error(
-				'temporarily_unavailable',
-				'Too many app registrations right now; try again later.',
-				array(
-					'status'      => 429,
-					'retry_after' => max( 1, (int) $bucket['reset'] - $now ),
-				)
-			);
-		}
-
-		$bucket['count'] = (int) $bucket['count'] + 1;
-		set_transient( $key, $bucket, max( 1, (int) $bucket['reset'] - $now ) );
-
+		self::commit_registration_slot( $slot, $now );
 		return true;
+	}
+
+	/**
+	 * Read and check both buckets; count nothing.  register() calls this
+	 * under the store lock.
+	 *
+	 * @param string   $ip    Caller IP.
+	 * @param string[] $hosts Redirect hosts.
+	 * @param int      $now   Current time.
+	 * @return array|WP_Error Bucket state for commit_registration_slot(), or the 429.
+	 */
+	public static function check_registration_slot( $ip, array $hosts, $now ) {
+		$address = self::rate_limit_address( $ip );
+		$keys    = array(
+			// Per-address ceiling across every redirect host (#1101 PR-3a):
+			// varying the hosts buys new hourly buckets, never more of the day.
+			'address' => array( 'mcpwp_oauth_dcr_addr_' . substr( self::hash_ip( $address ), 0, 32 ), self::ADDRESS_REGISTRATIONS_PER_DAY, self::SITE_WINDOW ),
+			'hosts'   => array( 'mcpwp_oauth_dcr_' . substr( self::hash_ip( $address . '|' . implode( ',', $hosts ) ), 0, 32 ), self::REGISTRATIONS_PER_WINDOW, self::RATE_LIMIT_WINDOW ),
+		);
+		$state = array();
+		foreach ( $keys as $name => list( $key, $limit, $window ) ) {
+			$bucket = get_transient( $key );
+			if ( ! is_array( $bucket ) || ! isset( $bucket['count'], $bucket['reset'] ) || (int) $bucket['reset'] <= $now ) {
+				$bucket = array(
+					'count' => 0,
+					'reset' => $now + $window,
+				);
+			}
+			if ( (int) $bucket['count'] >= $limit ) {
+				return new WP_Error(
+					'temporarily_unavailable',
+					'Too many app registrations right now; try again later.',
+					array(
+						'status'      => 429,
+						'retry_after' => max( 1, (int) $bucket['reset'] - $now ),
+					)
+				);
+			}
+			$state[ $name ] = array( $key, $bucket );
+		}
+		return $state;
+	}
+
+	/**
+	 * Count one registration in both buckets checked by check_registration_slot().
+	 *
+	 * @param array $state Bucket state.
+	 * @param int   $now   Current time.
+	 */
+	public static function commit_registration_slot( array $state, $now ) {
+		foreach ( $state as list( $key, $bucket ) ) {
+			$bucket['count'] = (int) $bucket['count'] + 1;
+			set_transient( $key, $bucket, max( 1, (int) $bucket['reset'] - $now ) );
+		}
 	}
 
 	/**
