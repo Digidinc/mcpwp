@@ -143,7 +143,7 @@ trait Mcpwp_Api_Auth {
 	 * @return bool
 	 */
 	protected function oauth_user_meets_min_role( $user_id ) {
-		return class_exists( 'Mcpwp_OAuth_Well_Known' ) && Mcpwp_OAuth_Well_Known::user_meets_min_role( (int) $user_id );
+		return class_exists( 'Mcpwp_OAuth_Well_Known' ) && Mcpwp_OAuth_Well_Known::user_can_connect( (int) $user_id );
 	}
 
 	/**
@@ -2479,7 +2479,13 @@ trait Mcpwp_Api_Auth {
 			// one chokepoint every declared post reference passes.  Visible-
 			// but-not-editable is a 403, not a 404: the user can already
 			// read the post, so its existence is no secret.
-			$edit_check = $this->check_oauth_user_can_change_post_refs( $request, $resolution['refs']['scalar'] );
+			//
+			// Per-item refs (ids[], updates[].id, posts[].id, ids:csv …) are
+			// checked too, and ANY failing id fails the WHOLE request — nothing
+			// is partially applied.  A missing or hidden id fails the same way
+			// (WordPress answers edit_post false for both), so the 403 is no
+			// existence oracle.
+			$edit_check = $this->check_oauth_user_can_change_post_refs( $request, array_merge( $resolution['refs']['scalar'], $resolution['refs']['items'] ) );
 			if ( is_wp_error( $edit_check ) ) {
 				return $edit_check;
 			}
@@ -3869,11 +3875,29 @@ trait Mcpwp_Api_Auth {
 		// explicit opt-in — the same MCPWP_TRUST_PROXY_HEADERS gate the OAuth
 		// well-known scheme check uses; otherwise fall back to REMOTE_ADDR, which
 		// the web server controls.
-		$trust_proxy = defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS;
+		return $this->resolve_client_ip( defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS );
+	}
 
+	/**
+	 * Resolve the client IP under an explicit trust flag.
+	 *
+	 * Split from get_client_ip() so both branches are testable without
+	 * define()-ing MCPWP_TRUST_PROXY_HEADERS (a constant cannot be undefined
+	 * in a single-process suite) — the same shape as
+	 * resolve_logging_client_ip().
+	 *
+	 * Behind a trusted proxy, CF-Connecting-IP is preferred over the first
+	 * X-Forwarded-For hop: Cloudflare sets it to the address it actually
+	 * accepted the connection from, while the first XFF hop is whatever the
+	 * client claimed before Cloudflare appended to the list.
+	 *
+	 * @param bool $trust_proxy Whether proxy-supplied headers may be believed.
+	 * @return string
+	 */
+	protected function resolve_client_ip( $trust_proxy ) {
 		$ip_keys = $trust_proxy
 			? array(
-				'HTTP_CF_CONNECTING_IP', // Cloudflare
+				'HTTP_CF_CONNECTING_IP', // Cloudflare — preferred (see above).
 				'HTTP_X_FORWARDED_FOR',  // Proxy
 				'HTTP_X_REAL_IP',        // Nginx
 				'REMOTE_ADDR',           // Standard

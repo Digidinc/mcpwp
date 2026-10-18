@@ -192,9 +192,18 @@ final class OAuthServerTest extends TestCase {
 	 * edit_others_posts) to consent, redeem a code or refresh; fixtures that
 	 * meant "an editor" by edit_posts alone now say so in full.
 	 */
-	const EDITOR_CAPS = array( 'edit_posts' => true, 'edit_others_posts' => true );
+	const EDITOR_CAPS = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true );
+
+	/** @var array */
+	private $saved_users;
 
 	protected function setUp(): void {
+		// PR-2 P1-A: a grant needs a LIVE user (get_userdata), so every user
+		// these fixtures name exists.
+		$this->saved_users = $GLOBALS['mcpwp_test_users'];
+		foreach ( array( 1, 7, 10, 20, 30, 31, 32, 33, 34, 35, 36 ) as $mcpwp_uid ) {
+			$GLOBALS['mcpwp_test_users'][] = (object) array( 'ID' => $mcpwp_uid, 'roles' => array(), 'user_login' => 'user' . $mcpwp_uid );
+		}
 		$GLOBALS['mcpwp_test_options']         = array();
 		$GLOBALS['mcpwp_test_transients']      = array();
 		$GLOBALS['mcpwp_test_current_user']    = 0;
@@ -212,6 +221,10 @@ final class OAuthServerTest extends TestCase {
 			'oauth_token_ttl'          => 3600,
 			'oauth_redirect_uris'      => array( 'https://client.example.com/callback' ),
 		) );
+	}
+
+	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_users'] = $this->saved_users;
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────────────
@@ -1733,7 +1746,7 @@ final class OAuthServerTest extends TestCase {
 	 * user_id 30 is an editor: edit_posts yes, manage_options no.
 	 */
 	public function test_refresh_token_reclamps_to_current_user_capability(): void {
-		$GLOBALS['mcpwp_test_user_caps'][30] = array( 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => false );
+		$GLOBALS['mcpwp_test_user_caps'][30] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => false );
 		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 30 );
 
 		$response = $this->controller()->handle_token(
@@ -1751,7 +1764,7 @@ final class OAuthServerTest extends TestCase {
 
 	/** The clamp must ratchet: the NEW refresh token cannot carry the old, wider scope. */
 	public function test_refresh_token_rotation_does_not_carry_forward_stale_scope(): void {
-		$GLOBALS['mcpwp_test_user_caps'][31] = array( 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => false );
+		$GLOBALS['mcpwp_test_user_caps'][31] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => false );
 		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 31 );
 
 		$data = $this->controller()->handle_token(
@@ -1820,7 +1833,7 @@ final class OAuthServerTest extends TestCase {
 	 * while the others pass, both halves of the refresh fix are really in place.
 	 */
 	public function test_refresh_token_with_unrecognised_scopes_does_not_fail_open(): void {
-		$GLOBALS['mcpwp_test_user_caps'][33] = array( 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
+		$GLOBALS['mcpwp_test_user_caps'][33] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
 		$refresh                             = $this->seed_refresh_token( array( 'bogus' ), 33 );
 
 		$response = $this->controller()->handle_token(
@@ -1842,7 +1855,7 @@ final class OAuthServerTest extends TestCase {
 	 * narrowed to write on its next use (was: keeps admin).
 	 */
 	public function test_refresh_token_admin_user_keeps_write_scope_never_admin(): void {
-		$GLOBALS['mcpwp_test_user_caps'][34] = array( 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
+		$GLOBALS['mcpwp_test_user_caps'][34] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
 		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 34 );
 
 		$data = $this->controller()->handle_token(
@@ -1869,7 +1882,7 @@ final class OAuthServerTest extends TestCase {
 	 * grant is exactly the admin scope it implies.
 	 */
 	public function test_refresh_token_filters_non_string_scope_members(): void {
-		$GLOBALS['mcpwp_test_user_caps'][35] = array( 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
+		$GLOBALS['mcpwp_test_user_caps'][35] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
 		$refresh                             = $this->seed_refresh_token( array( array( 'admin' ), 5, null, 'admin' ), 35 );
 
 		$response = $this->controller()->handle_token(
@@ -1901,7 +1914,7 @@ final class OAuthServerTest extends TestCase {
 	 * The bound user is an administrator so the clamp is a no-op.
 	 */
 	public function test_refresh_token_accepts_a_plain_string_scope_list(): void {
-		$GLOBALS['mcpwp_test_user_caps'][36] = array( 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
+		$GLOBALS['mcpwp_test_user_caps'][36] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
 
 		$ctrl  = $this->controller();
 		$token = 'mcpwp_rt_' . bin2hex( random_bytes( 16 ) );

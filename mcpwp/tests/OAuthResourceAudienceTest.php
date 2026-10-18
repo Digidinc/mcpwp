@@ -57,7 +57,7 @@ final class OAuthResourceAudienceTest extends TestCase {
 		$GLOBALS['mcpwp_test_options']      = array();
 		$GLOBALS['mcpwp_test_transients']   = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
-		$GLOBALS['mcpwp_test_user_caps']    = array( 7 => array( 'edit_posts' => true, 'edit_others_posts' => true ) );
+		$GLOBALS['mcpwp_test_user_caps']    = array( 7 => array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true ) );
 		$_SERVER['REQUEST_URI']             = '/';
 
 		update_option(
@@ -98,7 +98,7 @@ final class OAuthResourceAudienceTest extends TestCase {
 
 	private function login_editor(): void {
 		$GLOBALS['mcpwp_test_current_user'] = 7;
-		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true, 'edit_others_posts' => true );
+		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true );
 	}
 
 	/** Render consent, then POST it back approved, returning the redirect query. */
@@ -299,7 +299,7 @@ final class OAuthResourceAudienceTest extends TestCase {
 
 	public function test_refresh_token_with_foreign_aud_is_refused(): void {
 		$ctrl  = $this->controller();
-		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true, 'edit_others_posts' => true );
+		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true );
 		$token = 'mcpwp_rt_' . bin2hex( random_bytes( 16 ) );
 		set_transient( $ctrl->get_oauth_refresh_token_transient_key( $token ), array( 'scopes' => array( 'read' ), 'user_id' => 7, 'aud' => 'https://other.example/wp-json/mcpwp/v1/mcp' ), 3600 );
 
@@ -318,6 +318,48 @@ final class OAuthResourceAudienceTest extends TestCase {
 
 		$this->assertSame( 'invalid_target', $response->get_data()['error'] );
 		$this->assertNotFalse( get_transient( $ctrl->get_oauth_refresh_token_transient_key( $token ) ), 'Refused before rotation: the refresh token is not burned.' );
+	}
+
+	// ── P2-5: state round-trips byte-exact ────────────────────────────────
+
+	public function test_state_with_percent_sequences_round_trips_exactly(): void {
+		$state = 'a%2Fb%zz %41&amp;=x/y?z~' . "'" . '"<>';
+		$query = $this->approve( array( 'state' => $state ) );
+		$this->assertSame( $state, $query['state'] );
+	}
+
+	public function test_state_is_validated_not_sanitised(): void {
+		$this->login_editor();
+		foreach ( array( "bad\x01", "tab\there", str_repeat( 'a', 1025 ), "caf\xc3\xa9" ) as $bad ) {
+			$response = $this->controller()->handle_authorize_get( new WP_REST_Request( 'GET', '/mcpwp/v1/oauth/authorize', $this->params( array( 'state' => $bad ) ) ) );
+			$this->assertSame( 400, $response->get_status(), bin2hex( substr( $bad, 0, 12 ) ) );
+			$this->assertSame( 'invalid_request', $response->get_data()['error'] );
+			$this->assertArrayNotHasKey( 'Location', $response->get_headers() );
+		}
+		$ok = $this->controller()->handle_authorize_get( new WP_REST_Request( 'GET', '/mcpwp/v1/oauth/authorize', $this->params( array( 'state' => str_repeat( 'a', 1024 ) ) ) ) );
+		$this->assertSame( 200, $ok->get_status() );
+	}
+
+	// ── P2-2: client IP behind a trusted proxy ─────────────────────────────
+
+	public function test_trusted_proxy_prefers_cf_connecting_ip_over_first_xff_hop(): void {
+		$probe = new class() extends Mcpwp_Api_Auth_Test_Harness {
+			public function ip( $trust ) {
+				return $this->resolve_client_ip( $trust );
+			}
+		};
+		$saved                           = $_SERVER;
+		$_SERVER['REMOTE_ADDR']          = '10.0.0.1';
+		$_SERVER['HTTP_X_FORWARDED_FOR'] = '6.6.6.6, 198.51.100.4';
+		$_SERVER['HTTP_CF_CONNECTING_IP'] = '203.0.113.9';
+		try {
+			$this->assertSame( '203.0.113.9', $probe->ip( true ) );
+			unset( $_SERVER['HTTP_CF_CONNECTING_IP'] );
+			$this->assertSame( '6.6.6.6', $probe->ip( true ), 'Without Cloudflare, the first XFF hop (unchanged behaviour).' );
+			$this->assertSame( '10.0.0.1', $probe->ip( false ), 'Untrusted: REMOTE_ADDR only.' );
+		} finally {
+			$_SERVER = $saved;
+		}
 	}
 
 	// ── D13: iss ───────────────────────────────────────────────────────────

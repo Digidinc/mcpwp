@@ -611,11 +611,19 @@ function get_users($args = array())
     return $filtered;
 }
 
-function current_user_can($capability)
+function current_user_can($capability, ...$args)
 {
     $user_id = (int) $GLOBALS['mcpwp_test_current_user'];
     if (0 === $user_id) {
         return false;
+    }
+
+    // Per-object meta caps (edit_post / delete_post / read_post with a post
+    // id), when a test seeds them: $GLOBALS['mcpwp_test_post_caps'][user][cap][post_id].
+    // Absent entries fall through to the per-user map below, so no existing
+    // test changes behaviour.
+    if (isset($args[0]) && isset($GLOBALS['mcpwp_test_post_caps'][ $user_id ][ $capability ]) && array_key_exists((int) $args[0], $GLOBALS['mcpwp_test_post_caps'][ $user_id ][ $capability ])) {
+        return (bool) $GLOBALS['mcpwp_test_post_caps'][ $user_id ][ $capability ][ (int) $args[0] ];
     }
 
     // If per-user caps are configured for this user_id, check them.
@@ -927,8 +935,11 @@ function get_transient($name)
 
 function delete_transient($name)
 {
+    // Like core: true only when this call removed something. The OAuth code
+    // and refresh-token exchanges use that answer as their atomic claim.
+    $existed = isset($GLOBALS['mcpwp_test_transients'][ $name ]);
     unset($GLOBALS['mcpwp_test_transients'][ $name ]);
-    return true;
+    return $existed;
 }
 
 function get_user_meta($user_id, $key = '', $single = false)

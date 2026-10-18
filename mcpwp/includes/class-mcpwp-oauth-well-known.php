@@ -408,6 +408,33 @@ class Mcpwp_OAuth_Well_Known {
 	}
 
 	/**
+	 * Whether a user may hold or obtain an OAuth grant right now (P1-A).
+	 *
+	 * Three independent conditions, each checked on its own so none relies on
+	 * another: the account still exists (get_userdata), it still holds the
+	 * base `read` capability (a user whose roles were all removed has none),
+	 * and it meets the minimum connection role.  Used at consent GET/POST,
+	 * at code redemption, at refresh and on every token use — refresh does
+	 * not rely on authorize having checked.
+	 *
+	 * @param int $user_id User id.
+	 * @return bool
+	 */
+	public static function user_can_connect( $user_id ) {
+		$user_id = (int) $user_id;
+		if ( $user_id <= 0 || ! function_exists( 'get_userdata' ) || ! function_exists( 'user_can' ) ) {
+			return false;
+		}
+		if ( ! get_userdata( $user_id ) ) {
+			return false;
+		}
+		if ( ! user_can( $user_id, 'read' ) ) {
+			return false;
+		}
+		return self::user_meets_min_role( $user_id );
+	}
+
+	/**
 	 * Whether `oauth_enabled` is ON only because it was never stored (D10).
 	 *
 	 * @return bool

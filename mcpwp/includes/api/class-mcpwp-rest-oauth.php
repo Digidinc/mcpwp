@@ -230,7 +230,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
 		// P0b: below the site's minimum role, there is no consent screen at
 		// all — a plain page, never a redirect carrying a code.
-		if ( ! Mcpwp_OAuth_Well_Known::user_meets_min_role( get_current_user_id() ) ) {
+		if ( ! Mcpwp_OAuth_Well_Known::user_can_connect( get_current_user_id() ) ) {
 			return $this->min_role_refusal_response();
 		}
 
@@ -274,7 +274,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
 		// P0b: enforced on the POST too — a forged or replayed form from a
 		// user below the minimum role mints nothing.
-		if ( ! Mcpwp_OAuth_Well_Known::user_meets_min_role( get_current_user_id() ) ) {
+		if ( ! Mcpwp_OAuth_Well_Known::user_can_connect( get_current_user_id() ) ) {
 			return $this->min_role_refusal_response();
 		}
 
@@ -487,12 +487,18 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $resource_err;
 		}
 
-		// Read + immediately delete the code transient (single-use).
+		// Single use, claimed atomically (kasra-review P2-1).  Two concurrent
+		// redemptions can both READ the code; only the one whose DELETE
+		// actually removed it may proceed.  delete_transient() reports that
+		// on both backends: on the options table it is delete_option(), whose
+		// DELETE affects one row for exactly one caller (the other gets 0 and
+		// false); on an object cache it is wp_cache_delete(), which Redis
+		// (DEL's count) and Memcached (NOT_FOUND) answer per key atomically.
 		$transient_key = 'mcpwp_oauth_code_' . $code;
 		$stored        = get_transient( $transient_key );
-		delete_transient( $transient_key );
+		$claimed       = delete_transient( $transient_key );
 
-		if ( ! is_array( $stored ) || empty( $stored['code_challenge'] ) ) {
+		if ( ! $claimed || ! is_array( $stored ) || empty( $stored['code_challenge'] ) ) {
 			return $this->oauth_error_response( 'invalid_grant', 'Authorization code is invalid or has expired.', 400 );
 		}
 
@@ -552,7 +558,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
 		// P0b: the approving user must still meet the minimum role when the
 		// code is redeemed (a demotion inside the code's 60 s counts).
-		if ( ! Mcpwp_OAuth_Well_Known::user_meets_min_role( $stored_user_id ) ) {
+		if ( ! Mcpwp_OAuth_Well_Known::user_can_connect( $stored_user_id ) ) {
 			return $this->oauth_error_response( 'invalid_grant', 'The approving user can no longer connect AI apps on this site.', 400 );
 		}
 
@@ -623,9 +629,11 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
 		// P1-D: Delete the presented refresh token immediately (rotate before issuing new one).
 		// This ensures that even if the new issuance fails, the old token is gone.
-		delete_transient( $transient_key );
+		// The delete is also the claim (same reasoning as the code exchange):
+		// of two concurrent refreshes with one token, only one proceeds.
+		$claimed = delete_transient( $transient_key );
 
-		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
+		if ( ! $claimed || ! is_array( $record ) || empty( $record['scopes'] ) ) {
 			return $this->oauth_error_response( 'invalid_grant', 'Refresh token is invalid or has expired.', 400 );
 		}
 
@@ -654,8 +662,9 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
 		$user_id = isset( $record['user_id'] ) ? (int) $record['user_id'] : 0;
 
-		// P0b: a user demoted (or deleted) since consent cannot renew.
-		if ( ! Mcpwp_OAuth_Well_Known::user_meets_min_role( $user_id ) ) {
+		// P0b / P1-A: refresh carries its OWN live-user check — a user deleted,
+		// stripped of every role, or demoted since consent cannot renew.
+		if ( ! Mcpwp_OAuth_Well_Known::user_can_connect( $user_id ) ) {
 			return $this->oauth_error_response( 'invalid_grant', 'The approving user can no longer connect AI apps on this site.', 400 );
 		}
 
@@ -792,7 +801,10 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			'code_challenge'        => sanitize_text_field( $this->scalar_param( $request, 'code_challenge' ) ),
 			'code_challenge_method' => strtoupper( sanitize_key( $this->scalar_param( $request, 'code_challenge_method' ) ) ),
 			'scope'                 => sanitize_text_field( $this->scalar_param( $request, 'scope' ) ),
-			'state'                 => sanitize_text_field( $this->scalar_param( $request, 'state' ) ),
+			// Echoed back byte-exact (RFC 6749 §4.1.2), so validated in
+			// validate_authorize_params() instead of sanitised: sanitize_text_field()
+			// strips %xx sequences and would hand the client a different state.
+			'state'                 => $this->scalar_param( $request, 'state' ),
 			// RFC 8707.  Read raw (trimmed), not through esc_url_raw(): it is
 			// only ever compared after normalize_resource(), never echoed
 			// unescaped or followed, and esc_url_raw() could turn an invalid
@@ -802,6 +814,25 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		);
 
 		return $params;
+	}
+
+	/** Maximum length of the `state` parameter. */
+	const STATE_MAX_LENGTH = 1024;
+
+	/**
+	 * Whether a `state` value may be echoed back as-is.
+	 *
+	 * @param mixed $state Value.
+	 * @return bool
+	 */
+	public static function is_valid_state( $state ) {
+		if ( ! is_string( $state ) ) {
+			return false;
+		}
+		if ( strlen( $state ) > self::STATE_MAX_LENGTH ) {
+			return false;
+		}
+		return '' === $state || 1 === preg_match( '/^[\x20-\x7E]+$/', $state );
 	}
 
 	/**
@@ -899,6 +930,14 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	public function validate_authorize_params( $params ) {
 		if ( 'code' !== $params['response_type'] ) {
 			return new WP_Error( 'invalid_request', 'response_type must be "code".', array( 'status' => 400 ) );
+		}
+
+		// state round-trips byte-exact, so it is validated, never rewritten:
+		// visible ASCII plus space (RFC 6749 VSCHAR, %x20-7E), at most
+		// STATE_MAX_LENGTH bytes.  Anything else is refused as JSON — before
+		// the redirect_uri is trusted, so never by redirect.
+		if ( ! self::is_valid_state( $params['state'] ) ) {
+			return new WP_Error( 'invalid_request', 'state must be printable ASCII of at most 1024 characters.', array( 'status' => 400 ) );
 		}
 
 		// Resolve client_id: registered (DCR) first, legacy settings client second.
@@ -1074,7 +1113,10 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			$hidden_fields .= sprintf(
 				'<input type="hidden" name="%s" value="%s">',
 				esc_attr( $key ),
-				esc_attr( $this->stringify_param_value( $value ) )
+				// Byte-exact round trip: esc_attr() does not re-encode an
+				// existing entity, so a state containing "&amp;" would come
+				// back as "&".  Always-encode escaping is just as safe here.
+				htmlspecialchars( $this->stringify_param_value( $value ), ENT_QUOTES, 'UTF-8', true )
 			);
 		}
 		$hidden_fields .= '<input type="hidden" name="_mcpwp_oauth_binding" value="' . esc_attr( $this->consent_binding( $params ) ) . '">';

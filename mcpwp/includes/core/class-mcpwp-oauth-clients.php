@@ -72,8 +72,14 @@ class Mcpwp_OAuth_Clients {
 	/** Characters in a client name. */
 	const MAX_CLIENT_NAME_LENGTH = 100;
 
-	/** A client never used and older than this (7 days) is purged. */
-	const UNUSED_CLIENT_MAX_AGE = 604800;
+	/**
+	 * A client never authorized (no code ever issued for it) and older than
+	 * this (24 hours) is purged — kasra-review P1-B: a real client completes
+	 * consent within minutes of registering, so a day bounds the junk an
+	 * anonymous caller can park in the store.  An authorized client is never
+	 * purged or evicted.
+	 */
+	const UNUSED_CLIENT_MAX_AGE = 86400;
 
 	/** Registrations allowed per (IP address, redirect hosts) per window. */
 	const REGISTRATIONS_PER_WINDOW = 10;
@@ -873,7 +879,7 @@ class Mcpwp_OAuth_Clients {
 	 * @return true|WP_Error
 	 */
 	public static function consume_registration_slot( $ip, array $hosts, $now ) {
-		$key    = 'mcpwp_oauth_dcr_' . substr( self::hash_ip( (string) $ip . '|' . implode( ',', $hosts ) ), 0, 32 );
+		$key    = 'mcpwp_oauth_dcr_' . substr( self::hash_ip( self::rate_limit_address( $ip ) . '|' . implode( ',', $hosts ) ), 0, 32 );
 		$bucket = get_transient( $key );
 
 		if ( ! is_array( $bucket ) || ! isset( $bucket['count'], $bucket['reset'] ) || (int) $bucket['reset'] <= $now ) {
@@ -898,6 +904,36 @@ class Mcpwp_OAuth_Clients {
 		set_transient( $key, $bucket, max( 1, (int) $bucket['reset'] - $now ) );
 
 		return true;
+	}
+
+	/**
+	 * The address a rate-limit bucket is keyed on (P1-B).
+	 *
+	 * IPv4: the address itself.  IPv6: its /64 prefix — one end site is
+	 * normally handed a whole /64, so keying on the full address would give
+	 * every caller 2^64 fresh buckets.  An IPv4-mapped IPv6 address
+	 * (::ffff:a.b.c.d) is the IPv4 address it carries.  Anything that does
+	 * not parse is keyed as given (all unparseable callers share it).
+	 *
+	 * @param string $ip Caller IP.
+	 * @return string
+	 */
+	public static function rate_limit_address( $ip ) {
+		$ip     = trim( (string) $ip );
+		$binary = '' !== $ip ? @inet_pton( $ip ) : false; // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- inet_pton warns on garbage; false is the answer.
+		if ( false === $binary ) {
+			return $ip;
+		}
+		if ( 4 === strlen( $binary ) ) {
+			return (string) inet_ntop( $binary );
+		}
+		if ( 16 !== strlen( $binary ) ) {
+			return $ip;
+		}
+		if ( str_repeat( "\0", 10 ) . "\xff\xff" === substr( $binary, 0, 12 ) ) {
+			return (string) inet_ntop( substr( $binary, 12, 4 ) );
+		}
+		return (string) inet_ntop( substr( $binary, 0, 8 ) . str_repeat( "\0", 8 ) ) . '/64';
 	}
 
 	/**

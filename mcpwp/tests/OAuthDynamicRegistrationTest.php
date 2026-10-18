@@ -128,7 +128,7 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 
 	private function login_editor(): void {
 		$GLOBALS['mcpwp_test_current_user'] = 7;
-		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true, 'edit_others_posts' => true );
+		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true );
 	}
 
 	private function assert_error( $result, string $code ): void {
@@ -389,11 +389,11 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 
 	/** Round 2: at the cap, the oldest NEVER-authorized client is evicted. */
 	public function test_cap_of_500_evicts_the_oldest_never_authorized_client(): void {
-		$this->seed_clients( 1, time() - 3 * DAY_IN_SECONDS, 0 );   // oldest, never authorized → evicted
+		$this->seed_clients( 1, time() - 3 * HOUR_IN_SECONDS, 0 );   // oldest never-authorized (inside the 24 h purge window) → evicted
 		$oldest = array_keys( Mcpwp_OAuth_Clients::all() )[0];
 		$this->seed_clients( 1, time() - 5 * DAY_IN_SECONDS, time() ); // older still, but AUTHORIZED → kept
 		$authorized = array_keys( Mcpwp_OAuth_Clients::all() )[1];
-		$this->seed_clients( 498, time() - DAY_IN_SECONDS, 0 );
+		$this->seed_clients( 498, time() - HOUR_IN_SECONDS, 0 );
 
 		$result = $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) );
 
@@ -482,15 +482,66 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		$this->assertSame( 503, $result->get_error_data()['status'] );
 	}
 
-	public function test_registration_purges_unused_clients_older_than_seven_days_first(): void {
-		$this->seed_clients( 499, time() - 8 * DAY_IN_SECONDS, 0 );      // stale, never used → purged
-		$this->seed_clients( 1, time() - 8 * DAY_IN_SECONDS, time() - 9 * DAY_IN_SECONDS ); // old but USED → kept
-		$this->seed_clients( 1, time() - 6 * DAY_IN_SECONDS, 0 );        // unused but young → kept
+	/** P1-B (was 7 days): never-authorized clients are purged after 24 hours. */
+	public function test_registration_purges_never_authorized_clients_older_than_24_hours_first(): void {
+		$this->seed_clients( 499, time() - 25 * HOUR_IN_SECONDS, 0 );                     // never authorized, 25 h → purged
+		$this->seed_clients( 1, time() - 8 * DAY_IN_SECONDS, time() - 9 * DAY_IN_SECONDS ); // old but AUTHORIZED → kept
+		$this->seed_clients( 1, time() - 23 * HOUR_IN_SECONDS, 0 );                       // never authorized, 23 h → kept
 
 		$result = $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) );
 
 		$this->assertIsArray( $result, 'Purging stale clients makes room under the cap.' );
 		$this->assertCount( 3, Mcpwp_OAuth_Clients::all() );
+	}
+
+	public function test_purge_boundary_is_24_hours(): void {
+		$now     = time();
+		$clients = array(
+			'mcpwpc_' . str_repeat( '1', 32 ) => array( 'created_at' => $now - DAY_IN_SECONDS - 1, 'last_used_at' => 0, 'authorized_at' => 0 ),
+			'mcpwpc_' . str_repeat( '2', 32 ) => array( 'created_at' => $now - DAY_IN_SECONDS + 60, 'last_used_at' => 0, 'authorized_at' => 0 ),
+			'mcpwpc_' . str_repeat( '3', 32 ) => array( 'created_at' => $now - 30 * DAY_IN_SECONDS, 'last_used_at' => 0, 'authorized_at' => $now - 29 * DAY_IN_SECONDS ),
+		);
+		$kept = Mcpwp_OAuth_Clients::purge_stale( $clients, $now );
+		$this->assertSame( array( 'mcpwpc_' . str_repeat( '2', 32 ), 'mcpwpc_' . str_repeat( '3', 32 ) ), array_keys( $kept ) );
+	}
+
+	// ── P1-B: rate-limit bucket address ────────────────────────────────────
+
+	public function test_rate_limit_address_keys_ipv6_on_its_64_and_ipv4_mapped_as_ipv4(): void {
+		$this->assertSame( '203.0.113.7', Mcpwp_OAuth_Clients::rate_limit_address( '203.0.113.7' ) );
+		$this->assertSame( Mcpwp_OAuth_Clients::rate_limit_address( '2001:db8:1:2::1' ), Mcpwp_OAuth_Clients::rate_limit_address( '2001:db8:1:2:ffff:ffff:ffff:9' ) );
+		$this->assertSame( Mcpwp_OAuth_Clients::rate_limit_address( '2001:DB8:1:2::1' ), Mcpwp_OAuth_Clients::rate_limit_address( '2001:0db8:0001:0002:0:0:0:1' ), 'Normalised, not compared as text.' );
+		$this->assertNotSame( Mcpwp_OAuth_Clients::rate_limit_address( '2001:db8:1:2::1' ), Mcpwp_OAuth_Clients::rate_limit_address( '2001:db8:1:3::1' ) );
+		$this->assertSame( '203.0.113.7', Mcpwp_OAuth_Clients::rate_limit_address( '::ffff:203.0.113.7' ) );
+		$this->assertSame( '203.0.113.7', Mcpwp_OAuth_Clients::rate_limit_address( '::FFFF:cb00:7107' ) );
+	}
+
+	private function fill_bucket( string $ip ): void {
+		for ( $i = 0; $i < 10; $i++ ) {
+			$this->assertIsArray( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ), $ip ) );
+		}
+	}
+
+	public function test_two_addresses_in_one_64_share_a_bucket(): void {
+		$this->fill_bucket( '2001:db8:aa:bb::1' );
+		$this->assert_error( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ), '2001:db8:aa:bb:dead:beef:0:42' ), 'temporarily_unavailable' );
+	}
+
+	public function test_a_different_64_has_its_own_bucket(): void {
+		$this->fill_bucket( '2001:db8:aa:bb::1' );
+		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ), '2001:db8:aa:bc::1' ) );
+	}
+
+	public function test_an_ipv4_mapped_address_shares_the_ipv4_bucket(): void {
+		$this->fill_bucket( '198.51.100.77' );
+		$this->assert_error( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ), '::ffff:198.51.100.77' ), 'temporarily_unavailable' );
+		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ), '198.51.100.78' ), 'A neighbouring IPv4 address is not swept in.' );
+	}
+
+	public function test_429_text_is_truthful_and_names_no_admin_screen(): void {
+		$this->fill_bucket( '198.51.100.90' );
+		$over = $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ), '198.51.100.90' );
+		$this->assertSame( 'Too many app registrations right now; try again later.', $over->get_error_message() );
 	}
 
 	public function test_malformed_store_entries_are_never_clients(): void {
@@ -680,7 +731,7 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 
 	public function test_registered_public_client_redeems_its_code_and_is_marked_used(): void {
 		$client_id                          = $this->register_chatgpt();
-		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true, 'edit_others_posts' => true );
+		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true );
 
 		$response = $this->controller()->handle_token( $this->token_request( $this->seed_code( $client_id, self::CHATGPT_REDIRECT ), $client_id, self::CHATGPT_REDIRECT ) );
 
