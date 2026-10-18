@@ -138,32 +138,16 @@ trait Mcpwp_Admin_Setup_Trait {
 		$chatgpt_connector = new Mcpwp_ChatGPT_Connector( $this );
 		$chatgpt_new_url   = null;
 		if ( isset( $_POST['mcpwp_chatgpt_connector_action'] ) ) {
-			check_admin_referer( 'mcpwp_chatgpt_connector', 'mcpwp_chatgpt_connector_nonce' );
-			$chatgpt_action = sanitize_key( wp_unslash( $_POST['mcpwp_chatgpt_connector_action'] ) );
-
-			if ( 'create' === $chatgpt_action ) {
-				$chatgpt_result = $chatgpt_connector->create_or_rotate();
-				if ( is_wp_error( $chatgpt_result ) ) {
-					add_settings_error( 'mcpwp_messages', 'mcpwp_chatgpt_key_failed', $chatgpt_result->get_error_message(), 'error' );
-				} else {
+			check_admin_referer( Mcpwp_ChatGPT_Connector::NONCE_ACTION, 'mcpwp_chatgpt_connector_nonce' );
+			$chatgpt_result = $chatgpt_connector->handle_request( wp_unslash( $_POST ) );
+			if ( is_array( $chatgpt_result ) ) {
+				add_settings_error( 'mcpwp_messages', 'mcpwp_chatgpt_connector', $chatgpt_result['message'], $chatgpt_result['type'] );
+				if ( ! empty( $chatgpt_result['url'] ) ) {
 					$chatgpt_new_url = $chatgpt_result['url'];
-					add_settings_error(
-						'mcpwp_messages',
-						'mcpwp_chatgpt_key_created',
-						__( 'ChatGPT link created. Copy it now — it will not be shown again. Any earlier ChatGPT link has stopped working.', 'mcpwp' ),
-						'updated'
-					);
 				}
-			} elseif ( 'revoke' === $chatgpt_action ) {
-				$chatgpt_connector->revoke();
-				add_settings_error(
-					'mcpwp_messages',
-					'mcpwp_chatgpt_key_revoked',
-					__( 'ChatGPT link revoked. ChatGPT can no longer reach this site with it.', 'mcpwp' ),
-					'updated'
-				);
 			}
 		}
+		$chatgpt_oauth_conflict = Mcpwp_ChatGPT_Connector::oauth_discovery_conflict();
 		$chatgpt_active_key = $chatgpt_connector->get_active_key();
 
 		$scoped_keys = $this->list_scoped_api_keys( true );

@@ -9,12 +9,14 @@
  * "No authentication".
  *
  * This class mints no new kind of credential. The link's key is an ordinary
- * scoped key from create_scoped_api_key(), fixed to the least privilege that
- * still lets ChatGPT do real work: the Editor role (content, media, taxonomy,
- * SEO, Elementor), read + write scope, never admin. A write key cannot
- * publish (3.13), change settings, or manage keys. The only state kept here
- * is which scoped key id is the ChatGPT one, so the Setup page can show its
- * status and rotate or revoke exactly that key without touching others.
+ * scoped key from create_scoped_api_key(): a custom role limited to
+ * CATEGORIES, read + write scope, never admin. It is the Editor role minus
+ * Elementor theme-builder and templates, whose write routes can publish
+ * site-wide headers/footers and already-published templates without a
+ * `status` param (adversarial review of #1090, P1-1). What remains is stated
+ * on the Setup page claim by claim, and ChatGptConnectorTest pins each one.
+ * The only state kept here is which scoped key id is the ChatGPT one, so the
+ * Setup page can show its status and rotate or revoke exactly that key.
  *
  * @package MCPWP
  */
@@ -40,7 +42,17 @@ class Mcpwp_ChatGPT_Connector {
 	 *
 	 * @var string
 	 */
-	const ROLE = 'editor';
+	const ROLE = 'custom';
+
+	/**
+	 * Tool categories the connector key may reach.
+	 *
+	 * Deliberately excludes elementor-theme, elementor-templates, site,
+	 * admin, forms, webhooks, woocommerce and every other category.
+	 *
+	 * @var string[]
+	 */
+	const CATEGORIES = array( 'content', 'media', 'taxonomy', 'seo', 'elementor', 'elementor-build', 'elementor-info' );
 
 	/**
 	 * Scopes the connector key is minted with. Never 'admin'.
@@ -71,6 +83,18 @@ class Mcpwp_ChatGPT_Connector {
 	 */
 	public static function endpoint_url() {
 		return rest_url( 'mcpwp/v1/mcp' );
+	}
+
+	/**
+	 * Whether the endpoint is HTTPS (or the site is a local development site).
+	 *
+	 * @return bool
+	 */
+	public static function endpoint_is_secure() {
+		if ( 0 === strpos( self::endpoint_url(), 'https://' ) ) {
+			return true;
+		}
+		return function_exists( 'wp_get_environment_type' ) && 'local' === wp_get_environment_type();
 	}
 
 	/**
@@ -112,18 +136,29 @@ class Mcpwp_ChatGPT_Connector {
 	 * @return array{url:string,key:array}|WP_Error
 	 */
 	public function create_or_rotate() {
-		$this->revoke();
+		if ( ! self::endpoint_is_secure() ) {
+			return new WP_Error(
+				'mcpwp_chatgpt_needs_https',
+				__( 'This site\'s REST URL is not HTTPS, so a link carrying a key would travel in clear text. Enable HTTPS for the site first.', 'mcpwp' )
+			);
+		}
+
+		$had_link = $this->revoke();
 
 		$created = $this->auth->create_scoped_api_key(
 			__( 'ChatGPT connector', 'mcpwp' ),
 			self::SCOPES,
-			self::ROLE
+			self::ROLE,
+			self::CATEGORIES
 		);
 
 		if ( ! is_array( $created ) || empty( $created['key'] ) || empty( $created['id'] ) ) {
 			$message = ( is_array( $created ) && isset( $created['message'] ) )
 				? $created['message']
 				: __( 'Could not create the ChatGPT connector key.', 'mcpwp' );
+			if ( $had_link ) {
+				$message .= ' ' . __( 'The previous ChatGPT link was already revoked.', 'mcpwp' );
+			}
 			return new WP_Error( 'mcpwp_chatgpt_key_failed', $message );
 		}
 
@@ -136,6 +171,77 @@ class Mcpwp_ChatGPT_Connector {
 			'url' => self::connector_url( $plain ),
 			'key' => $created,
 		);
+	}
+
+	/**
+	 * Nonce action for every connector form on the Setup page.
+	 *
+	 * @var string
+	 */
+	const NONCE_ACTION = 'mcpwp_chatgpt_connector';
+
+	/**
+	 * Handle a Setup-page POST for the connector.
+	 *
+	 * Checks capability and nonce itself, so the guarantee does not rest on
+	 * the caller alone (the Setup page also runs check_admin_referer()).
+	 *
+	 * @param array $post Unslashed request fields.
+	 * @return array{type:string,message:string,url?:string}|null Null when the
+	 *         request is not a connector action.
+	 */
+	public function handle_request( array $post ) {
+		if ( ! isset( $post['mcpwp_chatgpt_connector_action'] ) ) {
+			return null;
+		}
+		if ( ! current_user_can( 'activate_plugins' ) ) {
+			return array( 'type' => 'error', 'message' => __( 'You are not allowed to manage the ChatGPT link.', 'mcpwp' ) );
+		}
+		$nonce = isset( $post['mcpwp_chatgpt_connector_nonce'] ) ? (string) $post['mcpwp_chatgpt_connector_nonce'] : '';
+		if ( ! wp_verify_nonce( $nonce, self::NONCE_ACTION ) ) {
+			return array( 'type' => 'error', 'message' => __( 'The form expired. Reload the page and try again.', 'mcpwp' ) );
+		}
+
+		$action = sanitize_key( (string) $post['mcpwp_chatgpt_connector_action'] );
+		if ( 'create' === $action ) {
+			$result = $this->create_or_rotate();
+			if ( is_wp_error( $result ) ) {
+				return array( 'type' => 'error', 'message' => $result->get_error_message() );
+			}
+			return array(
+				'type'    => 'updated',
+				'message' => __( 'ChatGPT link created. Copy it now — it will not be shown again. Any earlier ChatGPT link has stopped working.', 'mcpwp' ),
+				'url'     => $result['url'],
+			);
+		}
+		if ( 'revoke' === $action ) {
+			$this->revoke();
+			return array( 'type' => 'updated', 'message' => __( 'ChatGPT link revoked. ChatGPT can no longer reach this site with it.', 'mcpwp' ) );
+		}
+		return null;
+	}
+
+	/**
+	 * Which OAuth discovery, if any, this site advertises to clients.
+	 *
+	 * When either is on, a request with a missing, mistyped or revoked key
+	 * answers 401 + WWW-Authenticate pointing at an authorization server, and
+	 * ChatGPT switches to an OAuth sign-in instead of failing plainly. With the
+	 * broker that sign-in is the parked mumcp.com flow.
+	 *
+	 * @return string 'broker', 'legacy' or ''.
+	 */
+	public static function oauth_discovery_conflict() {
+		if ( ! class_exists( 'Mcpwp_OAuth_Well_Known' ) ) {
+			return '';
+		}
+		if ( Mcpwp_OAuth_Well_Known::is_broker_enrolled() ) {
+			return 'broker';
+		}
+		if ( Mcpwp_OAuth_Well_Known::is_legacy_oauth_enabled() ) {
+			return 'legacy';
+		}
+		return '';
 	}
 
 	/**

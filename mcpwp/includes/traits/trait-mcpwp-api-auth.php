@@ -5141,8 +5141,10 @@ trait Mcpwp_Api_Auth {
 	 * @return array Key metadata list.
 	 */
 	public function list_scoped_api_keys( $include_revoked = false ) {
-		$keys   = $this->get_scoped_api_keys_raw();
-		$output = array();
+		$keys      = $this->get_scoped_api_keys_raw();
+		$output    = array();
+		$last_used = get_option( $this->get_api_key_last_used_option_name(), array() );
+		$last_used = is_array( $last_used ) ? $last_used : array();
 
 		foreach ( $keys as $key ) {
 			$normalized = $this->normalize_api_key_record( $key );
@@ -5170,7 +5172,8 @@ trait Mcpwp_Api_Auth {
 				'tool_categories' => $deny_all ? array() : self::without_reserved_tool_categories( $normalized['tool_categories'] ),
 				'deny_all'        => $deny_all,
 				'created_at'      => $normalized['created_at'],
-				'last_used_at'    => $normalized['last_used_at'],
+				// The separate map wins; a record's own value is pre-#1090 history.
+				'last_used_at'    => isset( $last_used[ $normalized['id'] ] ) ? (string) $last_used[ $normalized['id'] ] : $normalized['last_used_at'],
 				'revoked_at'      => $normalized['revoked_at'],
 			);
 		}
@@ -5267,7 +5270,25 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
-	 * Update last_used_at on a scoped API key.
+	 * Option holding last-used timestamps, keyed by scoped key id.
+	 *
+	 * Kept OUT of the key store on purpose. touch_api_key_last_used() runs on
+	 * every authenticated request; when it rewrote the whole key array from the
+	 * snapshot read before the password-hash loop, a request in flight across a
+	 * revoke wrote `revoked_at = null` back and resurrected the key (adversarial
+	 * review of #1090, P1-2). Losing a timestamp to a race is harmless; losing a
+	 * revocation is not, so the request path never writes the key store.
+	 *
+	 * @return string
+	 */
+	protected function get_api_key_last_used_option_name() {
+		return 'mcpwp_api_keys_last_used';
+	}
+
+	/**
+	 * Record that a scoped API key was just used.
+	 *
+	 * Writes only the separate last-used map, at most once a minute per key.
 	 *
 	 * @param string $key_id Key identifier.
 	 */
@@ -5277,25 +5298,16 @@ trait Mcpwp_Api_Auth {
 			return;
 		}
 
-		$keys = $this->get_scoped_api_keys_raw();
-		$now  = current_time( 'mysql' );
-		$changed = false;
+		$map = get_option( $this->get_api_key_last_used_option_name(), array() );
+		$map = is_array( $map ) ? $map : array();
+		$now = current_time( 'mysql' );
 
-		foreach ( $keys as &$key ) {
-			$normalized = $this->normalize_api_key_record( $key );
-			if ( $normalized['id'] !== $key_id ) {
-				continue;
-			}
-
-			$key['last_used_at'] = $now;
-			$changed = true;
-			break;
+		if ( isset( $map[ $key_id ] ) && ( strtotime( $now ) - strtotime( (string) $map[ $key_id ] ) ) < 60 ) {
+			return;
 		}
-		unset( $key );
 
-		if ( $changed ) {
-			update_option( $this->get_scoped_api_keys_option_name(), $keys );
-		}
+		$map[ $key_id ] = $now;
+		update_option( $this->get_api_key_last_used_option_name(), $map, false );
 	}
 
 	/**
