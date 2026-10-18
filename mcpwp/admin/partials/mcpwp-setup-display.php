@@ -384,6 +384,9 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				<?php esc_html_e( 'Your API key is stored securely (hashed). To see it again, regenerate a new one below.', 'mcpwp' ); ?>
 			</p>
 			<?php endif; ?>
+			<p class="description">
+				<?php esc_html_e( 'A key revoked under Active Keys stays revoked, the primary key included. The old single-key setting is only used on a site that has never had role-based keys, and only to move that key into Active Keys.', 'mcpwp' ); ?>
+			</p>
 
 			<form method="post" class="mcpwp-regenerate-form" style="margin-top:10px;">
 				<?php wp_nonce_field( 'mcpwp_regenerate_key', 'mcpwp_nonce' ); ?>
@@ -391,7 +394,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 					<span class="dashicons dashicons-update"></span>
 					<?php esc_html_e( 'Regenerate Key', 'mcpwp' ); ?>
 				</button>
-				<span class="description"><?php esc_html_e( 'The old key will stop working immediately.', 'mcpwp' ); ?></span>
+				<span class="description"><?php esc_html_e( 'This revokes every key on this site — the primary key, all role-based keys and the ChatGPT link — and makes one new primary key.', 'mcpwp' ); ?></span>
 			</form>
 			<?php endif; ?>
 

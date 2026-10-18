@@ -805,7 +805,7 @@ trait Mcpwp_Api_Auth {
 		$matched_key = $this->find_scoped_api_key( $api_key );
 		$legacy_key  = get_option( 'mcpwp_api_key' );
 
-		if ( ! $matched_key && ! empty( $legacy_key ) && $this->is_api_key_match( $api_key, $legacy_key ) ) {
+		if ( ! $matched_key && ! empty( $legacy_key ) && $this->legacy_api_key_option_is_honoured() && $this->is_api_key_match( $api_key, $legacy_key ) ) {
 			// Auto-migrate legacy plain text keys to hashed storage.
 			if ( hash_equals( $legacy_key, $api_key ) ) {
 				$legacy_key = wp_hash_password( $api_key );
@@ -3120,7 +3120,7 @@ trait Mcpwp_Api_Auth {
 		$matched_key = $this->find_scoped_api_key( $api_key );
 		$legacy_key  = get_option( 'mcpwp_api_key' );
 
-		if ( ! $matched_key && ! empty( $legacy_key ) && $this->is_api_key_match( $api_key, $legacy_key ) ) {
+		if ( ! $matched_key && ! empty( $legacy_key ) && $this->legacy_api_key_option_is_honoured() && $this->is_api_key_match( $api_key, $legacy_key ) ) {
 			$matched_key = $this->migrate_legacy_key_to_scoped_store( $legacy_key );
 		}
 
@@ -3827,6 +3827,23 @@ trait Mcpwp_Api_Auth {
 		}
 
 		return false;
+	}
+
+	/**
+	 * Whether the legacy single-key option `mcpwp_api_key` may authenticate.
+	 *
+	 * Only on a site whose scoped store is still empty: a genuine
+	 * pre-multi-key install, whose key is migrated into the store on first use
+	 * and matched there from then on. Once the store holds any record, every
+	 * live key has a record, so a legacy hash with no live record can only
+	 * belong to a REVOKED key — find_scoped_api_key() skips revoked records,
+	 * and honouring the option here used to re-create a revoked primary key
+	 * as a brand-new active admin record (migrate_legacy_key_to_scoped_store()).
+	 *
+	 * @return bool
+	 */
+	protected function legacy_api_key_option_is_honoured() {
+		return array() === $this->get_scoped_api_keys_raw();
 	}
 
 	/**
@@ -5205,12 +5222,18 @@ trait Mcpwp_Api_Auth {
 			if ( empty( $normalized['revoked_at'] ) ) {
 				$key['revoked_at'] = current_time( 'mysql' );
 				$updated = true;
+				$revoked_hash = $normalized['hash'];
 			}
 		}
 		unset( $key );
 
 		if ( $updated ) {
 			update_option( $this->get_scoped_api_keys_option_name(), $keys );
+			// The legacy copy of a revoked primary key goes with it.
+			$legacy_key = get_option( 'mcpwp_api_key' );
+			if ( isset( $revoked_hash ) && '' !== (string) $revoked_hash && is_string( $legacy_key ) && hash_equals( (string) $revoked_hash, $legacy_key ) ) {
+				delete_option( 'mcpwp_api_key' );
+			}
 		}
 
 		return $updated;
@@ -6091,7 +6114,17 @@ trait Mcpwp_Api_Auth {
 		update_option( $this->get_scoped_api_keys_option_name(), $keys );
 
 		$created = $this->create_scoped_api_key( __( 'Primary API Key', 'mcpwp' ), $this->get_default_api_key_scopes() );
-		update_option( 'mcpwp_api_key', wp_hash_password( $created['key'] ) );
+
+		// The legacy option carries the record's own hash (not a second, salted
+		// hash of the same key) so revoking the record can recognise and clear it.
+		$legacy_hash = wp_hash_password( $created['key'] );
+		foreach ( $this->get_scoped_api_keys_raw() as $record ) {
+			if ( isset( $record['id'], $record['hash'] ) && $record['id'] === $created['id'] ) {
+				$legacy_hash = (string) $record['hash'];
+				break;
+			}
+		}
+		update_option( 'mcpwp_api_key', $legacy_hash );
 
 		return $created['key'];
 	}
