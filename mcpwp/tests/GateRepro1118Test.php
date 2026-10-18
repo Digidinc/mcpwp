@@ -8,9 +8,9 @@
  * @package MCPWP
  */
 use PHPUnit\Framework\TestCase;
-require_once '/app/includes/api/class-mcpwp-rest-posts.php';
-require_once '/app/includes/class-mcpwp-oauth-well-known.php';
-require_once '/app/tests/ApiAuthTest.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-posts.php';
+require_once dirname( __DIR__ ) . '/includes/class-mcpwp-oauth-well-known.php';
+require_once __DIR__ . '/ApiAuthTest.php';
 
 final class GateRepro1118Test extends TestCase {
 	const AUTHOR = 11; const OTHER = 12; const PAGE_EDITOR = 13;
@@ -166,7 +166,7 @@ final class GateRepro1118Test extends TestCase {
 	}
 
 	public function test_template_launder(): void {
-		if ( ! class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) { require_once '/app/includes/core/class-mcpwp-elementor-template-refs.php'; }
+		if ( ! class_exists( 'Mcpwp_Elementor_Template_Refs' ) ) { require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-elementor-template-refs.php'; }
 		$T = 9700; $P = 9701;
 		$GLOBALS['_mcpwp_test_posts'][ $T ] = new WP_Post( array( 'ID' => $T, 'post_type' => 'elementor_library', 'post_status' => 'private', 'post_author' => self::OTHER, 'post_title' => 'secret tpl', 'post_content' => '' ) );
 		$GLOBALS['_mcpwp_test_posts'][ $P ] = new WP_Post( array( 'ID' => $P, 'post_type' => 'page', 'post_status' => 'publish', 'post_author' => self::OTHER, 'post_title' => 'pub page', 'post_content' => '[elementor-template id="' . $T . '"]' ) );
