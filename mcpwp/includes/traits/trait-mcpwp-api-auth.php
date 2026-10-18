@@ -122,6 +122,389 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Whether the current principal ACTS AS A REAL WORDPRESS USER (#1100).
+	 *
+	 * The ONE predicate the route capability map is enforced on.  A user-run
+	 * principal is gated by scope AND the route's WordPress capability; a
+	 * bot-run principal (X-API-Key / ?api_key keys, broker bearer tokens,
+	 * client_credentials OAuth tokens — all running as the mcpwp_api_agent
+	 * service account) by scope alone, because that account deliberately
+	 * lacks manage_woocommerce, edit_theme_options and similar.
+	 *
+	 * A new user-run principal needs exactly one more line here.
+	 *
+	 * @return bool
+	 */
+	protected function requester_acts_as_user() {
+		return $this->requester_oauth_user_id() > 0                                                         // OAuth token minted for a user (#1099).
+			|| $this->requester_is_webmcp()                                                                  // WebMCP principal record (#981).
+			|| ( class_exists( 'Mcpwp_WebMCP' ) && Mcpwp_WebMCP::dispatch_user_id() > 0 )                    // WebMCP cookie + nonce dispatch.
+			|| $this->is_trusted_admin_ajax_request()                                                         // wp-admin Chat tab (admin, nonce).
+			|| ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::applying_as_admin() > 0 ); // Approved delete replayed by an admin.
+	}
+
+	/**
+	 * Enforce the route's WordPress capability on a user-run principal.
+	 *
+	 * Unknown routes and undecided (TODO) rows are admin-only until decided
+	 * (Mcpwp_Route_Capability_Map::UNDECIDED_ADMIN_ONLY_CAPABILITY) — never a
+	 * pass-through.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return true|WP_Error
+	 */
+	protected function check_user_run_capability( $request ) {
+		if ( ! $this->requester_acts_as_user() ) {
+			return true; // bots: scope is their gate (and see check_generic_post_type_access()).
+		}
+		if ( ! class_exists( 'Mcpwp_Route_Capability_Map' ) ) {
+			return new WP_Error( 'rest_forbidden_capability', __( 'Your WordPress account is not allowed to do this.', 'mcpwp' ), array( 'status' => 403 ) );
+		}
+		$method     = method_exists( $request, 'get_method' ) ? (string) $request->get_method() : 'GET';
+		$route      = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+		$capability = Mcpwp_Route_Capability_Map::required_capability( $method, $route );
+		// A row may require several capabilities at once ('a+b'); every one
+		// must be held. Used only where one action spans two post types
+		// (DELETE /drafts/delete-all: others' posts AND others' pages).
+		foreach ( '' === $capability ? array() : explode( '+', $capability ) as $one ) {
+			if ( ! current_user_can( $one ) ) {
+				return new WP_Error(
+					'rest_forbidden_capability',
+					__( 'Your WordPress account is not allowed to do this.', 'mcpwp' ),
+					array(
+						'status'              => 403,
+						'required_capability' => $capability,
+					)
+				);
+			}
+		}
+
+		return true;
+	}
+
+	/**
+	 * Generic post writes that CREATE a post of a caller-chosen or implied
+	 * type, keyed by normalised route => how the target type is found.
+	 * 'param:<name>=<default>' reads the type from a request parameter;
+	 * 'items:<param>=<default>' reads it from each item of an array param;
+	 * 'type:<type>' is fixed; 'source' is the type of the declared source post.
+	 *
+	 * @return array<string,string>
+	 */
+	protected static function user_run_create_type_routes() {
+		return array(
+			'/posts'                     => 'param:post_type=post',
+			'/posts/bulk'                => 'items:posts=post',
+			'/pages'                     => 'type:page',
+			'/pages/bulk'                => 'type:page',
+			'/elementor/page'            => 'type:page',
+			'/elementor/build-page'      => 'type:page',
+			'/elementor/landing-page'    => 'type:page',
+			'/elementor/clone'           => 'type:page',
+			'/elementor/blueprints/build' => 'type:page',
+		);
+	}
+
+	/**
+	 * Every request item list the gate reads PER ITEM on this route: the
+	 * 'list[].field' post references (get_post_ref_param_map()) and the
+	 * 'items:list' create rules (user_run_create_type_routes()). Derived from
+	 * those two tables, so a bulk door declared there is covered here with
+	 * no second list to keep in step.
+	 *
+	 * @param string $path Route without the /mcpwp/v1 prefix, lower-cased.
+	 * @return array<string,string[]> List param => the post-id fields declared in its items.
+	 */
+	protected static function bulk_item_list_params( $path ) {
+		$lists = array();
+		foreach ( self::get_post_ref_param_map() as $prefix => $declared ) {
+			if ( $path === $prefix || 0 === strpos( $path, $prefix . '/' ) ) {
+				foreach ( $declared as $spec ) {
+					if ( false !== strpos( $spec, '[].' ) ) {
+						list( $list, $field ) = explode( '[].', $spec, 2 );
+						$lists[ $list ][]     = $field;
+					}
+				}
+				break;
+			}
+		}
+		$routes = self::user_run_create_type_routes();
+		if ( isset( $routes[ $path ] ) && 0 === strpos( $routes[ $path ], 'items:' ) ) {
+			$list = (string) strstr( substr( $routes[ $path ], 6 ) . '=', '=', true );
+			if ( ! isset( $lists[ $list ] ) ) {
+				$lists[ $list ] = array();
+			}
+		}
+		return $lists;
+	}
+
+	/**
+	 * Whether a declared per-item post id is one both parsers read the same
+	 * way: empty (the handler skips the item and writes nothing) or a
+	 * canonical positive integer. Anything else — '9402abc', '0x24C2',
+	 * [9402], 9402.0 — the gate's is_numeric() and a handler's absint()
+	 * disagree on ('9402abc': skipped by the gate, post 9402 to absint();
+	 * [9402]: skipped, post 1), so it is refused rather than normalised.
+	 *
+	 * @param mixed $value Item field value.
+	 * @return bool
+	 */
+	protected static function is_unambiguous_item_post_id( $value ) {
+		if ( empty( $value ) ) {
+			return true;
+		}
+		if ( is_int( $value ) ) {
+			return $value > 0;
+		}
+		return is_string( $value ) && 1 === preg_match( '/^[1-9][0-9]*$/', $value );
+	}
+
+	/**
+	 * Bulk item lists must be lists of OBJECTS — refused whole otherwise
+	 * (#1103 round 3, parser differential). The gate reads post types and
+	 * post ids only from array items; the handlers used to json_decode a
+	 * STRING item as well, so `{"posts":["{\"post_type\":\"product\"}"]}`
+	 * passed every check and then created a product, and a string update
+	 * item edited a post the per-post edit_post check never saw. This runs
+	 * before ANY post-type or post-reference extraction, on every verdict
+	 * path (check_gate_entry()); normalize_bulk_items() no longer decodes
+	 * strings either, so there is one parser and it is is_array(). A
+	 * declared per-item post id must be one the gate and the handler read
+	 * identically (is_unambiguous_item_post_id()), or the request is
+	 * refused the same way.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return true|WP_Error 400 invalid_item.
+	 */
+	protected function check_bulk_items_are_objects( $request ) {
+		if ( ! is_object( $request ) || ! method_exists( $request, 'get_route' ) || ! method_exists( $request, 'get_params' ) ) {
+			return true;
+		}
+		$route = $this->normalize_route_for_authorization( (string) $request->get_route() );
+		$path  = strtolower( untrailingslashit( (string) preg_replace( '#^/mcpwp/v[0-9]+#i', '', $route ) ) );
+		$lists = self::bulk_item_list_params( $path );
+		if ( empty( $lists ) ) {
+			return true;
+		}
+		$params = (array) $request->get_params();
+		foreach ( $lists as $list => $id_fields ) {
+			if ( ! array_key_exists( $list, $params ) || null === $params[ $list ] ) {
+				continue;
+			}
+			$items = $params[ $list ];
+			$bad   = is_array( $items ) ? null : -1;
+			if ( null === $bad ) {
+				foreach ( $items as $index => $item ) {
+					if ( ! is_array( $item ) ) {
+						$bad = $index;
+						break;
+					}
+					foreach ( $id_fields as $field ) {
+						if ( array_key_exists( $field, $item ) && ! self::is_unambiguous_item_post_id( $item[ $field ] ) ) {
+							$bad = $index;
+							break 2;
+						}
+					}
+				}
+			}
+			if ( null !== $bad ) {
+				return new WP_Error(
+					'invalid_item',
+					sprintf(
+						/* translators: %s: request parameter name, e.g. "posts". */
+						__( 'Every item in "%s" must be a JSON object, and any post id in it a plain positive integer; nothing was changed.', 'mcpwp' ),
+						$list
+					),
+					array(
+						'status' => 400,
+						'param'  => $list,
+						'index'  => $bad,
+					)
+				);
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * The first check on every verdict path that applies the route rules —
+	 * the main tail (check_post_naming_params_category()) and the trusted
+	 * admin AJAX and approved-destructive-replay early returns: bulk item
+	 * shape first, then the route's user-run capability.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return true|WP_Error
+	 */
+	protected function check_gate_entry( $request ) {
+		$shape = $this->check_bulk_items_are_objects( $request );
+		if ( is_wp_error( $shape ) ) {
+			return $shape;
+		}
+		return $this->check_user_run_capability( $request );
+	}
+
+	/**
+	 * The generic post doors: routes that write a post whose TYPE the caller
+	 * chooses or that the door infers from an existing post (#1103 round 2).
+	 * A bot is held to post/page there unless it has admin scope; a user is
+	 * held to the type's own capability object.
+	 *
+	 * @param string $path Route without the /mcpwp/v1 prefix, lower-cased.
+	 * @return bool
+	 */
+	protected static function is_generic_post_door( $path ) {
+		return 1 === preg_match( '#^/(posts|pages|content)(/|$)#', (string) $path );
+	}
+
+	/**
+	 * Every (post type, cap key) a write targets. Creates read the type from
+	 * the request (user_run_create_type_routes(), a page clone, a
+	 * translation's source); writes that name declared post references read
+	 * it from each existing post. GET/HEAD/OPTIONS target nothing.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return array{path:string,targets:array<int,array{0:string,1:string}>}
+	 */
+	protected function generic_post_type_targets( $request ) {
+		$method = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'GET';
+		$route  = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+		$path   = strtolower( untrailingslashit( (string) preg_replace( '#^/mcpwp/v[0-9]+#i', '', $route ) ) );
+		if ( in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true ) ) {
+			return array( 'path' => $path, 'targets' => array() );
+		}
+
+		$checks = array();
+		$routes = self::user_run_create_type_routes();
+
+		if ( 'POST' === $method && isset( $routes[ $path ] ) ) {
+			$rule = $routes[ $path ];
+			if ( 0 === strpos( $rule, 'type:' ) ) {
+				$checks[] = array( substr( $rule, 5 ), 'create_posts' );
+			} elseif ( 0 === strpos( $rule, 'param:' ) ) {
+				list( $param, $default ) = explode( '=', substr( $rule, 6 ), 2 );
+				$value    = $request->get_param( $param );
+				$checks[] = array( ( is_string( $value ) && '' !== $value ) ? sanitize_key( $value ) : ( null === $value || '' === $value ? $default : '' ), 'create_posts' );
+			} elseif ( 0 === strpos( $rule, 'items:' ) ) {
+				list( $param, $default ) = explode( '=', substr( $rule, 6 ), 2 );
+				$items = $request->get_param( $param );
+				foreach ( is_array( $items ) ? $items : array() as $item ) {
+					$type     = is_array( $item ) && array_key_exists( 'post_type', $item ) ? $item['post_type'] : null;
+					$checks[] = array( ( is_string( $type ) && '' !== $type ) ? sanitize_key( $type ) : ( null === $type || '' === $type ? $default : '' ), 'create_posts' );
+				}
+			}
+		}
+
+		if ( 'POST' === $method && preg_match( '#^/pages/\\d+/clone$#', $path ) ) {
+			$checks[] = array( 'page', 'create_posts' );
+		}
+
+		// DELETE /content/{post_type}/{id}: the type is named in the path.
+		if ( preg_match( '#^/content/([a-z0-9_-]+)/\\d+$#', $path, $m ) ) {
+			$checks[] = array( sanitize_key( $m[1] ), 'DELETE' === $method ? 'delete_posts' : 'edit_posts' );
+		}
+
+		// Existing posts named by declared references. A reference the caller
+		// cannot see is skipped: the post-ref chokepoint already answers it
+		// exactly like a missing id, and a type-based refusal for it would be
+		// an existence oracle.
+		$resolution = $this->get_post_ref_resolution( $request );
+		if ( ! is_wp_error( $resolution ) && null !== $resolution['refs'] ) {
+			$is_translation = 'POST' === $method && preg_match( '#^/(posts|pages)/\\d+/translations$#', $path );
+			foreach ( $resolution['rows'] as $id => $row ) {
+				if ( ! empty( $resolution['hidden'][ $id ] ) ) {
+					continue;
+				}
+				$checks[] = array( $row['post_type'], 'DELETE' === $method ? 'delete_posts' : 'edit_posts' );
+				if ( $is_translation ) {
+					$checks[] = array( $row['post_type'], 'create_posts' );
+				}
+			}
+		}
+
+		return array( 'path' => $path, 'targets' => $checks );
+	}
+
+	/**
+	 * THE post-type rule of the generic post doors, for every principal
+	 * (#1100 / #1103 round 2) — one place, two branches:
+	 *
+	 *  - BOT-run principals (API keys, broker bearer, client_credentials —
+	 *    not requester_acts_as_user()): on a generic post door
+	 *    (is_generic_post_door()), a target type other than post or page
+	 *    requires ADMIN scope — on create (the post_type param) and on update
+	 *    and delete (the type of the existing post). Without it a write key
+	 *    holding content + woocommerce created products through POST /posts,
+	 *    around the admin scope on POST /woocommerce/products. This is a
+	 *    scope requirement: it runs in the verdict tail every bot path ends
+	 *    in, after the route-level scope check, so it cannot be skipped.
+	 *  - USER-run principals: the target type's own capability object —
+	 *    create_posts / edit_posts / delete_posts — on EVERY write that names a
+	 *    type (F1), never a fixed string. An unknown type or a missing cap
+	 *    object fails closed.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return true|WP_Error
+	 */
+	protected function check_generic_post_type_access( $request ) {
+		$found = $this->generic_post_type_targets( $request );
+		if ( empty( $found['targets'] ) ) {
+			return true;
+		}
+
+		if ( ! $this->requester_acts_as_user() ) {
+			if ( ! self::is_generic_post_door( $found['path'] ) ) {
+				return true;
+			}
+			foreach ( $found['targets'] as list( $type ) ) {
+				if ( in_array( (string) $type, array( 'post', 'page' ), true ) ) {
+					continue;
+				}
+				$record = $this->get_current_api_key_record();
+				if ( ! is_array( $record ) || ! $this->key_has_scope( $record, 'admin' ) ) {
+					return new WP_Error(
+						'insufficient_scope',
+						__( 'Writing this post type through the generic post endpoints requires an admin-scoped key. Use the post type\'s own endpoints.', 'mcpwp' ),
+						array(
+							'status'         => 403,
+							'required_scope' => 'admin',
+							'post_type'      => (string) $type,
+						)
+					);
+				}
+			}
+			return true;
+		}
+
+		return $this->check_user_run_post_type_capability( $found['targets'] );
+	}
+
+	/**
+	 * The user-run branch of check_generic_post_type_access(): every target
+	 * type's own capability (F1).
+	 *
+	 * @param array<int,array{0:string,1:string}> $targets (type, cap key) pairs.
+	 * @return true|WP_Error
+	 */
+	protected function check_user_run_post_type_capability( array $targets ) {
+		foreach ( $targets as list( $type, $cap_key ) ) {
+			$pto = ( '' !== $type && function_exists( 'get_post_type_object' ) ) ? get_post_type_object( $type ) : null;
+			$cap = ( is_object( $pto ) && isset( $pto->cap ) && is_object( $pto->cap ) && ! empty( $pto->cap->{$cap_key} ) ) ? (string) $pto->cap->{$cap_key} : '';
+			if ( '' === $cap || ! current_user_can( $cap ) ) {
+				return new WP_Error(
+					'rest_forbidden_capability',
+					__( 'Your WordPress account is not allowed to create or change this kind of content.', 'mcpwp' ),
+					array(
+						'status'              => 403,
+						'post_type'           => (string) $type,
+						'required_capability' => '' === $cap ? 'unknown post type' : $cap,
+					)
+				);
+			}
+		}
+		return true;
+	}
+
+	/**
 	 * The WordPress user an OAuth token acts as (PR-2 P0), or 0.
 	 *
 	 * @return int
@@ -770,7 +1153,10 @@ trait Mcpwp_Api_Auth {
 		// The open apply_filters() bypass was removed: any code that added a filter
 		// returning true could silently skip API-key auth for all requests.
 		if ( $this->is_trusted_admin_ajax_request() ) {
-			return true;
+			// A user-run principal (the logged-in administrator): the route's
+			// capability and the post-type rule still apply (#1100).
+			$capability_check = $this->check_gate_entry( $request );
+			return is_wp_error( $capability_check ) ? $capability_check : $this->check_generic_post_type_access( $request );
 		}
 
 		// An approved destructive operation being applied by an administrator
@@ -798,7 +1184,8 @@ trait Mcpwp_Api_Auth {
 		// path — DestructiveGateOnlyDeletesTest pins the invariant.
 		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::applying_as_admin() > 0 && function_exists( 'user_can' ) && user_can( Mcpwp_Destructive_Gate::applying_as_admin(), 'activate_plugins' ) ) {
 			wp_set_current_user( Mcpwp_Destructive_Gate::applying_as_admin() );
-			return true;
+			$capability_check = $this->check_gate_entry( $request );
+			return is_wp_error( $capability_check ) ? $capability_check : $this->check_generic_post_type_access( $request );
 		}
 
 		// Skip rate limiting for batch sub-requests (already counted on the outer request).
@@ -2460,6 +2847,15 @@ trait Mcpwp_Api_Auth {
 	 * @return true|WP_Error
 	 */
 	protected function check_post_naming_params_category( $request ) {
+		// #1100: the WordPress capability a user-run principal needs for this
+		// route (Mcpwp_Route_Capability_Map). This is the tail every
+		// verdict-computing path ends in, so the check runs on the main and
+		// the sub-request path alike; it is a no-op for bot-run principals.
+		$capability_check = $this->check_gate_entry( $request );
+		if ( is_wp_error( $capability_check ) ) {
+			return $capability_check;
+		}
+
 		$resolution = $this->get_post_ref_resolution( $request );
 		if ( is_wp_error( $resolution ) ) {
 			return $resolution;
@@ -2489,6 +2885,15 @@ trait Mcpwp_Api_Auth {
 			if ( is_wp_error( $edit_check ) ) {
 				return $edit_check;
 			}
+		}
+
+		// The generic post doors' post-type rule, for EVERY principal (bots:
+		// admin scope for types other than post/page; users: the type's own
+		// capability). After the hidden-reference checks above, so it can
+		// never tell a hidden post from a missing one.
+		$post_type_check = $this->check_generic_post_type_access( $request );
+		if ( is_wp_error( $post_type_check ) ) {
+			return $post_type_check;
 		}
 
 		return $this->check_request_template_refs( $request );
@@ -4375,6 +4780,47 @@ trait Mcpwp_Api_Auth {
 			return $is_write ? 'write' : 'read';
 		}
 
+		// #1100 interim (before the capability sweep): routes whose handlers
+		// carry no capability check of their own, so scope is the only gate.
+		// Admin scope closes them for every non-admin key and every OAuth
+		// token (OAuth is never admin) until the real WordPress capability
+		// is enforced for user-run principals.
+		//  - Form entries: submitters' names, emails and messages, which an
+		//    Editor cannot see in wp-admin. Every method, prefix match.
+		if ( preg_match( '#^/mcpwp/v1/forms/[^/]+/[^/]+/entries(/|$)#i', $route ) ) {
+			return 'admin';
+		}
+		//  - Widgets and sidebars: writing them needs edit_theme_options in
+		//    wp-admin. Writes only; listing stays at the read default.
+		if ( $is_write && ( $this->route_matches( $route, '/mcpwp/v1/widgets' ) || $this->route_matches( $route, '/mcpwp/v1/sidebars' ) ) ) {
+			return 'admin';
+		}
+		//  - Product creation (POST with no id): no per-post check exists for
+		//    a post that does not exist yet, and Editors lack edit_products.
+		//    Edits by id stay on the publish-gated rules below.
+		if ( 'POST' === $method && '/mcpwp/v1/woocommerce/products' === untrailingslashit( $route ) ) {
+			return 'admin';
+		}
+		//  - Site-wide settings with no capability check (Kasra, #1100 phase 1):
+		//    the site icon (/favicon writes), rewrite flush, page-cache flush,
+		//    site-health signal settings, the site context (brand brief) write,
+		//    the feedback relay, and creating or deleting a stored site
+		//    blueprint. In wp-admin each of these needs manage_options. Reads
+		//    of the same routes stay where they were.
+		$route_exact = untrailingslashit( $route );
+		if ( $is_write && $this->route_matches( $route, '/mcpwp/v1/favicon' ) ) {
+			return 'admin';
+		}
+		if ( 'POST' === $method && in_array( $route_exact, array( '/mcpwp/v1/flush-permalinks', '/mcpwp/v1/cache-flush', '/mcpwp/v1/site-context', '/mcpwp/v1/feedback/relay', '/mcpwp/v1/site-blueprints' ), true ) ) {
+			return 'admin';
+		}
+		if ( $is_write && '/mcpwp/v1/signals/settings' === $route_exact ) {
+			return 'admin';
+		}
+		if ( 'DELETE' === $method && preg_match( '#^/mcpwp/v1/site-blueprints/[^/]+$#i', $route_exact ) ) {
+			return 'admin';
+		}
+
 		// Blanket-admin routes: every method (including GET) requires admin scope.
 		$admin_routes = array(
 			'/mcpwp/v1/settings',
@@ -4913,6 +5359,20 @@ trait Mcpwp_Api_Auth {
 	 */
 	protected function get_required_scope_for_tool_name( $tool_name ) {
 		$admin_tools = array(
+			// #1100 interim: mirrors the form-entries, widget/sidebar-write
+			// and product-create admin routes in get_required_scope_for_request().
+			'wp_get_form_entries',
+			'wp_add_widget',
+			'wp_update_widget',
+			'wp_delete_widget',
+			'wp_move_widget',
+			'wp_reorder_widgets',
+			'wc_create_product',
+			// #1100 phase 1: mirrors the site-wide setting writes above.
+			'wp_flush_permalinks',
+			'wp_flush_cache',
+			'wp_set_site_context',
+			'wp_create_site_blueprint',
 			// WooCommerce orders/customers: mirrors the blanket-admin
 			// /woocommerce/orders and /woocommerce/customers routes (PR-2 round 2).
 			'wc_list_orders',

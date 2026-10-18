@@ -56,7 +56,7 @@ final class OAuthRunAsUserTest extends TestCase {
 			self::EDITOR     => array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'publish_posts' => true, 'read_private_posts' => true, 'read_post' => true, 'edit_post' => true, 'delete_post' => true ),
 			// Authors read and edit only their own; these fixtures are about
 			// ANOTHER author's posts, so the meta caps are denied.
-			self::AUTHOR     => array( 'read' => true, 'edit_posts' => true, 'publish_posts' => true, 'read_post' => false, 'edit_post' => false ),
+			self::AUTHOR     => array( 'read' => true, 'edit_posts' => true, 'publish_posts' => true, 'delete_posts' => true, 'upload_files' => true, 'read_post' => false, 'edit_post' => false ),
 			self::CONTRIB    => array( 'read' => true, 'edit_posts' => true, 'read_post' => false, 'edit_post' => false ),
 			self::SUBSCRIBER => array( 'read' => true ),
 		);

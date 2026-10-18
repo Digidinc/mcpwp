@@ -3495,6 +3495,7 @@ function get_post_type_object($post_type)
             array(
                 'create_posts' => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
                 'edit_posts'   => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
+                'delete_posts' => 'page' === (string) $post_type ? 'delete_pages' : 'delete_posts',
             ),
             (array) ($GLOBALS['mcpwp_test_post_type_caps'][ (string) $post_type ] ?? array())
         ),
@@ -4629,6 +4630,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-signals.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-signals.php';
 // OAuth 2.1 server (#531).
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-clients.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-route-capability-map.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-oauth.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-settings.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-oauth-well-known.php';

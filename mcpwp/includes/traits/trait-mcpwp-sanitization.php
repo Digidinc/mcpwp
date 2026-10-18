@@ -752,9 +752,14 @@ trait Mcpwp_Sanitization {
 	 * failed its required-field check, and the caller got "0 updated" with an
 	 * error that described the wrong problem.
 	 *
-	 * The schemas now declare object items. This stays as the honest fallback:
-	 * decode what is decodable, and for anything else say what was actually
-	 * received instead of blaming a missing field.
+	 * The schemas now declare object items. A JSON *string* item is no longer
+	 * decoded here (#1103 round 3, parser differential): the auth gate reads
+	 * only array items, so a decode here was a second parser that let a
+	 * string item name a post type or post id the gate never saw. The gate
+	 * (Mcpwp_Api_Auth::check_bulk_items_are_objects()) refuses the whole
+	 * request first; this stays as the handler-side mirror of that one rule
+	 * — an item is accepted only when is_array() — and says what was
+	 * actually received instead of blaming a missing field.
 	 *
 	 * @param array  $items    Raw items from the request.
 	 * @param string $singular Item label for error messages, e.g. 'page'.
@@ -769,20 +774,6 @@ trait Mcpwp_Sanitization {
 			if ( is_array( $item ) ) {
 				$normalized[ $index ] = $item;
 				continue;
-			}
-
-			if ( is_object( $item ) ) {
-				$normalized[ $index ] = (array) $item;
-				continue;
-			}
-
-			if ( is_string( $item ) ) {
-				$decoded = json_decode( $item, true );
-
-				if ( is_array( $decoded ) ) {
-					$normalized[ $index ] = $decoded;
-					continue;
-				}
 			}
 
 			$errors[] = array(
