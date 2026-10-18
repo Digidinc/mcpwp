@@ -13,9 +13,14 @@
  *    the proof of possession, so no client secret is ever minted or stored.
  *  - The registration endpoint is unauthenticated by design, so everything it
  *    can write is bounded: at most 5 redirect URIs of at most 2,000 characters
- *    each, a 100-character plain-text name, a hard cap of 500 clients, a purge
- *    of clients never used and older than 7 days on every registration, and
- *    10 registrations per IP per hour.
+ *    each, a 100-character plain-text name, 10 registrations per (IP, redirect
+ *    hosts) per hour, 50 per site per rolling day, a purge of never-authorized
+ *    clients older than 7 days, and a cap of 500 clients enforced by evicting
+ *    the oldest never-authorized client (refusing only when all 500 have
+ *    been authorized).
+ *  - Every read-modify-write of the store runs under a lock row, and a
+ *    registration is verified in storage before its id is returned; a lost
+ *    race is a 503 "retry", never a later invalid_client.
  *  - Redirect URIs are shape-checked here (https, or http on a loopback host
  *    for native apps; no fragment; no userinfo).  What actually stops an
  *    attacker-registered redirect is the consent screen, which shows the
@@ -70,8 +75,29 @@ class Mcpwp_OAuth_Clients {
 	/** A client never used and older than this (7 days) is purged. */
 	const UNUSED_CLIENT_MAX_AGE = 604800;
 
-	/** Registrations allowed per IP address per window. */
+	/** Registrations allowed per (IP address, redirect hosts) per window. */
 	const REGISTRATIONS_PER_WINDOW = 10;
+
+	/** Registrations allowed per site in any rolling day. */
+	const SITE_REGISTRATIONS_PER_DAY = 50;
+
+	/** The rolling window for the per-site cap (1 day). */
+	const SITE_WINDOW = 86400;
+
+	/** Option holding the per-site registration timestamps (not autoloaded). */
+	const SITE_WINDOW_OPTION = 'mcpwp_oauth_dcr_site_window';
+
+	/** Lock row guarding every read-modify-write of the store. */
+	const LOCK_OPTION = 'mcpwp_oauth_clients_lock';
+
+	/** Seconds a lock holder is trusted before the lock may be stolen. */
+	const LOCK_TTL = 10;
+
+	/** Lock attempts before giving up with a 503. */
+	const LOCK_ATTEMPTS = 3;
+
+	/** Pause between lock attempts (50 ms). */
+	const LOCK_RETRY_MICROSECONDS = 50000;
 
 	/** Rate-limit window (1 hour). */
 	const RATE_LIMIT_WINDOW = 3600;
@@ -397,12 +423,48 @@ class Mcpwp_OAuth_Clients {
 	}
 
 	/**
+	 * Whether a client has ever been authorized (a code was issued for it).
+	 *
+	 * `last_used_at` counts too: records written before authorized_at existed
+	 * were only ever touched on approval or redemption.
+	 *
+	 * @param array $record Client record.
+	 * @return bool
+	 */
+	public static function has_been_authorized( $record ) {
+		return is_array( $record ) && ( ! empty( $record['authorized_at'] ) || ! empty( $record['last_used_at'] ) );
+	}
+
+	/**
+	 * Whether any registered client has ever been authorized.
+	 *
+	 * @return bool
+	 */
+	public static function any_client_authorized() {
+		foreach ( self::all() as $record ) {
+			if ( self::has_been_authorized( $record ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Register a client.
 	 *
-	 * Order matters: rate limit (cheapest, counts every attempt) → validate →
-	 * purge stale clients → cap → write.  The id is returned only once the
-	 * record is stored, so a client is never told about an id that does not
-	 * exist.
+	 * Order matters:
+	 *  1. validate (no state touched by a malformed request);
+	 *  2. per-requester bucket — (caller IP, redirect host set), so many real
+	 *     users behind one Cloudflare or OpenAI egress address do not share
+	 *     one bucket, and a spoofable X-Forwarded-For is still ignored unless
+	 *     MCPWP_TRUST_PROXY_HEADERS says otherwise;
+	 *  3. under the store lock: the per-site rolling-day cap, the 7-day purge,
+	 *     LRU eviction of a never-authorized client at the 500 cap, the write,
+	 *     and a re-read that proves the new client landed.
+	 *
+	 * The id is returned only once the record is verified in storage.  Any
+	 * failure to get the lock or to verify is a 503 "try again" — never a
+	 * client_id that later turns out not to exist.
 	 *
 	 * @param mixed  $metadata Decoded JSON body.
 	 * @param string $ip       Caller IP (REMOTE_ADDR unless proxy headers are trusted).
@@ -412,29 +474,14 @@ class Mcpwp_OAuth_Clients {
 	public static function register( $metadata, $ip, $now = 0 ) {
 		$now = $now > 0 ? (int) $now : time();
 
-		$rate = self::consume_registration_slot( $ip, $now );
-		if ( is_wp_error( $rate ) ) {
-			return $rate;
-		}
-
 		$draft = self::validate_registration_metadata( $metadata );
 		if ( is_wp_error( $draft ) ) {
 			return $draft;
 		}
 
-		$clients = self::all();
-		$before  = count( $clients );
-		$clients = self::purge_stale( $clients, $now );
-
-		if ( count( $clients ) >= self::MAX_CLIENTS ) {
-			if ( count( $clients ) !== $before ) {
-				update_option( self::OPTION, $clients, false );
-			}
-			return new WP_Error(
-				'temporarily_unavailable',
-				'This site has too many registered apps. An administrator can remove unused ones; try again later.',
-				array( 'status' => 429 )
-			);
+		$rate = self::consume_registration_slot( $ip, self::redirect_hosts( $draft['redirect_uris'] ), $now );
+		if ( is_wp_error( $rate ) ) {
+			return $rate;
 		}
 
 		$client_id = self::CLIENT_ID_PREFIX . bin2hex( random_bytes( 16 ) );
@@ -444,16 +491,79 @@ class Mcpwp_OAuth_Clients {
 			'redirect_uris'        => $draft['redirect_uris'],
 			'created_at'           => $now,
 			'last_used_at'         => 0,
+			'authorized_at'        => 0,
 			'registration_ip_hash' => self::hash_ip( $ip ),
 		);
 
-		$clients[ $client_id ] = $record;
-		if ( ! update_option( self::OPTION, $clients, false ) ) {
-			return new WP_Error( 'server_error', 'The client could not be stored.', array( 'status' => 500 ) );
+		$token = self::acquire_lock( $now );
+		if ( false === $token ) {
+			return self::busy_error();
 		}
 
+		$result = self::register_locked( $record, $now );
+
+		self::release_lock( $token );
+
+		return $result;
+	}
+
+	/**
+	 * The part of register() that runs under the store lock.
+	 *
+	 * @param array $record New client record.
+	 * @param int   $now    Current time.
+	 * @return array|WP_Error
+	 */
+	private static function register_locked( array $record, $now ) {
+		self::flush_option_cache( self::OPTION );
+		self::flush_option_cache( self::SITE_WINDOW_OPTION );
+
+		// Per-site cap: at most SITE_REGISTRATIONS_PER_DAY in any rolling day.
+		$window = self::site_window( $now );
+		if ( count( $window ) >= self::SITE_REGISTRATIONS_PER_DAY ) {
+			return new WP_Error(
+				'temporarily_unavailable',
+				'This site has registered too many apps in the last day. Try again later.',
+				array(
+					'status'      => 429,
+					'retry_after' => max( 1, (int) min( $window ) + self::SITE_WINDOW - $now ),
+				)
+			);
+		}
+
+		$clients = self::purge_stale( self::all(), $now );
+
+		// At the cap, evict the oldest never-authorized client to make room.
+		// An authorized client is never evicted: someone is using it.
+		while ( count( $clients ) >= self::MAX_CLIENTS ) {
+			$victim = self::oldest_never_authorized( $clients );
+			if ( null === $victim ) {
+				return new WP_Error(
+					'temporarily_unavailable',
+					'This site has too many connected apps. An administrator can remove unused ones; try again later.',
+					array( 'status' => 429 )
+				);
+			}
+			unset( $clients[ $victim ] );
+		}
+
+		$clients[ $record['client_id'] ] = $record;
+		update_option( self::OPTION, $clients, false );
+
+		// Verify from storage, not from the write's return value: update_option()
+		// answers false for "unchanged" as well as "failed", and an object
+		// cache can make a lost write look present.  Only a client that is
+		// really there gets its id back.
+		self::flush_option_cache( self::OPTION );
+		if ( null === self::find( $record['client_id'] ) ) {
+			return self::busy_error();
+		}
+
+		$window[] = $now;
+		update_option( self::SITE_WINDOW_OPTION, array_values( $window ), false );
+
 		return array(
-			'client_id'                  => $client_id,
+			'client_id'                  => $record['client_id'],
 			'client_id_issued_at'        => $now,
 			'client_name'                => $record['client_name'],
 			'redirect_uris'              => $record['redirect_uris'],
@@ -464,7 +574,46 @@ class Mcpwp_OAuth_Clients {
 	}
 
 	/**
-	 * Drop clients that were never used and are older than 7 days.
+	 * Registration timestamps inside the rolling day, oldest first.
+	 *
+	 * @param int $now Current time.
+	 * @return int[]
+	 */
+	private static function site_window( $now ) {
+		$stored = get_option( self::SITE_WINDOW_OPTION, array() );
+		$window = array();
+		foreach ( is_array( $stored ) ? $stored : array() as $at ) {
+			if ( is_numeric( $at ) && (int) $at > $now - self::SITE_WINDOW ) {
+				$window[] = (int) $at;
+			}
+		}
+		sort( $window );
+		return $window;
+	}
+
+	/**
+	 * Id of the oldest (by created_at) client never authorized, or null.
+	 *
+	 * @param array $clients Records keyed by id.
+	 * @return string|null
+	 */
+	private static function oldest_never_authorized( array $clients ) {
+		$victim = null;
+		$oldest = PHP_INT_MAX;
+		foreach ( $clients as $client_id => $record ) {
+			if ( self::has_been_authorized( $record ) ) {
+				continue;
+			}
+			if ( (int) $record['created_at'] < $oldest ) {
+				$oldest = (int) $record['created_at'];
+				$victim = $client_id;
+			}
+		}
+		return $victim;
+	}
+
+	/**
+	 * Drop clients never authorized and older than 7 days.
 	 *
 	 * @param array $clients Records keyed by id.
 	 * @param int   $now     Current time.
@@ -473,7 +622,7 @@ class Mcpwp_OAuth_Clients {
 	public static function purge_stale( array $clients, $now ) {
 		$cutoff = (int) $now - self::UNUSED_CLIENT_MAX_AGE;
 		foreach ( $clients as $client_id => $record ) {
-			if ( empty( $record['last_used_at'] ) && (int) $record['created_at'] < $cutoff ) {
+			if ( ! self::has_been_authorized( $record ) && (int) $record['created_at'] < $cutoff ) {
 				unset( $clients[ $client_id ] );
 			}
 		}
@@ -481,8 +630,54 @@ class Mcpwp_OAuth_Clients {
 	}
 
 	/**
-	 * Record that a client was used (a code was approved or redeemed), at
-	 * most once per TOUCH_INTERVAL.  A used client is never purged.
+	 * Record that a code is being issued for a client — BEFORE the code is
+	 * minted, so an authorized client is never evicted while it holds one.
+	 *
+	 * @param string $client_id Client id.
+	 * @param int    $now       Current time (testable).
+	 * @return bool True when recorded (or already recorded); false when the
+	 *              store could not be updated — the caller must not mint.
+	 */
+	public static function mark_authorized( $client_id, $now = 0 ) {
+		$now = $now > 0 ? (int) $now : time();
+		if ( ! self::looks_like_client_id( $client_id ) ) {
+			return false;
+		}
+
+		$existing = self::find( $client_id );
+		if ( null === $existing ) {
+			return false;
+		}
+		if ( ! empty( $existing['authorized_at'] ) ) {
+			return true;
+		}
+
+		$token = self::acquire_lock( $now );
+		if ( false === $token ) {
+			return false;
+		}
+
+		self::flush_option_cache( self::OPTION );
+		$clients = self::all();
+		$ok      = false;
+		if ( isset( $clients[ $client_id ] ) ) {
+			$clients[ $client_id ]['authorized_at'] = $now;
+			$clients[ $client_id ]['last_used_at']  = $now;
+			update_option( self::OPTION, $clients, false );
+			self::flush_option_cache( self::OPTION );
+			$check = self::find( $client_id );
+			$ok    = is_array( $check ) && ! empty( $check['authorized_at'] );
+		}
+
+		self::release_lock( $token );
+
+		return $ok;
+	}
+
+	/**
+	 * Record that a client was used (a code was redeemed), at most once per
+	 * TOUCH_INTERVAL.  Best effort: skipped when the lock is busy, because
+	 * last_used_at only orders reporting, never eviction.
 	 *
 	 * @param string $client_id Client id.
 	 * @param int    $now       Current time (testable).
@@ -492,15 +687,149 @@ class Mcpwp_OAuth_Clients {
 		if ( ! self::looks_like_client_id( $client_id ) ) {
 			return;
 		}
+		$existing = self::find( $client_id );
+		if ( null === $existing || (int) $existing['last_used_at'] > $now - self::TOUCH_INTERVAL ) {
+			return;
+		}
+
+		$token = self::acquire_lock( $now );
+		if ( false === $token ) {
+			return;
+		}
+		self::flush_option_cache( self::OPTION );
 		$clients = self::all();
-		if ( ! isset( $clients[ $client_id ] ) ) {
+		if ( isset( $clients[ $client_id ] ) ) {
+			$clients[ $client_id ]['last_used_at'] = $now;
+			update_option( self::OPTION, $clients, false );
+		}
+		self::release_lock( $token );
+	}
+
+	// -------------------------------------------------------------------------
+	// Store lock
+	// -------------------------------------------------------------------------
+
+	/**
+	 * Take the store lock: a plain INSERT of a lock row.
+	 *
+	 * Not add_option(): in WordPress that is a cached read-then-write whose
+	 * INSERT uses ON DUPLICATE KEY UPDATE, so two concurrent callers can both
+	 * "succeed" (see Mcpwp_Idempotency_Claim).  A plain INSERT against the
+	 * UNIQUE key on option_name lets exactly one win.  The row holds its
+	 * expiry; a holder that died is stolen after LOCK_TTL by a
+	 * compare-and-swap UPDATE, so two stealers cannot both win.  A few short
+	 * retries absorb ordinary contention.
+	 *
+	 * @param int $now Current time.
+	 * @return string|false Token for release_lock(), or false.
+	 */
+	public static function acquire_lock( $now = 0 ) {
+		global $wpdb;
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'insert' ) ) {
+			return false; // Nothing to arbitrate with: refuse rather than run unlocked.
+		}
+
+		for ( $attempt = 0; $attempt < self::LOCK_ATTEMPTS; $attempt++ ) {
+			if ( $attempt > 0 ) {
+				usleep( self::LOCK_RETRY_MICROSECONDS );
+			}
+			$t     = $now > 0 ? (int) $now : time();
+			$token = (string) ( $t + self::LOCK_TTL ) . '|' . bin2hex( random_bytes( 4 ) );
+
+			$suppressed = method_exists( $wpdb, 'suppress_errors' ) ? $wpdb->suppress_errors( true ) : null;
+			$inserted   = $wpdb->insert(
+				$wpdb->options,
+				array(
+					'option_name'  => self::LOCK_OPTION,
+					'option_value' => $token,
+					'autoload'     => 'no',
+				),
+				array( '%s', '%s', '%s' )
+			);
+			if ( null !== $suppressed ) {
+				$wpdb->suppress_errors( $suppressed );
+			}
+			if ( 1 === (int) $inserted ) {
+				return $token;
+			}
+
+			// Held.  Steal only an expired lock, by compare-and-swap.
+			if ( ! method_exists( $wpdb, 'get_var' ) || ! method_exists( $wpdb, 'update' ) ) {
+				continue;
+			}
+			$current = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::LOCK_OPTION ) );
+			if ( ! is_string( $current ) || '' === $current ) {
+				continue;
+			}
+			$expires = (int) strtok( $current, '|' );
+			if ( $expires >= $t ) {
+				continue;
+			}
+			$stolen = $wpdb->update(
+				$wpdb->options,
+				array( 'option_value' => $token ),
+				array(
+					'option_name'  => self::LOCK_OPTION,
+					'option_value' => $current,
+				),
+				array( '%s' ),
+				array( '%s', '%s' )
+			);
+			if ( 1 === (int) $stolen ) {
+				return $token;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Release the store lock — compare-and-delete, so a holder that overran
+	 * LOCK_TTL never deletes the lock someone else has since stolen.
+	 *
+	 * @param string $token Token from acquire_lock().
+	 */
+	public static function release_lock( $token ) {
+		global $wpdb;
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'delete' ) ) {
 			return;
 		}
-		if ( (int) $clients[ $client_id ]['last_used_at'] > $now - self::TOUCH_INTERVAL ) {
-			return;
+		$wpdb->delete(
+			$wpdb->options,
+			array(
+				'option_name'  => self::LOCK_OPTION,
+				'option_value' => (string) $token,
+			),
+			array( '%s', '%s' )
+		);
+	}
+
+	/**
+	 * Drop the object-cache copy of an option so the next get_option() reads
+	 * the database (the option is not autoloaded, so it is cached on its own).
+	 *
+	 * @param string $name Option name.
+	 */
+	private static function flush_option_cache( $name ) {
+		if ( function_exists( 'wp_cache_delete' ) ) {
+			wp_cache_delete( $name, 'options' );
 		}
-		$clients[ $client_id ]['last_used_at'] = $now;
-		update_option( self::OPTION, $clients, false );
+	}
+
+	/**
+	 * The "store busy, retry" answer.
+	 *
+	 * @return WP_Error
+	 */
+	private static function busy_error() {
+		return new WP_Error(
+			'temporarily_unavailable',
+			'The app could not be registered because the site was busy. Nothing was saved; retry the registration.',
+			array(
+				'status'      => 503,
+				'retry_after' => 1,
+			)
+		);
 	}
 
 	// -------------------------------------------------------------------------
@@ -508,18 +837,38 @@ class Mcpwp_OAuth_Clients {
 	// -------------------------------------------------------------------------
 
 	/**
-	 * Count one registration attempt against the caller's IP.
+	 * The distinct, lower-cased hosts of a redirect list, sorted.
 	 *
-	 * Fixed one-hour window in a transient keyed by a hash of the IP, so the
-	 * raw address is never stored.  Every attempt counts, valid or not: a
-	 * malformed request costs the server work too.
+	 * @param string[] $uris Validated redirect URIs.
+	 * @return string[]
+	 */
+	public static function redirect_hosts( array $uris ) {
+		$hosts = array();
+		foreach ( $uris as $uri ) {
+			$host = strtolower( (string) wp_parse_url( $uri, PHP_URL_HOST ) );
+			if ( '' !== $host ) {
+				$hosts[ $host ] = true;
+			}
+		}
+		$hosts = array_keys( $hosts );
+		sort( $hosts );
+		return $hosts;
+	}
+
+	/**
+	 * Count one registration against the (caller IP, redirect hosts) bucket.
 	 *
-	 * @param string $ip  Caller IP.
-	 * @param int    $now Current time.
+	 * Fixed one-hour window in a transient keyed by a keyed hash, so neither
+	 * the address nor the hosts are stored in clear.  Varying the hosts buys
+	 * an attacker new buckets, which is what the per-site daily cap is for.
+	 *
+	 * @param string   $ip    Caller IP.
+	 * @param string[] $hosts Redirect hosts (redirect_hosts()).
+	 * @param int      $now   Current time.
 	 * @return true|WP_Error
 	 */
-	public static function consume_registration_slot( $ip, $now ) {
-		$key    = 'mcpwp_oauth_dcr_' . substr( self::hash_ip( $ip ), 0, 32 );
+	public static function consume_registration_slot( $ip, array $hosts, $now ) {
+		$key    = 'mcpwp_oauth_dcr_' . substr( self::hash_ip( (string) $ip . '|' . implode( ',', $hosts ) ), 0, 32 );
 		$bucket = get_transient( $key );
 
 		if ( ! is_array( $bucket ) || ! isset( $bucket['count'], $bucket['reset'] ) || (int) $bucket['reset'] <= $now ) {
@@ -532,7 +881,7 @@ class Mcpwp_OAuth_Clients {
 		if ( (int) $bucket['count'] >= self::REGISTRATIONS_PER_WINDOW ) {
 			return new WP_Error(
 				'temporarily_unavailable',
-				'Too many client registrations from this address. Try again later.',
+				'Too many client registrations from this address for this app. Try again later.',
 				array(
 					'status'      => 429,
 					'retry_after' => max( 1, (int) $bucket['reset'] - $now ),

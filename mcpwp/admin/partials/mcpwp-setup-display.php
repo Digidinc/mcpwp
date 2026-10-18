@@ -201,6 +201,8 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 		</div>
 		<?php endif; ?>
 
+		<?php Mcpwp_OAuth_Local_Admin::render_address_notice(); ?>
+
 		<!-- ============================= ADD TO CHATGPT ============================= -->
 		<div class="mcpwp-card" id="mcpwp-add-to-chatgpt">
 			<h2>

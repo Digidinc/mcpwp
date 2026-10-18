@@ -87,6 +87,12 @@ class Mcpwp_Uninstaller {
 		'mcpwp_approval_requests_pre_3149',
 		'mcpwp_approval_requests',
 		'mcpwp_approvals_identity_migrated',
+		// OAuth client store + D10 migration flag + aud-rotation record (PR-2).
+		'mcpwp_oauth_clients',
+		'mcpwp_oauth_clients_lock',
+		'mcpwp_oauth_dcr_site_window',
+		'mcpwp_oauth_default_migrated',
+		'mcpwp_oauth_last_resource',
 		'mcpwp_approvals_table_migration_lock',
 		'mcpwp_approvals_schema_version',
 		'mcpwp_approvals_migration_skipped',

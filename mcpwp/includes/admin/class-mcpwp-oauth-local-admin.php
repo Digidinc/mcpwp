@@ -13,7 +13,17 @@
  *  - an on/off control under Setup → Advanced.  Saving it stores an explicit
  *    value, so a site switched off stays off across upgrades.
  *
- * Both actions are admin-post handlers carrying their own nonce and
+ * Round 2 adds:
+ *  - a one-time, flag-guarded migration: a STORED `oauth_enabled = false`
+ *    is removed so the new default applies.  Old versions wrote false on ANY
+ *    settings save, under a label ("OAuth Token Endpoint … client
+ *    credentials") that never described sign-in, so a stored false is not
+ *    evidence of an opt-out.  Such sites get the notice too.
+ *  - an "address changed" line on Setup: a permalink or home-URL change
+ *    changes the MCP URL, which is every OAuth token's audience, so
+ *    connected apps must reconnect.
+ *
+ * Every action is an admin-post handler carrying its own nonce and
  * capability check.  The process_* methods hold the logic and never exit,
  * so they are unit-testable; the handle_* wrappers redirect and exit.
  *
@@ -45,6 +55,125 @@ class Mcpwp_OAuth_Local_Admin {
 	/** Capability required to see the notice and to change the switch. */
 	const CAPABILITY = 'activate_plugins';
 
+	/** Flag: the D10 migration has run (autoloaded — read on every load). */
+	const MIGRATED_FLAG = 'mcpwp_oauth_default_migrated';
+
+	/** The canonical resource this site was last authorized under. */
+	const LAST_RESOURCE_OPTION = 'mcpwp_oauth_last_resource';
+
+	/** admin-post action (and nonce action) for the address-changed line. */
+	const ADDRESS_DISMISS_ACTION = 'mcpwp_oauth_address_notice_dismiss';
+
+	/**
+	 * One-time migration (PR-2 D10, round 2).
+	 *
+	 * Runs on plugin load, before admin_init registers the settings sanitizer
+	 * — which matters: that sanitizer keeps a stored checkbox value when the
+	 * write does not carry it, and would put the false straight back.
+	 *
+	 * Stored false → key removed (absent = on).  Stored true and absent are
+	 * left alone.  The flag is set last and checked first, so it runs once:
+	 * a site switched off after this release stays off.
+	 *
+	 * @return bool True when it ran (flag was not set).
+	 */
+	public static function migrate_default_on() {
+		if ( get_option( self::MIGRATED_FLAG ) ) {
+			return false;
+		}
+
+		$settings = get_option( 'mcpwp_settings', array() );
+		if ( is_array( $settings ) && array_key_exists( 'oauth_enabled', $settings ) && empty( $settings['oauth_enabled'] ) ) {
+			unset( $settings['oauth_enabled'] );
+			update_option( 'mcpwp_settings', $settings );
+		}
+
+		update_option( self::MIGRATED_FLAG, 1 );
+		return true;
+	}
+
+	/**
+	 * Store the current canonical resource if none is stored yet.
+	 *
+	 * Called when a code is issued; the address-changed line compares against
+	 * it.  Only the first authorization sets it — a later reconnection must
+	 * not hide the fact that other apps still hold tokens for the old URL.
+	 */
+	public static function remember_resource_if_unset() {
+		if ( '' === (string) get_option( self::LAST_RESOURCE_OPTION, '' ) ) {
+			update_option( self::LAST_RESOURCE_OPTION, Mcpwp_OAuth_Well_Known::get_canonical_resource(), false );
+		}
+	}
+
+	/**
+	 * Whether Setup should say the site's address changed.
+	 *
+	 * True when a resource was recorded, it differs from today's canonical
+	 * MCP URL, and at least one registered client has ever been authorized.
+	 *
+	 * @return bool
+	 */
+	public static function address_changed() {
+		$last = (string) get_option( self::LAST_RESOURCE_OPTION, '' );
+		if ( '' === $last ) {
+			return false;
+		}
+		if ( Mcpwp_OAuth_Well_Known::normalize_resource( $last ) === Mcpwp_OAuth_Well_Known::normalize_resource( Mcpwp_OAuth_Well_Known::get_canonical_resource() ) ) {
+			return false;
+		}
+		return Mcpwp_OAuth_Clients::any_client_authorized();
+	}
+
+	/**
+	 * Dismiss the address-changed line: the current address becomes the one
+	 * on record.
+	 *
+	 * @param array $post Unslashed request fields.
+	 * @return bool True when dismissed.
+	 */
+	public static function process_address_dismiss( array $post ) {
+		if ( ! current_user_can( self::CAPABILITY ) ) {
+			return false;
+		}
+		$nonce = isset( $post[ self::NONCE_FIELD ] ) ? (string) $post[ self::NONCE_FIELD ] : '';
+		if ( ! wp_verify_nonce( $nonce, self::ADDRESS_DISMISS_ACTION ) ) {
+			return false;
+		}
+		update_option( self::LAST_RESOURCE_OPTION, Mcpwp_OAuth_Well_Known::get_canonical_resource(), false );
+		return true;
+	}
+
+	/**
+	 * admin-post handler for the address-changed dismiss.
+	 */
+	public static function handle_address_dismiss() {
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified in process_address_dismiss().
+		if ( ! self::process_address_dismiss( wp_unslash( $_POST ) ) ) {
+			wp_die( esc_html__( 'The request expired or you are not allowed to do this.', 'mcpwp' ), '', array( 'response' => 403 ) );
+		}
+		wp_safe_redirect( admin_url( 'admin.php?page=mcpwp' ) );
+		exit;
+	}
+
+	/**
+	 * Render the address-changed line (Setup page).
+	 */
+	public static function render_address_notice() {
+		if ( ! current_user_can( self::CAPABILITY ) || ! self::address_changed() ) {
+			return;
+		}
+		?>
+		<div class="notice notice-warning inline" id="mcpwp-oauth-address-notice" style="margin:10px 0;">
+			<p><?php esc_html_e( 'This site\'s address changed, so AI apps connected with WordPress sign-in must reconnect.', 'mcpwp' ); ?></p>
+			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0 0 8px;">
+				<input type="hidden" name="action" value="<?php echo esc_attr( self::ADDRESS_DISMISS_ACTION ); ?>" />
+				<?php wp_nonce_field( self::ADDRESS_DISMISS_ACTION, self::NONCE_FIELD ); ?>
+				<button type="submit" class="button button-small"><?php esc_html_e( 'Dismiss', 'mcpwp' ); ?></button>
+			</form>
+		</div>
+		<?php
+	}
+
 	/**
 	 * Whether the notice should be shown to the current user.
 	 *
@@ -72,7 +201,7 @@ class Mcpwp_OAuth_Local_Admin {
 		?>
 		<div class="notice notice-info" id="mcpwp-oauth-default-notice">
 			<p>
-				<?php esc_html_e( 'AI apps can now connect by signing in with WordPress; turn off under Setup → Advanced.', 'mcpwp' ); ?>
+				<?php esc_html_e( 'This update turned on sign-in for AI apps: AI apps can now connect by signing in with WordPress; turn off under Setup → Advanced.', 'mcpwp' ); ?>
 				<a href="<?php echo esc_url( $setup_url ); ?>"><?php esc_html_e( 'Open Setup → Advanced', 'mcpwp' ); ?></a>
 			</p>
 			<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin:0 0 8px;">

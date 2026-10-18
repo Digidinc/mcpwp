@@ -46,6 +46,7 @@ final class OAuthDefaultOnTest extends TestCase {
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 		$GLOBALS['mcpwp_test_user_caps']    = array();
 		$GLOBALS['mcpwp_test_user_meta']    = array();
+		$GLOBALS['mcpwp_test_wpdb_options'] = array();
 	}
 
 	protected function tearDown(): void {
@@ -323,7 +324,7 @@ final class OAuthDefaultOnTest extends TestCase {
 
 		$this->legacy_client_settings();
 		$this->assertTrue( Mcpwp_OAuth_Local_Admin::should_show_notice(), 'absent' );
-		$this->assertStringContainsString( 'AI apps can now connect by signing in with WordPress; turn off under Setup → Advanced.', $this->render_notice() );
+		$this->assertStringContainsString( 'This update turned on sign-in for AI apps: AI apps can now connect by signing in with WordPress; turn off under Setup → Advanced.', $this->render_notice() );
 		$this->assertStringContainsString( Mcpwp_OAuth_Local_Admin::DISMISS_ACTION, $this->render_notice() );
 
 		$this->legacy_client_settings( array( 'oauth_enabled' => true ) );
@@ -389,6 +390,151 @@ final class OAuthDefaultOnTest extends TestCase {
 		$this->assertNull( Mcpwp_OAuth_Local_Admin::process_toggle( array( Mcpwp_OAuth_Local_Admin::NONCE_FIELD => 'test-nonce', 'mcpwp_local_oauth' => '0' ) ) );
 
 		$this->assertArrayNotHasKey( 'oauth_enabled', get_option( 'mcpwp_settings' ) );
+	}
+
+	// ── Round 2: D10 migration ─────────────────────────────────────────────
+
+	public function test_migration_turns_a_stored_false_into_absent_once(): void {
+		$this->legacy_client_settings( array( 'oauth_enabled' => false ) );
+
+		$this->assertTrue( Mcpwp_OAuth_Local_Admin::migrate_default_on() );
+
+		$stored = get_option( 'mcpwp_settings' );
+		$this->assertArrayNotHasKey( 'oauth_enabled', $stored );
+		$this->assertSame( 'test_client', $stored['oauth_client_id'], 'Other settings are kept.' );
+		$this->assertTrue( Mcpwp_OAuth_Well_Known::is_legacy_oauth_enabled() );
+		$this->assertNotEmpty( get_option( Mcpwp_OAuth_Local_Admin::MIGRATED_FLAG ) );
+
+		$this->admin();
+		$this->assertTrue( Mcpwp_OAuth_Local_Admin::should_show_notice(), 'A migrated site is told, once.' );
+	}
+
+	public function test_migration_leaves_a_stored_true_untouched(): void {
+		$this->legacy_client_settings( array( 'oauth_enabled' => true ) );
+		Mcpwp_OAuth_Local_Admin::migrate_default_on();
+		$this->assertTrue( get_option( 'mcpwp_settings' )['oauth_enabled'] );
+	}
+
+	public function test_migration_leaves_absent_untouched(): void {
+		$this->legacy_client_settings();
+		$before = get_option( 'mcpwp_settings' );
+		Mcpwp_OAuth_Local_Admin::migrate_default_on();
+		$this->assertSame( $before, get_option( 'mcpwp_settings' ) );
+		$this->assertNotEmpty( get_option( Mcpwp_OAuth_Local_Admin::MIGRATED_FLAG ) );
+	}
+
+	public function test_migration_flag_prevents_a_second_run(): void {
+		update_option( Mcpwp_OAuth_Local_Admin::MIGRATED_FLAG, 1 );
+		$this->legacy_client_settings( array( 'oauth_enabled' => false ) );
+
+		$this->assertFalse( Mcpwp_OAuth_Local_Admin::migrate_default_on() );
+		$this->assertFalse( get_option( 'mcpwp_settings' )['oauth_enabled'] );
+	}
+
+	public function test_a_site_switched_off_after_the_migration_stays_off(): void {
+		$this->legacy_client_settings( array( 'oauth_enabled' => false ) );
+		Mcpwp_OAuth_Local_Admin::migrate_default_on();
+
+		$this->admin();
+		Mcpwp_OAuth_Local_Admin::process_toggle( array( Mcpwp_OAuth_Local_Admin::NONCE_FIELD => 'test-nonce', 'mcpwp_local_oauth' => '0' ) );
+		Mcpwp_OAuth_Local_Admin::migrate_default_on(); // next page load
+
+		$this->assertFalse( get_option( 'mcpwp_settings' )['oauth_enabled'] );
+		$this->assertFalse( Mcpwp_OAuth_Well_Known::is_legacy_oauth_enabled() );
+	}
+
+	public function test_migration_is_wired_to_plugin_load_before_the_sanitizer(): void {
+		$bootstrap = (string) file_get_contents( dirname( __DIR__ ) . '/mcpwp.php' );
+		$this->assertStringContainsString( 'Mcpwp_OAuth_Local_Admin::migrate_default_on()', $bootstrap );
+		$this->assertStringNotContainsString( "add_action( 'admin_init', array( 'Mcpwp_OAuth_Local_Admin', 'migrate_default_on' )", $bootstrap );
+	}
+
+	// ── Round 2: address-changed line ──────────────────────────────────────
+
+	private function seed_client( bool $authorized ): void {
+		$id = 'mcpwpc_' . str_repeat( 'a', 32 );
+		update_option(
+			Mcpwp_OAuth_Clients::OPTION,
+			array(
+				$id => array(
+					'client_id'     => $id,
+					'client_name'   => 'ChatGPT',
+					'redirect_uris' => array( 'https://chatgpt.com/cb' ),
+					'created_at'    => time(),
+					'last_used_at'  => $authorized ? time() : 0,
+					'authorized_at' => $authorized ? time() : 0,
+				),
+			),
+			false
+		);
+	}
+
+	private function render_address_notice(): string {
+		ob_start();
+		Mcpwp_OAuth_Local_Admin::render_address_notice();
+		return (string) ob_get_clean();
+	}
+
+	public function test_address_line_shows_when_the_mcp_url_changed_and_a_client_was_authorized(): void {
+		$this->admin();
+		$this->seed_client( true );
+		update_option( Mcpwp_OAuth_Local_Admin::LAST_RESOURCE_OPTION, 'https://old.example.com/wp-json/mcpwp/v1/mcp', false );
+
+		$this->assertTrue( Mcpwp_OAuth_Local_Admin::address_changed() );
+		$this->assertStringContainsString( 'This site&#039;s address changed, so AI apps connected with WordPress sign-in must reconnect.', $this->render_address_notice() );
+	}
+
+	public function test_address_line_hidden_when_unchanged(): void {
+		$this->admin();
+		$this->seed_client( true );
+		update_option( Mcpwp_OAuth_Local_Admin::LAST_RESOURCE_OPTION, Mcpwp_OAuth_Well_Known::get_canonical_resource(), false );
+		$this->assertFalse( Mcpwp_OAuth_Local_Admin::address_changed() );
+	}
+
+	public function test_address_line_hidden_when_no_client_was_ever_authorized(): void {
+		$this->admin();
+		$this->seed_client( false );
+		update_option( Mcpwp_OAuth_Local_Admin::LAST_RESOURCE_OPTION, 'https://old.example.com/wp-json/mcpwp/v1/mcp', false );
+		$this->assertFalse( Mcpwp_OAuth_Local_Admin::address_changed() );
+		$this->assertSame( '', $this->render_address_notice() );
+	}
+
+	public function test_address_line_hidden_from_non_admins(): void {
+		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->seed_client( true );
+		update_option( Mcpwp_OAuth_Local_Admin::LAST_RESOURCE_OPTION, 'https://old.example.com/wp-json/mcpwp/v1/mcp', false );
+		$this->assertSame( '', $this->render_address_notice() );
+	}
+
+	public function test_address_line_dismiss_needs_nonce_and_records_the_current_url(): void {
+		$this->admin();
+		$this->seed_client( true );
+		update_option( Mcpwp_OAuth_Local_Admin::LAST_RESOURCE_OPTION, 'https://old.example.com/wp-json/mcpwp/v1/mcp', false );
+
+		$this->assertFalse( Mcpwp_OAuth_Local_Admin::process_address_dismiss( array( Mcpwp_OAuth_Local_Admin::NONCE_FIELD => 'forged' ) ) );
+		$this->assertTrue( Mcpwp_OAuth_Local_Admin::address_changed() );
+
+		$this->assertTrue( Mcpwp_OAuth_Local_Admin::process_address_dismiss( array( Mcpwp_OAuth_Local_Admin::NONCE_FIELD => 'test-nonce' ) ) );
+		$this->assertSame( Mcpwp_OAuth_Well_Known::get_canonical_resource(), get_option( Mcpwp_OAuth_Local_Admin::LAST_RESOURCE_OPTION ) );
+		$this->assertFalse( Mcpwp_OAuth_Local_Admin::address_changed() );
+		$this->assertSame( '', $this->render_address_notice() );
+	}
+
+	public function test_first_approval_records_the_resource_and_later_ones_do_not_move_it(): void {
+		$this->legacy_client_settings();
+		$this->login( 7, array( 'edit_posts' => true ) );
+		list( , $fields )      = $this->consent( 'read write' );
+		$fields['action']      = 'approve';
+		$fields['scope_write'] = '1';
+		$this->code_scope( $this->post( $fields ) );
+		$this->assertSame( Mcpwp_OAuth_Well_Known::get_canonical_resource(), get_option( Mcpwp_OAuth_Local_Admin::LAST_RESOURCE_OPTION ) );
+
+		update_option( Mcpwp_OAuth_Local_Admin::LAST_RESOURCE_OPTION, 'https://old.example.com/wp-json/mcpwp/v1/mcp', false );
+		list( , $again )      = $this->consent( 'read write' );
+		$again['action']      = 'approve';
+		$again['scope_write'] = '1';
+		$this->code_scope( $this->post( $again ) );
+		$this->assertSame( 'https://old.example.com/wp-json/mcpwp/v1/mcp', get_option( Mcpwp_OAuth_Local_Admin::LAST_RESOURCE_OPTION ), 'A reconnection must not hide the change from other apps.' );
 	}
 
 	// ── D11 / D14 ──────────────────────────────────────────────────────────

@@ -54,6 +54,7 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		$GLOBALS['mcpwp_test_transients']       = array();
 		$GLOBALS['mcpwp_test_current_user']     = 0;
 		$GLOBALS['mcpwp_test_user_caps']        = array();
+		$GLOBALS['mcpwp_test_wpdb_options']     = array();
 		$this->saved_remote_addr                = $_SERVER['REMOTE_ADDR'] ?? null;
 		$_SERVER['REMOTE_ADDR']                 = '203.0.113.7';
 
@@ -277,7 +278,8 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		$this->assertNotNull( Mcpwp_OAuth_Clients::find( $client_id ) );
 	}
 
-	public function test_registration_is_rate_limited_to_ten_per_ip_per_hour(): void {
+	/** Round 2: the bucket is (caller IP, redirect hosts), 10 per hour. */
+	public function test_registration_is_rate_limited_to_ten_per_ip_and_redirect_host_per_hour(): void {
 		for ( $i = 0; $i < 10; $i++ ) {
 			$this->assertIsArray( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ), '198.51.100.1' ) );
 		}
@@ -288,6 +290,13 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		$this->assertGreaterThan( 0, $eleventh->get_error_data()['retry_after'] );
 		$this->assertCount( 10, Mcpwp_OAuth_Clients::all() );
 
+		// Same host, another path: same bucket (the key is the HOST).
+		$this->assert_error( $this->register( array( 'redirect_uris' => array( 'https://chatgpt.com/other' ) ), '198.51.100.1' ), 'temporarily_unavailable' );
+
+		// Same address, another app's redirect host: its own bucket, so one
+		// shared egress address (Cloudflare, OpenAI) cannot starve other apps.
+		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( 'https://claude.ai/api/mcp/auth_callback' ) ), '198.51.100.1' ) );
+
 		// Another address has its own bucket.
 		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ), '198.51.100.2' ) );
 
@@ -296,11 +305,38 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		$this->assertStringNotContainsString( '198.51.100.1', serialize( get_option( Mcpwp_OAuth_Clients::OPTION ) ) );
 	}
 
-	public function test_invalid_attempts_count_against_the_rate_limit(): void {
-		for ( $i = 0; $i < 10; $i++ ) {
+	/**
+	 * Round 2: validation runs first (the bucket is keyed on the validated
+	 * redirect host), so a malformed request writes nothing — not even a
+	 * bucket — and does not cost a legitimate client its slots.
+	 */
+	public function test_invalid_attempts_write_nothing_and_cost_no_slot(): void {
+		for ( $i = 0; $i < 20; $i++ ) {
 			$this->register( array( 'redirect_uris' => array( 'http://evil.example/cb' ) ), '198.51.100.9' );
 		}
-		$this->assert_error( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ), '198.51.100.9' ), 'temporarily_unavailable' );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_transients'] );
+		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ), '198.51.100.9' ) );
+	}
+
+	public function test_per_site_cap_of_fifty_per_rolling_day(): void {
+		for ( $i = 0; $i < 50; $i++ ) {
+			// A different address and host each time: every per-requester
+			// bucket is fresh, so only the site cap can stop number 51.
+			$this->assertIsArray( $this->register( array( 'redirect_uris' => array( 'https://app' . $i . '.example/cb' ) ), '198.51.100.' . $i ) );
+		}
+
+		$over = $this->register( array( 'redirect_uris' => array( 'https://app-new.example/cb' ) ), '203.0.113.200' );
+		$this->assert_error( $over, 'temporarily_unavailable' );
+		$this->assertSame( 429, $over->get_error_data()['status'] );
+		$this->assertGreaterThan( 0, $over->get_error_data()['retry_after'] );
+		$this->assertCount( 50, Mcpwp_OAuth_Clients::all() );
+
+		// Rolling: registrations older than a day no longer count.
+		$window = get_option( Mcpwp_OAuth_Clients::SITE_WINDOW_OPTION );
+		update_option( Mcpwp_OAuth_Clients::SITE_WINDOW_OPTION, array_map( function () {
+			return time() - DAY_IN_SECONDS - 5;
+		}, $window ), false );
+		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( 'https://app-new.example/cb' ) ), '203.0.113.200' ) );
 	}
 
 	public function test_endpoint_sends_retry_after_on_429(): void {
@@ -333,14 +369,98 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		update_option( Mcpwp_OAuth_Clients::OPTION, $clients, false );
 	}
 
-	public function test_cap_of_500_clients_answers_temporarily_unavailable(): void {
-		$this->seed_clients( 500, time(), 0 );
+	/** Round 2: at the cap, the oldest NEVER-authorized client is evicted. */
+	public function test_cap_of_500_evicts_the_oldest_never_authorized_client(): void {
+		$this->seed_clients( 1, time() - 3 * DAY_IN_SECONDS, 0 );   // oldest, never authorized → evicted
+		$oldest = array_keys( Mcpwp_OAuth_Clients::all() )[0];
+		$this->seed_clients( 1, time() - 5 * DAY_IN_SECONDS, time() ); // older still, but AUTHORIZED → kept
+		$authorized = array_keys( Mcpwp_OAuth_Clients::all() )[1];
+		$this->seed_clients( 498, time() - DAY_IN_SECONDS, 0 );
+
+		$result = $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) );
+
+		$this->assertIsArray( $result );
+		$clients = Mcpwp_OAuth_Clients::all();
+		$this->assertCount( 500, $clients );
+		$this->assertArrayNotHasKey( $oldest, $clients, 'The oldest never-authorized client makes room.' );
+		$this->assertArrayHasKey( $authorized, $clients, 'An authorized client is never evicted.' );
+		$this->assertArrayHasKey( $result['client_id'], $clients );
+	}
+
+	public function test_cap_refuses_only_when_all_500_have_been_authorized(): void {
+		$this->seed_clients( 500, time() - DAY_IN_SECONDS, time() );
 
 		$result = $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) );
 
 		$this->assert_error( $result, 'temporarily_unavailable' );
 		$this->assertSame( 429, $result->get_error_data()['status'] );
 		$this->assertCount( 500, Mcpwp_OAuth_Clients::all() );
+	}
+
+	// ── Round 2: store lock + verification ────────────────────────────────
+
+	private function hold_lock( int $expires_at ): void {
+		$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_OAuth_Clients::LOCK_OPTION ] = $expires_at . '|deadbeef';
+	}
+
+	public function test_lock_held_answers_503_and_stores_nothing(): void {
+		$this->hold_lock( time() + 60 );
+
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/register' );
+		$request->set_body( wp_json_encode( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) ) );
+		$response = $this->controller()->handle_register( $request );
+
+		$this->assertSame( 503, $response->get_status() );
+		$this->assertSame( 'temporarily_unavailable', $response->get_data()['error'] );
+		$this->assertStringContainsString( 'retry', $response->get_data()['error_description'] );
+		$this->assertArrayHasKey( 'Retry-After', $response->get_headers() );
+		$this->assertArrayNotHasKey( 'client_id', $response->get_data() );
+		$this->assertSame( array(), Mcpwp_OAuth_Clients::all() );
+		$this->assertSame( time() + 60 . '|deadbeef', $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_OAuth_Clients::LOCK_OPTION ], 'A held lock is never deleted by the loser.' );
+	}
+
+	public function test_stale_lock_is_broken_after_its_timeout(): void {
+		$this->hold_lock( time() - 1 );
+
+		$result = $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) );
+
+		$this->assertIsArray( $result );
+		$this->assertNotNull( Mcpwp_OAuth_Clients::find( $result['client_id'] ) );
+		$this->assertArrayNotHasKey( Mcpwp_OAuth_Clients::LOCK_OPTION, $GLOBALS['mcpwp_test_wpdb_options'], 'Released after use.' );
+	}
+
+	public function test_lock_is_released_after_a_normal_registration(): void {
+		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) ) );
+		$this->assertArrayNotHasKey( Mcpwp_OAuth_Clients::LOCK_OPTION, $GLOBALS['mcpwp_test_wpdb_options'] );
+	}
+
+	public function test_lost_write_answers_503_never_a_phantom_client_id(): void {
+		// The write "succeeds" but the stored value does not contain the new
+		// client (a concurrent writer, a cache, a failed replica write…).
+		$GLOBALS['mcpwp_test_option_store_hook'] = function ( $name, $value ) {
+			return Mcpwp_OAuth_Clients::OPTION === $name ? array() : $value;
+		};
+		try {
+			$result = $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) );
+		} finally {
+			unset( $GLOBALS['mcpwp_test_option_store_hook'] );
+		}
+
+		$this->assert_error( $result, 'temporarily_unavailable' );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
+		$this->assertSame( array(), get_option( Mcpwp_OAuth_Clients::SITE_WINDOW_OPTION, array() ), 'A failed registration does not count against the site cap.' );
+		$this->assertArrayNotHasKey( Mcpwp_OAuth_Clients::LOCK_OPTION, $GLOBALS['mcpwp_test_wpdb_options'] );
+	}
+
+	public function test_failed_write_answers_503(): void {
+		$GLOBALS['mcpwp_test_update_option_fail'][ Mcpwp_OAuth_Clients::OPTION ] = true;
+		try {
+			$result = $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) );
+		} finally {
+			unset( $GLOBALS['mcpwp_test_update_option_fail'][ Mcpwp_OAuth_Clients::OPTION ] );
+		}
+		$this->assert_error( $result, 'temporarily_unavailable' );
+		$this->assertSame( 503, $result->get_error_data()['status'] );
 	}
 
 	public function test_registration_purges_unused_clients_older_than_seven_days_first(): void {
@@ -487,6 +607,56 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 				'code_verifier' => self::VERIFIER,
 			)
 		);
+	}
+
+	public function test_approval_marks_the_client_authorized_before_the_code(): void {
+		$client_id = $this->register_chatgpt();
+		$this->login_editor();
+		$this->assertFalse( Mcpwp_OAuth_Clients::has_been_authorized( Mcpwp_OAuth_Clients::find( $client_id ) ) );
+
+		$location = $this->approve( $client_id );
+
+		$this->assertStringContainsString( 'code=', $location );
+		$this->assertGreaterThan( 0, Mcpwp_OAuth_Clients::find( $client_id )['authorized_at'] );
+	}
+
+	public function test_approval_with_the_store_locked_redirects_temporarily_unavailable_and_mints_no_code(): void {
+		$client_id = $this->register_chatgpt();
+		$this->login_editor();
+		$html = (string) $this->controller()->handle_authorize_get(
+			new WP_REST_Request( 'GET', '/mcpwp/v1/oauth/authorize', $this->authorize_params( $client_id, self::CHATGPT_REDIRECT ) )
+		)->get_data();
+		$this->hold_lock( time() + 60 );
+
+		$location = $this->post_consent( $html );
+
+		$this->assertStringStartsWith( self::CHATGPT_REDIRECT . '?', $location );
+		parse_str( (string) wp_parse_url( $location, PHP_URL_QUERY ), $query );
+		$this->assertSame( 'temporarily_unavailable', $query['error'] );
+		$this->assertArrayNotHasKey( 'code', $query );
+		$this->assertSame( array(), array_filter( array_keys( $GLOBALS['mcpwp_test_transients'] ), function ( $k ) {
+			return 0 === strpos( $k, 'mcpwp_oauth_code_' );
+		} ) );
+	}
+
+	private function post_consent( string $html ): string {
+		preg_match_all( '/<input type="hidden" name="([^"]+)" value="([^"]*)">/', $html, $m, PREG_SET_ORDER );
+		$post = array();
+		foreach ( $m as $row ) {
+			$post[ $row[1] ] = html_entity_decode( $row[2], ENT_QUOTES, 'UTF-8' );
+		}
+		$post['action']      = 'approve';
+		$post['scope_write'] = '1';
+		$response            = $this->controller()->handle_authorize_post( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/authorize', $post ) );
+		$this->assertSame( 302, $response->get_status() );
+		return $response->get_headers()['Location'];
+	}
+
+	private function approve( string $client_id ): string {
+		$html = (string) $this->controller()->handle_authorize_get(
+			new WP_REST_Request( 'GET', '/mcpwp/v1/oauth/authorize', $this->authorize_params( $client_id, self::CHATGPT_REDIRECT ) )
+		)->get_data();
+		return $this->post_consent( $html );
 	}
 
 	public function test_registered_public_client_redeems_its_code_and_is_marked_used(): void {

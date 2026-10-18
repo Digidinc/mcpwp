@@ -533,6 +533,14 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		}
 	);
 
+	// One-time (PR-2 D10): a stored oauth_enabled=false written by an older
+	// version's settings save is not an opt-out — remove it so the default
+	// (on) applies.  Runs here, before admin_init registers the settings
+	// sanitizer, which would otherwise put the stored false back.
+	if ( ! get_option( Mcpwp_OAuth_Local_Admin::MIGRATED_FLAG ) ) {
+		Mcpwp_OAuth_Local_Admin::migrate_default_on();
+	}
+
 	// One-time reset of the destructive-approval switch. An early build of
 	// the gate exposed destructive_requires_approval through the settings
 	// API; a principal that flipped it off then would keep the gate off after

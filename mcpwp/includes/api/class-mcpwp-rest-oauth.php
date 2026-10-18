@@ -325,6 +325,33 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			$clamped_scope = array( 'read' );
 		}
 
+		// A registered client is marked authorized BEFORE its code exists, so
+		// LRU eviction (which only takes never-authorized clients) can never
+		// remove a client that holds a live code.  If the store is busy the
+		// approval is not lost silently: the client is told to retry, at its
+		// already-validated redirect_uri (RFC 6749 §4.1.2.1).
+		if ( Mcpwp_OAuth_Clients::looks_like_client_id( $params['client_id'] ) && ! Mcpwp_OAuth_Clients::mark_authorized( $params['client_id'] ) ) {
+			return $this->oauth_redirect_response(
+				add_query_arg(
+					array(
+						'error'             => 'temporarily_unavailable',
+						'error_description' => rawurlencode( 'The site was busy. Try connecting again.' ),
+						'state'             => '' !== $params['state'] ? rawurlencode( $params['state'] ) : false,
+						'iss'               => rawurlencode( Mcpwp_OAuth_Well_Known::get_issuer() ),
+					),
+					$params['redirect_uri']
+				)
+			);
+		}
+
+		// Remember the resource this site was authorized under, so a later
+		// permalink or home-URL change (which changes every token's audience)
+		// can be shown to the administrator.  First authorization only; the
+		// Setup notice's dismiss moves it on.
+		if ( class_exists( 'Mcpwp_OAuth_Local_Admin' ) ) {
+			Mcpwp_OAuth_Local_Admin::remember_resource_if_unset();
+		}
+
 		// Approval path — generate auth code.
 		$code          = bin2hex( random_bytes( 32 ) );
 		$user_id       = get_current_user_id();
@@ -345,8 +372,6 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			),
 			60
 		);
-
-		Mcpwp_OAuth_Clients::touch( $params['client_id'] );
 
 		$redirect = add_query_arg(
 			array(
