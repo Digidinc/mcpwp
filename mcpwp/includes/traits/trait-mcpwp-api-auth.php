@@ -146,8 +146,8 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Enforce the route's WordPress capability on a user-run principal.
 	 *
-	 * Unknown routes and undecided (TODO) rows deny everyone but
-	 * administrators (Mcpwp_Route_Capability_Map::TODO_CAPABILITY) — never a
+	 * Unknown routes and undecided (TODO) rows are admin-only until decided
+	 * (Mcpwp_Route_Capability_Map::UNDECIDED_ADMIN_ONLY_CAPABILITY) — never a
 	 * pass-through.
 	 *
 	 * @param WP_REST_Request $request Request.

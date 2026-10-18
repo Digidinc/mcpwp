@@ -14,6 +14,9 @@ use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-posts.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-mcp.php';
+require_once dirname( __DIR__ ) . '/includes/mcp/class-mcpwp-mcp-free-tools.php';
+require_once dirname( __DIR__ ) . '/includes/mcp/class-mcpwp-mcp-pro-tools.php';
 
 final class CapabilityChokepoint1100Test extends TestCase {
 
@@ -41,6 +44,7 @@ final class CapabilityChokepoint1100Test extends TestCase {
 		$GLOBALS['mcpwp_test_user_caps']    = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 		$GLOBALS['_mcpwp_test_posts']       = array();
+		$GLOBALS['mcpwp_test_post_caps']    = array();
 		if ( class_exists( 'Mcpwp_WebMCP' ) ) {
 			Mcpwp_WebMCP::end_dispatch( 0 );
 		}
@@ -84,8 +88,8 @@ final class CapabilityChokepoint1100Test extends TestCase {
 			'edit_theme_options (kit CSS)'      => array( 'POST', '/mcpwp/v1/elementor/kit-css', array( 'css' => 'a{}' ), 'edit_theme_options' ),
 			'edit_theme_options (globals)'      => array( 'POST', '/mcpwp/v1/elementor/globals', array(), 'edit_theme_options' ),
 			'edit_products (Woo products)'      => array( 'GET', '/mcpwp/v1/woocommerce/products', array(), 'edit_products' ),
-			'TODO deny (SEO audit)'             => array( 'GET', '/mcpwp/v1/seo/audit', array(), 'manage_options' ),
-			'TODO deny (Elementor data)'        => array( 'GET', '/mcpwp/v1/elementor/5', array( 'id' => 5 ), 'manage_options' ),
+			'admin-only until decided (SEO audit)' => array( 'GET', '/mcpwp/v1/seo/audit', array(), 'manage_options' ),
+			'admin-only until decided (site state)' => array( 'GET', '/mcpwp/v1/site-state', array(), 'manage_options' ),
 		);
 	}
 
@@ -106,6 +110,94 @@ final class CapabilityChokepoint1100Test extends TestCase {
 	 */
 	public function test_bot_admin_key_is_gated_by_scope_only( string $method, string $route, array $params ): void {
 		$this->assertTrue( $this->check( $method, $route, $this->admin_key(), $params ), "$method $route" );
+	}
+
+	// ── Kasra: every core-profile tool is callable by an Editor's OAuth token ──
+
+	/**
+	 * Mcpwp_REST_MCP::CORE_TOOL_PROFILE_TOOLS (24) plus the two meta tools.
+	 * wp_list_menus is the one exception and is asserted separately below:
+	 * it is ADMIN scope (menus are site configuration), which an OAuth token
+	 * can never hold (D8), so it is refused by the scope gate — not by the
+	 * capability map. tools/list's core profile does not filter by scope, so
+	 * the exclusion is stated here, not hidden.
+	 */
+	public function test_editor_oauth_token_can_call_every_core_profile_tool(): void {
+		$ref  = new ReflectionClass( 'Mcpwp_REST_MCP' );
+		$core = $ref->getConstant( 'CORE_TOOL_PROFILE_TOOLS' );
+		$meta = $ref->getConstant( 'META_TOOL_NAMES' );
+		$map  = array_merge( ( new Mcpwp_MCP_Free_Tools() )->get_tool_map(), ( new Mcpwp_MCP_Pro_Tools() )->get_tool_map() );
+
+		$this->assertCount( 24, $core, 'Premise: the core profile this test pins.' );
+
+		// A page the Editor can read and edit (WordPress answers yes for an Editor).
+		$GLOBALS['mcpwp_test_post_caps'][ self::EDITOR ] = array(
+			'read_post'   => array( 5 => true ),
+			'edit_post'   => array( 5 => true ),
+			'delete_post' => array( 5 => true ),
+		);
+		$GLOBALS['_mcpwp_test_posts'][5]->post_name = 'home';
+		$headers = $this->editor_token();
+
+		$failed  = array();
+		$passed  = array();
+		foreach ( $core as $tool ) {
+			if ( 'wp_list_menus' === $tool ) {
+				continue; // asserted below
+			}
+			$this->assertArrayHasKey( $tool, $map, $tool );
+			$route  = preg_replace_callback(
+				'/\{([^}]+)\}/',
+				static function ( $m ) {
+					return 'slug' === $m[1] ? 'home' : '5';
+				},
+				'/mcpwp/v1' . $map[ $tool ]['route']
+			);
+			$params = false !== strpos( $map[ $tool ]['route'], '{id}' ) ? array( 'id' => 5 ) : array();
+			if ( '/mcpwp/v1/rendered-html' === $route || '/mcpwp/v1/elementor/build-page' === $route ) {
+				$params['id'] = 5;
+			}
+			$result = $this->check( $map[ $tool ]['method'], $route, $headers, $params );
+			if ( true === $result ) {
+				$passed[] = $tool;
+			} else {
+				$failed[] = $tool . ' ' . $map[ $tool ]['method'] . ' ' . $route . ' -> ' . ( is_wp_error( $result ) ? $result->get_error_code() . ' ' . wp_json_encode( $result->get_error_data() ) : var_export( $result, true ) );
+			}
+		}
+
+		// The meta tools ride the /mcp envelope; their inner call is checked as its own sub-request.
+		foreach ( $meta as $tool ) {
+			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), $headers );
+			$request->set_body( wp_json_encode( array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/call', 'params' => array( 'name' => $tool, 'arguments' => array( 'query' => 'pages', 'name' => 'wp_list_pages', 'arguments' => new stdClass() ) ) ) ) );
+			$result = ( new Mcpwp_REST_Posts() )->check_permission( $request );
+			if ( true === $result ) {
+				$passed[] = $tool;
+			} else {
+				$failed[] = $tool . ' -> ' . ( is_wp_error( $result ) ? $result->get_error_code() : var_export( $result, true ) );
+			}
+		}
+
+		$this->assertSame( array(), $failed, "Core-profile tools an Editor's OAuth token cannot call:\n" . implode( "\n", $failed ) );
+		$this->assertCount( 25, $passed, '23 core tools + 2 meta tools.' );
+	}
+
+	public function test_wp_list_menus_is_refused_by_scope_not_by_the_capability_map(): void {
+		$map    = ( new Mcpwp_MCP_Free_Tools() )->get_tool_map();
+		$result = $this->check( $map['wp_list_menus']['method'], '/mcpwp/v1' . $map['wp_list_menus']['route'], $this->editor_token() );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+		$this->assertSame( 'admin', $result->get_error_data()['required_scope'] );
+		$this->assertSame( 'admin', $this->harness()->required_scope_for_tool( 'wp_list_menus' ) );
+	}
+
+	public function test_set_seo_also_applies_the_per_post_edit_check(): void {
+		$GLOBALS['mcpwp_test_post_caps'][ self::EDITOR ] = array( 'read_post' => array( 5 => true ), 'edit_post' => array( 5 => false ) );
+		$result = $this->check( 'POST', '/mcpwp/v1/seo/5', $this->editor_token(), array( 'id' => 5, 'title' => 'x' ) );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'rest_cannot_edit', $result->get_error_code(), 'edit_posts passes the map; edit_post on THIS post decides.' );
+
+		$GLOBALS['mcpwp_test_post_caps'][ self::EDITOR ] = array( 'read_post' => array( 5 => false ) );
+		$this->assertSame( 'not_found', $this->check( 'GET', '/mcpwp/v1/elementor/5', $this->editor_token(), array( 'id' => 5 ) )->get_error_code(), 'read_post on THIS post decides the read rows.' );
 	}
 
 	public function test_sub_request_path_enforces_the_map_too(): void {

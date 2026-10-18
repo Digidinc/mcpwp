@@ -439,11 +439,11 @@ final class RouteCapabilityMapTest extends TestCase {
 		ksort( $counts );
 		$this->assertSame(
 			array(
-				'TODO'                 => 162,
+				'TODO'                 => 155,
 				'delete_pages'         => 1,
 				'delete_posts'         => 1,
 				'edit_pages'           => 7,
-				'edit_posts'           => 31,
+				'edit_posts'           => 34,
 				'edit_products'        => 12,
 				'edit_theme_options'   => 29,
 				'forms:entries'        => 1,
@@ -453,12 +453,12 @@ final class RouteCapabilityMapTest extends TestCase {
 				'manage_product_terms' => 3,
 				'manage_woocommerce'   => 7,
 				'none'                 => 37,
-				'read'                 => 3,
+				'read'                 => 7,
 				'upload_files'         => 8,
 			),
 			$counts
 		);
-		$this->assertSame( 'b555d75542002e9c2284049a2507dbc4ea4e048ed71c90b85b1a4214f7df0416', hash( 'sha256', implode( "\n", $lines ) ) );
+		$this->assertSame( '87d994c490eba54c724fdbcaed7a42a3ccfe98a2422c6e75737c6794093f687e', hash( 'sha256', implode( "\n", $lines ) ) );
 	}
 
 	// ── The predicate ──────────────────────────────────────────────────────
@@ -527,7 +527,7 @@ final class RouteCapabilityMapTest extends TestCase {
 		$this->assertTrue( $this->check_as( 2, $key, array( 'id' => 'k1', 'type' => 'scoped', 'scopes' => array( 'read', 'write', 'admin' ), 'role' => 'admin' ) ), "$key: bots are gated by scope only" );
 	}
 
-	public function test_todo_rows_deny_an_editor_and_admit_an_administrator(): void {
+	public function test_undecided_rows_are_admin_only_until_decided(): void {
 		$todo = array_keys( array_filter( Mcpwp_Route_Capability_Map::rows(), function ( $row ) {
 			return 'TODO' === $row[1];
 		} ) );
@@ -538,13 +538,14 @@ final class RouteCapabilityMapTest extends TestCase {
 		}
 	}
 
-	public function test_an_unknown_route_denies_a_user_run_principal(): void {
+	public function test_an_unknown_route_is_admin_only_until_decided(): void {
 		$auth = new Mcpwp_Route_Capability_Map_Harness();
 		$auth->act_as( $this->editor_record() );
 		$GLOBALS['mcpwp_test_current_user'] = self::EDITOR;
 		$result = $auth->check_user_run_capability( new WP_REST_Request( 'GET', '/mcpwp/v1/some-addon-route', array() ) );
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'manage_options', $result->get_error_data()['required_capability'] );
+		$this->assertSame( 'manage_options', Mcpwp_Route_Capability_Map::UNDECIDED_ADMIN_ONLY_CAPABILITY );
 	}
 
 	public function test_forms_capability_follows_the_plugin_segment(): void {
@@ -566,6 +567,37 @@ final class RouteCapabilityMapTest extends TestCase {
 		$this->assertSame( 'edit_theme_options', $rows['POST /elementor/kit-css'][1] );
 		$this->assertSame( 'write', $rows['POST /elementor/kit-css'][0] );
 		$this->assertSame( 'manage_woocommerce', $rows['GET /woocommerce/orders'][1] );
+		// (D) First-connection discovery: read.
+		foreach ( array( 'GET /site-info', 'GET /onboard', 'GET /introspect' ) as $key ) {
+			$this->assertSame( 'read', $rows[ $key ][1], $key );
+		}
+		// Kasra, Pass A follow-up: the core-profile tool rows, decided by ROW.
+		$core_rows = array(
+			'GET /site-context'                   => array( 'read', 'wp_get_site_context' ),
+			'GET /rendered-html'                  => array( 'read', 'wp_get_rendered_html' ),
+			'GET /elementor/(?P<id>\\d+)'         => array( 'read', 'wp_get_elementor' ),
+			'GET /elementor/(?P<id>\\d+)/summary' => array( 'read', 'wp_get_elementor_summary' ),
+			'GET /seo/(?P<id>\\d+)'               => array( 'edit_posts', 'wp_get_seo' ),
+			'POST /seo/(?P<id>\\d+)'              => array( 'edit_posts', 'wp_set_seo' ),
+			'GET /approvals'                      => array( 'edit_posts', 'wp_list_approvals' ),
+		);
+		$map = array_merge( ( new Mcpwp_MCP_Free_Tools() )->get_tool_map(), ( new Mcpwp_MCP_Pro_Tools() )->get_tool_map() );
+		foreach ( $core_rows as $key => list( $capability, $tool ) ) {
+			$this->assertSame( $capability, $rows[ $key ][1], $key );
+			// The tool resolves to exactly this row.
+			$route = preg_replace( '/\\{[^}]+\\}/', '5', $map[ $tool ]['route'] );
+			$this->assertSame( $key, Mcpwp_Route_Capability_Map::resolve( $map[ $tool ]['method'], $route )['key'], $tool );
+		}
+		// Their per-post check: each route that names a post declares it.
+		$probe = new class() extends Mcpwp_Route_Capability_Map_Harness {
+			public function refs( $request ) {
+				return $this->collect_post_refs( $request );
+			}
+		};
+		foreach ( array( array( 'GET', '/mcpwp/v1/rendered-html' ), array( 'GET', '/mcpwp/v1/elementor/5' ), array( 'GET', '/mcpwp/v1/elementor/5/summary' ), array( 'GET', '/mcpwp/v1/seo/5' ), array( 'POST', '/mcpwp/v1/seo/5' ) ) as list( $method, $route ) ) {
+			$refs = $probe->refs( new WP_REST_Request( $method, $route, array( 'id' => 5 ) ) );
+			$this->assertSame( array( 5 ), $refs['scalar'], "$method $route declares its post id for the per-post check" );
+		}
 		foreach ( $rows as $key => $row ) {
 			if ( 0 === strpos( explode( ' ', $key, 2 )[1], '/learnpress' ) ) {
 				$this->assertSame( 'manage_options', $row[1], $key );
