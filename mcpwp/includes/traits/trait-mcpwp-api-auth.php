@@ -4375,6 +4375,28 @@ trait Mcpwp_Api_Auth {
 			return $is_write ? 'write' : 'read';
 		}
 
+		// #1100 interim (before the capability sweep): routes whose handlers
+		// carry no capability check of their own, so scope is the only gate.
+		// Admin scope closes them for every non-admin key and every OAuth
+		// token (OAuth is never admin) until the real WordPress capability
+		// is enforced for user-run principals.
+		//  - Form entries: submitters' names, emails and messages, which an
+		//    Editor cannot see in wp-admin. Every method, prefix match.
+		if ( preg_match( '#^/mcpwp/v1/forms/[^/]+/[^/]+/entries(/|$)#i', $route ) ) {
+			return 'admin';
+		}
+		//  - Widgets and sidebars: writing them needs edit_theme_options in
+		//    wp-admin. Writes only; listing stays at the read default.
+		if ( $is_write && ( $this->route_matches( $route, '/mcpwp/v1/widgets' ) || $this->route_matches( $route, '/mcpwp/v1/sidebars' ) ) ) {
+			return 'admin';
+		}
+		//  - Product creation (POST with no id): no per-post check exists for
+		//    a post that does not exist yet, and Editors lack edit_products.
+		//    Edits by id stay on the publish-gated rules below.
+		if ( 'POST' === $method && '/mcpwp/v1/woocommerce/products' === untrailingslashit( $route ) ) {
+			return 'admin';
+		}
+
 		// Blanket-admin routes: every method (including GET) requires admin scope.
 		$admin_routes = array(
 			'/mcpwp/v1/settings',
@@ -4913,6 +4935,15 @@ trait Mcpwp_Api_Auth {
 	 */
 	protected function get_required_scope_for_tool_name( $tool_name ) {
 		$admin_tools = array(
+			// #1100 interim: mirrors the form-entries, widget/sidebar-write
+			// and product-create admin routes in get_required_scope_for_request().
+			'wp_get_form_entries',
+			'wp_add_widget',
+			'wp_update_widget',
+			'wp_delete_widget',
+			'wp_move_widget',
+			'wp_reorder_widgets',
+			'wc_create_product',
 			// WooCommerce orders/customers: mirrors the blanket-admin
 			// /woocommerce/orders and /woocommerce/customers routes (PR-2 round 2).
 			'wc_list_orders',

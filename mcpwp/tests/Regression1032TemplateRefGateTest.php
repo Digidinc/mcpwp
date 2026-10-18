@@ -1270,14 +1270,40 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 	// every REST controller shares, not a per-controller reimplementation.
 	// =========================================================================
 
+	/**
+	 * #1100 interim: widget/sidebar writes and product creation are admin
+	 * scope, and only an admin-ROLE key (every category) can hold admin
+	 * scope — so no key can both reach these routes and lack
+	 * elementor-templates. A category-restricted write key is now refused
+	 * by the scope gate in front of the template-reference scan; the scan
+	 * itself stays covered on the write-scope routes in this file (blocks,
+	 * media, content-graph, posts, elementor).
+	 */
+	private function is_interim_admin_route( WP_REST_Request $request ): bool {
+		$route = (string) $request->get_route();
+		return 'GET' !== $request->get_method()
+			&& ( preg_match( '#^/mcpwp/v1/(widgets|sidebars)(/|$)#', $route ) || ( 'POST' === $request->get_method() && '/mcpwp/v1/woocommerce/products' === $route ) );
+	}
+
 	private function assert_request_refused( object $controller, WP_REST_Request $request, string $context = '' ): void {
 		$auth = $controller->check_permission( $request );
+		if ( $this->is_interim_admin_route( $request ) ) {
+			$this->assertInstanceOf( WP_Error::class, $auth, $context );
+			$this->assertSame( 'insufficient_scope', $auth->get_error_code(), $context . ' (#1100: refused by admin scope before the scan)' );
+			return;
+		}
 		$this->assertInstanceOf( WP_Error::class, $auth, $context );
 		$this->assertSame( 'not_found', $auth->get_error_code(), $context );
 		$this->assertSame( 'A referenced template was not found.', $auth->get_error_data()['hint'] ?? null, $context );
 	}
 
 	private function assert_request_allowed( object $controller, WP_REST_Request $request, string $context = '' ): void {
+		if ( $this->is_interim_admin_route( $request ) ) {
+			// #1100: same body with an admin-role key — the scan still lets
+			// a non-reference through on these routes.
+			$admin   = $controller->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ) );
+			$request = new WP_REST_Request( $request->get_method(), $request->get_route(), $request->get_params(), array( 'X-API-Key' => $admin['key'] ) );
+		}
 		$this->assertTrue( $controller->check_permission( $request ), $context );
 	}
 

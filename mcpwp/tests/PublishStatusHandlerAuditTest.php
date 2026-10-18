@@ -176,7 +176,9 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 		'posts update'                => array( 'PUT', '/mcpwp/v1/posts/1', array( 'id' => 1 ) ),
 		'pages create'                => array( 'POST', '/mcpwp/v1/pages', array( 'title' => 'x' ) ),
 		'pages clone'                 => array( 'POST', '/mcpwp/v1/pages/1/clone', array( 'id' => 1 ) ),
-		'woocommerce products create' => array( 'POST', '/mcpwp/v1/woocommerce/products', array( 'name' => 'x' ) ),
+		// 'woocommerce products create' left this provider in #1100: product
+		// creation is now admin scope for EVERY status (see the test below),
+		// not only publish/private/future.
 		'learnpress course create'    => array( 'POST', '/mcpwp/v1/learnpress/courses', array( 'title' => 'x' ) ),
 		'learnpress course update'    => array( 'PUT', '/mcpwp/v1/learnpress/courses/1', array( 'id' => 1 ) ),
 		'learnpress lesson create'    => array( 'POST', '/mcpwp/v1/learnpress/lessons', array( 'title' => 'x' ) ),
@@ -315,6 +317,19 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 			'$publish_gated_routes entry (or regex) in get_required_scope_for_request(), a direct scope assertion to ' .
 			'ROUTE_SCOPE_CASES below, and an entry here explaining the disposition.'
 		);
+	}
+
+	/**
+	 * #1100 interim (was: conditionally gated, draft stayed write). Product
+	 * creation has no per-post check and Editors lack edit_products, so it
+	 * is admin scope whatever status is asked for.
+	 */
+	public function test_woocommerce_product_create_is_admin_for_every_status(): void {
+		$auth = new Mcpwp_Publish_Audit_Auth_Harness();
+		foreach ( array( 'publish', 'private', 'future', 'draft', 'pending' ) as $status ) {
+			$this->assertSame( 'admin', $auth->scope_for( 'POST', '/mcpwp/v1/woocommerce/products', array( 'name' => 'x', 'status' => $status ) ), $status );
+		}
+		$this->assertSame( 'admin', $auth->scope_for( 'POST', '/mcpwp/v1/woocommerce/products', array( 'name' => 'x' ) ), 'no status' );
 	}
 
 	/**
