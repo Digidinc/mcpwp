@@ -30,8 +30,11 @@ class Mcpwp_Activator {
 		// Create API role and user
 		self::create_api_role_and_user();
 
-		// Generate API key if not exists
-		if ( ! get_option( 'mcpwp_api_key' ) ) {
+		// Generate a first API key only on a genuinely fresh site (both key
+		// stores empty). On any other site a minted legacy key would be refused
+		// at auth (#1097) and shown to the admin as a key that never works.
+		require_once __DIR__ . '/core/class-mcpwp-key-state.php';
+		if ( Mcpwp_Key_State::is_fresh_site() ) {
 			$api_key = self::generate_api_key();
 			update_option( 'mcpwp_api_key', wp_hash_password( $api_key ) );
 			// Store plain text temporarily so admin can see it on first visit

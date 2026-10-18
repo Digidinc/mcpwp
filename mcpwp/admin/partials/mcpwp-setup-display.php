@@ -15,6 +15,9 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 $stored_key_hash = get_option( 'mcpwp_api_key', '' );
+// "Has a key" = legacy option OR an active scoped record (#1097): the legacy
+// option alone is only a copy and may be empty on a site with live keys.
+$site_has_key    = Mcpwp_Key_State::site_has_api_key();
 $admin           = new Mcpwp_Admin();
 $is_first        = get_option( 'mcpwp_first_activation', false );
 $rest_base       = rest_url( 'mcpwp/v1/' );
@@ -61,7 +64,7 @@ if ( empty( $site_slug ) || false !== strpos( $site_slug, '%' ) ) {
 if ( isset( $new_key ) && $new_key ) {
 	$display_key = $new_key;
 	$is_hidden   = false;
-} elseif ( ! empty( $stored_key_hash ) ) {
+} elseif ( $site_has_key ) {
 	$display_key = 'mcpwp_******************** (Hidden)';
 	$is_hidden   = true;
 } else {
@@ -73,7 +76,7 @@ $role_definitions = Mcpwp_Admin::get_role_definitions();
 $all_cat_labels   = Mcpwp_Admin::get_all_tool_category_labels();
 
 // Onboarding checklist state.
-$onboard_key_done  = ! empty( $stored_key_hash );
+$onboard_key_done  = $site_has_key;
 $onboard_conn_done = ! empty( $last_activity_time );
 $onboard_tool_done = class_exists( 'Mcpwp_Action_Log' )
 	&& ( Mcpwp_Action_Log::list_entries( array( 'limit' => 1 ) )['total'] ?? 0 ) > 0;
@@ -348,7 +351,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 				<?php esc_html_e( 'This key authenticates AI assistants when they connect to your site. Generate one key per AI client so you can revoke access individually.', 'mcpwp' ); ?>
 			</p>
 
-			<?php if ( empty( $stored_key_hash ) && ! ( isset( $new_key ) && $new_key ) ) : ?>
+			<?php if ( ! $site_has_key && ! ( isset( $new_key ) && $new_key ) ) : ?>
 			<!-- No keys yet — prominent Generate button -->
 			<div class="mcpwp-no-key-prompt">
 				<p class="description"><strong><?php esc_html_e( 'No API key configured yet.', 'mcpwp' ); ?></strong> <?php esc_html_e( 'Generate one to start connecting AI tools to this site.', 'mcpwp' ); ?></p>
@@ -403,6 +406,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 			<h3><?php esc_html_e( 'Create Role-Based Key', 'mcpwp' ); ?></h3>
 			<p class="description">
 				<?php esc_html_e( 'Each role limits which MCP tools the AI can access. Use Designer for Elementor-only access, Editor for content, Author for drafts.', 'mcpwp' ); ?>
+				<?php esc_html_e( 'Make one key per integration, labelled with what uses it (for example "Cursor — Hadi" or "n8n content flow"), with the narrowest role that works. Then you can revoke one without breaking the others, and you always know what a key is for.', 'mcpwp' ); ?>
 			</p>
 
 			<?php if ( ! empty( $new_scoped_key['key'] ) ) : ?>

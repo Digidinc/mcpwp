@@ -224,6 +224,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	}
 
 	// Load traits first
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-state.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-api-auth.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-sanitization.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-logging.php';
