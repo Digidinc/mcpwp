@@ -1667,6 +1667,33 @@ final class OAuthServerTest extends TestCase {
 		$this->assertSame( array(), $GLOBALS['mcpwp_test_transients'] );
 	}
 
+	/**
+	 * The nonce must hold on its own.  The test above posts no consent
+	 * binding, so the binding check would refuse it even with the nonce
+	 * check gone (a mutation of the nonce check survived it).  Here the form
+	 * is exactly what the screen rendered — valid binding, write ticked —
+	 * and only the nonce is wrong.
+	 */
+	public function test_consent_post_with_a_valid_form_but_a_forged_nonce_mints_nothing(): void {
+		update_option( 'permalink_structure', '/%postname%/' );
+		$this->login_as( 7, self::EDITOR_CAPS );
+		$ctrl = $this->controller();
+
+		$fields                       = $this->hidden_fields_from( $this->render_consent( $ctrl, 'read write' ) );
+		$fields['action']             = 'approve';
+		$fields['scope_write']        = '1';
+		$fields['_mcpwp_oauth_nonce'] = 'forged-' . $fields['_mcpwp_oauth_nonce'];
+
+		$response = $ctrl->handle_authorize_post( $this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $fields ) );
+
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'Invalid or expired nonce.', $response->get_data()['error_description'] );
+		$this->assertArrayNotHasKey( 'Location', $response->get_headers() );
+		$this->assertSame( array(), array_filter( array_keys( $GLOBALS['mcpwp_test_transients'] ), function ( $k ) {
+			return 0 === strpos( $k, 'mcpwp_oauth_code_' );
+		} ) );
+	}
+
 	public function test_consent_post_requires_login(): void {
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 
