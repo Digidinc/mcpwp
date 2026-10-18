@@ -243,20 +243,20 @@ trait Mcpwp_Api_Auth {
 	 * those two tables, so a bulk door declared there is covered here with
 	 * no second list to keep in step.
 	 *
-	 * @param string $path Route without the /mcpwp/v1 prefix, lower-cased.
+	 * @param string $path      Route without the /mcpwp/v1 prefix, lower-cased.
+	 * @param bool   $user_run  Whether the caller acts as a user ('@read-user' refs are then read too).
 	 * @return array<string,string[]> List param => the post-id fields declared in its items.
 	 */
-	protected static function bulk_item_list_params( $path ) {
+	protected static function bulk_item_list_params( $path, $user_run = false ) {
 		$lists = array();
-		foreach ( self::get_post_ref_param_map() as $prefix => $declared ) {
-			if ( $path === $prefix || 0 === strpos( $path, $prefix . '/' ) ) {
-				foreach ( $declared as $spec ) {
-					if ( false !== strpos( $spec, '[].' ) ) {
-						list( $list, $field ) = explode( '[].', $spec, 2 );
-						$lists[ $list ][]     = $field;
-					}
-				}
-				break;
+		foreach ( self::post_ref_specs_for_path( $path ) as $declared_spec ) {
+			list( $spec, $class ) = self::post_ref_spec_parts( $declared_spec );
+			if ( 'read-user' === $class && ! $user_run ) {
+				continue;
+			}
+			if ( false !== strpos( $spec, '[].' ) ) {
+				list( $list, $field ) = explode( '[].', $spec, 2 );
+				$lists[ $list ][]     = $field;
 			}
 		}
 		$routes = self::user_run_create_type_routes();
@@ -313,7 +313,7 @@ trait Mcpwp_Api_Auth {
 		}
 		$route = $this->normalize_route_for_authorization( (string) $request->get_route() );
 		$path  = strtolower( untrailingslashit( (string) preg_replace( '#^/mcpwp/v[0-9]+#i', '', $route ) ) );
-		$lists = self::bulk_item_list_params( $path );
+		$lists = self::bulk_item_list_params( $path, $this->requester_acts_as_user() );
 		if ( empty( $lists ) ) {
 			return true;
 		}
@@ -441,8 +441,14 @@ trait Mcpwp_Api_Auth {
 		$resolution = $this->get_post_ref_resolution( $request );
 		if ( ! is_wp_error( $resolution ) && null !== $resolution['refs'] ) {
 			$is_translation = 'POST' === $method && preg_match( '#^/(posts|pages)/\\d+/translations$#', $path );
+			// Only WRITTEN references charge their type's write capability
+			// (#1101 PR-3c). A read-only reference ('@read' / '@read-user' —
+			// a link target, a featured image, a clone source) is judged by
+			// read_post alone; charging edit_pages for linking to a published
+			// page would refuse an Author a call core allows.
+			$written = array_flip( array_map( 'intval', array_merge( $resolution['refs']['scalar'], $resolution['refs']['items'] ) ) );
 			foreach ( $resolution['rows'] as $id => $row ) {
-				if ( ! empty( $resolution['hidden'][ $id ] ) ) {
+				if ( ! empty( $resolution['hidden'][ $id ] ) || ! isset( $written[ (int) $id ] ) ) {
 					continue;
 				}
 				$checks[] = array( $row['post_type'], 'DELETE' === $method ? 'delete_posts' : 'edit_posts' );
@@ -2216,6 +2222,27 @@ trait Mcpwp_Api_Auth {
 	 *  - 'name:item'     PER-ITEM: one id that a bulk-shaped door reports in
 	 *                    its per-item results rather than refusing
 	 *
+	 * and carries ONE of three classes (#1101 PR-3c):
+	 *  - (no suffix)     WRITE target: the request changes that post.  Every
+	 *                    principal gets the hidden check; a user-run principal
+	 *                    also needs edit_post (delete_post on DELETE).
+	 *  - '@read'         READ-only reference: the request only looks at that
+	 *                    post (a link target, a clone or template source).
+	 *                    Every principal gets the hidden check; a user-run
+	 *                    principal needs read_post, not edit_post — so an
+	 *                    Author may reference a published post, never
+	 *                    another user's draft or private post.  A hidden read
+	 *                    ref refuses the whole request, whatever its shape.
+	 *  - '@read-user'    READ-only reference checked for user-run principals
+	 *                    only (read_post, as '@read').  Used for the nested
+	 *                    references this audit found undeclared
+	 *                    (featured_image, media_id, a page's parent): a bot
+	 *                    key keeps exactly the scope-only behaviour it had.
+	 *
+	 * A key may contain '*' for one path segment ('/pages/*' + '/clone'), so a
+	 * sub-route can carry a different class than its parent family.  Keys
+	 * are matched in order; the first that matches wins.
+	 *
 	 * Per-item ids are never refused as a request; the bulk handler asks
 	 * post_ref_item_visible() for each one (see
 	 * check_post_naming_params_category()).
@@ -2236,16 +2263,18 @@ trait Mcpwp_Api_Auth {
 			'/elementor/blueprints'               => array(),
 			'/elementor/build-page'               => array(),
 			'/elementor/bulk'                     => array( 'ids:csv' ),
-			'/elementor/clone'                    => array( 'source_id' ),
+			// The clone's source is only read; its parent page too.
+			'/elementor/clone'                    => array( 'source_id@read', 'parent@read' ),
 			'/elementor/custom-code'              => array( 'id' ),
 			// Both shapes are per-item: an id the run cannot touch is reported
 			// in not_touched[], never refused as a whole request.
 			'/elementor/find-replace'             => array( 'id:item', 'ids[]' ),
 			'/elementor/globals'                  => array(),
 			'/elementor/kit-css'                  => array(),
-			'/elementor/landing-page'             => array( 'template_id' ),
+			'/elementor/landing-page'             => array( 'template_id@read' ),
 			'/elementor/parts'                    => array( 'id', 'page_id' ),
-			'/elementor/save-section-as-template' => array( 'page_id' ),
+			// The section is copied FROM page_id into a new template: a read.
+			'/elementor/save-section-as-template' => array( 'page_id@read' ),
 			'/elementor/status'                   => array(),
 			'/elementor/templates'                => array( 'id', 'page_id' ),
 			'/elementor/widget-help'               => array(),
@@ -2265,13 +2294,17 @@ trait Mcpwp_Api_Auth {
 			'/rendered-html'                       => array( 'id' ),
 			'/rendered-copy'                       => array( 'id' ),
 			// `updates` and the original `pages` spelling are both accepted.
-			'/pages/bulk'                          => array( 'updates[].id', 'pages[].id' ),
-			// /pages/{id}, .../clone (the {id} IS the clone source),
-			// .../template, .../translations.
-			'/pages'                               => array( 'id' ),
+			// parent / featured_image: nested references (#1110, PR-3c).
+			'/pages/bulk'                          => array( 'updates[].id', 'pages[].id', 'updates[].parent@read-user', 'pages[].parent@read-user', 'updates[].featured_image@read-user', 'pages[].featured_image@read-user' ),
+			// /pages/{id}/clone: the {id} IS the clone source — only read.
+			'/pages/*/clone'                       => array( 'id@read' ),
+			// /pages/{id}, .../template, .../translations.
+			'/pages'                               => array( 'id', 'parent@read-user', 'featured_image@read-user' ),
 			// `updates` and the original `posts` spelling are both accepted.
-			'/posts/bulk'                          => array( 'updates[].id', 'posts[].id' ),
-			'/posts'                               => array( 'id' ),
+			'/posts/bulk'                          => array( 'updates[].id', 'posts[].id', 'updates[].featured_image@read-user', 'posts[].featured_image@read-user' ),
+			// The attachment set as the featured image is only referenced.
+			'/posts/*/featured-image'              => array( 'id', 'media_id@read-user' ),
+			'/posts'                               => array( 'id', 'featured_image@read-user' ),
 			'/post-meta'                           => array( 'id' ),
 			// Generic CPT door: /content/{post_type}/{id}. GET /content
 			// (list) has no 'id' param, so nothing fires there.
@@ -2279,8 +2312,10 @@ trait Mcpwp_Api_Auth {
 			'/blocks'                              => array( 'id' ),
 
 			// === Content graph ===
-			'/content-graph/apply-link'            => array( 'source_id', 'target_id' ),
-			'/content-graph/suggestions'           => array( 'source_id' ),
+			// The link is written INTO source_id; target_id is only read
+			// (its URL and title).
+			'/content-graph/apply-link'            => array( 'source_id', 'target_id@read' ),
+			'/content-graph/suggestions'           => array( 'source_id@read' ),
 
 			// === SEO — specific plugin/aggregate doors before the /seo/{id} catch-all ===
 			// updates[].id: bulk_update()'s own 'id'→'post_id' alias
@@ -2570,6 +2605,78 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Split a declared spec into its path and its class (#1101 PR-3c):
+	 * 'write', 'read' ('@read') or 'read-user' ('@read-user').
+	 *
+	 * @param string $spec Declared spec.
+	 * @return array{0:string,1:string}
+	 */
+	public static function post_ref_spec_parts( $spec ) {
+		$spec = (string) $spec;
+		if ( '@read-user' === substr( $spec, -10 ) ) {
+			return array( substr( $spec, 0, -10 ), 'read-user' );
+		}
+		if ( '@read' === substr( $spec, -5 ) ) {
+			return array( substr( $spec, 0, -5 ), 'read' );
+		}
+		return array( $spec, 'write' );
+	}
+
+	/**
+	 * Whether a declared ref value would be skipped by this guard (not
+	 * numeric) yet read as a post id > 0 by a handler's absint() / (int).
+	 *
+	 * @param mixed $value Raw value.
+	 * @return bool
+	 */
+	public static function is_ambiguous_post_ref_value( $value ) {
+		if ( is_array( $value ) || is_object( $value ) || true === $value ) {
+			return true;
+		}
+		return is_string( $value ) && ! is_numeric( $value ) && 1 === preg_match( '/^\s*[+]?\d/', $value );
+	}
+
+	/**
+	 * The declared specs for a route path: those of post_ref_map_key_for_path().
+	 *
+	 * @param string $path Route without the /mcpwp/v1 prefix.
+	 * @return string[]
+	 */
+	public static function post_ref_specs_for_path( $path ) {
+		$key = self::post_ref_map_key_for_path( $path );
+		if ( null === $key ) {
+			return array();
+		}
+		$map = self::get_post_ref_param_map();
+		return $map[ $key ];
+	}
+
+	/**
+	 * The map key that governs a route path: the first key that matches it —
+	 * exactly, as a prefix followed by '/', or with '*' standing for one
+	 * segment. Null when none does.
+	 *
+	 * @param string $path Route without the /mcpwp/v1 prefix.
+	 * @return string|null
+	 */
+	public static function post_ref_map_key_for_path( $path ) {
+		$path = (string) $path;
+		foreach ( array_keys( self::get_post_ref_param_map() ) as $prefix ) {
+			if ( false !== strpos( $prefix, '*' ) ) {
+				$pattern = '#^' . str_replace( '\\*', '[^/]+', preg_quote( $prefix, '#' ) ) . '(/|$)#';
+				if ( preg_match( $pattern, $path ) ) {
+					return $prefix;
+				}
+				continue;
+			}
+			if ( $path === $prefix || 0 === strpos( $path, $prefix . '/' ) ) {
+				return $prefix;
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * Most ids a declared per-item param may name in one request. Checked
 	 * before any lookup runs, so an oversized list costs nothing.
 	 */
@@ -2585,7 +2692,7 @@ trait Mcpwp_Api_Auth {
 	 * rest_do_request(), which runs this same check on the real route).
 	 *
 	 * @param WP_REST_Request $request Request object.
-	 * @return array{route_category:string,scalar:int[],items:int[]}|WP_Error|null
+	 * @return array{route_category:string,scalar:int[],items:int[],read:int[]}|WP_Error|null
 	 */
 	protected function collect_post_refs( $request ) {
 		if ( ! is_object( $request ) || ! method_exists( $request, 'get_route' ) ) {
@@ -2603,18 +2710,24 @@ trait Mcpwp_Api_Auth {
 
 		$path = ( 0 === strpos( $route, '/mcpwp/v1' ) ) ? substr( $route, strlen( '/mcpwp/v1' ) ) : $route;
 
-		$specs = array();
-		foreach ( self::get_post_ref_param_map() as $prefix => $declared ) {
-			if ( $path === $prefix || 0 === strpos( $path, $prefix . '/' ) ) {
-				$specs = $declared;
-				break;
-			}
-		}
+		$specs     = self::post_ref_specs_for_path( $path );
+		$user_run  = $this->requester_acts_as_user();
+		// '@read-user' refs are payload refs of WRITES (a featured image, a
+		// parent being set). On a GET the same name is a list filter
+		// (GET /pages?parent=) whose results are already clamped to what
+		// the caller may read; judging it would turn "list the published
+		// children" into a 404 an Author never got before.
+		$is_read_method = method_exists( $request, 'get_method' ) && in_array( strtoupper( (string) $request->get_method() ), array( 'GET', 'HEAD' ), true );
 
 		$scalar = array();
 		$items  = array();
+		$read   = array();
 
-		foreach ( $specs as $spec ) {
+		foreach ( $specs as $declared_spec ) {
+			list( $spec, $class ) = self::post_ref_spec_parts( $declared_spec );
+			if ( 'read-user' === $class && ( ! $user_run || $is_read_method ) ) {
+				continue; // A bot key keeps its scope-only behaviour; a GET filter is not a write.
+			}
 			$per_item = self::is_per_item_post_ref_spec( $spec );
 			$raw      = $this->extract_post_ref_values( $params, $spec );
 
@@ -2631,10 +2744,22 @@ trait Mcpwp_Api_Auth {
 			}
 
 			foreach ( $raw as $value ) {
+				// #1101 PR-3c: a value this guard and a handler's absint()
+				// would read differently ('12abc', true, [12]: skipped here,
+				// a real post id there) is refused, not skipped.
+				if ( self::is_ambiguous_post_ref_value( $value ) ) {
+					return new WP_Error(
+						'invalid_post_ref',
+						__( 'Post ids must be plain positive integers.', 'mcpwp' ),
+						array( 'status' => 400 )
+					);
+				}
 				if ( ! is_numeric( $value ) || (int) $value <= 0 ) {
 					continue; // Not an id at all: the door's own validation answers it.
 				}
-				if ( $per_item ) {
+				if ( 'write' !== $class ) {
+					$read[] = (int) $value;
+				} elseif ( $per_item ) {
 					$items[] = (int) $value;
 				} else {
 					$scalar[] = (int) $value;
@@ -2676,7 +2801,7 @@ trait Mcpwp_Api_Auth {
 			}
 		}
 
-		if ( empty( $scalar ) && empty( $items ) ) {
+		if ( empty( $scalar ) && empty( $items ) && empty( $read ) ) {
 			return null;
 		}
 
@@ -2684,6 +2809,9 @@ trait Mcpwp_Api_Auth {
 			'route_category' => (string) self::get_category_for_route( '/mcpwp/v1' . $path ),
 			'scalar'         => array_values( array_unique( $scalar ) ),
 			'items'          => array_values( array_unique( $items ) ),
+			// #1101 PR-3c: read-only references — hidden check (read_post
+			// for a user-run principal), never the per-post edit check.
+			'read'           => array_values( array_unique( $read ) ),
 		);
 	}
 
@@ -2787,6 +2915,13 @@ trait Mcpwp_Api_Auth {
 			} elseif ( ! $this->is_public_status( $row['post_status'] ) && ! $this->requester_can_see_non_public() ) {
 				return true;
 			}
+		} elseif ( 'attachment' === $row['post_type'] && ( $this->requester_is_webmcp() || $this->requester_oauth_user_id() > 0 ) && ! current_user_can( 'read_post', (int) $id ) ) {
+			// #1101 PR-3c: an attachment carries no visibility of its own, but
+			// for a user-run principal WordPress still answers read_post for it
+			// through its parent (an unattached file reads as published; one
+			// attached to another user's draft does not).  Without this, a
+			// featured_image / media_id reference would never be checked.
+			return true;
 		}
 
 		if ( in_array( $row['post_type'], array( 'post', 'page' ), true ) ) {
@@ -2825,7 +2960,7 @@ trait Mcpwp_Api_Auth {
 		);
 
 		if ( null !== $refs ) {
-			$ids  = array_merge( $refs['scalar'], $refs['items'] );
+			$ids  = array_values( array_unique( array_merge( $refs['scalar'], $refs['items'], $refs['read'] ) ) );
 			$rows = self::fetch_post_ref_rows( $ids );
 			foreach ( $ids as $id ) {
 				$resolution['hidden'][ $id ] = $this->post_ref_is_hidden( $id, $rows[ $id ] ?? null, $refs['route_category'] );
@@ -2893,7 +3028,11 @@ trait Mcpwp_Api_Auth {
 		}
 
 		if ( null !== $resolution['refs'] ) {
-			foreach ( $resolution['refs']['scalar'] as $id ) {
+			// Scalar write refs and every read-only ref (#1101 PR-3c) answer
+			// a hidden id with the canonical 404 — for a user-run principal
+			// "hidden" includes read_post false, so another user's draft
+			// reads exactly like a missing id.
+			foreach ( array_merge( $resolution['refs']['scalar'], $resolution['refs']['read'] ) as $id ) {
 				if ( ! empty( $resolution['hidden'][ $id ] ) ) {
 					return $this->post_ref_not_found_error( $request );
 				}
@@ -3544,7 +3683,11 @@ trait Mcpwp_Api_Auth {
 	 * @return int[]
 	 */
 	protected function written_post_ref_target_ids( $request, array $refs ) {
-		$scalar = $refs['scalar'];
+		// #1101 PR-3c: read-only refs count here by default as before — a
+		// clone's or landing page's source is copied into the written post
+		// verbatim, so its stored refs were already exempt; the per-route
+		// override below is what excludes a link target.
+		$scalar = array_values( array_unique( array_merge( $refs['scalar'], $refs['read'] ?? array() ) ) );
 
 		if ( is_object( $request ) && method_exists( $request, 'get_route' ) ) {
 			$route = $this->normalize_route_for_authorization( (string) $request->get_route() );
