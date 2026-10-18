@@ -198,6 +198,102 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 		</div>
 		<?php endif; ?>
 
+		<!-- ============================= ADD TO CHATGPT ============================= -->
+		<div class="mcpwp-card" id="mcpwp-add-to-chatgpt">
+			<h2>
+				<span class="dashicons dashicons-format-chat"></span>
+				<?php esc_html_e( 'Add to ChatGPT', 'mcpwp' ); ?>
+			</h2>
+			<p class="description">
+				<?php esc_html_e( 'One link connects ChatGPT to this site. No account, no sign-in: create the link, paste it into ChatGPT, done.', 'mcpwp' ); ?>
+			</p>
+
+			<?php if ( ! empty( $chatgpt_new_url ) ) : ?>
+				<div class="mcpwp-code-wrapper">
+					<pre class="mcpwp-code-block" id="mcpwp-chatgpt-url"><?php echo esc_url( $chatgpt_new_url ); ?></pre>
+					<button type="button" class="button button-primary mcpwp-copy-code-btn" data-target="mcpwp-chatgpt-url">
+						<span class="dashicons dashicons-clipboard"></span>
+						<?php esc_html_e( 'Copy link', 'mcpwp' ); ?>
+					</button>
+				</div>
+				<div class="notice notice-warning inline" style="margin:10px 0 0;">
+					<p>
+						<strong><?php esc_html_e( 'This link contains a key. Treat it like a password.', 'mcpwp' ); ?></strong>
+						<?php esc_html_e( 'It is shown once. Paste it into ChatGPT now; do not email it or post it in a chat.', 'mcpwp' ); ?>
+					</p>
+				</div>
+			<?php elseif ( ! empty( $chatgpt_active_key ) ) : ?>
+				<p>
+					<span class="mcpwp-status mcpwp-status-active"><?php esc_html_e( 'ChatGPT link active', 'mcpwp' ); ?></span>
+					<?php
+					printf(
+						/* translators: 1: creation date, 2: last-used date or "never" */
+						esc_html__( 'Created %1$s · last used %2$s.', 'mcpwp' ),
+						esc_html( ! empty( $chatgpt_active_key['created_at'] ) ? date_i18n( get_option( 'date_format' ), strtotime( $chatgpt_active_key['created_at'] ) ) : '—' ),
+						esc_html( ! empty( $chatgpt_active_key['last_used_at'] ) ? date_i18n( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), strtotime( $chatgpt_active_key['last_used_at'] ) ) : __( 'never', 'mcpwp' ) )
+					);
+					?>
+				</p>
+				<p class="description">
+					<?php esc_html_e( 'The link was shown only once. To see a link again, create a new one; the old link stops working at that moment.', 'mcpwp' ); ?>
+				</p>
+			<?php endif; ?>
+
+			<div style="display:flex;flex-wrap:wrap;gap:8px;margin:12px 0;">
+				<form method="post">
+					<?php wp_nonce_field( 'mcpwp_chatgpt_connector', 'mcpwp_chatgpt_connector_nonce' ); ?>
+					<input type="hidden" name="mcpwp_chatgpt_connector_action" value="create" />
+					<?php if ( empty( $chatgpt_active_key ) && empty( $chatgpt_new_url ) ) : ?>
+						<button type="submit" class="button button-primary button-hero">
+							<span class="dashicons dashicons-admin-links"></span>
+							<?php esc_html_e( 'Create ChatGPT link', 'mcpwp' ); ?>
+						</button>
+					<?php else : ?>
+						<button type="submit" class="button" onclick="return confirm('<?php echo esc_js( __( 'Create a new ChatGPT link? The current link stops working immediately.', 'mcpwp' ) ); ?>');">
+							<span class="dashicons dashicons-update"></span>
+							<?php esc_html_e( 'Rotate link', 'mcpwp' ); ?>
+						</button>
+					<?php endif; ?>
+				</form>
+				<?php if ( ! empty( $chatgpt_active_key ) ) : ?>
+				<form method="post">
+					<?php wp_nonce_field( 'mcpwp_chatgpt_connector', 'mcpwp_chatgpt_connector_nonce' ); ?>
+					<input type="hidden" name="mcpwp_chatgpt_connector_action" value="revoke" />
+					<button type="submit" class="button button-link-delete" onclick="return confirm('<?php echo esc_js( __( 'Revoke the ChatGPT link? ChatGPT loses access to this site.', 'mcpwp' ) ); ?>');">
+						<?php esc_html_e( 'Revoke', 'mcpwp' ); ?>
+					</button>
+				</form>
+				<?php endif; ?>
+			</div>
+
+			<h4><?php esc_html_e( 'In ChatGPT', 'mcpwp' ); ?></h4>
+			<ol>
+				<li><?php esc_html_e( 'Open chatgpt.com/plugins, select +, then "Add custom MCP server".', 'mcpwp' ); ?></li>
+				<li>
+					<?php
+					printf(
+						/* translators: %s: site name */
+						esc_html__( 'Name it "%s" and paste the link into the MCP server URL field.', 'mcpwp' ),
+						esc_html( $site_name )
+					);
+					?>
+				</li>
+				<li><?php esc_html_e( 'Authentication: choose "No authentication". The key is already inside the link.', 'mcpwp' ); ?></li>
+				<li><?php esc_html_e( 'Accept the risk notice ("I understand and want to continue"), then create it. Ask ChatGPT to "list my pages" to check.', 'mcpwp' ); ?></li>
+			</ol>
+			<p class="description">
+				<?php esc_html_e( 'Custom MCP servers depend on your ChatGPT plan, and in a Business or Enterprise workspace an admin may have to allow them first.', 'mcpwp' ); ?>
+			</p>
+
+			<h4><?php esc_html_e( 'What this link can and cannot do', 'mcpwp' ); ?></h4>
+			<ul style="list-style:disc;margin-left:20px;">
+				<li><?php esc_html_e( 'Can: read the site; create drafts; edit pages, posts, media, categories and tags, SEO fields and Elementor layouts — including pages that are already live.', 'mcpwp' ); ?></li>
+				<li><?php esc_html_e( 'Cannot: publish new content, change site settings or plugins, manage users, or create or see API keys. It uses an Editor-role key with read and write scope, never admin.', 'mcpwp' ); ?></li>
+				<li><?php esc_html_e( 'Where the secret sits: the key is part of the link. This site stores only a one-way hash of it. ChatGPT stores the full link in your ChatGPT account, and anyone who can see your connector settings there can see it.', 'mcpwp' ); ?></li>
+				<li><?php esc_html_e( 'Calls are recorded in the Activity Log (on by default). Rotate or revoke above to cut access instantly.', 'mcpwp' ); ?></li>
+			</ul>
+		</div>
+
 		<!-- ============================= SECTION 1: YOUR API KEY ============================= -->
 		<div class="mcpwp-card">
 			<h2>
@@ -322,7 +418,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 							<?php esc_html_e( 'Write', 'mcpwp' ); ?>
 						</label>
 						<label style="display:inline-block;">
-							<input type="checkbox" name="mcpwp_scoped_key_scopes[]" value="admin" checked="checked" />
+							<input type="checkbox" name="mcpwp_scoped_key_scopes[]" value="admin" />
 							<?php esc_html_e( 'Admin ops', 'mcpwp' ); ?>
 						</label>
 					</div>
@@ -499,11 +595,11 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 					</p>
 				</div>
 
-				<!-- Method 2: OAuth sign-in — via the mumcp.com sign-in broker -->
-				<div class="mcpwp-connect-method">
+				<!-- Method 2: OAuth sign-in via the mumcp.com broker (advanced, off the default path) -->
+				<details class="mcpwp-connect-method"<?php echo $broker_enrolled ? ' open' : ''; ?>>
+					<summary><strong><?php esc_html_e( 'Advanced: OAuth sign-in via mumcp.com', 'mcpwp' ); ?></strong></summary>
 					<h4 class="mcpwp-connect-method__title">
 						<?php esc_html_e( 'OAuth sign-in', 'mcpwp' ); ?>
-						<span class="mcpwp-status mcpwp-status-active"><?php esc_html_e( 'Recommended · More secure', 'mcpwp' ); ?></span>
 						<?php if ( $broker_enrolled ) : ?>
 							<span class="mcpwp-status mcpwp-status-active"><?php esc_html_e( 'Connected', 'mcpwp' ); ?></span>
 						<?php else : ?>
@@ -511,7 +607,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 						<?php endif; ?>
 					</h4>
 					<p class="description">
-						<?php esc_html_e( 'Signs in with your WordPress account — no API key ever rides in the URL. Connect this site to the mumcp.com sign-in broker to enable OAuth sign-in for Claude Desktop, claude.ai, and other connectors.', 'mcpwp' ); ?>
+						<?php esc_html_e( 'Optional, for advanced setups. Sign-in goes through a separate mumcp.com account (an emailed link), not your WordPress login, and only the mumcp.com account that connected this site can authorize clients. For ChatGPT, use Add to ChatGPT at the top of this page instead.', 'mcpwp' ); ?>
 					</p>
 
 					<?php if ( 'connected' === $broker_notice ) : ?>
@@ -543,7 +639,7 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 							<button type="submit" class="button button-primary"><?php esc_html_e( 'Connect to mumcp.com', 'mcpwp' ); ?></button>
 						</form>
 					<?php endif; ?>
-				</div>
+				</details>
 
 				<p><?php esc_html_e( 'Or add to claude_desktop_config.json (Claude Desktop config supports only command-based servers, so the URL goes through the mcp-remote bridge):', 'mcpwp' ); ?></p>
 				<div class="mcpwp-code-wrapper">
