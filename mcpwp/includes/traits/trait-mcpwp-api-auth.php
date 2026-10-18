@@ -206,6 +206,37 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * The request's params AS THE HANDLERS SEE THEM (#1110): every key any
+	 * bucket carries, each resolved through get_param() — the accessor every
+	 * handler uses. WP_REST_Request::get_params() merges the buckets so a
+	 * null in a higher bucket (a JSON body's {"updates":null}) OVERRIDES a
+	 * value below it (?updates[0][post_id]=X), while get_param() skips the
+	 * null and returns the query value; a gate reading get_params() judged
+	 * nothing while the handler wrote to post X. Every gate reader that
+	 * judges a list or an id a handler will act on reads this instead.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return array<string,mixed> Empty when the request exposes no params.
+	 */
+	protected function gate_params( $request ) {
+		if ( ! is_object( $request ) || ! method_exists( $request, 'get_params' ) ) {
+			return array();
+		}
+		$merged = $request->get_params();
+		if ( ! is_array( $merged ) ) {
+			return array();
+		}
+		if ( ! method_exists( $request, 'get_param' ) ) {
+			return $merged;
+		}
+		$params = array();
+		foreach ( array_keys( $merged ) as $key ) {
+			$params[ $key ] = $request->get_param( $key );
+		}
+		return $params;
+	}
+
+	/**
 	 * Every request item list the gate reads PER ITEM on this route: the
 	 * 'list[].field' post references (get_post_ref_param_map()) and the
 	 * 'items:list' create rules (user_run_create_type_routes()). Derived from
@@ -286,7 +317,7 @@ trait Mcpwp_Api_Auth {
 		if ( empty( $lists ) ) {
 			return true;
 		}
-		$params = (array) $request->get_params();
+		$params = $this->gate_params( $request );
 		foreach ( $lists as $list => $id_fields ) {
 			if ( ! array_key_exists( $list, $params ) || null === $params[ $list ] ) {
 				continue;
@@ -2565,10 +2596,10 @@ trait Mcpwp_Api_Auth {
 			return null;
 		}
 
-		$params = method_exists( $request, 'get_params' ) ? $request->get_params() : null;
-		if ( ! is_array( $params ) ) {
+		if ( ! method_exists( $request, 'get_params' ) ) {
 			return null;
 		}
+		$params = $this->gate_params( $request );
 
 		$path = ( 0 === strpos( $route, '/mcpwp/v1' ) ) ? substr( $route, strlen( '/mcpwp/v1' ) ) : $route;
 
@@ -3428,8 +3459,8 @@ trait Mcpwp_Api_Auth {
 			return true;
 		}
 
-		$params = method_exists( $request, 'get_params' ) ? $request->get_params() : null;
-		if ( ! is_array( $params ) || empty( $params ) ) {
+		$params = $this->gate_params( $request );
+		if ( empty( $params ) ) {
 			return true;
 		}
 
@@ -3521,7 +3552,7 @@ trait Mcpwp_Api_Auth {
 
 			foreach ( self::written_post_ref_scalar_overrides() as $prefix => $written_specs ) {
 				if ( $path === $prefix || 0 === strpos( $path, $prefix . '/' ) ) {
-					$params = method_exists( $request, 'get_params' ) ? $request->get_params() : array();
+					$params = $this->gate_params( $request );
 					$params = is_array( $params ) ? $params : array();
 
 					$scalar = array();
@@ -3784,7 +3815,7 @@ trait Mcpwp_Api_Auth {
 		// reaches this (it takes the unmetered verify_api_key_auth_only() path),
 		// so a tools/call that already charged the weight is not charged twice.
 		if ( class_exists( 'Mcpwp_Operation_Weights' ) && method_exists( $request, 'get_route' ) ) {
-			$params = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
+			$params = $this->gate_params( $request );
 			$graph  = Mcpwp_Operation_Weights::graph_weight( Mcpwp_Operation_Weights::normalize_route( (string) $request->get_route() ), $params );
 			if ( null !== $graph ) {
 				return $graph;
@@ -4752,7 +4783,7 @@ trait Mcpwp_Api_Auth {
 		// the caller has not named. Gated here, in the route table, like every
 		// other high-blast-radius op — not only inside the handler (#803).
 		if ( $is_write && preg_match( '#^/mcpwp/v1/elementor/find-replace(/|$)#i', $route ) ) {
-			$params = method_exists( $request, 'get_params' ) ? $request->get_params() : array();
+			$params = $this->gate_params( $request );
 			if ( is_array( $params ) && class_exists( 'Mcpwp_REST_Elementor' ) && Mcpwp_REST_Elementor::find_replace_is_wide( $params ) ) {
 				return 'admin';
 			}
@@ -5084,13 +5115,16 @@ trait Mcpwp_Api_Auth {
 	 * therefore now included below, alongside 'publish' and 'private'. See
 	 * param_value_targets_admin_scope().
 	 *
-	 * Deliberately reads get_params() (like the sibling
-	 * find_replace_is_wide() check above) rather than get_json_params(): the
-	 * former is what WP_REST_Request actually exposes as the merged,
-	 * already-decoded body/query/URL params on every real dispatch path this
-	 * plugin uses (direct REST, /batch sub-dispatch, MCP tools/call via
-	 * rest_do_request()), and it degrades safely (empty array) rather than
-	 * null when a request carries no JSON body at all.
+	 * Reads gate_params() (like the sibling find_replace_is_wide() check
+	 * above) rather than get_json_params(): every bucket a handler can read
+	 * — JSON, body, query, URL — on every real dispatch path this plugin
+	 * uses (direct REST, /batch sub-dispatch, MCP tools/call via
+	 * rest_do_request()), degrading safely (empty array) when a request has
+	 * no JSON body. It used to read get_params() for the same reasons, but
+	 * get_params() lets a JSON-body null hide a query-string value that the
+	 * handler's get_param() still reads (#1110): {"status":null} plus
+	 * ?status=publish was judged "no status" and then published. Each key is
+	 * now resolved through get_param(), the handlers' own accessor.
 	 *
 	 * @param WP_REST_Request $request Request object.
 	 * @return bool True when any targeted item would end up 'publish', 'private', or 'future'.
@@ -5100,7 +5134,7 @@ trait Mcpwp_Api_Auth {
 			return false;
 		}
 
-		$params = (array) $request->get_params();
+		$params = $this->gate_params( $request );
 
 		if ( $this->param_value_targets_admin_scope( $params, 'status' ) ) {
 			return true;

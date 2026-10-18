@@ -792,6 +792,30 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 	}
 
 	/**
+	 * #1110: the request-wide template-ref scan reads each key through
+	 * get_param(), as the handler does — a JSON-body null cannot hide a
+	 * query-string elementor_data carrying a gated template reference.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_rest_wiring_refuses_a_gated_template_hidden_behind_a_json_null(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.0' );
+		}
+		$controller = new Mcpwp_REST_Elementor();
+		$created    = $controller->create_scoped_api_key( 'designer, no templates', array( 'read', 'write' ), 'custom', array( 'elementor' ) );
+		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/' . self::PAGE_ID, array( 'id' => self::PAGE_ID ), array( 'X-API-Key' => $created['key'] ) );
+		$request->set_query_params( array( 'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ) ) );
+		$request->set_json_params( array( 'elementor_data' => null ) );
+		$this->assertNotNull( $request->get_param( 'elementor_data' ), 'The handler would read the query value.' );
+
+		$auth = $controller->check_permission( $request );
+		$this->assertInstanceOf( WP_Error::class, $auth );
+		$this->assertSame( 'not_found', $auth->get_error_code() );
+	}
+
+	/**
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
