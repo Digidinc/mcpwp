@@ -136,22 +136,32 @@ final class ToolSchemaConstraintsTest extends TestCase
 
     // ── Handler-side fallback ────────────────────────────────────────────
 
-    public function test_json_string_items_are_decoded_rather_than_silently_failing(): void
+    /**
+     * #1103 round 3: a JSON string item is NOT decoded any more. The auth
+     * gate reads only array items, so decoding here was a second parser the
+     * gate never saw (a string item created a product / edited a post past
+     * the per-post check). The gate refuses the whole request first; this is
+     * the handler-side mirror: the item is reported, never used.
+     */
+    public function test_json_string_items_are_refused_not_decoded(): void
     {
-        // Exactly what the reporting client sent: 40 stringified page objects.
         $result = (new BulkItemNormalizerHarness())->normalize(
             array('{"id":5652,"status":"draft"}', '{"id":5653,"status":"draft"}'),
             'page'
         );
 
-        $this->assertSame(array(), $result['errors']);
-        $this->assertSame(
-            array(
-                array('id' => 5652, 'status' => 'draft'),
-                array('id' => 5653, 'status' => 'draft'),
-            ),
-            $result['items']
-        );
+        $this->assertSame(array(), $result['items']);
+        $this->assertCount(2, $result['errors']);
+        $this->assertStringContainsString('must be an object', $result['errors'][0]['message']);
+        $this->assertStringContainsString('string', $result['errors'][0]['message']);
+    }
+
+    public function test_object_typed_items_are_refused_too(): void
+    {
+        $result = (new BulkItemNormalizerHarness())->normalize(array((object) array('id' => 5)), 'page');
+
+        $this->assertSame(array(), $result['items']);
+        $this->assertStringContainsString('object', $result['errors'][0]['message']);
     }
 
     public function test_object_items_pass_through_untouched(): void
@@ -178,7 +188,7 @@ final class ToolSchemaConstraintsTest extends TestCase
     public function test_normalization_preserves_item_indexes_for_error_reporting(): void
     {
         $result = (new BulkItemNormalizerHarness())->normalize(
-            array('bad', '{"id":7}'),
+            array('bad', array('id' => 7)),
             'page'
         );
 

@@ -206,6 +206,144 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Every request item list the gate reads PER ITEM on this route: the
+	 * 'list[].field' post references (get_post_ref_param_map()) and the
+	 * 'items:list' create rules (user_run_create_type_routes()). Derived from
+	 * those two tables, so a bulk door declared there is covered here with
+	 * no second list to keep in step.
+	 *
+	 * @param string $path Route without the /mcpwp/v1 prefix, lower-cased.
+	 * @return array<string,string[]> List param => the post-id fields declared in its items.
+	 */
+	protected static function bulk_item_list_params( $path ) {
+		$lists = array();
+		foreach ( self::get_post_ref_param_map() as $prefix => $declared ) {
+			if ( $path === $prefix || 0 === strpos( $path, $prefix . '/' ) ) {
+				foreach ( $declared as $spec ) {
+					if ( false !== strpos( $spec, '[].' ) ) {
+						list( $list, $field ) = explode( '[].', $spec, 2 );
+						$lists[ $list ][]     = $field;
+					}
+				}
+				break;
+			}
+		}
+		$routes = self::user_run_create_type_routes();
+		if ( isset( $routes[ $path ] ) && 0 === strpos( $routes[ $path ], 'items:' ) ) {
+			$list = (string) strstr( substr( $routes[ $path ], 6 ) . '=', '=', true );
+			if ( ! isset( $lists[ $list ] ) ) {
+				$lists[ $list ] = array();
+			}
+		}
+		return $lists;
+	}
+
+	/**
+	 * Whether a declared per-item post id is one both parsers read the same
+	 * way: empty (the handler skips the item and writes nothing) or a
+	 * canonical positive integer. Anything else — '9402abc', '0x24C2',
+	 * [9402], 9402.0 — the gate's is_numeric() and a handler's absint()
+	 * disagree on ('9402abc': skipped by the gate, post 9402 to absint();
+	 * [9402]: skipped, post 1), so it is refused rather than normalised.
+	 *
+	 * @param mixed $value Item field value.
+	 * @return bool
+	 */
+	protected static function is_unambiguous_item_post_id( $value ) {
+		if ( empty( $value ) ) {
+			return true;
+		}
+		if ( is_int( $value ) ) {
+			return $value > 0;
+		}
+		return is_string( $value ) && 1 === preg_match( '/^[1-9][0-9]*$/', $value );
+	}
+
+	/**
+	 * Bulk item lists must be lists of OBJECTS — refused whole otherwise
+	 * (#1103 round 3, parser differential). The gate reads post types and
+	 * post ids only from array items; the handlers used to json_decode a
+	 * STRING item as well, so `{"posts":["{\"post_type\":\"product\"}"]}`
+	 * passed every check and then created a product, and a string update
+	 * item edited a post the per-post edit_post check never saw. This runs
+	 * before ANY post-type or post-reference extraction, on every verdict
+	 * path (check_gate_entry()); normalize_bulk_items() no longer decodes
+	 * strings either, so there is one parser and it is is_array(). A
+	 * declared per-item post id must be one the gate and the handler read
+	 * identically (is_unambiguous_item_post_id()), or the request is
+	 * refused the same way.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return true|WP_Error 400 invalid_item.
+	 */
+	protected function check_bulk_items_are_objects( $request ) {
+		if ( ! is_object( $request ) || ! method_exists( $request, 'get_route' ) || ! method_exists( $request, 'get_params' ) ) {
+			return true;
+		}
+		$route = $this->normalize_route_for_authorization( (string) $request->get_route() );
+		$path  = strtolower( untrailingslashit( (string) preg_replace( '#^/mcpwp/v[0-9]+#i', '', $route ) ) );
+		$lists = self::bulk_item_list_params( $path );
+		if ( empty( $lists ) ) {
+			return true;
+		}
+		$params = (array) $request->get_params();
+		foreach ( $lists as $list => $id_fields ) {
+			if ( ! array_key_exists( $list, $params ) || null === $params[ $list ] ) {
+				continue;
+			}
+			$items = $params[ $list ];
+			$bad   = is_array( $items ) ? null : -1;
+			if ( null === $bad ) {
+				foreach ( $items as $index => $item ) {
+					if ( ! is_array( $item ) ) {
+						$bad = $index;
+						break;
+					}
+					foreach ( $id_fields as $field ) {
+						if ( array_key_exists( $field, $item ) && ! self::is_unambiguous_item_post_id( $item[ $field ] ) ) {
+							$bad = $index;
+							break 2;
+						}
+					}
+				}
+			}
+			if ( null !== $bad ) {
+				return new WP_Error(
+					'invalid_item',
+					sprintf(
+						/* translators: %s: request parameter name, e.g. "posts". */
+						__( 'Every item in "%s" must be a JSON object, and any post id in it a plain positive integer; nothing was changed.', 'mcpwp' ),
+						$list
+					),
+					array(
+						'status' => 400,
+						'param'  => $list,
+						'index'  => $bad,
+					)
+				);
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * The first check on every verdict path that applies the route rules —
+	 * the main tail (check_post_naming_params_category()) and the trusted
+	 * admin AJAX and approved-destructive-replay early returns: bulk item
+	 * shape first, then the route's user-run capability.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return true|WP_Error
+	 */
+	protected function check_gate_entry( $request ) {
+		$shape = $this->check_bulk_items_are_objects( $request );
+		if ( is_wp_error( $shape ) ) {
+			return $shape;
+		}
+		return $this->check_user_run_capability( $request );
+	}
+
+	/**
 	 * The generic post doors: routes that write a post whose TYPE the caller
 	 * chooses or that the door infers from an existing post (#1103 round 2).
 	 * A bot is held to post/page there unless it has admin scope; a user is
@@ -1017,7 +1155,7 @@ trait Mcpwp_Api_Auth {
 		if ( $this->is_trusted_admin_ajax_request() ) {
 			// A user-run principal (the logged-in administrator): the route's
 			// capability and the post-type rule still apply (#1100).
-			$capability_check = $this->check_user_run_capability( $request );
+			$capability_check = $this->check_gate_entry( $request );
 			return is_wp_error( $capability_check ) ? $capability_check : $this->check_generic_post_type_access( $request );
 		}
 
@@ -1046,7 +1184,7 @@ trait Mcpwp_Api_Auth {
 		// path — DestructiveGateOnlyDeletesTest pins the invariant.
 		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::applying_as_admin() > 0 && function_exists( 'user_can' ) && user_can( Mcpwp_Destructive_Gate::applying_as_admin(), 'activate_plugins' ) ) {
 			wp_set_current_user( Mcpwp_Destructive_Gate::applying_as_admin() );
-			$capability_check = $this->check_user_run_capability( $request );
+			$capability_check = $this->check_gate_entry( $request );
 			return is_wp_error( $capability_check ) ? $capability_check : $this->check_generic_post_type_access( $request );
 		}
 
@@ -2713,7 +2851,7 @@ trait Mcpwp_Api_Auth {
 		// route (Mcpwp_Route_Capability_Map). This is the tail every
 		// verdict-computing path ends in, so the check runs on the main and
 		// the sub-request path alike; it is a no-op for bot-run principals.
-		$capability_check = $this->check_user_run_capability( $request );
+		$capability_check = $this->check_gate_entry( $request );
 		if ( is_wp_error( $capability_check ) ) {
 			return $capability_check;
 		}

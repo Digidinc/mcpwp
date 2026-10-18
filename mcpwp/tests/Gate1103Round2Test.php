@@ -358,6 +358,48 @@ final class Gate1103Round2Test extends TestCase {
 		$this->assert_refused( $probe->check_user_run_capability( new WP_REST_Request( 'DELETE', '/mcpwp/v1/drafts/delete-all', array() ) ), 'replay', 'delete_others_posts+delete_others_pages' );
 	}
 
+	/** M11: the replay leg is pinned THROUGH check_permission, so `return true` in that leg turns it red. */
+	public function test_admin_destructive_replay_is_capability_checked_through_check_permission(): void {
+		$ref = new ReflectionProperty( 'Mcpwp_Destructive_Gate', 'applying_as_admin' );
+		$ref->setAccessible( true );
+		$ref->setValue( null, self::ADMIN );
+		$GLOBALS['mcpwp_test_current_user'] = self::ADMIN;
+		$GLOBALS['mcpwp_test_post_caps'][ self::ADMIN ] = array( 'read_post' => array( self::POST_ID => true ), 'edit_post' => array( self::POST_ID => true ), 'delete_post' => array( self::POST_ID => true ) );
+
+		$this->assertTrue( ( new Mcpwp_REST_Posts() )->check_permission( new WP_REST_Request( 'DELETE', '/mcpwp/v1/drafts/delete-all', array() ) ), 'The admin passes with both delete_others_* caps.' );
+
+		$GLOBALS['mcpwp_test_user_caps'][ self::ADMIN ]['delete_others_pages'] = false;
+		$this->assert_refused( ( new Mcpwp_REST_Posts() )->check_permission( new WP_REST_Request( 'DELETE', '/mcpwp/v1/drafts/delete-all', array() ) ), 'replay, route capability', 'delete_others_posts+delete_others_pages' );
+		// …and the post-type rule: the admin holds no delete_products.
+		$this->assert_refused( ( new Mcpwp_REST_Posts() )->check_permission( new WP_REST_Request( 'DELETE', '/mcpwp/v1/posts/' . self::POST_ID, array( 'id' => self::POST_ID ) ) ), 'replay, post type', 'delete_products' );
+	}
+
+	/** M10: the admin-AJAX leg is subject to check_generic_post_type_access(). */
+	public function test_trusted_admin_ajax_is_subject_to_the_post_type_rule(): void {
+		$this->enter_trusted_admin_ajax();
+		$this->assert_refused(
+			( new Mcpwp_REST_Posts() )->check_permission( new WP_REST_Request( 'POST', '/mcpwp/v1/posts', array( 'title' => 'x', 'post_type' => 'product', 'status' => 'draft' ) ) ),
+			'chat tab, product',
+			'edit_products'
+		);
+		$this->assertTrue( ( new Mcpwp_REST_Posts() )->check_permission( new WP_REST_Request( 'POST', '/mcpwp/v1/posts', array( 'title' => 'x', 'status' => 'draft' ) ) ), 'A post is fine.' );
+		$GLOBALS['mcpwp_test_user_caps'][ self::ADMIN ]['edit_products'] = true;
+		$this->assertTrue( ( new Mcpwp_REST_Posts() )->check_permission( new WP_REST_Request( 'POST', '/mcpwp/v1/posts', array( 'title' => 'x', 'post_type' => 'product', 'status' => 'draft' ) ) ), 'With the type\'s own cap, allowed.' );
+	}
+
+	/** M16: a translation creates a post of the SOURCE's type — its create_posts is checked. */
+	public function test_translation_needs_the_source_types_create_posts(): void {
+		$GLOBALS['mcpwp_test_post_type_caps']['product']['create_posts'] = 'create_products';
+		$GLOBALS['mcpwp_test_user_caps'][ self::EDITOR ]['edit_products'] = true;
+		$GLOBALS['mcpwp_test_post_caps'][ self::EDITOR ] = array( 'read_post' => array( self::POST_ID => true ), 'edit_post' => array( self::POST_ID => true ) );
+		$route = '/mcpwp/v1/posts/' . self::POST_ID . '/translations';
+
+		$this->assert_refused( $this->check( 'POST', $route, $this->token( self::EDITOR ), array( 'id' => self::POST_ID, 'language' => 'fr' ) ), 'translation', 'create_products' );
+
+		$GLOBALS['mcpwp_test_user_caps'][ self::EDITOR ]['create_products'] = true;
+		$this->assertTrue( $this->check( 'POST', $route, $this->token( self::EDITOR ), array( 'id' => self::POST_ID, 'language' => 'fr' ) ) );
+	}
+
 	public function test_no_leg_fires_for_a_plain_request(): void {
 		$GLOBALS['mcpwp_test_current_user'] = self::ADMIN;
 		$this->assertFalse( ( new Mcpwp_Gate_1103_Harness() )->requester_acts_as_user(), 'No principal, no AJAX, no replay: not a user-run principal.' );
