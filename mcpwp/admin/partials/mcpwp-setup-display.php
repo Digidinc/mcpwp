@@ -878,7 +878,22 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 					<strong><?php esc_html_e( 'Allow AI apps to connect by signing in with WordPress (OAuth)', 'mcpwp' ); ?></strong>
 				</label>
 				<p class="description">
-					<?php esc_html_e( 'An app such as ChatGPT or Claude sends you to this site\'s WordPress login and a consent screen. It gets read and write access at most, never administrator access, and only for this site\'s MCP endpoint. Links and API keys keep working either way.', 'mcpwp' ); ?>
+					<?php esc_html_e( 'An app such as ChatGPT or Claude sends you to this site\'s WordPress login and a consent screen. It acts as the WordPress user who approved it, with read and write access at most, never administrator access, and only for this site\'s MCP endpoint. Links and API keys keep working either way.', 'mcpwp' ); ?>
+				</p>
+				<p>
+					<label for="mcpwp_local_oauth_min_role"><strong><?php esc_html_e( 'Who may connect an AI app', 'mcpwp' ); ?></strong></label><br />
+					<select id="mcpwp_local_oauth_min_role" name="mcpwp_local_oauth_min_role">
+						<?php
+						$mcpwp_min_role_labels = array(
+							'author'        => __( 'Authors and above', 'mcpwp' ),
+							'editor'        => __( 'Editors and above (default)', 'mcpwp' ),
+							'administrator' => __( 'Administrators only', 'mcpwp' ),
+						);
+						foreach ( $mcpwp_min_role_labels as $mcpwp_role => $mcpwp_label ) :
+							?>
+							<option value="<?php echo esc_attr( $mcpwp_role ); ?>" <?php selected( Mcpwp_OAuth_Well_Known::get_min_role(), $mcpwp_role ); ?>><?php echo esc_html( $mcpwp_label ); ?></option>
+						<?php endforeach; ?>
+					</select>
 				</p>
 				<p><button type="submit" class="button"><?php esc_html_e( 'Save', 'mcpwp' ); ?></button></p>
 			</form>

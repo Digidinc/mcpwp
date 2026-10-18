@@ -48,7 +48,15 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 	/** @var mixed */
 	private $saved_remote_addr;
 
+	/** @var array */
+	private $saved_users;
+
 	protected function setUp(): void {
+		// PR-2 P0: an OAuth token acts as its user, who must exist.
+		$this->saved_users = $GLOBALS['mcpwp_test_users'];
+		foreach ( array( 1, 2, 7, 8, 9, 10 ) as $mcpwp_uid ) {
+			$GLOBALS['mcpwp_test_users'][] = (object) array( 'ID' => $mcpwp_uid, 'roles' => array(), 'user_login' => 'user' . $mcpwp_uid );
+		}
 		$GLOBALS['mcpwp_test_options']          = array();
 		$GLOBALS['mcpwp_test_options_autoload'] = array();
 		$GLOBALS['mcpwp_test_transients']       = array();
@@ -69,6 +77,7 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_users'] = $this->saved_users;
 		if ( null === $this->saved_remote_addr ) {
 			unset( $_SERVER['REMOTE_ADDR'] );
 		} else {
@@ -119,7 +128,7 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 
 	private function login_editor(): void {
 		$GLOBALS['mcpwp_test_current_user'] = 7;
-		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true );
+		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true, 'edit_others_posts' => true );
 	}
 
 	private function assert_error( $result, string $code ): void {
@@ -173,11 +182,20 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		$this->assertSame( array(), Mcpwp_OAuth_Clients::all() );
 	}
 
-	public function test_confidential_auth_method_is_refused(): void {
-		$this->assert_error(
-			$this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ), 'token_endpoint_auth_method' => 'client_secret_basic' ) ),
-			'invalid_client_metadata'
-		);
+	/**
+	 * P1-3 (was: a confidential auth method is refused with 400). RFC 7591
+	 * §3.2.1 lets the server replace requested metadata: the client is
+	 * registered as public, the 201 says "none", and no secret exists.
+	 */
+	public function test_requested_confidential_auth_method_is_replaced_with_none(): void {
+		foreach ( array( 'client_secret_basic', 'client_secret_post', 'private_key_jwt' ) as $method ) {
+			$result = $this->register( array( 'redirect_uris' => array( 'https://' . str_replace( '_', '-', $method ) . '.example/cb' ), 'token_endpoint_auth_method' => $method ) );
+			$this->assertIsArray( $result, $method );
+			$this->assertSame( 'none', $result['token_endpoint_auth_method'], $method );
+			$this->assertArrayNotHasKey( 'client_secret', $result, $method );
+			$this->assertArrayNotHasKey( 'client_secret', Mcpwp_OAuth_Clients::find( $result['client_id'] ), $method );
+		}
+		$this->assert_error( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ), 'token_endpoint_auth_method' => array( 'none' ) ) ), 'invalid_client_metadata' );
 	}
 
 	public function test_unsupported_grant_or_response_types_are_refused(): void {
@@ -661,7 +679,7 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 
 	public function test_registered_public_client_redeems_its_code_and_is_marked_used(): void {
 		$client_id                          = $this->register_chatgpt();
-		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true );
+		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true, 'edit_others_posts' => true );
 
 		$response = $this->controller()->handle_token( $this->token_request( $this->seed_code( $client_id, self::CHATGPT_REDIRECT ), $client_id, self::CHATGPT_REDIRECT ) );
 

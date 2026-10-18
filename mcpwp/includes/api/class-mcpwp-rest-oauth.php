@@ -228,6 +228,12 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->oauth_redirect_response( wp_login_url( $callback_url ) );
 		}
 
+		// P0b: below the site's minimum role, there is no consent screen at
+		// all — a plain page, never a redirect carrying a code.
+		if ( ! Mcpwp_OAuth_Well_Known::user_meets_min_role( get_current_user_id() ) ) {
+			return $this->min_role_refusal_response();
+		}
+
 		// Clamp scope to what the current user is actually capable of before
 		// rendering the consent screen so users only see what they can get.
 		//
@@ -266,6 +272,12 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->oauth_error_response( 'access_denied', 'Authentication required.', 401 );
 		}
 
+		// P0b: enforced on the POST too — a forged or replayed form from a
+		// user below the minimum role mints nothing.
+		if ( ! Mcpwp_OAuth_Well_Known::user_meets_min_role( get_current_user_id() ) ) {
+			return $this->min_role_refusal_response();
+		}
+
 		// Verify CSRF nonce.
 		$nonce = $request->get_param( '_mcpwp_oauth_nonce' );
 		if ( ! wp_verify_nonce( (string) $nonce, 'mcpwp_oauth_consent' ) ) {
@@ -298,6 +310,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// empty string.)
 		$action = sanitize_key( (string) $request->get_param( 'action' ) );
 		if ( 'approve' !== $action ) {
+			$this->log_oauth_event( 'oauth_consent_denied', array( 'client_id' => $params['client_id'] ) );
 			$redirect = add_query_arg(
 				array(
 					'error'             => 'access_denied',
@@ -371,6 +384,14 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 				'expires'        => time() + 60,
 			),
 			60
+		);
+
+		$this->log_oauth_event(
+			'oauth_consent_approved',
+			array(
+				'client_id' => $params['client_id'],
+				'scope'     => implode( ' ', $clamped_scope ),
+			)
 		);
 
 		$redirect = add_query_arg(
@@ -528,6 +549,13 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// externally (e.g. seeded via wp eval in tests or by older code).
 		// Use the user_id stored in the code — that was the user who consented.
 		$stored_user_id = isset( $stored['user_id'] ) ? (int) $stored['user_id'] : 0;
+
+		// P0b: the approving user must still meet the minimum role when the
+		// code is redeemed (a demotion inside the code's 60 s counts).
+		if ( ! Mcpwp_OAuth_Well_Known::user_meets_min_role( $stored_user_id ) ) {
+			return $this->oauth_error_response( 'invalid_grant', 'The approving user can no longer connect AI apps on this site.', 400 );
+		}
+
 		$scopes         = $this->clamp_scope_array_to_user_id( $scopes, $stored_user_id );
 
 		// Issue token via existing backend.
@@ -537,6 +565,16 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		if ( isset( $stored['client_id'] ) ) {
 			Mcpwp_OAuth_Clients::touch( (string) $stored['client_id'] );
 		}
+
+		$this->log_oauth_event(
+			'oauth_token_issued',
+			array(
+				'grant_type' => 'authorization_code',
+				'client_id'  => isset( $stored['client_id'] ) ? (string) $stored['client_id'] : '',
+				'user_id'    => $stored_user_id,
+				'scope'      => isset( $token_response['scope'] ) ? (string) $token_response['scope'] : '',
+			)
+		);
 
 		return $this->no_store( new WP_REST_Response( $token_response, 200 ) );
 	}
@@ -616,6 +654,11 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
 		$user_id = isset( $record['user_id'] ) ? (int) $record['user_id'] : 0;
 
+		// P0b: a user demoted (or deleted) since consent cannot renew.
+		if ( ! Mcpwp_OAuth_Well_Known::user_meets_min_role( $user_id ) ) {
+			return $this->oauth_error_response( 'invalid_grant', 'The approving user can no longer connect AI apps on this site.', 400 );
+		}
+
 		// P0-A parity: re-clamp to the stored user's CURRENT capabilities on every
 		// refresh. A refresh token outlives the consent that minted it (up to 30
 		// days, per issue_oauth_access_token_with_user()), so without this a user
@@ -638,6 +681,15 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
 		// Issue a new access token + new refresh token.
 		$token_response = $this->issue_oauth_access_token_with_user( $scopes, $ttl, $user_id );
+
+		$this->log_oauth_event(
+			'oauth_token_issued',
+			array(
+				'grant_type' => 'refresh_token',
+				'user_id'    => $user_id,
+				'scope'      => isset( $token_response['scope'] ) ? (string) $token_response['scope'] : '',
+			)
+		);
 
 		return $this->no_store( new WP_REST_Response( $token_response, 200 ) );
 	}
@@ -708,6 +760,16 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$scopes = $this->apply_scope_ceiling( $scopes, $oauth_settings['oauth_client_credentials_max_scope'] );
 
 		$token_data = $this->issue_oauth_access_token( $scopes, $oauth_settings['oauth_token_ttl'], array( 'client_id' => $client_id ) );
+
+		$this->log_oauth_event(
+			'oauth_token_issued',
+			array(
+				'grant_type' => 'client_credentials',
+				'client_id'  => $client_id,
+				'user_id'    => 0,
+				'scope'      => isset( $token_data['scope'] ) ? (string) $token_data['scope'] : '',
+			)
+		);
 
 		return new WP_REST_Response( $token_data, 200 );
 	}
@@ -1300,8 +1362,11 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$token_response = $this->issue_oauth_access_token( $scopes, $ttl, array( 'user_id' => (int) $user_id ) );
 
 		// Issue a refresh token (separate, longer-lived transient).
-		// Refresh TTL = 30 days max or 10x access TTL, whichever is smaller.
-		$refresh_ttl    = min( 30 * DAY_IN_SECONDS, $ttl * 10 );
+		// P1-2: the refresh lifetime is its own setting, decoupled from the
+		// access TTL (it used to be min(30 d, 10 x access TTL) — 10 hours at
+		// the default 3600, so connections died overnight).  Rotation on
+		// every use is unchanged.
+		$refresh_ttl    = self::refresh_token_ttl();
 		$refresh_token  = 'mcpwp_rt_' . bin2hex( random_bytes( 32 ) );
 		$refresh_record = array(
 			'scopes'     => $scopes,
@@ -1320,6 +1385,70 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$token_response['refresh_token'] = $refresh_token;
 
 		return $token_response;
+	}
+
+	/**
+	 * Refresh-token lifetime: 30 days by default, clamped to 14-30 days.
+	 *
+	 * Configurable through the `mcpwp_oauth_refresh_ttl_days` filter only —
+	 * no UI, and never shorter than 14 days or longer than 30.
+	 *
+	 * @return int Seconds.
+	 */
+	public static function refresh_token_ttl() {
+		$days = function_exists( 'apply_filters' ) ? (int) apply_filters( 'mcpwp_oauth_refresh_ttl_days', 30 ) : 30;
+		$days = max( 14, min( 30, $days ) );
+		return $days * DAY_IN_SECONDS;
+	}
+
+	/**
+	 * Write an OAuth decision to the activity log: who, which client, what
+	 * scope.  A synthetic request carrying ONLY those fields is logged, so a
+	 * code, verifier, token, nonce or consent binding can never reach the log.
+	 *
+	 * @param string $action Log action.
+	 * @param array  $fields Safe fields (client_id, scope, user_id, grant_type).
+	 */
+	private function log_oauth_event( $action, array $fields ) {
+		if ( ! isset( $fields['user_id'] ) ) {
+			$fields['user_id'] = get_current_user_id();
+		}
+		$entry = new WP_REST_Request( 'POST', '/' . $this->namespace . '/oauth/' . str_replace( 'oauth_', '', $action ) );
+		$entry->set_body_params( $fields );
+		$this->log_activity( $action, $entry );
+	}
+
+	/**
+	 * The plain refusal page for a user below the minimum role (P0b).
+	 *
+	 * @return WP_REST_Response
+	 */
+	private function min_role_refusal_response() {
+		$labels = array(
+			'editor'        => __( 'Editor', 'mcpwp' ),
+			'author'        => __( 'Author', 'mcpwp' ),
+			'administrator' => __( 'Administrator', 'mcpwp' ),
+		);
+		$role = Mcpwp_OAuth_Well_Known::get_min_role();
+
+		$html = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+			. '<title>' . esc_html__( 'Not allowed', 'mcpwp' ) . '</title>'
+			. '<style>body{font-family:system-ui,sans-serif;max-width:480px;margin:60px auto;padding:0 16px}</style></head><body>'
+			. '<h1>' . esc_html__( 'Your WordPress role can\'t connect AI apps on this site; ask an administrator.', 'mcpwp' ) . '</h1>'
+			. '<p>' . esc_html(
+				sprintf(
+					/* translators: %s: role name */
+					__( 'Connecting an AI app needs the %s role or higher.', 'mcpwp' ),
+					$labels[ $role ]
+				)
+			) . '</p></body></html>';
+
+		$response = new WP_REST_Response( $html, 403 );
+		$response->header( 'Content-Type', 'text/html; charset=utf-8' );
+		$response->header( 'X-Frame-Options', 'DENY' );
+		$response->header( 'Content-Security-Policy', "frame-ancestors 'none'" );
+		$response->header( 'Cache-Control', 'no-store, private' );
+		return $response;
 	}
 
 	/**

@@ -40,16 +40,25 @@ final class OAuthDefaultOnTest extends TestCase {
 	const REDIRECT = 'https://client.example.com/callback';
 	const VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
 
+	/** @var array */
+	private $saved_users;
+
 	protected function setUp(): void {
+		// PR-2 P0: an OAuth token acts as its user, who must exist.
+		$this->saved_users = $GLOBALS['mcpwp_test_users'];
+		foreach ( array( 1, 2, 7, 8, 9, 10 ) as $mcpwp_uid ) {
+			$GLOBALS['mcpwp_test_users'][] = (object) array( 'ID' => $mcpwp_uid, 'roles' => array(), 'user_login' => 'user' . $mcpwp_uid );
+		}
 		$GLOBALS['mcpwp_test_options']      = array();
 		$GLOBALS['mcpwp_test_transients']   = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
-		$GLOBALS['mcpwp_test_user_caps']    = array();
+		$GLOBALS['mcpwp_test_user_caps']    = array( 7 => array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		$GLOBALS['mcpwp_test_user_meta']    = array();
 		$GLOBALS['mcpwp_test_wpdb_options'] = array();
 	}
 
 	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_users'] = $this->saved_users;
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 		$GLOBALS['mcpwp_test_user_caps']    = array();
 		$GLOBALS['mcpwp_test_user_meta']    = array();
@@ -181,7 +190,7 @@ final class OAuthDefaultOnTest extends TestCase {
 	// ── D9 / D8: scope defaults ────────────────────────────────────────────
 
 	public function test_no_scope_means_read_write_for_an_editor(): void {
-		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		$this->assertSame( array( 'read', 'write' ), $this->controller()->clamp_scope_to_user_capability( '' ) );
 		$this->assertSame( array( 'read', 'write' ), $this->controller()->clamp_scope_to_user_capability( '   ' ) );
 	}
@@ -192,7 +201,7 @@ final class OAuthDefaultOnTest extends TestCase {
 	}
 
 	public function test_no_scope_for_an_administrator_is_write_never_admin(): void {
-		$this->login( 1, array( 'edit_posts' => true, 'manage_options' => true ) );
+		$this->login( 1, array( 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true ) );
 		$this->assertSame( array( 'read', 'write' ), $this->controller()->clamp_scope_to_user_capability( '' ) );
 		$this->assertSame( array( 'read', 'write' ), $this->controller()->clamp_scope_to_user_capability( 'read write admin' ) );
 		$this->assertSame( array( 'read', 'write' ), $this->controller()->clamp_scope_array_to_user_id( array( 'read', 'write', 'admin' ), 1 ) );
@@ -200,7 +209,7 @@ final class OAuthDefaultOnTest extends TestCase {
 
 	public function test_admin_full_round_trip_mints_write_not_admin(): void {
 		$this->legacy_client_settings();
-		$this->login( 1, array( 'edit_posts' => true, 'manage_options' => true ) );
+		$this->login( 1, array( 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true ) );
 
 		list( , $fields )      = $this->consent( 'read write admin' );
 		$fields['action']      = 'approve';
@@ -210,7 +219,7 @@ final class OAuthDefaultOnTest extends TestCase {
 	}
 
 	public function test_scope_unrecognised_only_stays_read(): void {
-		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		$this->assertSame( array( 'read' ), $this->controller()->clamp_scope_to_user_capability( 'openid profile' ) );
 	}
 
@@ -218,7 +227,7 @@ final class OAuthDefaultOnTest extends TestCase {
 
 	public function test_consent_shows_write_as_a_ticked_box_only_when_grantable(): void {
 		$this->legacy_client_settings();
-		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		list( $html ) = $this->consent( '' );
 		$this->assertStringContainsString( 'name="scope_write" value="1" checked', $html );
 		$this->assertStringContainsString( '<input type="hidden" name="scope" value="read write">', $html, 'D9: no scope requested = read write.' );
@@ -230,7 +239,7 @@ final class OAuthDefaultOnTest extends TestCase {
 
 	public function test_ticked_write_mints_read_write(): void {
 		$this->legacy_client_settings();
-		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		list( , $fields )      = $this->consent( '' );
 		$fields['action']      = 'approve';
 		$fields['scope_write'] = '1';
@@ -240,7 +249,7 @@ final class OAuthDefaultOnTest extends TestCase {
 
 	public function test_unticked_write_mints_read_only(): void {
 		$this->legacy_client_settings();
-		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		list( , $fields ) = $this->consent( 'read write' );
 		$fields['action'] = 'approve';
 		// An unticked checkbox is simply absent from the POST.
@@ -250,7 +259,7 @@ final class OAuthDefaultOnTest extends TestCase {
 
 	public function test_write_tick_cannot_add_write_to_a_read_request(): void {
 		$this->legacy_client_settings();
-		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		list( , $fields )      = $this->consent( 'read' );
 		$fields['action']      = 'approve';
 		$fields['scope_write'] = '1'; // forged: the screen never offered it
@@ -260,7 +269,7 @@ final class OAuthDefaultOnTest extends TestCase {
 
 	public function test_tampered_scope_field_is_refused_and_mints_nothing(): void {
 		$this->legacy_client_settings();
-		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		list( , $fields )      = $this->consent( 'read' );
 		$fields['action']      = 'approve';
 		$fields['scope']       = 'read write admin'; // edited hidden field
@@ -276,7 +285,7 @@ final class OAuthDefaultOnTest extends TestCase {
 
 	public function test_every_bound_field_is_tamper_evident(): void {
 		$this->legacy_client_settings( array( 'oauth_redirect_uris' => array( self::REDIRECT, 'https://client.example.com/other' ) ) );
-		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		list( , $fields ) = $this->consent( 'read write' );
 
 		$tampers = array(
@@ -299,7 +308,7 @@ final class OAuthDefaultOnTest extends TestCase {
 		$this->assertSame( 400, $this->post( $missing )->get_status(), 'No binding, no code.' );
 
 		// Another user cannot replay this user's form.
-		$this->login( 8, array( 'edit_posts' => true ) );
+		$this->login( 8, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		$other           = $fields;
 		$other['action'] = 'approve';
 		$this->assertSame( 400, $this->post( $other )->get_status() );
@@ -310,7 +319,7 @@ final class OAuthDefaultOnTest extends TestCase {
 	// ── D10 addition: notice + switch ──────────────────────────────────────
 
 	private function admin(): void {
-		$this->login( 1, array( 'activate_plugins' => true, 'manage_options' => true, 'edit_posts' => true ) );
+		$this->login( 1, array( 'activate_plugins' => true, 'manage_options' => true, 'edit_posts' => true, 'edit_others_posts' => true ) );
 	}
 
 	private function render_notice(): string {
@@ -337,7 +346,7 @@ final class OAuthDefaultOnTest extends TestCase {
 
 	public function test_notice_needs_activate_plugins(): void {
 		$this->legacy_client_settings();
-		$this->login( 7, array( 'edit_posts' => true, 'manage_options' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true ) );
 		$this->assertFalse( Mcpwp_OAuth_Local_Admin::should_show_notice() );
 		$this->assertSame( '', $this->render_notice() );
 	}
@@ -360,7 +369,7 @@ final class OAuthDefaultOnTest extends TestCase {
 
 	public function test_dismissal_refused_without_capability(): void {
 		$this->legacy_client_settings();
-		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		$this->assertFalse( Mcpwp_OAuth_Local_Admin::process_dismiss( array( Mcpwp_OAuth_Local_Admin::NONCE_FIELD => 'test-nonce' ) ) );
 		$this->assertSame( '', get_user_meta( 7, Mcpwp_OAuth_Local_Admin::DISMISSED_META, true ) );
 	}
@@ -386,7 +395,7 @@ final class OAuthDefaultOnTest extends TestCase {
 		$this->admin();
 		$this->assertNull( Mcpwp_OAuth_Local_Admin::process_toggle( array( 'mcpwp_local_oauth' => '0' ) ) );
 
-		$this->login( 7, array( 'edit_posts' => true, 'manage_options' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true ) );
 		$this->assertNull( Mcpwp_OAuth_Local_Admin::process_toggle( array( Mcpwp_OAuth_Local_Admin::NONCE_FIELD => 'test-nonce', 'mcpwp_local_oauth' => '0' ) ) );
 
 		$this->assertArrayNotHasKey( 'oauth_enabled', get_option( 'mcpwp_settings' ) );
@@ -500,7 +509,7 @@ final class OAuthDefaultOnTest extends TestCase {
 	}
 
 	public function test_address_line_hidden_from_non_admins(): void {
-		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		$this->seed_client( true );
 		update_option( Mcpwp_OAuth_Local_Admin::LAST_RESOURCE_OPTION, 'https://old.example.com/wp-json/mcpwp/v1/mcp', false );
 		$this->assertSame( '', $this->render_address_notice() );
@@ -522,7 +531,7 @@ final class OAuthDefaultOnTest extends TestCase {
 
 	public function test_first_approval_records_the_resource_and_later_ones_do_not_move_it(): void {
 		$this->legacy_client_settings();
-		$this->login( 7, array( 'edit_posts' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		list( , $fields )      = $this->consent( 'read write' );
 		$fields['action']      = 'approve';
 		$fields['scope_write'] = '1';
@@ -535,6 +544,35 @@ final class OAuthDefaultOnTest extends TestCase {
 		$again['scope_write'] = '1';
 		$this->code_scope( $this->post( $again ) );
 		$this->assertSame( 'https://old.example.com/wp-json/mcpwp/v1/mcp', get_option( Mcpwp_OAuth_Local_Admin::LAST_RESOURCE_OPTION ), 'A reconnection must not hide the change from other apps.' );
+	}
+
+	public function test_consent_decisions_are_logged_without_code_or_binding(): void {
+		$this->legacy_client_settings( array( 'enable_logging' => true ) );
+		$this->login( 7, array( 'edit_posts' => true, 'edit_others_posts' => true ) );
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+
+		list( , $fields )      = $this->consent( 'read write' );
+		$approve               = $fields;
+		$approve['action']     = 'approve';
+		$approve['scope_write'] = '1';
+		$location              = $this->post( $approve )->get_headers()['Location'];
+		parse_str( (string) wp_parse_url( $location, PHP_URL_QUERY ), $query );
+
+		$deny           = $fields;
+		$deny['action'] = 'deny';
+		$this->post( $deny );
+
+		$rows    = $GLOBALS['mcpwp_test_wpdb_rows']['wp_mcpwp_activity_log'] ?? array();
+		$actions = array_column( $rows, 'action' );
+		$this->assertContains( 'oauth_consent_approved', $actions );
+		$this->assertContains( 'oauth_consent_denied', $actions );
+		$approved = json_decode( $rows[ array_search( 'oauth_consent_approved', $actions, true ) ]['request_data'], true );
+		$this->assertSame( array( 'client_id' => 'test_client', 'scope' => 'read write', 'user_id' => 7 ), $approved );
+
+		$all = serialize( $rows );
+		$this->assertStringNotContainsString( $query['code'], $all );
+		$this->assertStringNotContainsString( $fields['_mcpwp_oauth_binding'], $all );
+		$this->assertStringNotContainsString( $fields['code_challenge'], $all );
 	}
 
 	// ── D11 / D14 ──────────────────────────────────────────────────────────

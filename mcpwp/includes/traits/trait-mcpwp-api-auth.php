@@ -94,6 +94,16 @@ trait Mcpwp_Api_Auth {
 		}
 
 		$key_record = $this->get_current_api_key_record();
+
+		// An OAuth token acting as a user (PR-2 P0): list-level non-public
+		// visibility needs write scope AND what WordPress gives an Editor
+		// for it — reading others' drafts and private posts.  Per-post reads
+		// still ask read_post (requester_can_read_post()).
+		if ( $this->requester_oauth_user_id() > 0 ) {
+			return $key_record && $this->key_has_scope( $key_record, 'write' )
+				&& current_user_can( 'edit_others_posts' ) && current_user_can( 'read_private_posts' );
+		}
+
 		if ( $key_record && $this->key_has_scope( $key_record, 'write' ) ) {
 			return true;
 		}
@@ -109,6 +119,31 @@ trait Mcpwp_Api_Auth {
 	protected function requester_is_webmcp() {
 		$key_record = $this->get_current_api_key_record();
 		return is_array( $key_record ) && isset( $key_record['type'] ) && class_exists( 'Mcpwp_WebMCP' ) && Mcpwp_WebMCP::SOURCE === $key_record['type'];
+	}
+
+	/**
+	 * The WordPress user an OAuth token acts as (PR-2 P0), or 0.
+	 *
+	 * @return int
+	 */
+	protected function requester_oauth_user_id() {
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) || ! isset( $key_record['type'] ) || 'oauth' !== $key_record['type'] || empty( $key_record['acts_as_user'] ) ) {
+			return 0;
+		}
+		return (int) $key_record['acts_as_user'];
+	}
+
+	/**
+	 * Whether a user meets the site's minimum role for OAuth connections.
+	 *
+	 * Fails closed when the resolver is unavailable.
+	 *
+	 * @param int $user_id User id.
+	 * @return bool
+	 */
+	protected function oauth_user_meets_min_role( $user_id ) {
+		return class_exists( 'Mcpwp_OAuth_Well_Known' ) && Mcpwp_OAuth_Well_Known::user_meets_min_role( (int) $user_id );
 	}
 
 	/**
@@ -131,6 +166,17 @@ trait Mcpwp_Api_Auth {
 
 		if ( $this->requester_is_webmcp() ) {
 			return current_user_can( 'read_post', (int) $post->ID );
+		}
+
+		// OAuth acting as a user: WordPress decides (read_post), and a
+		// non-public post additionally needs write scope — the scope stays a
+		// ceiling, exactly as for an API key.
+		if ( $this->requester_oauth_user_id() > 0 ) {
+			if ( ! current_user_can( 'read_post', (int) $post->ID ) ) {
+				return false;
+			}
+			$key_record = $this->get_current_api_key_record();
+			return $this->is_public_status( $post->post_status ) || $this->key_has_scope( $key_record, 'write' );
 		}
 
 		return $this->is_public_status( $post->post_status ) || $this->requester_can_see_non_public();
@@ -2311,6 +2357,15 @@ trait Mcpwp_Api_Auth {
 				if ( ! current_user_can( 'read_post', (int) $id ) ) {
 					return true;
 				}
+			} elseif ( $this->requester_oauth_user_id() > 0 ) {
+				// OAuth acting as a user (PR-2 P0): WordPress decides, and
+				// a non-public post still needs write scope.
+				if ( ! current_user_can( 'read_post', (int) $id ) ) {
+					return true;
+				}
+				if ( ! $this->is_public_status( $row['post_status'] ) && ! $this->key_has_scope( $this->get_current_api_key_record(), 'write' ) ) {
+					return true;
+				}
 			} elseif ( ! $this->is_public_status( $row['post_status'] ) && ! $this->requester_can_see_non_public() ) {
 				return true;
 			}
@@ -2416,9 +2471,52 @@ trait Mcpwp_Api_Auth {
 					return $this->post_ref_not_found_error( $request );
 				}
 			}
+
+			// PR-2 P0: an OAuth token acting as a user may change only posts
+			// WordPress lets that user change.  MCPWP's write handlers call
+			// wp_update_post()/wp_delete_post(), which check no capability,
+			// so running as the user is not enough on its own — this is the
+			// one chokepoint every declared post reference passes.  Visible-
+			// but-not-editable is a 403, not a 404: the user can already
+			// read the post, so its existence is no secret.
+			$edit_check = $this->check_oauth_user_can_change_post_refs( $request, $resolution['refs']['scalar'] );
+			if ( is_wp_error( $edit_check ) ) {
+				return $edit_check;
+			}
 		}
 
 		return $this->check_request_template_refs( $request );
+	}
+
+	/**
+	 * Per-post write check for an OAuth token acting as a user (PR-2 P0).
+	 *
+	 * Applies to every non-GET/HEAD request carrying declared scalar post
+	 * references: DELETE needs delete_post, anything else edit_post.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @param int[]           $ids     Declared scalar post ids.
+	 * @return true|WP_Error
+	 */
+	protected function check_oauth_user_can_change_post_refs( $request, $ids ) {
+		if ( $this->requester_oauth_user_id() <= 0 || empty( $ids ) ) {
+			return true;
+		}
+		$method = is_object( $request ) && method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'GET';
+		if ( in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true ) ) {
+			return true;
+		}
+		$cap = 'DELETE' === $method ? 'delete_post' : 'edit_post';
+		foreach ( (array) $ids as $id ) {
+			if ( (int) $id > 0 && ! current_user_can( $cap, (int) $id ) ) {
+				return new WP_Error(
+					'rest_cannot_edit',
+					__( 'Your WordPress account is not allowed to change this content.', 'mcpwp' ),
+					array( 'status' => 403 )
+				);
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -3459,6 +3557,22 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
+		// PR-2 P0: a token minted for a user ACTS AS that user.  So the user
+		// must still exist and still meet the site's minimum role for AI
+		// connections (Mcpwp_OAuth_Well_Known::get_min_role()); a deleted or
+		// demoted user's token stops working on its next request.  A record
+		// without user_id (client_credentials, pre-identity legacy tokens)
+		// keeps running as the service account — see below.
+		$oauth_user_id = ( isset( $record['user_id'] ) && (int) $record['user_id'] > 0 ) ? (int) $record['user_id'] : 0;
+		if ( $oauth_user_id > 0 && ( ! get_userdata( $oauth_user_id ) || ! $this->oauth_user_meets_min_role( $oauth_user_id ) ) ) {
+			$this->log_auth_failure( $request );
+			return new WP_Error(
+				'invalid_token',
+				__( 'The WordPress user who approved this connection can no longer connect AI apps on this site.', 'mcpwp' ),
+				array( 'status' => 401 )
+			);
+		}
+
 		if ( $metered ) {
 			$rate_limit_check = $this->meter_request( $request, 'oauth:' . substr( hash( 'sha256', (string) $token ), 0, 16 ), $this->rate_limit_method( $request ) );
 			if ( is_wp_error( $rate_limit_check ) ) {
@@ -3484,6 +3598,12 @@ trait Mcpwp_Api_Auth {
 			'type'   => 'oauth',
 			'scopes' => $this->sanitize_scopes( (array) $record['scopes'] ),
 		);
+		if ( $oauth_user_id > 0 ) {
+			// Read by requester_oauth_user_id(): this principal is a real
+			// WordPress user, so per-post visibility and write checks ask
+			// WordPress (the WebMCP rule, #981) instead of trusting scope.
+			$key_record['acts_as_user'] = $oauth_user_id;
+		}
 		$this->current_api_key_record = $key_record;
 		$required_scope               = $this->get_required_scope_for_request( $request );
 
@@ -3503,7 +3623,17 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
-		if ( ! $this->set_api_user_context() ) {
+		// PR-2 P0: run AS THE APPROVING USER, never as the service account.
+		// The service account (mcpwp_api_agent) holds editor-level caps, so
+		// running a user's token as it would hand a low-privilege user an
+		// editor's reach; as the user, WordPress capability checks (and the
+		// per-post read/edit checks below) apply.  The token scope stays a
+		// further ceiling on top.  Only a token with no user — the machine
+		// client_credentials grant and pre-identity legacy tokens — keeps
+		// the service account, unchanged.
+		if ( $oauth_user_id > 0 ) {
+			wp_set_current_user( $oauth_user_id );
+		} elseif ( ! $this->set_api_user_context() ) {
 			return new WP_Error(
 				'api_user_missing',
 				__( 'API user context is not configured. Re-activate MCPWP to provision the service account.', 'mcpwp' ),
@@ -4247,6 +4377,14 @@ trait Mcpwp_Api_Auth {
 			// Staging routes: pushing environments (especially →live) is irreversible
 			// without a host-level backup, so all staging endpoints require admin scope.
 			'/mcpwp/v1/staging',
+			// WooCommerce orders and customers (PR-2 round 2, Kasra option A):
+			// customer PII, addresses and order history.  The handlers carry no
+			// capability check of their own (that is #1100), so scope is the
+			// only gate — admin, every method, prefix match (orders/{id},
+			// orders/statuses, customers/{id} and any future sub-route).  An
+			// OAuth token is never admin (D8), so it cannot reach them at all.
+			'/mcpwp/v1/woocommerce/orders',
+			'/mcpwp/v1/woocommerce/customers',
 		);
 
 		foreach ( $admin_routes as $admin_route ) {
@@ -4751,6 +4889,14 @@ trait Mcpwp_Api_Auth {
 	 */
 	protected function get_required_scope_for_tool_name( $tool_name ) {
 		$admin_tools = array(
+			// WooCommerce orders/customers: mirrors the blanket-admin
+			// /woocommerce/orders and /woocommerce/customers routes (PR-2 round 2).
+			'wc_list_orders',
+			'wc_get_order',
+			'wc_update_order',
+			'wc_list_order_statuses',
+			'wc_list_customers',
+			'wc_get_customer',
 			'wp_delete_all_drafts',
 			'wp_get_options',
 			'wp_update_options',

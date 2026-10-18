@@ -45,11 +45,19 @@ final class OAuthResourceAudienceTest extends TestCase {
 	const REDIRECT = 'https://client.example.com/callback';
 	const VERIFIER = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
 
+	/** @var array */
+	private $saved_users;
+
 	protected function setUp(): void {
+		// PR-2 P0: an OAuth token acts as its user, who must exist.
+		$this->saved_users = $GLOBALS['mcpwp_test_users'];
+		foreach ( array( 1, 2, 7, 8, 9, 10 ) as $mcpwp_uid ) {
+			$GLOBALS['mcpwp_test_users'][] = (object) array( 'ID' => $mcpwp_uid, 'roles' => array(), 'user_login' => 'user' . $mcpwp_uid );
+		}
 		$GLOBALS['mcpwp_test_options']      = array();
 		$GLOBALS['mcpwp_test_transients']   = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
-		$GLOBALS['mcpwp_test_user_caps']    = array();
+		$GLOBALS['mcpwp_test_user_caps']    = array( 7 => array( 'edit_posts' => true, 'edit_others_posts' => true ) );
 		$_SERVER['REQUEST_URI']             = '/';
 
 		update_option(
@@ -63,6 +71,7 @@ final class OAuthResourceAudienceTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_users'] = $this->saved_users;
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 		$GLOBALS['mcpwp_test_user_caps']    = array();
 		unset( $_SERVER['REQUEST_URI'] );
@@ -89,7 +98,7 @@ final class OAuthResourceAudienceTest extends TestCase {
 
 	private function login_editor(): void {
 		$GLOBALS['mcpwp_test_current_user'] = 7;
-		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true );
+		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true, 'edit_others_posts' => true );
 	}
 
 	/** Render consent, then POST it back approved, returning the redirect query. */
@@ -290,7 +299,7 @@ final class OAuthResourceAudienceTest extends TestCase {
 
 	public function test_refresh_token_with_foreign_aud_is_refused(): void {
 		$ctrl  = $this->controller();
-		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true );
+		$GLOBALS['mcpwp_test_user_caps'][7] = array( 'edit_posts' => true, 'edit_others_posts' => true );
 		$token = 'mcpwp_rt_' . bin2hex( random_bytes( 16 ) );
 		set_transient( $ctrl->get_oauth_refresh_token_transient_key( $token ), array( 'scopes' => array( 'read' ), 'user_id' => 7, 'aud' => 'https://other.example/wp-json/mcpwp/v1/mcp' ), 3600 );
 
@@ -344,7 +353,7 @@ final class OAuthResourceAudienceTest extends TestCase {
 		$this->assertSame( 'https://example.com/wp-json/mcpwp/v1/oauth/register', $metadata['registration_endpoint'] );
 		$this->assertTrue( $metadata['authorization_response_iss_parameter_supported'] );
 		$this->assertSame( array( 'read', 'write' ), $metadata['scopes_supported'] );
-		$this->assertContains( 'none', $metadata['token_endpoint_auth_methods_supported'] );
+		$this->assertSame( array( 'none' ), $metadata['token_endpoint_auth_methods_supported'], 'P1-3: only public clients are advertised.' );
 	}
 
 	// ── PRM + D12 ──────────────────────────────────────────────────────────

@@ -359,6 +359,55 @@ class Mcpwp_OAuth_Well_Known {
 	}
 
 	/**
+	 * Option holding the minimum WordPress role allowed to approve an AI
+	 * connection (PR-2 P0b).  Its own option: the settings sanitizer rebuilds
+	 * mcpwp_settings from a fixed key list and would drop it.
+	 *
+	 * @var string
+	 */
+	const MIN_ROLE_OPTION = 'mcpwp_oauth_min_role';
+
+	/**
+	 * Minimum-role choices → the capability that defines each.
+	 *
+	 * @return array<string,string>
+	 */
+	public static function min_role_choices() {
+		return array(
+			'editor'        => 'edit_others_posts',
+			'author'        => 'publish_posts',
+			'administrator' => 'manage_options',
+		);
+	}
+
+	/**
+	 * The configured minimum role; Editor when unset or unrecognised.
+	 *
+	 * @return string
+	 */
+	public static function get_min_role() {
+		$role    = (string) get_option( self::MIN_ROLE_OPTION, 'editor' );
+		$choices = self::min_role_choices();
+		return isset( $choices[ $role ] ) ? $role : 'editor';
+	}
+
+	/**
+	 * Whether a user meets the minimum role (by its capability, so custom
+	 * roles carrying it qualify and a demotion takes effect at once).
+	 *
+	 * @param int $user_id User id.
+	 * @return bool
+	 */
+	public static function user_meets_min_role( $user_id ) {
+		$user_id = (int) $user_id;
+		if ( $user_id <= 0 || ! function_exists( 'user_can' ) ) {
+			return false;
+		}
+		$choices = self::min_role_choices();
+		return (bool) user_can( $user_id, $choices[ self::get_min_role() ] );
+	}
+
+	/**
 	 * Whether `oauth_enabled` is ON only because it was never stored (D10).
 	 *
 	 * @return bool
@@ -448,7 +497,10 @@ class Mcpwp_OAuth_Well_Known {
 			'response_types_supported'              => array( 'code' ),
 			'grant_types_supported'                 => array( 'authorization_code', 'refresh_token' ),
 			'code_challenge_methods_supported'      => array( 'S256' ),
-			'token_endpoint_auth_methods_supported' => array( 'none', 'client_secret_post' ),
+			// P1-3: only public clients are registered (DCR answers "none").
+			// The legacy settings client still authenticates with
+			// client_secret_post at the token endpoint, but is not advertised.
+			'token_endpoint_auth_methods_supported' => array( 'none' ),
 			// D8: OAuth never grants admin.
 			'scopes_supported'                      => array( 'read', 'write' ),
 			// D13: RFC 9207 — every authorization response carries `iss`.

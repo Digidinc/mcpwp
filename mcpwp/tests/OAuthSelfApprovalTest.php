@@ -29,7 +29,20 @@ class Mcpwp_OAuth_SelfApproval_Auth_Harness {
 
 final class OAuthSelfApprovalTest extends TestCase {
 
+
+	/** @var array */
+	private $pr2_saved_users;
+
+	/** @var array */
+	private $pr2_saved_caps;
+
 	protected function setUp(): void {
+		// PR-2 P0: an OAuth token acts as its approving user, who must exist
+		// and meet the minimum role (default Editor). User 7 is that Editor.
+		$this->pr2_saved_users                = $GLOBALS['mcpwp_test_users'];
+		$this->pr2_saved_caps                 = $GLOBALS['mcpwp_test_user_caps'] ?? array();
+		$GLOBALS['mcpwp_test_users'][]        = (object) array( 'ID' => 7, 'roles' => array( 'editor' ), 'user_login' => 'editor7' );
+		$GLOBALS['mcpwp_test_user_caps'][7]   = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'publish_posts' => true, 'read_private_posts' => true );
 		$GLOBALS['mcpwp_test_options']       = array();
 		$GLOBALS['mcpwp_test_transients']    = array();
 		$GLOBALS['mcpwp_test_current_user']  = 0;
@@ -40,6 +53,11 @@ final class OAuthSelfApprovalTest extends TestCase {
 			'oauth_enabled'    => true,
 			'oauth_token_ttl'  => 3600,
 		) );
+	}
+
+	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_users']      = $this->pr2_saved_users;
+		$GLOBALS['mcpwp_test_user_caps'] = $this->pr2_saved_caps;
 	}
 
 	/** Invoke the private check_self_approval() with a chosen current key record. */

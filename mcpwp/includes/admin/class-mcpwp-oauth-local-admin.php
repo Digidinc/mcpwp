@@ -257,6 +257,16 @@ class Mcpwp_OAuth_Local_Admin {
 		$settings['oauth_enabled'] = $enabled;
 		update_option( 'mcpwp_settings', $settings );
 
+		// P0b: the minimum role that may connect AI apps, in its own option
+		// (the settings sanitizer would drop an unknown key).  Only a listed
+		// choice is stored; anything else leaves the stored value alone.
+		if ( isset( $post['mcpwp_local_oauth_min_role'] ) ) {
+			$role = sanitize_key( (string) $post['mcpwp_local_oauth_min_role'] );
+			if ( array_key_exists( $role, Mcpwp_OAuth_Well_Known::min_role_choices() ) ) {
+				update_option( Mcpwp_OAuth_Well_Known::MIN_ROLE_OPTION, $role, false );
+			}
+		}
+
 		return $enabled;
 	}
 

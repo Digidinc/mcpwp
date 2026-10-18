@@ -310,8 +310,13 @@ class Mcpwp_OAuth_Clients {
 			return $redirect_uris;
 		}
 
-		if ( array_key_exists( 'token_endpoint_auth_method', $metadata ) && 'none' !== $metadata['token_endpoint_auth_method'] ) {
-			return self::metadata_error( 'Only public clients are supported: token_endpoint_auth_method must be "none" (PKCE S256 is required instead of a secret).' );
+		// RFC 7591 §3.2.1: the server may replace requested metadata with
+		// values it supports.  Only public clients exist here, so any
+		// requested token_endpoint_auth_method is replaced with "none" (and
+		// the 201 response says so) instead of refusing a client that merely
+		// asked for client_secret_post.  No secret is ever issued.
+		if ( array_key_exists( 'token_endpoint_auth_method', $metadata ) && ! is_string( $metadata['token_endpoint_auth_method'] ) ) {
+			return self::metadata_error( 'token_endpoint_auth_method must be a string.' );
 		}
 
 		if ( array_key_exists( 'grant_types', $metadata ) ) {
@@ -523,7 +528,7 @@ class Mcpwp_OAuth_Clients {
 		if ( count( $window ) >= self::SITE_REGISTRATIONS_PER_DAY ) {
 			return new WP_Error(
 				'temporarily_unavailable',
-				'This site has registered too many apps in the last day. Try again later.',
+				'Too many app registrations right now; try again later.',
 				array(
 					'status'      => 429,
 					'retry_after' => max( 1, (int) min( $window ) + self::SITE_WINDOW - $now ),
@@ -540,7 +545,7 @@ class Mcpwp_OAuth_Clients {
 			if ( null === $victim ) {
 				return new WP_Error(
 					'temporarily_unavailable',
-					'This site has too many connected apps. An administrator can remove unused ones; try again later.',
+					'Too many app registrations right now; try again later.',
 					array( 'status' => 429 )
 				);
 			}
@@ -881,7 +886,7 @@ class Mcpwp_OAuth_Clients {
 		if ( (int) $bucket['count'] >= self::REGISTRATIONS_PER_WINDOW ) {
 			return new WP_Error(
 				'temporarily_unavailable',
-				'Too many client registrations from this address for this app. Try again later.',
+				'Too many app registrations right now; try again later.',
 				array(
 					'status'      => 429,
 					'retry_after' => max( 1, (int) $bucket['reset'] - $now ),
