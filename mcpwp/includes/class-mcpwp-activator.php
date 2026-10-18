@@ -851,6 +851,255 @@ class Mcpwp_Activator {
 	const DENY_ALL_CATEGORIES_LOCK_OPTION = 'mcpwp_deny_all_categories_migration_lock';
 	const DENY_ALL_CATEGORIES_LOCK_TTL    = 15;
 
+	/** Set once every 2.8 spai credential is in the scoped store or dead (#1098). */
+	const SPAI_ADOPTION_FLAG        = 'mcpwp_spai_credentials_adopted';
+	const SPAI_ADOPTION_LOCK_OPTION = 'mcpwp_spai_adoption_lock';
+	const SPAI_ADOPTION_LOCK_TTL    = 15;
+
+	/** Label of an adopted record; the Setup page explains what it can do. */
+	const SPAI_ADOPTED_LABEL = 'Migrated 2.8 key';
+
+	/**
+	 * One-time adoption of the 2.8 spai credentials into the revocable store
+	 * (#1098), then deletion of the originals.
+	 *
+	 * The 2.8 → mcpwp migration copied spai credentials verbatim, but not
+	 * always: on the normal upgrade path activate() mints mcpwp_api_key
+	 * before Mcpwp_Migrate::run(), so a single spai_api_key is never copied
+	 * (the copy skips a target that already has a value). That key then
+	 * authenticated as admin through find_legacy_spai_key() for good, and no
+	 * screen could revoke it — "regenerate revokes EVERY key" was false for
+	 * it. Here every live spai credential becomes an ordinary scoped record,
+	 * which Active Keys lists and Revoke kills, and the spai options are
+	 * deleted, so the bridge has nothing left to honour.
+	 *
+	 * Never resurrects a revoked credential:
+	 *  - a hash already in the scoped store — ACTIVE OR REVOKED — is not
+	 *    added again (a revoked copy stays the only record, so it stays dead);
+	 *  - a spai record that is itself revoked is not adopted;
+	 *  - the store is re-read immediately before the one append, so the write
+	 *    carries every record as it is now, never an older snapshot. (The
+	 *    store has no lock of its own — create/revoke write it unlocked, the
+	 *    #1041 NIT-B race — so this narrows that window to the append itself;
+	 *    the migration lock serialises against other migrations.)
+	 *
+	 * Behaviour is preserved, so this is not a lockout:
+	 *  - a spai_api_keys record keeps its own scopes, role and categories —
+	 *    exactly what the bridge granted it (normalize_api_key_record());
+	 *  - the single spai_api_key keeps admin, as the bridge synthesised it;
+	 *  - on a site whose scoped store is still EMPTY, the legacy mcpwp_api_key
+	 *    is honoured only while it stays empty, so adopting a spai key would
+	 *    switch it off; it is adopted into the store in the same write.
+	 *
+	 * The originals are deleted only after the write is verified (every
+	 * adopted hash re-read from the store), and the flag is set only
+	 * after both deletions are verified. Any failure leaves the originals and
+	 * the flag unset; the next load retries, and the retry is idempotent
+	 * (already-present hashes are skipped). Nothing here prints or logs a key
+	 * or a hash.
+	 *
+	 * @return bool True when adoption is complete (flag set).
+	 */
+	public static function adopt_spai_credentials() {
+		if ( get_option( self::SPAI_ADOPTION_FLAG ) ) {
+			return true;
+		}
+
+		$lock_token = self::acquire_migration_lock( self::SPAI_ADOPTION_LOCK_OPTION, self::SPAI_ADOPTION_LOCK_TTL );
+		if ( false === $lock_token ) {
+			return false; // Another request owns it; it (or the next load) makes progress.
+		}
+
+		try {
+			if ( get_option( self::SPAI_ADOPTION_FLAG ) ) {
+				return true;
+			}
+
+			$spai_keys   = get_option( 'spai_api_keys', '__NOT_SET__' );
+			$spai_single = get_option( 'spai_api_key', '__NOT_SET__' );
+
+			if ( '__NOT_SET__' !== $spai_keys || '__NOT_SET__' !== $spai_single ) {
+				$adopted = self::build_spai_adoption_records(
+					is_array( $spai_keys ) ? $spai_keys : array(),
+					is_string( $spai_single ) ? $spai_single : ''
+				);
+				if ( ! empty( $adopted ) && ! self::append_and_verify_scoped_records( $adopted ) ) {
+					return false; // Originals kept, flag unset: retried next load.
+				}
+				if ( ! self::delete_spai_credential_options() ) {
+					return false;
+				}
+			}
+
+			update_option( self::SPAI_ADOPTION_FLAG, 1, false );
+			return true;
+		} finally {
+			self::release_migration_lock( self::SPAI_ADOPTION_LOCK_OPTION, $lock_token );
+		}
+	}
+
+	/**
+	 * The records to add: one per live spai credential whose hash the scoped
+	 * store does not already hold (active or revoked).
+	 *
+	 * @param array  $spai_keys   spai_api_keys records.
+	 * @param string $spai_single spai_api_key hash ('' when absent).
+	 * @return array<int,array>
+	 */
+	private static function build_spai_adoption_records( array $spai_keys, $spai_single ) {
+		$store   = get_option( 'mcpwp_api_keys', array() );
+		$store   = is_array( $store ) ? $store : array();
+		$present = array();
+		$ids     = array();
+		foreach ( $store as $record ) {
+			if ( is_array( $record ) && isset( $record['hash'] ) && '' !== (string) $record['hash'] ) {
+				$present[ (string) $record['hash'] ] = true; // Active OR revoked: never add it again.
+			}
+			if ( is_array( $record ) && ! empty( $record['id'] ) ) {
+				$ids[ sanitize_key( (string) $record['id'] ) ] = true;
+			}
+		}
+
+		$now     = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
+		$adopted = array();
+
+		foreach ( $spai_keys as $key ) {
+			if ( ! is_array( $key ) || ! empty( $key['revoked_at'] ) ) {
+				continue; // A revoked 2.8 record stays dead; its option is deleted below.
+			}
+			$hash = isset( $key['hash'] ) ? (string) $key['hash'] : '';
+			if ( '' === $hash || isset( $present[ $hash ] ) ) {
+				continue;
+			}
+			$id = isset( $key['id'] ) ? sanitize_key( (string) $key['id'] ) : '';
+			if ( '' === $id || isset( $ids[ $id ] ) ) {
+				$id = self::new_scoped_key_id();
+			}
+			$record = array(
+				'id'            => $id,
+				'label'         => self::SPAI_ADOPTED_LABEL,
+				'hash'          => $hash,
+				'created_at'    => ! empty( $key['created_at'] ) ? (string) $key['created_at'] : $now,
+				'last_used_at'  => ! empty( $key['last_used_at'] ) ? (string) $key['last_used_at'] : null,
+				'revoked_at'    => null,
+				'migrated_from' => 'spai',
+			);
+			// What the bridge granted it — normalize_api_key_record() reads these.
+			foreach ( array( 'scopes', 'role', 'tool_categories', 'rate_limits', 'allow_destructive' ) as $field ) {
+				if ( array_key_exists( $field, $key ) ) {
+					$record[ $field ] = $key[ $field ];
+				}
+			}
+			$adopted[]          = $record;
+			$present[ $hash ]   = true;
+			$ids[ $id ]         = true;
+		}
+
+		if ( '' !== $spai_single && ! isset( $present[ $spai_single ] ) ) {
+			$adopted[]                = array(
+				'id'            => self::new_scoped_key_id(),
+				'label'         => self::SPAI_ADOPTED_LABEL,
+				'hash'          => $spai_single,
+				// As the bridge synthesised it: admin.
+				'scopes'        => array( 'read', 'write', 'admin' ),
+				'role'          => 'admin',
+				'created_at'    => $now,
+				'last_used_at'  => null,
+				'revoked_at'    => null,
+				'migrated_from' => 'spai',
+			);
+			$present[ $spai_single ] = true;
+		}
+
+		// An EMPTY store honours the legacy mcpwp_api_key; the first record
+		// switches that off, so the legacy key moves into the store with it.
+		if ( ! empty( $adopted ) && array() === $store ) {
+			$legacy = (string) get_option( 'mcpwp_api_key', '' );
+			if ( '' !== $legacy ) {
+				$legacy_hash = self::looks_like_password_hash( $legacy ) ? $legacy : wp_hash_password( $legacy );
+				if ( ! isset( $present[ $legacy_hash ] ) ) {
+					array_unshift(
+						$adopted,
+						array(
+							'id'           => self::new_scoped_key_id(),
+							'label'        => __( 'Primary API Key', 'mcpwp' ),
+							'hash'         => $legacy_hash,
+							'scopes'       => array( 'read', 'write', 'admin' ),
+							'created_at'   => $now,
+							'last_used_at' => null,
+							'revoked_at'   => null,
+						)
+					);
+				}
+			}
+		}
+
+		return $adopted;
+	}
+
+	/**
+	 * Append records to the scoped store from a FRESH read, then verify every
+	 * appended hash reads back as an active record.
+	 *
+	 * @param array<int,array> $adopted Records to append.
+	 * @return bool
+	 */
+	private static function append_and_verify_scoped_records( array $adopted ) {
+		$store = get_option( 'mcpwp_api_keys', array() );
+		$store = is_array( $store ) ? $store : array();
+		$held  = array();
+		foreach ( $store as $record ) {
+			if ( is_array( $record ) && isset( $record['hash'] ) ) {
+				$held[ (string) $record['hash'] ] = true;
+			}
+		}
+		foreach ( $adopted as $record ) {
+			if ( ! isset( $held[ $record['hash'] ] ) ) { // Re-checked against the fresh read.
+				$store[] = $record;
+			}
+		}
+		update_option( 'mcpwp_api_keys', $store );
+
+		$verify = get_option( 'mcpwp_api_keys', array() );
+		$active = array();
+		foreach ( is_array( $verify ) ? $verify : array() as $record ) {
+			if ( is_array( $record ) && isset( $record['hash'] ) ) {
+				// Revoked by someone else since? Then it is present, and dead — fine.
+				$active[ (string) $record['hash'] ] = true;
+			}
+		}
+		foreach ( $adopted as $record ) {
+			if ( ! isset( $active[ $record['hash'] ] ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * Delete both spai credential options; true only when both are gone.
+	 *
+	 * Also called by regenerate_api_key(): "revoke every key" includes them.
+	 *
+	 * @return bool
+	 */
+	public static function delete_spai_credential_options() {
+		foreach ( array( 'spai_api_keys', 'spai_api_key' ) as $option ) {
+			if ( '__NOT_SET__' !== get_option( $option, '__NOT_SET__' ) ) {
+				delete_option( $option );
+			}
+			if ( '__NOT_SET__' !== get_option( $option, '__NOT_SET__' ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/** A fresh scoped-key id. */
+	private static function new_scoped_key_id() {
+		return sanitize_key( function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true ) );
+	}
+
 	/**
 	 * Snippets repaired per plugins_loaded call, in addition to the time
 	 * budget below — whichever limit is hit first ends the current run. Kept

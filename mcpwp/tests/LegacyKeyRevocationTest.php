@@ -228,6 +228,7 @@ final class LegacyKeyRevocationTest extends TestCase {
 			'Setup page has-key flag'     => array( 'admin/partials/mcpwp-setup-display.php', '$site_has_key    = Mcpwp_Key_State::site_has_api_key();' ),
 			'activator first-key mint'    => array( 'includes/class-mcpwp-activator.php', 'if ( Mcpwp_Key_State::is_fresh_site() ) {' ),
 			'admin test-connection check' => array( 'includes/admin/class-mcpwp-admin.php', 'if ( ! Mcpwp_Key_State::site_has_api_key() ) {' ),
+			'network overview (#1098)'    => array( 'includes/admin/class-mcpwp-admin.php', '$has_api_key    = Mcpwp_Key_State::site_has_api_key();' ),
 		);
 	}
 

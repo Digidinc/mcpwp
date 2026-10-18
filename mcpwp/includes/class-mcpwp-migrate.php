@@ -7,7 +7,11 @@
  * the freshly-created mcpwp_* tables.  The routine is:
  *
  *   - Idempotent: guarded by the `mcpwp_migrated_from_spai` flag option.
- *   - Non-destructive: leaves all spai_* originals intact.
+ *   - Non-destructive: leaves all spai_* originals intact. (The two
+ *     credential options are the exception, handled AFTER this run by
+ *     Mcpwp_Activator::adopt_spai_credentials(), #1098: every live spai key
+ *     is moved into the revocable store, then spai_api_keys / spai_api_key
+ *     are deleted.)
  *   - Non-overwriting: skips any mcpwp_* option that already has a value.
  *   - Safe on fresh installs: no spai_* options present → nothing happens.
  *

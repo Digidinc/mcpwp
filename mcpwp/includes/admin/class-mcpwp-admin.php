@@ -457,7 +457,8 @@ class Mcpwp_Admin {
 			switch_to_blog( $site->blog_id );
 
 			$version        = get_option( 'mcpwp_version', '' );
-			$has_api_key    = ! empty( get_option( 'mcpwp_api_key' ) );
+			// The legacy option OR an active scoped record (#1098 P2, as #1097).
+			$has_api_key    = Mcpwp_Key_State::site_has_api_key();
 			$scoped_keys    = get_option( 'mcpwp_api_keys', array() );
 			$active_keys    = 0;
 			if ( is_array( $scoped_keys ) ) {

@@ -4659,6 +4659,12 @@ trait Mcpwp_Api_Auth {
 	 * is intentional.  Migration is handled separately by Mcpwp_Migrate::run()
 	 * so that the auth path stays simple and side-effect-free.
 	 *
+	 * @deprecated #1098 — Mcpwp_Activator::adopt_spai_credentials() moves every
+	 *             live spai credential into the scoped store and deletes both
+	 *             spai options, so with the options gone this bridge is inert.
+	 *             Kept for one release as the fallback for a site where
+	 *             adoption has not completed yet; remove in the next minor.
+	 *
 	 * @param string $api_key Incoming plaintext API key.
 	 * @return array|null Matching (normalized) key record, or null.
 	 */
@@ -5934,6 +5940,8 @@ trait Mcpwp_Api_Auth {
 				// The separate map wins; a record's own value is pre-#1090 history.
 				'last_used_at'    => isset( $last_used[ $normalized['id'] ] ) ? (string) $last_used[ $normalized['id'] ] : $normalized['last_used_at'],
 				'revoked_at'      => $normalized['revoked_at'],
+				// #1098: adopted from a 2.8 credential (the Setup page says so).
+				'migrated_from'   => isset( $key['migrated_from'] ) ? sanitize_key( (string) $key['migrated_from'] ) : '',
 			);
 		}
 
@@ -6899,6 +6907,12 @@ trait Mcpwp_Api_Auth {
 	 * @return string New API key (plain text).
 	 */
 	public function regenerate_api_key() {
+		// "Revokes EVERY key" (the Setup confirm) includes a 2.8 spai
+		// credential the scoped store never held (#1098): find_legacy_spai_key()
+		// reads these two options, so deleting them ends it.
+		delete_option( 'spai_api_keys' );
+		delete_option( 'spai_api_key' );
+
 		$keys = $this->get_scoped_api_keys_raw();
 
 		foreach ( $keys as &$key ) {
