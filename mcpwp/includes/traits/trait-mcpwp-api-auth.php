@@ -122,6 +122,61 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Whether the current principal ACTS AS A REAL WORDPRESS USER (#1100).
+	 *
+	 * The ONE predicate the route capability map is enforced on.  A user-run
+	 * principal is gated by scope AND the route's WordPress capability; a
+	 * bot-run principal (X-API-Key / ?api_key keys, broker bearer tokens,
+	 * client_credentials OAuth tokens — all running as the mcpwp_api_agent
+	 * service account) by scope alone, because that account deliberately
+	 * lacks manage_woocommerce, edit_theme_options and similar.
+	 *
+	 * A new user-run principal needs exactly one more line here.
+	 *
+	 * @return bool
+	 */
+	protected function requester_acts_as_user() {
+		return $this->requester_oauth_user_id() > 0                                                         // OAuth token minted for a user (#1099).
+			|| $this->requester_is_webmcp()                                                                  // WebMCP principal record (#981).
+			|| ( class_exists( 'Mcpwp_WebMCP' ) && Mcpwp_WebMCP::dispatch_user_id() > 0 )                    // WebMCP cookie + nonce dispatch.
+			|| $this->is_trusted_admin_ajax_request()                                                         // wp-admin Chat tab (admin, nonce).
+			|| ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::applying_as_admin() > 0 ); // Approved delete replayed by an admin.
+	}
+
+	/**
+	 * Enforce the route's WordPress capability on a user-run principal.
+	 *
+	 * Unknown routes and undecided (TODO) rows deny everyone but
+	 * administrators (Mcpwp_Route_Capability_Map::TODO_CAPABILITY) — never a
+	 * pass-through.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return true|WP_Error
+	 */
+	protected function check_user_run_capability( $request ) {
+		if ( ! $this->requester_acts_as_user() ) {
+			return true;
+		}
+		if ( ! class_exists( 'Mcpwp_Route_Capability_Map' ) ) {
+			return new WP_Error( 'rest_forbidden_capability', __( 'Your WordPress account is not allowed to do this.', 'mcpwp' ), array( 'status' => 403 ) );
+		}
+		$method     = method_exists( $request, 'get_method' ) ? (string) $request->get_method() : 'GET';
+		$route      = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+		$capability = Mcpwp_Route_Capability_Map::required_capability( $method, $route );
+		if ( '' === $capability || current_user_can( $capability ) ) {
+			return true;
+		}
+		return new WP_Error(
+			'rest_forbidden_capability',
+			__( 'Your WordPress account is not allowed to do this.', 'mcpwp' ),
+			array(
+				'status'              => 403,
+				'required_capability' => $capability,
+			)
+		);
+	}
+
+	/**
 	 * The WordPress user an OAuth token acts as (PR-2 P0), or 0.
 	 *
 	 * @return int
@@ -770,7 +825,9 @@ trait Mcpwp_Api_Auth {
 		// The open apply_filters() bypass was removed: any code that added a filter
 		// returning true could silently skip API-key auth for all requests.
 		if ( $this->is_trusted_admin_ajax_request() ) {
-			return true;
+			// A user-run principal (the logged-in administrator): the route's
+			// capability still applies (#1100).
+			return $this->check_user_run_capability( $request );
 		}
 
 		// An approved destructive operation being applied by an administrator
@@ -798,7 +855,7 @@ trait Mcpwp_Api_Auth {
 		// path — DestructiveGateOnlyDeletesTest pins the invariant.
 		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::applying_as_admin() > 0 && function_exists( 'user_can' ) && user_can( Mcpwp_Destructive_Gate::applying_as_admin(), 'activate_plugins' ) ) {
 			wp_set_current_user( Mcpwp_Destructive_Gate::applying_as_admin() );
-			return true;
+			return $this->check_user_run_capability( $request );
 		}
 
 		// Skip rate limiting for batch sub-requests (already counted on the outer request).
@@ -2460,6 +2517,15 @@ trait Mcpwp_Api_Auth {
 	 * @return true|WP_Error
 	 */
 	protected function check_post_naming_params_category( $request ) {
+		// #1100: the WordPress capability a user-run principal needs for this
+		// route (Mcpwp_Route_Capability_Map). This is the tail every
+		// verdict-computing path ends in, so the check runs on the main and
+		// the sub-request path alike; it is a no-op for bot-run principals.
+		$capability_check = $this->check_user_run_capability( $request );
+		if ( is_wp_error( $capability_check ) ) {
+			return $capability_check;
+		}
+
 		$resolution = $this->get_post_ref_resolution( $request );
 		if ( is_wp_error( $resolution ) ) {
 			return $resolution;

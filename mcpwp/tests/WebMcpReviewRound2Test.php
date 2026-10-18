@@ -34,7 +34,7 @@ final class WebMcpReviewRound2Test extends TestCase {
 			'restricted_tax' => array( 'object_type' => array( 'post' ), 'cap' => array( 'assign_terms' => 'manage_options' ) ),
 		);
 		$GLOBALS['mcpwp_test_user_caps']        = array(
-			self::EDITOR => array( 'edit_posts' => true, 'edit_pages' => true, 'edit_others_posts' => true ),
+			self::EDITOR => array( 'read' => true, 'edit_posts' => true, 'edit_pages' => true, 'edit_others_posts' => true ),
 		);
 		$GLOBALS['mcpwp_test_current_user']     = self::EDITOR;
 		$GLOBALS['_mcpwp_test_posts']           = array(
