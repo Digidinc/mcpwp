@@ -1074,6 +1074,10 @@ function get_user_meta($user_id, $key = '', $single = false)
 
 function update_user_meta($user_id, $key, $value)
 {
+    // Test-only: a write that does not land (a failed UPDATE, a filter).
+    if (! empty($GLOBALS['mcpwp_test_user_meta_write_fails'][ $key ])) {
+        return false;
+    }
     // Like core: a scalar is stored — and read back — as a string (a float
     // through PHP's 14-digit `precision`), an array/object serialized.
     // #1101 round 2: a microsecond epoch stored as a float came back rounded.

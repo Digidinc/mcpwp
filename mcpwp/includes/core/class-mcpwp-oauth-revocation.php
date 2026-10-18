@@ -24,8 +24,8 @@
  * float would not survive WordPress's meta/option storage, which keeps
  * scalars as strings and casts a float through the 14-significant-digit
  * `precision` setting (a microsecond epoch would come back rounded to the
- * 10 ms).  An integer string round-trips exactly.  A token issued later in
- * the same second as a revocation is not caught by it; a clock that steps
+ * 10 ms).  An integer string round-trips exactly.  A token issued even one
+ * microsecond after a revocation is not caught by it; a clock that steps
  * backwards can only revoke more (a new token issued "before" the epoch
  * dies), never resurrect one.  A record without issued_at (minted before
  * this release) falls back to created_at (seconds), then 0 — any epoch
@@ -34,6 +34,15 @@
  * issued_at is the moment the issuing request CHECKED revocation, not the
  * moment it minted (#1101 round 2): a revocation landing between the check
  * and the mint therefore still covers the new token.
+ *
+ * A record that names no client (a pre-#1101 token, migrated as such) cannot
+ * be attributed to an app.  It is caught by its user's epoch, and by ANY
+ * per-app revocation of that user (revoke_user_client(), including the
+ * profile's "App connected before this update" row) — the user meant to cut
+ * an app, and an unattributed token might be that app's.  A refresh that
+ * presents such a token is attributed to the presenting client for the
+ * check (the client it is about to be bound to), so that client's own and
+ * per-pair epochs apply too.
  *
  * The options are not autoloaded and are pruned on every write: an entry
  * outlives every token it can apply to (refresh TTL plus the longest access
@@ -158,9 +167,20 @@ class Mcpwp_OAuth_Revocation {
 			}
 		}
 
-		if ( $user_id > 0 && '' !== $client_id ) {
+		if ( $user_id > 0 ) {
 			$pairs = self::read_map( self::PAIRS_OPTION );
-			$epoch = $pairs[ $user_id . '|' . $client_id ] ?? 0;
+			if ( '' !== $client_id ) {
+				$epoch = $pairs[ $user_id . '|' . $client_id ] ?? 0;
+			} else {
+				// Unattributed: any per-app revocation of this user applies.
+				$epoch  = 0;
+				$prefix = $user_id . '|';
+				foreach ( $pairs as $key => $pair_epoch ) {
+					if ( 0 === strpos( (string) $key, $prefix ) ) {
+						$epoch = max( $epoch, $pair_epoch );
+					}
+				}
+			}
 			if ( $epoch > 0 && $at <= $epoch ) {
 				return true;
 			}
@@ -265,8 +285,13 @@ class Mcpwp_OAuth_Revocation {
 	 * revoked.  Fails closed and reports like every other revocation: false
 	 * when either write did not land.
 	 *
+	 * #1101 PR-3b round 2: the user's unattributed (pre-#1101, client-less)
+	 * tokens are cut too — their rows marked, and the epoch rule in
+	 * is_revoked() for the ones not yet migrated.  $client_id may be
+	 * Mcpwp_OAuth_Token_Store::LEGACY_APP to cut only those.
+	 *
 	 * @param int    $user_id   User id.
-	 * @param string $client_id Client id.
+	 * @param string $client_id Client id, or LEGACY_APP.
 	 * @return bool
 	 */
 	public static function revoke_user_client( $user_id, $client_id ) {
@@ -275,9 +300,16 @@ class Mcpwp_OAuth_Revocation {
 		if ( $user_id <= 0 || '' === $client_id ) {
 			return false;
 		}
-		$ok = self::write_map_entry( self::PAIRS_OPTION, $user_id . '|' . $client_id, self::now() );
-		if ( class_exists( 'Mcpwp_OAuth_Token_Store' ) && ! Mcpwp_OAuth_Token_Store::revoke_user_rows( $user_id, $client_id ) ) {
-			$ok = false;
+		$legacy = class_exists( 'Mcpwp_OAuth_Token_Store' ) && Mcpwp_OAuth_Token_Store::LEGACY_APP === $client_id;
+		// The legacy row is stored under "user|" (empty client): bounded, one per user.
+		$ok = self::write_map_entry( self::PAIRS_OPTION, $user_id . '|' . ( $legacy ? '' : $client_id ), self::now() );
+		if ( class_exists( 'Mcpwp_OAuth_Token_Store' ) ) {
+			if ( ! $legacy && ! Mcpwp_OAuth_Token_Store::revoke_user_rows( $user_id, $client_id ) ) {
+				$ok = false;
+			}
+			if ( ! Mcpwp_OAuth_Token_Store::revoke_user_rows( $user_id, '' ) ) {
+				$ok = false;
+			}
 		}
 		if ( ! $ok ) {
 			self::report_write_failure( 'user_client', $user_id . '|' . $client_id );

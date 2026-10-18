@@ -135,8 +135,7 @@ class Mcpwp_Loader {
 		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Apps_Admin::DELETE_ACTION, 'Mcpwp_OAuth_Apps_Admin', 'handle_delete' );
 		$this->add_action( 'show_user_profile', 'Mcpwp_OAuth_Apps_Admin', 'render_profile_section' );
 		$this->add_action( 'edit_user_profile', 'Mcpwp_OAuth_Apps_Admin', 'render_profile_section' );
-		$this->add_action( 'personal_options_update', 'Mcpwp_OAuth_Apps_Admin', 'handle_profile_update' );
-		$this->add_action( 'edit_user_profile_update', 'Mcpwp_OAuth_Apps_Admin', 'handle_profile_update' );
+		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Apps_Admin::REVOKE_ACTION, 'Mcpwp_OAuth_Apps_Admin', 'handle_revoke_request' );
 
 		// WebMCP in wp-admin (#981): script + origin-trial meta, both no-ops
 		// unless switched on and the user qualifies.

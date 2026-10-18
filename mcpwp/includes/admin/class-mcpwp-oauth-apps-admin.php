@@ -9,7 +9,10 @@
  *   (Mcpwp_OAuth_Revocation::revoke_user_client()); an administrator also
  *   gets "Disconnect all AI apps for this user" (revoke_user()).  A user may
  *   revoke their own apps; an administrator (edit_users + manage_options)
- *   anyone's; nobody else.
+ *   anyone's; nobody else.  Revoke is a link to a confirmation page served
+ *   by admin-post (GET shows it, its POST acts): the profile section sits
+ *   inside the profile form, which can hold neither a nested form nor a
+ *   submit button that Enter would press.
  *
  * Every action checks capability and a nonce bound to its target itself
  * (the ChatGPT connector's handle_request() pattern), so the guarantee does
@@ -31,8 +34,11 @@ class Mcpwp_OAuth_Apps_Admin {
 	/** admin-post action (and nonce action prefix) for deleting an app. */
 	const DELETE_ACTION = 'mcpwp_oauth_client_delete';
 
-	/** Nonce action prefix for the profile buttons. */
+	/** Nonce action prefix for the profile revocations. */
 	const PROFILE_ACTION = 'mcpwp_oauth_apps_profile';
+
+	/** admin-post action for a profile revocation (GET confirm, POST act). */
+	const REVOKE_ACTION = 'mcpwp_oauth_app_revoke';
 
 	/** Nonce field shared by both forms. */
 	const NONCE_FIELD = 'mcpwp_oauth_apps_nonce';
@@ -220,8 +226,15 @@ class Mcpwp_OAuth_Apps_Admin {
 			return array( 'type' => 'updated', 'message' => __( 'All AI apps for this user were disconnected. They lost access immediately; each will need to be connected again.', 'mcpwp' ) );
 		}
 
+		// #1101 PR-3b round 2: only an app this user actually has connected
+		// (or the "connected before this update" row).  Anything else is
+		// refused, so the per-pair epoch map can never grow with ids that
+		// name nothing.
 		$apps = Mcpwp_OAuth_Token_Store::live_apps_for_user( $user_id );
-		$name = isset( $apps[ $client_id ] ) ? (string) $apps[ $client_id ]['client_name'] : $client_id;
+		if ( ! isset( $apps[ $client_id ] ) ) {
+			return array( 'type' => 'error', 'message' => __( 'That app is not connected to this account.', 'mcpwp' ) );
+		}
+		$name = (string) $apps[ $client_id ]['client_name'];
 		if ( ! Mcpwp_OAuth_Revocation::revoke_user_client( $user_id, $client_id ) ) {
 			return array( 'type' => 'error', 'message' => __( 'The app could not be revoked because the site was busy. Try again.', 'mcpwp' ) );
 		}
@@ -233,16 +246,105 @@ class Mcpwp_OAuth_Apps_Admin {
 	}
 
 	/**
-	 * personal_options_update / edit_user_profile_update.
+	 * URL of the confirmation page for one profile revocation.
 	 *
-	 * @param int $user_id Profile owner.
+	 * @param int    $user_id Profile owner.
+	 * @param string $app     Client id, Mcpwp_OAuth_Token_Store::LEGACY_APP, or '' for "all".
+	 * @return string
 	 */
-	public static function handle_profile_update( $user_id ) {
-		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified in process_profile().
-		$result = self::process_profile( (int) $user_id, wp_unslash( $_POST ) );
-		if ( null !== $result ) {
-			self::remember_notice( $result );
+	public static function revoke_url( $user_id, $app ) {
+		$args = array(
+			'action'          => self::REVOKE_ACTION,
+			'user_id'         => (int) $user_id,
+			self::NONCE_FIELD => wp_create_nonce( self::PROFILE_ACTION . '|' . (int) $user_id ),
+		);
+		if ( '' === $app ) {
+			$args['all'] = '1';
+		} else {
+			$args['app'] = $app;
 		}
+		return add_query_arg( $args, admin_url( 'admin-post.php' ) );
+	}
+
+	/**
+	 * The confirmation page a Revoke / Disconnect all link opens: what will
+	 * happen, and one POST form (its own page, so never nested in the
+	 * profile form).  Empty when the caller may not act or the link's nonce
+	 * is not valid for that profile.
+	 *
+	 * @param array $get Unslashed query fields.
+	 * @return string HTML.
+	 */
+	public static function render_confirm_page( array $get ) {
+		$user_id = isset( $get['user_id'] ) ? (int) $get['user_id'] : 0;
+		$all     = ! empty( $get['all'] );
+		$app     = isset( $get['app'] ) ? sanitize_key( (string) $get['app'] ) : '';
+		$nonce   = isset( $get[ self::NONCE_FIELD ] ) ? (string) $get[ self::NONCE_FIELD ] : '';
+		if ( ! self::can_manage_apps_of( $user_id ) || ( $all && ! self::is_apps_admin() ) || ! wp_verify_nonce( $nonce, self::PROFILE_ACTION . '|' . $user_id ) ) {
+			return '';
+		}
+		$apps = Mcpwp_OAuth_Token_Store::live_apps_for_user( $user_id );
+		if ( ! $all && ! isset( $apps[ $app ] ) ) {
+			return '';
+		}
+		$question = $all
+			? __( 'Disconnect all AI apps for this user?', 'mcpwp' )
+			/* translators: %s: app name */
+			: sprintf( __( 'Revoke %s?', 'mcpwp' ), (string) $apps[ $app ]['client_name'] );
+		ob_start();
+		?>
+		<h1><?php echo esc_html( $question ); ?></h1>
+		<p><?php esc_html_e( 'The app loses access immediately; it will need to be connected again.', 'mcpwp' ); ?></p>
+		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>">
+			<input type="hidden" name="action" value="<?php echo esc_attr( self::REVOKE_ACTION ); ?>" />
+			<input type="hidden" name="user_id" value="<?php echo esc_attr( (string) $user_id ); ?>" />
+			<?php if ( $all ) : ?>
+				<input type="hidden" name="<?php echo esc_attr( self::FIELD_REVOKE_ALL ); ?>" value="1" />
+			<?php else : ?>
+				<input type="hidden" name="<?php echo esc_attr( self::FIELD_REVOKE ); ?>" value="<?php echo esc_attr( $app ); ?>" />
+			<?php endif; ?>
+			<?php wp_nonce_field( self::PROFILE_ACTION . '|' . $user_id, self::NONCE_FIELD, false ); ?>
+			<p>
+				<button type="submit" class="button button-primary"><?php echo esc_html( $all ? __( 'Disconnect all', 'mcpwp' ) : __( 'Revoke', 'mcpwp' ) ); ?></button>
+				<a class="button" href="<?php echo esc_url( self::profile_url( $user_id ) ); ?>"><?php esc_html_e( 'Cancel', 'mcpwp' ); ?></a>
+			</p>
+		</form>
+		<?php
+		return (string) ob_get_clean();
+	}
+
+	/**
+	 * admin-post handler: GET shows the confirmation page, POST revokes and
+	 * returns to the profile.
+	 */
+	public static function handle_revoke_request() {
+		$method = isset( $_SERVER['REQUEST_METHOD'] ) ? strtoupper( sanitize_key( wp_unslash( $_SERVER['REQUEST_METHOD'] ) ) ) : 'GET';
+		if ( 'POST' !== $method ) {
+			// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- verified in render_confirm_page().
+			$html = self::render_confirm_page( wp_unslash( $_GET ) );
+			if ( '' === $html ) {
+				wp_die( esc_html__( 'The link expired or you are not allowed to do this.', 'mcpwp' ), '', array( 'response' => 403 ) );
+			}
+			wp_die( $html, esc_html__( 'Connected AI apps', 'mcpwp' ), array( 'response' => 200 ) ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- built escaped in render_confirm_page().
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified in process_profile().
+		$post    = wp_unslash( $_POST );
+		$user_id = isset( $post['user_id'] ) ? (int) $post['user_id'] : 0;
+		$result  = self::process_profile( $user_id, $post );
+		if ( null === $result || ( 'error' === $result['type'] && ! self::can_manage_apps_of( $user_id ) ) ) {
+			wp_die( esc_html__( 'You are not allowed to do this.', 'mcpwp' ), '', array( 'response' => 403 ) );
+		}
+		self::remember_notice( $result );
+		wp_safe_redirect( self::profile_url( $user_id ) . '#mcpwp-connected-apps' );
+		exit;
+	}
+
+	/**
+	 * @param int $user_id Profile owner.
+	 * @return string
+	 */
+	private static function profile_url( $user_id ) {
+		return (int) get_current_user_id() === (int) $user_id ? admin_url( 'profile.php' ) : add_query_arg( 'user_id', (int) $user_id, admin_url( 'user-edit.php' ) );
 	}
 
 	/**
@@ -260,7 +362,11 @@ class Mcpwp_OAuth_Apps_Admin {
 		<h2 id="mcpwp-connected-apps"><?php esc_html_e( 'Connected AI apps', 'mcpwp' ); ?></h2>
 		<?php self::render_notice(); ?>
 		<p class="description"><?php esc_html_e( 'Apps such as ChatGPT or Claude that were allowed to use this site as this user. Revoke: the app loses access immediately; it will need to be connected again.', 'mcpwp' ); ?></p>
-		<?php wp_nonce_field( self::PROFILE_ACTION . '|' . $user_id, self::NONCE_FIELD, false ); ?>
+		<?php
+		// #1101 PR-3b round 2: links, never submit buttons.  This section is
+		// inside the profile form, and a form's first submit button is the
+		// one Enter presses — a Revoke there fired on Enter in any field.
+		?>
 		<?php if ( empty( $apps ) ) : ?>
 			<p><?php esc_html_e( 'No AI apps are connected.', 'mcpwp' ); ?></p>
 		<?php else : ?>
@@ -281,13 +387,13 @@ class Mcpwp_OAuth_Apps_Admin {
 							<td><?php echo esc_html( in_array( 'write', (array) $app['scopes'], true ) ? __( 'Read and write', 'mcpwp' ) : __( 'Read only', 'mcpwp' ) ); ?></td>
 							<td><?php echo esc_html( self::format_time( (int) floor( (int) $app['issued_at'] / 1000000 ) ) ); ?></td>
 							<td><?php echo esc_html( self::format_time( (int) $app['last_used_at'] ) ); ?></td>
-							<td><button type="submit" class="button button-small" name="<?php echo esc_attr( self::FIELD_REVOKE ); ?>" value="<?php echo esc_attr( (string) $app['client_id'] ); ?>"><?php esc_html_e( 'Revoke', 'mcpwp' ); ?></button></td>
+							<td><a class="button button-small" href="<?php echo esc_url( self::revoke_url( $user_id, (string) $app['client_id'] ) ); ?>"><?php esc_html_e( 'Revoke', 'mcpwp' ); ?></a></td>
 						</tr>
 					<?php endforeach; ?>
 				</tbody>
 			</table>
 			<?php if ( self::is_apps_admin() ) : ?>
-				<p><button type="submit" class="button" name="<?php echo esc_attr( self::FIELD_REVOKE_ALL ); ?>" value="1"><?php esc_html_e( 'Disconnect all AI apps for this user', 'mcpwp' ); ?></button></p>
+				<p><a class="button" href="<?php echo esc_url( self::revoke_url( $user_id, '' ) ); ?>"><?php esc_html_e( 'Disconnect all AI apps for this user', 'mcpwp' ); ?></a></p>
 			<?php endif; ?>
 		<?php endif; ?>
 		<?php

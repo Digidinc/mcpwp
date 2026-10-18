@@ -268,12 +268,11 @@ final class OAuthConnectedApps1101bTest extends TestCase {
 		$this->grant( self::ALICE, self::EVIL );
 		$this->as_user( self::ALICE );
 		$GLOBALS['mcpwp_test_current_user'] = self::ALICE;
-		$_POST = $this->profile_post( self::ALICE, array( Mcpwp_OAuth_Apps_Admin::FIELD_REVOKE => self::EVIL ) );
-		try {
-			Mcpwp_OAuth_Apps_Admin::handle_profile_update( self::ALICE );
-		} finally {
-			$_POST = array();
-		}
+		// What handle_revoke_request() does with the result (it then exits).
+		$result   = Mcpwp_OAuth_Apps_Admin::process_profile( self::ALICE, $this->profile_post( self::ALICE, array( Mcpwp_OAuth_Apps_Admin::FIELD_REVOKE => self::EVIL ) ) );
+		$remember = new ReflectionMethod( 'Mcpwp_OAuth_Apps_Admin', 'remember_notice' );
+		$remember->setAccessible( true );
+		$remember->invoke( null, $result );
 		$html = $this->html( function () { Mcpwp_OAuth_Apps_Admin::render_profile_section( (object) array( 'ID' => self::ALICE ) ); } );
 		$this->assertStringContainsString( '&lt;script&gt;alert(1)&lt;/script&gt; lost access immediately', $html );
 		$this->assertStringNotContainsString( '<script>', $html );

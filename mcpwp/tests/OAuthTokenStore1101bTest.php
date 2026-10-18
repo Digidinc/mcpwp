@@ -127,7 +127,12 @@ final class OAuthTokenStore1101bTest extends TestCase {
 		$this->assertFalse( Mcpwp_OAuth_Token_Store::insert( $token, 'access', array( 'scopes' => array( 'read' ), 'expires_at' => time() + 60 ) ), 'token_hash is unique.' );
 
 		$this->assertTrue( Mcpwp_OAuth_Token_Store::revoke( $token ) );
-		$this->assertFalse( Mcpwp_OAuth_Token_Store::revoke( $token ), 'Already revoked: 0 rows.' );
+		$first = mcpwp_test_oauth_row( $token )['revoked_at'];
+		$this->assertTrue( Mcpwp_OAuth_Token_Store::revoke( $token ), 'Already revoked is success (a retry answers the same)…' );
+		$this->assertSame( $first, mcpwp_test_oauth_row( $token )['revoked_at'], '…and keeps the first revocation time.' );
+		$GLOBALS['mcpwp_test_oauth_tokens_fail'] = true;
+		$this->assertFalse( Mcpwp_OAuth_Token_Store::revoke( $token ), 'Only a failed UPDATE is false.' );
+		$GLOBALS['mcpwp_test_oauth_tokens_fail'] = null;
 		$this->assertFalse( Mcpwp_OAuth_Token_Store::is_active( Mcpwp_OAuth_Token_Store::find( $token ), 'access' ) );
 	}
 

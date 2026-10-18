@@ -56,6 +56,9 @@ class Mcpwp_OAuth_Token_Store {
 	const TYPE_REFRESH   = 'refresh';
 	const TYPE_TOMBSTONE = 'reuse_tombstone';
 
+	/** live_apps_for_user() key for tokens from before #1101 (no client). */
+	const LEGACY_APP = 'legacy';
+
 	/** last_used_at is written at most this often per token (seconds). */
 	const TOUCH_INTERVAL = 60;
 
@@ -221,13 +224,20 @@ class Mcpwp_OAuth_Token_Store {
 	 * @param string $token Refresh token.
 	 * @return bool True for the one caller whose UPDATE affected the row.
 	 */
-	public static function claim_refresh( $token ) {
+	public static function claim_refresh( $token, $family_id = '', $client_id = '' ) {
 		global $wpdb;
+		// #1101 PR-3b round 2: the tombstone names the family and the client
+		// the new tokens were just minted under — not whatever the claimed
+		// row carried.  A migrated pre-#1101 row carries no client; before
+		// this, its tombstone kept '' for it, so a replay could not reach the
+		// family and an RFC 7009 revoke could not prove ownership.
 		$affected = $wpdb->query(
 			$wpdb->prepare(
-				'UPDATE ' . self::table() . ' SET type = %s, revoked_at = %d WHERE token_hash = %s AND type = %s AND revoked_at IS NULL', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- table name is $wpdb->prefix plus a constant.
+				'UPDATE ' . self::table() . ' SET type = %s, revoked_at = %d, family_id = %s, client_id = %s WHERE token_hash = %s AND type = %s AND revoked_at IS NULL', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- table name is $wpdb->prefix plus a constant.
 				self::TYPE_TOMBSTONE,
 				Mcpwp_OAuth_Revocation::now(),
+				(string) $family_id,
+				(string) $client_id,
 				self::hash( $token ),
 				self::TYPE_REFRESH
 			)
@@ -239,7 +249,8 @@ class Mcpwp_OAuth_Token_Store {
 	 * Mark one token revoked (any type).
 	 *
 	 * @param string $token Token string.
-	 * @return bool True when a live row was revoked.
+	 * @return bool False only when the UPDATE failed: a row already revoked
+	 *              (0 rows) is success, so a retried revoke answers the same.
 	 */
 	public static function revoke( $token ) {
 		global $wpdb;
@@ -250,7 +261,7 @@ class Mcpwp_OAuth_Token_Store {
 				self::hash( $token )
 			)
 		);
-		return 1 === (int) $affected;
+		return false !== $affected;
 	}
 
 	/**
@@ -295,15 +306,16 @@ class Mcpwp_OAuth_Token_Store {
 	}
 
 	/**
-	 * Mark every live row of one user revoked, optionally for one client.
+	 * Mark live rows of one user revoked: every client (null), one client,
+	 * or only the client-less rows a pre-#1101 token migrated into ('').
 	 *
-	 * @param int    $user_id   User id.
-	 * @param string $client_id Client id; '' for every client.
+	 * @param int         $user_id   User id.
+	 * @param string|null $client_id Client id, '' for unattributed rows, null for all.
 	 * @return bool False when the UPDATE failed (0 rows is success).
 	 */
-	public static function revoke_user_rows( $user_id, $client_id = '' ) {
+	public static function revoke_user_rows( $user_id, $client_id = null ) {
 		global $wpdb;
-		if ( '' === (string) $client_id ) {
+		if ( null === $client_id ) {
 			$sql = $wpdb->prepare(
 				'UPDATE ' . self::table() . ' SET revoked_at = %d WHERE user_id = %d AND revoked_at IS NULL', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- see claim_refresh().
 				Mcpwp_OAuth_Revocation::now(),
@@ -363,15 +375,18 @@ class Mcpwp_OAuth_Token_Store {
 	public static function live_apps_for_user( $user_id ) {
 		$apps = array();
 		foreach ( self::live_rows( (int) $user_id ) as $row ) {
-			$client_id = (string) $row['client_id'];
-			if ( '' === $client_id ) {
-				continue; // A pre-binding token belongs to no app it could be revoked from.
-			}
+			// #1101 PR-3b round 2: a token from before the update names no
+			// app; it is listed as one row of its own (key LEGACY_APP) so the
+			// user can still revoke it.
+			$client_id = '' === (string) $row['client_id'] ? self::LEGACY_APP : (string) $row['client_id'];
 			if ( ! isset( $apps[ $client_id ] ) ) {
-				$record             = class_exists( 'Mcpwp_OAuth_Clients' ) ? Mcpwp_OAuth_Clients::find( $client_id ) : null;
+				$record             = ( self::LEGACY_APP !== $client_id && class_exists( 'Mcpwp_OAuth_Clients' ) ) ? Mcpwp_OAuth_Clients::find( $client_id ) : null;
 				$apps[ $client_id ] = array(
 					'client_id'    => $client_id,
-					'client_name'  => is_array( $record ) && '' !== (string) $record['client_name'] ? (string) $record['client_name'] : $client_id,
+					'legacy'       => self::LEGACY_APP === $client_id,
+					'client_name'  => self::LEGACY_APP === $client_id
+						? __( 'App connected before this update', 'mcpwp' )
+						: ( is_array( $record ) && '' !== (string) $record['client_name'] ? (string) $record['client_name'] : $client_id ),
 					'scopes'       => array(),
 					'last_used_at' => 0,
 					'issued_at'    => PHP_INT_MAX,
@@ -536,10 +551,31 @@ class Mcpwp_OAuth_Token_Store {
 		if ( ! array_key_exists( 'aud', $record ) && class_exists( 'Mcpwp_OAuth_Well_Known' ) ) {
 			$record['aud'] = Mcpwp_OAuth_Well_Known::get_canonical_resource();
 		}
+		// #1101 PR-3b round 2: a pre-#1101 refresh token belongs to no
+		// family.  It gets one derived from the token itself, so every
+		// concurrent migration of the same token agrees on it, and its
+		// tombstone, its replay and its revocation all reach the same chain.
+		if ( self::TYPE_REFRESH === $type && empty( $record['family_id'] ) ) {
+			$record['family_id'] = self::legacy_family_id( $token );
+		}
 		if ( ! self::insert( $token, $type, $record ) ) {
-			return null;
+			// A concurrent migration of the same token may have won the
+			// UNIQUE key: use its row (still subject to every check), never a
+			// false 401.  Anything else is a failed write: refused.
+			$row = self::find( $token );
+			return is_array( $row ) && self::is_active( $row, $type ) ? self::to_record( $row ) : null;
 		}
 		delete_transient( $transient_key );
 		return self::to_record( (array) self::find( $token ) );
+	}
+
+	/**
+	 * The family a pre-#1101 refresh token is given on migration.
+	 *
+	 * @param string $token Refresh token.
+	 * @return string
+	 */
+	public static function legacy_family_id( $token ) {
+		return hash( 'sha256', 'legacy|' . (string) $token );
 	}
 }

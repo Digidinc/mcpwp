@@ -754,8 +754,15 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		}
 
 		// #1101: revoked by epoch (client, user, or family).  A revoked token
-		// is dead either way, so its row is marked revoked.
-		if ( Mcpwp_OAuth_Revocation::is_revoked( $record ) ) {
+		// is dead either way, so its row is marked revoked.  #1101 PR-3b
+		// round 2: an unbound (pre-#1101) record is attributed, for this
+		// check, to the client presenting it — the client it is about to be
+		// bound to — so that client's epoch and its per-user epoch apply.
+		$check = $record;
+		if ( '' === $bound_client ) {
+			$check['client_id'] = $client_id;
+		}
+		if ( Mcpwp_OAuth_Revocation::is_revoked( $check ) || ( '' === $bound_client && Mcpwp_OAuth_Revocation::is_revoked( $record ) ) ) {
 			Mcpwp_OAuth_Token_Store::revoke( $refresh_token );
 			return $this->oauth_error_response( 'invalid_grant', 'Refresh token has been revoked.', 400 );
 		}
@@ -796,7 +803,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		if ( is_wp_error( $token_response ) ) {
 			return $this->no_store( $this->wpe_to_response( $token_response ) );
 		}
-		if ( ! Mcpwp_OAuth_Token_Store::claim_refresh( $refresh_token ) ) {
+		if ( ! Mcpwp_OAuth_Token_Store::claim_refresh( $refresh_token, $family_id, $client_id ) ) {
 			$this->discard_minted( $token_response );
 			return $this->oauth_error_response( 'invalid_grant', 'Refresh token is invalid or has expired.', 400 );
 		}
@@ -871,7 +878,9 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// server ignore it).  A refresh token — live, or already rotated away
 		// (its row is the reuse tombstone) — takes its family with it; an
 		// access token is marked revoked.  A token from before the table
-		// carries no client_id, so it belongs to no client and is left alone.
+		// carries no client_id, so it belongs to no client and is left alone
+		// (a pre-#1101 refresh token, once used, is bound: its tombstone names
+		// the client and family it was rotated into).
 		$persisted = true;
 		$row       = Mcpwp_OAuth_Token_Store::find( $token );
 		if ( is_array( $row ) && $this->record_belongs_to_client( $row, $client_id ) ) {
@@ -879,7 +888,12 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			if ( in_array( $kind, array( Mcpwp_OAuth_Token_Store::TYPE_REFRESH, Mcpwp_OAuth_Token_Store::TYPE_TOMBSTONE ), true ) && '' !== (string) $row['family_id'] ) {
 				$persisted = Mcpwp_OAuth_Revocation::revoke_family( (string) $row['family_id'] );
 			}
-			Mcpwp_OAuth_Token_Store::revoke( $token );
+			// #1101 PR-3b round 2: the row write is checked too.  If it failed,
+			// the row is unchanged and a retry finds it again (and the
+			// family's marker, for a refresh token, is already written).
+			if ( ! Mcpwp_OAuth_Token_Store::revoke( $token ) ) {
+				$persisted = false;
+			}
 			$this->log_oauth_event( 'oauth_token_revoked', array( 'client_id' => $client_id, 'user_id' => (int) $row['user_id'], 'grant_type' => Mcpwp_OAuth_Token_Store::TYPE_ACCESS === $kind ? 'access_token' : 'refresh_token' ) );
 		}
 		unset( $hint );
