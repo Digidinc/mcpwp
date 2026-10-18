@@ -253,11 +253,19 @@ class Mcpwp_Users {
 	 * variants such as wp_2_capabilities and wp_2_user_level — and the session
 	 * token store, closing the meta.wp_capabilities role-escalation vector.
 	 *
+	 * #1101 PR-3b round 2: also every mcpwp_oauth_* key — in particular
+	 * mcpwp_oauth_revoked_before, the user's OAuth revocation epoch.
+	 * Clearing it through PUT /users/{id} would resurrect the user's revoked
+	 * AI-app tokens; setting it far ahead would lock their apps out.
+	 *
 	 * @param string $meta_key Already-sanitized (sanitize_key) meta key.
 	 * @return bool True when the key is protected and must be skipped.
 	 */
 	protected static function is_protected_user_meta_key( $meta_key ) {
 		if ( 'session_tokens' === $meta_key ) {
+			return true;
+		}
+		if ( 0 === strpos( (string) $meta_key, 'mcpwp_oauth_' ) ) {
 			return true;
 		}
 		return (bool) preg_match( '/(^|_)(capabilities|user_level)$/', (string) $meta_key );

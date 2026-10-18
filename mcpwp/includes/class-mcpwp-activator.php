@@ -1610,6 +1610,16 @@ class Mcpwp_Activator {
 		// Approvals table (#1042).
 		dbDelta( self::approvals_create_sql( $wpdb->prefix . 'mcpwp_approvals', $charset_collate ) );
 
+		// OAuth token table (#1101 PR-3b) — on its own schema option; this
+		// file cannot assume the plugin's require order (see top of file).
+		if ( ! class_exists( 'Mcpwp_OAuth_Revocation' ) ) {
+			require_once __DIR__ . '/core/class-mcpwp-oauth-revocation.php';
+		}
+		if ( ! class_exists( 'Mcpwp_OAuth_Token_Store' ) ) {
+			require_once __DIR__ . '/core/class-mcpwp-oauth-token-store.php';
+		}
+		Mcpwp_OAuth_Token_Store::ensure_table();
+
 		self::ensure_graph_tables();
 	}
 

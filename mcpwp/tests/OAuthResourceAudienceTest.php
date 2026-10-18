@@ -242,17 +242,17 @@ final class OAuthResourceAudienceTest extends TestCase {
 		$query = $this->approve( array( 'resource' => self::MCP_URL ) );
 		$data  = $this->controller()->handle_token( $this->token_request( $query['code'] ) )->get_data();
 
-		$record = get_transient( $this->controller()->access_token_key( $data['access_token'] ) );
+		$record = mcpwp_test_oauth_record( $data['access_token'] );
 		$this->assertSame( self::MCP_URL, $record['aud'] );
 
-		$refresh = get_transient( $this->controller()->get_oauth_refresh_token_transient_key( $data['refresh_token'] ) );
+		$refresh = mcpwp_test_oauth_record( $data['refresh_token'] );
 		$this->assertSame( self::MCP_URL, $refresh['aud'] );
 	}
 
 	public function test_client_credentials_token_also_carries_aud(): void {
 		$auth = new Mcpwp_Api_Auth_Test_Harness();
 		$data = $auth->issue_oauth_access_token( array( 'read' ), 3600, array( 'client_id' => 'test_client' ) );
-		$record = get_transient( 'mcpwp_oauth_token_' . md5( $data['access_token'] ) );
+		$record = mcpwp_test_oauth_record( $data['access_token'] );
 		$this->assertSame( self::MCP_URL, $record['aud'] );
 	}
 
@@ -266,12 +266,10 @@ final class OAuthResourceAudienceTest extends TestCase {
 	public function test_token_whose_stored_aud_was_altered_is_refused(): void {
 		$auth  = new Mcpwp_Api_Auth_Test_Harness();
 		$token = $auth->issue_oauth_access_token( array( 'read', 'write' ), 3600, array( 'user_id' => 7 ) )['access_token'];
-		$key   = 'mcpwp_oauth_token_' . md5( $token );
 
-		foreach ( array( 'https://other-site.example/wp-json/mcpwp/v1/mcp', '', null, 'https://example.com', array( self::MCP_URL ) ) as $forged ) {
-			$record        = $GLOBALS['mcpwp_test_transients'][ $key ]['value'];
-			$record['aud'] = $forged;
-			$GLOBALS['mcpwp_test_transients'][ $key ]['value'] = $record;
+		// #1101 PR-3b: the aud column is a string; an empty one fails closed.
+		foreach ( array( 'https://other-site.example/wp-json/mcpwp/v1/mcp', '', 'https://example.com', ' ' . self::MCP_URL ) as $forged ) {
+			mcpwp_test_oauth_set( $token, array( 'aud' => $forged ) );
 
 			$result = $auth->verify_api_key( $this->bearer_request( $token ) );
 			$this->assertInstanceOf( WP_Error::class, $result, 'aud=' . wp_json_encode( $forged ) );
@@ -287,7 +285,11 @@ final class OAuthResourceAudienceTest extends TestCase {
 
 		$this->assertTrue( $auth->verify_api_key( $this->bearer_request( $token ) ), 'D2 grace: aud-less tokens predate this release.' );
 
-		$GLOBALS['mcpwp_test_transients'][ 'mcpwp_oauth_token_' . md5( $token ) ]['expires'] = time() - 1;
+		// #1101 PR-3b: that use moved it into the token table (re-bound to
+		// this site's endpoint); it still ends with its own TTL.
+		$this->assertFalse( get_transient( 'mcpwp_oauth_token_' . md5( $token ) ) );
+		$this->assertSame( self::MCP_URL, mcpwp_test_oauth_record( $token )['aud'] );
+		mcpwp_test_oauth_set( $token, array( 'expires_at' => time() - 1 ) );
 		$this->assertInstanceOf( WP_Error::class, $auth->verify_api_key( $this->bearer_request( $token ) ), 'The grace ends with the token TTL.' );
 	}
 

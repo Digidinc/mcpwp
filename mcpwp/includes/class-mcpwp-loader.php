@@ -130,6 +130,13 @@ class Mcpwp_Loader {
 		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Local_Admin::DISMISS_ACTION, 'Mcpwp_OAuth_Local_Admin', 'handle_dismiss' );
 		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Local_Admin::ADDRESS_DISMISS_ACTION, 'Mcpwp_OAuth_Local_Admin', 'handle_address_dismiss' );
 
+		// Connected AI apps (#1101 PR-3b): the app list's Remove, and the
+		// profile section with per-app Revoke / Disconnect all.
+		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Apps_Admin::DELETE_ACTION, 'Mcpwp_OAuth_Apps_Admin', 'handle_delete' );
+		$this->add_action( 'show_user_profile', 'Mcpwp_OAuth_Apps_Admin', 'render_profile_section' );
+		$this->add_action( 'edit_user_profile', 'Mcpwp_OAuth_Apps_Admin', 'render_profile_section' );
+		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Apps_Admin::REVOKE_ACTION, 'Mcpwp_OAuth_Apps_Admin', 'handle_revoke_request' );
+
 		// WebMCP in wp-admin (#981): script + origin-trial meta, both no-ops
 		// unless switched on and the user qualifies.
 		$this->add_action( 'admin_enqueue_scripts', 'Mcpwp_WebMCP', 'enqueue' );

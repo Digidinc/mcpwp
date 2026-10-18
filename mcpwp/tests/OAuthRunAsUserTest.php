@@ -290,8 +290,7 @@ final class OAuthRunAsUserTest extends TestCase {
 
 	public function test_sub_request_path_enforces_aud(): void {
 		$token = $this->token( self::EDITOR );
-		$key   = 'mcpwp_oauth_token_' . md5( $token );
-		$GLOBALS['mcpwp_test_transients'][ $key ]['value']['aud'] = 'https://other.example/wp-json/mcpwp/v1/mcp';
+		mcpwp_test_oauth_set( $token, array( 'aud' => 'https://other.example/wp-json/mcpwp/v1/mcp' ) );
 
 		$this->assert_error_code( $this->sub_request( $token ), 'invalid_token', 401 );
 	}
@@ -461,22 +460,26 @@ final class OAuthRunAsUserTest extends TestCase {
 
 	public function test_concurrent_second_refresh_with_one_token_is_invalid_grant(): void {
 		$this->legacy_client();
-		$data   = $this->redeem( $this->seed_code( self::EDITOR ) )->get_data();
-		$key    = ( new Mcpwp_REST_OAuth() )->get_oauth_refresh_token_transient_key( $data['refresh_token'] );
-		$record = get_transient( $key );
+		$data = $this->redeem( $this->seed_code( self::EDITOR ) )->get_data();
 
-		$GLOBALS['mcpwp_test_transient_hook'] = function ( $name ) use ( $key, $record ) {
-			return $key === $name ? $record : null;
+		// #1101 PR-3b: both requests read the live row and pass every check;
+		// the second one's claim lands first.  The first one's claim — one
+		// conditional UPDATE — then affects 0 rows.
+		$second = null;
+		$GLOBALS['mcpwp_test_oauth_tokens_before'] = function ( $kind, $sql ) use ( $data, &$second ) {
+			if ( null === $second && 'query' === $kind && false !== strpos( $sql, "SET type = 'reuse_tombstone'" ) ) {
+				$second = false;
+				$second = $this->refresh( $data['refresh_token'] );
+			}
 		};
 		try {
-			$first  = $this->refresh( $data['refresh_token'] );
-			$second = $this->refresh( $data['refresh_token'] );
+			$first = $this->refresh( $data['refresh_token'] );
 		} finally {
-			unset( $GLOBALS['mcpwp_test_transient_hook'] );
+			$GLOBALS['mcpwp_test_oauth_tokens_before'] = null;
 		}
 
-		$this->assertSame( 200, $first->get_status() );
-		$this->assertSame( 'invalid_grant', $second->get_data()['error'] );
+		$this->assertSame( 200, $second->get_status(), 'The claim that landed first wins.' );
+		$this->assertSame( 'invalid_grant', $first->get_data()['error'] );
 	}
 
 	// ── P1-2: refresh lifetime decoupled from the access TTL ──────────────
@@ -486,17 +489,15 @@ final class OAuthRunAsUserTest extends TestCase {
 		$data = $this->redeem( $this->seed_code( self::EDITOR ) )->get_data();
 		$this->assertSame( 3600, $data['expires_in'], 'The access TTL is unchanged.' );
 
-		$key = ( new Mcpwp_REST_OAuth() )->get_oauth_refresh_token_transient_key( $data['refresh_token'] );
-		$this->assertSame( 30 * DAY_IN_SECONDS, $GLOBALS['mcpwp_test_transients'][ $key ]['ttl'], 'Was min(30 d, 10 x 3600 s) = 10 hours.' );
+		$this->assertEqualsWithDelta( time() + 30 * DAY_IN_SECONDS, (int) mcpwp_test_oauth_row( $data['refresh_token'] )['expires_at'], 5, 'Was min(30 d, 10 x 3600 s) = 10 hours.' );
 
 		// Simulate day 29: the stored record is near its end, the refresh still works and rotates.
-		$GLOBALS['mcpwp_test_transients'][ $key ]['expires'] = time() + 60;
+		mcpwp_test_oauth_set( $data['refresh_token'], array( 'expires_at' => time() + 60 ) );
 		$next = ( new Mcpwp_REST_OAuth() )->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'client_id' => 'test_client', 'refresh_token' => $data['refresh_token'] ) ) )->get_data();
 		$this->assertArrayHasKey( 'refresh_token', $next );
 		$this->assertNotSame( $data['refresh_token'], $next['refresh_token'] );
-		$next_key = ( new Mcpwp_REST_OAuth() )->get_oauth_refresh_token_transient_key( $next['refresh_token'] );
-		$this->assertSame( 30 * DAY_IN_SECONDS, $GLOBALS['mcpwp_test_transients'][ $next_key ]['ttl'] );
-		$this->assertFalse( get_transient( $key ), 'The used refresh token is gone.' );
+		$this->assertEqualsWithDelta( time() + 30 * DAY_IN_SECONDS, (int) mcpwp_test_oauth_row( $next['refresh_token'] )['expires_at'], 5 );
+		$this->assertSame( 'reuse_tombstone', mcpwp_test_oauth_row( $data['refresh_token'] )['type'], 'The used refresh token is spent.' );
 	}
 
 	public function test_refresh_lifetime_is_clamped_to_14_30_days(): void {

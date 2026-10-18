@@ -3958,17 +3958,30 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
-		// For legacy spai_at_ tokens we check the legacy transient namespace first.
-		// 2.8.56 used 'spai_oauth_token_' . md5($token); v3 uses 'mcpwp_oauth_token_' . md5($token).
-		// We try the legacy key first when the token has the spai_ prefix, then fall
-		// through to the standard path in case it was already re-issued under v3 naming.
+		// #1101 PR-3b: access tokens live in the hashed token table.  A
+		// token is valid only when its row is found active (an access row,
+		// not revoked, not expired); a missing table finds nothing (fail
+		// closed).  A token with no row at all may be one issued before the
+		// table existed: during the grace window it is looked up in its old
+		// transient — 2.8.x spai_oauth_token_<md5> first for an spai_at_
+		// token, then mcpwp_oauth_token_<md5> — and moved into the table on
+		// this use, or refused if that write fails.
 		$record = false;
-		if ( 0 === strpos( (string) $token, 'spai_at_' ) ) {
-			$legacy_transient_key = 'spai_oauth_token_' . md5( (string) $token );
-			$record               = get_transient( $legacy_transient_key );
-		}
-		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
-			$record = get_transient( $this->get_oauth_token_transient_key( $token ) );
+		$row    = Mcpwp_OAuth_Token_Store::find( $token );
+		if ( Mcpwp_OAuth_Token_Store::is_active( $row, Mcpwp_OAuth_Token_Store::TYPE_ACCESS ) ) {
+			$record = Mcpwp_OAuth_Token_Store::to_record( $row );
+			Mcpwp_OAuth_Token_Store::touch( $row );
+		} elseif ( null === $row ) {
+			$legacy_keys = array( $this->get_oauth_token_transient_key( $token ) );
+			if ( 0 === strpos( (string) $token, 'spai_at_' ) ) {
+				array_unshift( $legacy_keys, 'spai_oauth_token_' . md5( (string) $token ) );
+			}
+			foreach ( $legacy_keys as $legacy_key ) {
+				$record = Mcpwp_OAuth_Token_Store::migrate_from_transient( $token, Mcpwp_OAuth_Token_Store::TYPE_ACCESS, $legacy_key, DAY_IN_SECONDS );
+				if ( is_array( $record ) ) {
+					break;
+				}
+			}
 		}
 
 		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
@@ -6683,9 +6696,13 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Issue an OAuth bearer access token.
 	 *
+	 * #1101 PR-3b: the token is written to the hashed token table (never a
+	 * transient).  If that write fails nothing is issued: the caller gets a
+	 * WP_Error, never a token that would not validate (fail closed).
+	 *
 	 * @param array $scopes Scopes to grant.
 	 * @param int   $ttl    Token TTL in seconds.
-	 * @return array Token response payload.
+	 * @return array|WP_Error Token response payload, or 503 when it could not be stored.
 	 */
 	public function issue_oauth_access_token( $scopes, $ttl, $context = array() ) {
 		$ttl    = max( 300, min( 86400, absint( $ttl ) ) );
@@ -6723,7 +6740,9 @@ trait Mcpwp_Api_Auth {
 			$payload['family_id'] = $context['family_id'];
 		}
 
-		set_transient( $this->get_oauth_token_transient_key( $token ), $payload, $ttl );
+		if ( ! Mcpwp_OAuth_Token_Store::insert( $token, Mcpwp_OAuth_Token_Store::TYPE_ACCESS, $payload ) ) {
+			return new WP_Error( 'temporarily_unavailable', __( 'The token could not be stored. Try again.', 'mcpwp' ), array( 'status' => 503 ) );
+		}
 
 		return array(
 			'access_token' => $token,
