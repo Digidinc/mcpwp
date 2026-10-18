@@ -200,7 +200,7 @@ trait Mcpwp_Api_Auth {
 			'/elementor/page'            => 'type:page',
 			'/elementor/build-page'      => 'type:page',
 			'/elementor/landing-page'    => 'type:page',
-			'/elementor/clone'           => 'type:page',
+			'/elementor/clone'           => 'source:source_id', // The handler copies the source's post_type (#1118 P0-3).
 			'/elementor/blueprints/build' => 'type:page',
 		);
 	}
@@ -404,8 +404,9 @@ trait Mcpwp_Api_Auth {
 			return array( 'path' => $path, 'targets' => array() );
 		}
 
-		$checks = array();
-		$routes = self::user_run_create_type_routes();
+		$checks       = array();
+		$routes       = self::user_run_create_type_routes();
+		$source_param = '';
 
 		if ( 'POST' === $method && isset( $routes[ $path ] ) ) {
 			$rule = $routes[ $path ];
@@ -415,6 +416,10 @@ trait Mcpwp_Api_Auth {
 				list( $param, $default ) = explode( '=', substr( $rule, 6 ), 2 );
 				$value    = $request->get_param( $param );
 				$checks[] = array( ( is_string( $value ) && '' !== $value ) ? sanitize_key( $value ) : ( null === $value || '' === $value ? $default : '' ), 'create_posts' );
+			} elseif ( 0 === strpos( $rule, 'source:' ) ) {
+				// The created type is the declared SOURCE post's type: resolved
+				// below, from the same reference resolution the chokepoint uses.
+				$source_param = substr( $rule, 7 );
 			} elseif ( 0 === strpos( $rule, 'items:' ) ) {
 				list( $param, $default ) = explode( '=', substr( $rule, 6 ), 2 );
 				$items = $request->get_param( $param );
@@ -447,6 +452,17 @@ trait Mcpwp_Api_Auth {
 			// read_post alone; charging edit_pages for linking to a published
 			// page would refuse an Author a call core allows.
 			$written = array_flip( array_map( 'intval', array_merge( $resolution['refs']['scalar'], $resolution['refs']['items'] ) ) );
+			// 'source:<param>': the create cap of the source's own type. A
+			// hidden or missing source is skipped — the chokepoint answers it
+			// as the canonical 404, and a type verdict here would be an
+			// existence oracle.
+			if ( '' !== $source_param ) {
+				$source_value = $request->get_param( $source_param );
+				$source_id    = is_numeric( $source_value ) ? (int) $source_value : 0;
+				if ( $source_id > 0 && isset( $resolution['rows'][ $source_id ] ) && empty( $resolution['hidden'][ $source_id ] ) ) {
+					$checks[] = array( (string) $resolution['rows'][ $source_id ]['post_type'], 'create_posts' );
+				}
+			}
 			foreach ( $resolution['rows'] as $id => $row ) {
 				if ( ! empty( $resolution['hidden'][ $id ] ) || ! isset( $written[ (int) $id ] ) ) {
 					continue;
@@ -2222,7 +2238,7 @@ trait Mcpwp_Api_Auth {
 	 *  - 'name:item'     PER-ITEM: one id that a bulk-shaped door reports in
 	 *                    its per-item results rather than refusing
 	 *
-	 * and carries ONE of three classes (#1101 PR-3c):
+	 * and carries ONE of four classes (#1101 PR-3c, #1118):
 	 *  - (no suffix)     WRITE target: the request changes that post.  Every
 	 *                    principal gets the hidden check; a user-run principal
 	 *                    also needs edit_post (delete_post on DELETE).
@@ -2238,6 +2254,19 @@ trait Mcpwp_Api_Auth {
 	 *                    references this audit found undeclared
 	 *                    (featured_image, media_id, a page's parent): a bot
 	 *                    key keeps exactly the scope-only behaviour it had.
+	 *                    Never on GET/HEAD, where the name is a list filter.
+	 *  - '@source'       As '@read', for a post whose stored content the
+	 *                    handler COPIES into the post it creates (a clone's
+	 *                    or landing page's source). The only read refs that
+	 *                    count toward the #1032 pre-existing-template
+	 *                    exemption (written_post_ref_target_ids()); '@read'
+	 *                    and '@read-user' refs never do (#1118 P0-2). A route
+	 *                    that copies the source's TYPE also declares
+	 *                    'source:<param>' in user_run_create_type_routes().
+	 *
+	 * Every declared value that this guard and a handler's absint() could
+	 * read differently — negative, '12abc', true, an array — is refused 400
+	 * invalid_post_ref (is_ambiguous_post_ref_value()).
 	 *
 	 * A key may contain '*' for one path segment ('/pages/*' + '/clone'), so a
 	 * sub-route can carry a different class than its parent family.  Keys
@@ -2264,14 +2293,14 @@ trait Mcpwp_Api_Auth {
 			'/elementor/build-page'               => array(),
 			'/elementor/bulk'                     => array( 'ids:csv' ),
 			// The clone's source is only read; its parent page too.
-			'/elementor/clone'                    => array( 'source_id@read', 'parent@read' ),
+			'/elementor/clone'                    => array( 'source_id@source', 'parent@read' ),
 			'/elementor/custom-code'              => array( 'id' ),
 			// Both shapes are per-item: an id the run cannot touch is reported
 			// in not_touched[], never refused as a whole request.
 			'/elementor/find-replace'             => array( 'id:item', 'ids[]' ),
 			'/elementor/globals'                  => array(),
 			'/elementor/kit-css'                  => array(),
-			'/elementor/landing-page'             => array( 'template_id@read' ),
+			'/elementor/landing-page'             => array( 'template_id@source' ),
 			'/elementor/parts'                    => array( 'id', 'page_id' ),
 			// The section is copied FROM page_id into a new template: a read.
 			'/elementor/save-section-as-template' => array( 'page_id@read' ),
@@ -2297,7 +2326,7 @@ trait Mcpwp_Api_Auth {
 			// parent / featured_image: nested references (#1110, PR-3c).
 			'/pages/bulk'                          => array( 'updates[].id', 'pages[].id', 'updates[].parent@read-user', 'pages[].parent@read-user', 'updates[].featured_image@read-user', 'pages[].featured_image@read-user' ),
 			// /pages/{id}/clone: the {id} IS the clone source — only read.
-			'/pages/*/clone'                       => array( 'id@read' ),
+			'/pages/*/clone'                       => array( 'id@source' ),
 			// /pages/{id}, .../template, .../translations.
 			'/pages'                               => array( 'id', 'parent@read-user', 'featured_image@read-user' ),
 			// `updates` and the original `posts` spelling are both accepted.
@@ -2619,12 +2648,24 @@ trait Mcpwp_Api_Auth {
 		if ( '@read' === substr( $spec, -5 ) ) {
 			return array( substr( $spec, 0, -5 ), 'read' );
 		}
+		if ( '@source' === substr( $spec, -7 ) ) {
+			return array( substr( $spec, 0, -7 ), 'source' );
+		}
 		return array( $spec, 'write' );
 	}
 
 	/**
-	 * Whether a declared ref value would be skipped by this guard (not
-	 * numeric) yet read as a post id > 0 by a handler's absint() / (int).
+	 * Whether a declared ref value is one this guard and a handler's
+	 * absint() / (int) could read differently, and so is refused (400
+	 * invalid_post_ref) rather than skipped:
+	 *  - an array, object or true (absint() reads 1, or the first element);
+	 *  - a non-numeric string that starts like a number ('12abc', '+12x',
+	 *    '-0x1');
+	 *  - #1118 P0-1: ANY negative number, int, float or numeric string
+	 *    ('-5', -5, ' -5', -5.0). The guard skipped values <= 0 as "not an
+	 *    id", and absint() turned -N into N — a page editor cloned another
+	 *    user's draft by sending -id.
+	 * 0, '0', '', null and false are not ids and still pass untouched.
 	 *
 	 * @param mixed $value Raw value.
 	 * @return bool
@@ -2633,7 +2674,16 @@ trait Mcpwp_Api_Auth {
 		if ( is_array( $value ) || is_object( $value ) || true === $value ) {
 			return true;
 		}
-		return is_string( $value ) && ! is_numeric( $value ) && 1 === preg_match( '/^\s*[+]?\d/', $value );
+		if ( ( is_int( $value ) || is_float( $value ) ) && $value < 0 ) {
+			return true;
+		}
+		if ( ! is_string( $value ) ) {
+			return false;
+		}
+		if ( is_numeric( $value ) ) {
+			return (float) $value < 0;
+		}
+		return 1 === preg_match( '/^\s*[+-]?\d/', $value );
 	}
 
 	/**
@@ -2722,6 +2772,7 @@ trait Mcpwp_Api_Auth {
 		$scalar = array();
 		$items  = array();
 		$read   = array();
+		$source = array(); // '@source' refs: also in $read; the only template-exempt read refs.
 
 		foreach ( $specs as $declared_spec ) {
 			list( $spec, $class ) = self::post_ref_spec_parts( $declared_spec );
@@ -2757,7 +2808,10 @@ trait Mcpwp_Api_Auth {
 				if ( ! is_numeric( $value ) || (int) $value <= 0 ) {
 					continue; // Not an id at all: the door's own validation answers it.
 				}
-				if ( 'write' !== $class ) {
+				if ( 'source' === $class ) {
+					$read[]   = (int) $value;
+					$source[] = (int) $value;
+				} elseif ( 'write' !== $class ) {
 					$read[] = (int) $value;
 				} elseif ( $per_item ) {
 					$items[] = (int) $value;
@@ -2778,6 +2832,13 @@ trait Mcpwp_Api_Auth {
 		// A single item (POST /menus/{id}/items) is a scalar ref; the items[]
 		// of a menu created in one call (POST /menus) are per-item refs.
 		if ( $this->route_matches( $path, '/menus' ) ) {
+			// #1118 P0-1: an object_id the guard skips (negative, '12abc') but
+			// absint() reads as a post, under a type that names a post.
+			foreach ( array_merge( array( $params ), isset( $params['items'] ) && is_array( $params['items'] ) ? $params['items'] : array() ) as $menu_item ) {
+				if ( is_array( $menu_item ) && self::menu_item_type_names_post( $menu_item ) && array_key_exists( 'object_id', $menu_item ) && self::is_ambiguous_post_ref_value( $menu_item['object_id'] ) ) {
+					return new WP_Error( 'invalid_post_ref', __( 'Post ids must be plain positive integers.', 'mcpwp' ), array( 'status' => 400 ) );
+				}
+			}
 			if ( self::menu_item_names_post( $params ) ) {
 				$scalar[] = (int) $params['object_id'];
 			}
@@ -2801,6 +2862,24 @@ trait Mcpwp_Api_Auth {
 			}
 		}
 
+		// #1118 P1: POST /post-meta/{id} {key, value} — the value names a post
+		// when the key is a known id meta (get_post_ref_meta_value_keys()). A
+		// read-only reference (an attachment set as the thumbnail, a product
+		// linked as an upsell), so '@read-user': user-run principals, writes.
+		if ( $user_run && ! $is_read_method && preg_match( '#^/post-meta/\d+$#', $path ) && isset( $params['key'] ) && is_string( $params['key'] ) ) {
+			$meta_keys = self::get_post_ref_meta_value_keys();
+			$meta_key  = trim( $params['key'] );
+			if ( isset( $meta_keys[ $meta_key ] ) && array_key_exists( 'value', $params ) ) {
+				$values = self::post_ref_meta_values( $params['value'], $meta_keys[ $meta_key ] );
+				if ( null === $values ) {
+					return new WP_Error( 'invalid_post_ref', __( 'Post ids must be plain positive integers.', 'mcpwp' ), array( 'status' => 400 ) );
+				}
+				foreach ( $values as $meta_value ) {
+					$read[] = $meta_value;
+				}
+			}
+		}
+
 		if ( empty( $scalar ) && empty( $items ) && empty( $read ) ) {
 			return null;
 		}
@@ -2812,7 +2891,75 @@ trait Mcpwp_Api_Auth {
 			// #1101 PR-3c: read-only references — hidden check (read_post
 			// for a user-run principal), never the per-post edit check.
 			'read'           => array_values( array_unique( $read ) ),
+			// #1118 P0-2: the subset of 'read' whose stored content the handler
+			// copies verbatim (a clone's or landing page's source) — the only
+			// read refs the #1032 pre-existing-template exemption may use.
+			'source'         => array_values( array_unique( $source ) ),
 		);
+	}
+
+	/**
+	 * Whether a nav-menu item's type says its object_id is a post.
+	 *
+	 * @param array $item Item payload.
+	 * @return bool
+	 */
+	public static function menu_item_type_names_post( array $item ) {
+		$type = isset( $item['type'] ) && is_string( $item['type'] ) ? $item['type'] : '';
+		return in_array( $type, array( 'post_type', 'post', 'page' ), true );
+	}
+
+	/**
+	 * Post-meta keys whose VALUE names posts (#1118 P1), and the value's
+	 * shape: 'scalar' (one id), 'csv' ('1,2,3') or 'list' (an array, or a
+	 * JSON array string — the handler decodes one). Only keys /post-meta can
+	 * write: _elementor_* keys are refused there outright, so
+	 * _elementor_template_id is not listed.
+	 *
+	 * @return array<string,string>
+	 */
+	public static function get_post_ref_meta_value_keys() {
+		return array(
+			'_thumbnail_id'          => 'scalar', // Featured image (core).
+			'_product_image_gallery' => 'csv',    // WooCommerce gallery attachment ids.
+			'_upsell_ids'            => 'list',   // WooCommerce linked products.
+			'_crosssell_ids'         => 'list',
+			'_children'              => 'list',   // WooCommerce grouped product children.
+		);
+	}
+
+	/**
+	 * The post ids a meta value names, or null when one of them is ambiguous.
+	 *
+	 * @param mixed  $value Raw value.
+	 * @param string $shape 'scalar' | 'csv' | 'list'.
+	 * @return int[]|null
+	 */
+	public static function post_ref_meta_values( $value, $shape ) {
+		if ( 'list' === $shape && is_string( $value ) && '[' === substr( ltrim( $value ), 0, 1 ) ) {
+			$decoded = json_decode( $value, true );
+			$value   = is_array( $decoded ) ? $decoded : $value;
+		}
+		if ( 'csv' === $shape && is_string( $value ) ) {
+			$parts = explode( ',', $value );
+		} elseif ( 'list' === $shape && is_array( $value ) ) {
+			$parts = array_values( $value );
+		} else {
+			$parts = array( $value );
+		}
+		$ids = array();
+		foreach ( $parts as $part ) {
+			if ( is_string( $part ) && 'csv' === $shape ) {
+				$part = trim( $part );
+			}
+			if ( self::is_ambiguous_post_ref_value( $part ) ) {
+				return null;
+			}
+			if ( is_numeric( $part ) && (int) $part > 0 ) {
+				$ids[] = (int) $part;
+			}
+		}
+		return $ids;
 	}
 
 	/**
@@ -2823,8 +2970,7 @@ trait Mcpwp_Api_Auth {
 	 * @return bool
 	 */
 	public static function menu_item_names_post( array $item ) {
-		$type = isset( $item['type'] ) && is_string( $item['type'] ) ? $item['type'] : '';
-		return in_array( $type, array( 'post_type', 'post', 'page' ), true )
+		return self::menu_item_type_names_post( $item )
 			&& isset( $item['object_id'] ) && is_numeric( $item['object_id'] ) && (int) $item['object_id'] > 0;
 	}
 
@@ -3687,7 +3833,7 @@ trait Mcpwp_Api_Auth {
 		// clone's or landing page's source is copied into the written post
 		// verbatim, so its stored refs were already exempt; the per-route
 		// override below is what excludes a link target.
-		$scalar = array_values( array_unique( array_merge( $refs['scalar'], $refs['read'] ?? array() ) ) );
+		$scalar = array_values( array_unique( array_merge( $refs['scalar'], $refs['source'] ?? array() ) ) );
 
 		if ( is_object( $request ) && method_exists( $request, 'get_route' ) ) {
 			$route = $this->normalize_route_for_authorization( (string) $request->get_route() );

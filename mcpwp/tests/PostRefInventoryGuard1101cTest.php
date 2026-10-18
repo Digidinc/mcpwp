@@ -113,7 +113,7 @@ final class PostRefInventoryGuard1101cTest extends TestCase {
 	);
 
 	/** An id-like parameter name. */
-	const ID_LIKE = '/^(id|ids|[a-z_]*_id|[a-z_]*_ids|parent|featured_image|featured_media|thumbnail|attachment|attachments|image|images|gallery|media|source|target|template|post|page|object_id|menu_item_parent)$/';
+	const ID_LIKE = '/^(id|ids|[a-z_]*_id|[a-z_]*_ids|[a-z][A-Za-z]*Ids?|parent|post_parent|[a-z_]*_parent|featured_image|featured_media|thumbnail|attachment|attachments|image|images|gallery|media|source|target|template|post|page|object_id|menu_item_parent)$/';
 
 	/**
 	 * Reviewed: id-like names on reachable routes that do not name a post.
@@ -150,8 +150,14 @@ final class PostRefInventoryGuard1101cTest extends TestCase {
 	const NESTED = array(
 		'includes/core/class-mcpwp-pages.php featured_image'          => 'read-user',
 		'includes/core/class-mcpwp-pages.php parent'                  => 'read-user',
+		'includes/core/class-mcpwp-pages.php post_parent'             => 'not-a-post: the wp_insert_post() array this class BUILDS from $data[parent] (output, not input)',
 		'includes/core/class-mcpwp-pages.php template'                => 'not-a-post: a page template file name',
 		'includes/core/class-mcpwp-posts.php featured_image'          => 'read-user',
+		'includes/pro/core/class-mcpwp-elementor-pro.php page'              => 'not-a-post: pagination of the template list',
+		'includes/pro/core/class-mcpwp-elementor-pro.php parent'            => 'read',   // /elementor/clone parent.
+		'includes/pro/core/class-mcpwp-elementor-pro.php source_element_id' => 'not-a-post: copied OUT of a part\'s own meta into the response (output)',
+		'includes/pro/core/class-mcpwp-elementor-pro.php source_page_id'    => 'not-a-post: copied OUT of a part\'s own meta into the response (output)',
+		'includes/pro/core/class-mcpwp-elementor-pro.php template_id'       => 'source', // /elementor/landing-page template_id.
 		'includes/traits/trait-mcpwp-sanitization.php featured_image' => 'read-user',
 		'includes/traits/trait-mcpwp-sanitization.php id'             => 'write',
 		'includes/traits/trait-mcpwp-sanitization.php ids'            => 'not-a-post: list filter (post__in), clamped to published for user-run principals',
@@ -287,8 +293,11 @@ final class PostRefInventoryGuard1101cTest extends TestCase {
 					$names[] = (string) $a;
 				}
 				$body = self::body_of( $h['callback'] ?? null );
-				preg_match_all( '/get_param\(\s*[\'"](\w+)[\'"]\s*\)|\$request\[\s*[\'"](\w+)[\'"]\s*\]/', $body, $reads );
-				foreach ( array_merge( $reads[1], $reads[2] ) as $n ) {
+				// get_param('x'), $request['x'], get_json_params()['x'] /
+				// get_body_params()['x'], and $params/$body/$json/$input['x']
+				// (a callback's local copy of the request's params, #1118 P2).
+				preg_match_all( '/get_param\(\s*[\'"](\w+)[\'"]\s*\)|\$request\[\s*[\'"](\w+)[\'"]\s*\]|get_(?:json|body)_params\(\)\s*\[\s*[\'"](\w+)[\'"]\s*\]|\$(?:params|body|json|input)\[\s*[\'"](\w+)[\'"]\s*\]/', $body, $reads );
+				foreach ( array_merge( $reads[1], $reads[2], $reads[3], $reads[4] ) as $n ) {
 					if ( '' !== $n ) {
 						$names[] = $n;
 					}
@@ -451,6 +460,10 @@ final class PostRefInventoryGuard1101cTest extends TestCase {
 		'includes/core/class-mcpwp-posts.php',
 		'includes/core/class-mcpwp-pages.php',
 		'includes/traits/trait-mcpwp-sanitization.php',
+		// #1118 P2: the other cores whose handlers take a whole args array.
+		'includes/core/class-mcpwp-media.php',
+		'includes/core/class-mcpwp-post-fields.php',
+		'includes/pro/core/class-mcpwp-elementor-pro.php',
 	);
 
 	private static function nested_sweep(): array {

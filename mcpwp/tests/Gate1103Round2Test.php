@@ -286,8 +286,12 @@ final class Gate1103Round2Test extends TestCase {
 	 */
 	public function test_elementor_page_creators_also_check_the_page_types_create_cap(): void {
 		$GLOBALS['mcpwp_test_post_type_caps']['page'] = array( 'create_posts' => 'create_pages_custom' );
+		// /elementor/clone creates the SOURCE's type (#1118 P0-3): name a page.
+		$GLOBALS['_mcpwp_test_posts'][9850] = new WP_Post( array( 'ID' => 9850, 'post_type' => 'page', 'post_status' => 'publish', 'post_title' => 'src' ) );
+		$GLOBALS['mcpwp_test_post_caps'][ self::EDITOR ]['read_post'][9850] = true;
 		foreach ( array_column( self::elementor_page_creators(), 0 ) as $route ) {
-			$this->assert_refused( $this->check( 'POST', $route, $this->token( self::EDITOR ), array( 'title' => 'x' ) ), $route, 'create_pages_custom' );
+			$params = '/mcpwp/v1/elementor/clone' === $route ? array( 'title' => 'x', 'source_id' => 9850 ) : array( 'title' => 'x' );
+			$this->assert_refused( $this->check( 'POST', $route, $this->token( self::EDITOR ), $params ), $route, 'create_pages_custom' );
 		}
 		$GLOBALS['mcpwp_test_user_caps'][ self::EDITOR ]['create_pages_custom'] = true;
 		$this->assertTrue( $this->check( 'POST', '/mcpwp/v1/elementor/page', $this->token( self::EDITOR ), array( 'title' => 'x' ) ) );
