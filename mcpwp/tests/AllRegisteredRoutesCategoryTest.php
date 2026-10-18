@@ -128,6 +128,7 @@ final class AllRegisteredRoutesCategoryTest extends TestCase {
 		'/oauth/authorize',       // Mcpwp_REST_OAuth: pre-token OAuth 2.1 authorize step.
 		'/oauth/token',           // Mcpwp_REST_OAuth: pre-token OAuth 2.1 token exchange.
 		'/oauth/register',        // Mcpwp_REST_OAuth: RFC 7591 Dynamic Client Registration (public by design, PR-2 D3).
+		'/oauth/revoke',          // Mcpwp_REST_OAuth: RFC 7009 token revocation (public by design, #1101).
 		'/broker/enroll-callback', // Mcpwp_REST_Broker: mumcp.com enrollment handshake (public by design).
 		'/broker/enroll-confirm',  // Mcpwp_REST_Broker: mumcp.com enrollment handshake (public by design).
 		'/broker/enroll-store',    // Mcpwp_REST_Broker: mumcp.com enrollment handshake (public by design).

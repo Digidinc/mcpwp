@@ -93,6 +93,12 @@ class Mcpwp_Uninstaller {
 		'mcpwp_oauth_dcr_site_window',
 		'mcpwp_oauth_default_migrated',
 		'mcpwp_oauth_last_resource',
+		// OAuth revocation epochs + their lock, D10 migration lock (#1101).
+		'mcpwp_oauth_deleted_users',
+		'mcpwp_oauth_client_epochs',
+		'mcpwp_oauth_revoked_families',
+		'mcpwp_oauth_revocation_lock',
+		'mcpwp_oauth_default_migration_lock',
 		'mcpwp_approvals_table_migration_lock',
 		'mcpwp_approvals_schema_version',
 		'mcpwp_approvals_migration_skipped',

@@ -84,6 +84,15 @@ class Mcpwp_OAuth_Clients {
 	/** Registrations allowed per (IP address, redirect hosts) per window. */
 	const REGISTRATIONS_PER_WINDOW = 10;
 
+	/**
+	 * Registrations one address (IPv4, or an IPv6 /64) may make in any
+	 * rolling day ACROSS ALL redirect hosts (#1101 PR-3a).  The hourly
+	 * (address, hosts) bucket alone let one address mint a fresh bucket per
+	 * redirect host and spend the whole per-site day; capped at 20 of the
+	 * site's 50, one address can no longer lock everyone else out.
+	 */
+	const ADDRESS_REGISTRATIONS_PER_DAY = 20;
+
 	/** Registrations allowed per site in any rolling day. */
 	const SITE_REGISTRATIONS_PER_DAY = 50;
 
@@ -717,6 +726,68 @@ class Mcpwp_OAuth_Clients {
 		self::release_lock( $token );
 	}
 
+	/**
+	 * Set a client's revocation epoch (#1101 PR-3a): every token issued to it
+	 * at or before $epoch stops working (Mcpwp_OAuth_Revocation::is_revoked()).
+	 * Never lowers an epoch already stored.
+	 *
+	 * @param string $client_id Client id.
+	 * @param float  $epoch     Revocation time (Mcpwp_OAuth_Revocation::now()).
+	 * @return bool True when the record now carries an epoch >= $epoch.
+	 */
+	public static function set_revoked_before( $client_id, $epoch ) {
+		if ( null === self::find( $client_id ) ) {
+			return false;
+		}
+		$token = self::acquire_lock();
+		if ( false === $token ) {
+			return false;
+		}
+		self::flush_option_cache( self::OPTION );
+		$clients = self::all();
+		$ok      = false;
+		if ( isset( $clients[ $client_id ] ) ) {
+			$clients[ $client_id ]['revoked_before'] = max( (float) $epoch, (float) ( $clients[ $client_id ]['revoked_before'] ?? 0 ) );
+			update_option( self::OPTION, $clients, false );
+			self::flush_option_cache( self::OPTION );
+			$check = self::find( $client_id );
+			$ok    = is_array( $check ) && (float) ( $check['revoked_before'] ?? 0 ) >= (float) $epoch;
+		}
+		self::release_lock( $token );
+		return $ok;
+	}
+
+	/**
+	 * Delete a registered client (#1101 PR-3a).  Its tokens die with it: a
+	 * tombstone epoch is written first (Mcpwp_OAuth_Revocation), because the
+	 * record — and the revoked_before it could carry — is about to be gone,
+	 * and issued tokens live in transients that cannot be enumerated.  If the
+	 * tombstone cannot be written, nothing is deleted.
+	 *
+	 * @param string $client_id Client id.
+	 * @return bool True when the client is gone and its tokens are revoked.
+	 */
+	public static function delete( $client_id ) {
+		if ( null === self::find( $client_id ) ) {
+			return false;
+		}
+		if ( ! Mcpwp_OAuth_Revocation::tombstone_client( $client_id ) ) {
+			return false;
+		}
+		$token = self::acquire_lock();
+		if ( false === $token ) {
+			return false;
+		}
+		self::flush_option_cache( self::OPTION );
+		$clients = self::all();
+		unset( $clients[ $client_id ] );
+		update_option( self::OPTION, $clients, false );
+		self::flush_option_cache( self::OPTION );
+		$gone = null === self::find( $client_id );
+		self::release_lock( $token );
+		return $gone;
+	}
+
 	// -------------------------------------------------------------------------
 	// Store lock
 	// -------------------------------------------------------------------------
@@ -732,10 +803,14 @@ class Mcpwp_OAuth_Clients {
 	 * compare-and-swap UPDATE, so two stealers cannot both win.  A few short
 	 * retries absorb ordinary contention.
 	 *
-	 * @param int $now Current time.
+	 * The same lock pattern guards other OAuth stores under their own row
+	 * name (the D10 migration, Mcpwp_OAuth_Revocation): pass $name.
+	 *
+	 * @param int    $now  Current time.
+	 * @param string $name Lock row (option_name); the client store's by default.
 	 * @return string|false Token for release_lock(), or false.
 	 */
-	public static function acquire_lock( $now = 0 ) {
+	public static function acquire_lock( $now = 0, $name = self::LOCK_OPTION ) {
 		global $wpdb;
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'insert' ) ) {
 			return false; // Nothing to arbitrate with: refuse rather than run unlocked.
@@ -752,7 +827,7 @@ class Mcpwp_OAuth_Clients {
 			$inserted   = $wpdb->insert(
 				$wpdb->options,
 				array(
-					'option_name'  => self::LOCK_OPTION,
+					'option_name'  => $name,
 					'option_value' => $token,
 					'autoload'     => 'no',
 				),
@@ -769,7 +844,7 @@ class Mcpwp_OAuth_Clients {
 			if ( ! method_exists( $wpdb, 'get_var' ) || ! method_exists( $wpdb, 'update' ) ) {
 				continue;
 			}
-			$current = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::LOCK_OPTION ) );
+			$current = $wpdb->get_var( $wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", $name ) );
 			if ( ! is_string( $current ) || '' === $current ) {
 				continue;
 			}
@@ -781,7 +856,7 @@ class Mcpwp_OAuth_Clients {
 				$wpdb->options,
 				array( 'option_value' => $token ),
 				array(
-					'option_name'  => self::LOCK_OPTION,
+					'option_name'  => $name,
 					'option_value' => $current,
 				),
 				array( '%s' ),
@@ -800,8 +875,9 @@ class Mcpwp_OAuth_Clients {
 	 * LOCK_TTL never deletes the lock someone else has since stolen.
 	 *
 	 * @param string $token Token from acquire_lock().
+	 * @param string $name  Lock row the token was taken on.
 	 */
-	public static function release_lock( $token ) {
+	public static function release_lock( $token, $name = self::LOCK_OPTION ) {
 		global $wpdb;
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'delete' ) ) {
 			return;
@@ -809,7 +885,7 @@ class Mcpwp_OAuth_Clients {
 		$wpdb->delete(
 			$wpdb->options,
 			array(
-				'option_name'  => self::LOCK_OPTION,
+				'option_name'  => $name,
 				'option_value' => (string) $token,
 			),
 			array( '%s', '%s' )
@@ -822,7 +898,7 @@ class Mcpwp_OAuth_Clients {
 	 *
 	 * @param string $name Option name.
 	 */
-	private static function flush_option_cache( $name ) {
+	public static function flush_option_cache( $name ) {
 		if ( function_exists( 'wp_cache_delete' ) ) {
 			wp_cache_delete( $name, 'options' );
 		}
@@ -872,7 +948,9 @@ class Mcpwp_OAuth_Clients {
 	 *
 	 * Fixed one-hour window in a transient keyed by a keyed hash, so neither
 	 * the address nor the hosts are stored in clear.  Varying the hosts buys
-	 * an attacker new buckets, which is what the per-site daily cap is for.
+	 * an attacker new hourly buckets but not more of the day: one address
+	 * (IPv6: one /64) may register at most ADDRESS_REGISTRATIONS_PER_DAY
+	 * clients across all hosts, under the per-site daily cap.
 	 *
 	 * @param string   $ip    Caller IP.
 	 * @param string[] $hosts Redirect hosts (redirect_hosts()).
@@ -880,7 +958,30 @@ class Mcpwp_OAuth_Clients {
 	 * @return true|WP_Error
 	 */
 	public static function consume_registration_slot( $ip, array $hosts, $now ) {
-		$key    = 'mcpwp_oauth_dcr_' . substr( self::hash_ip( self::rate_limit_address( $ip ) . '|' . implode( ',', $hosts ) ), 0, 32 );
+		$address = self::rate_limit_address( $ip );
+
+		// Per-address ceiling across every redirect host (#1101 PR-3a):
+		// varying the hosts buys new hourly buckets, never more of the day.
+		$address_key    = 'mcpwp_oauth_dcr_addr_' . substr( self::hash_ip( $address ), 0, 32 );
+		$address_bucket = get_transient( $address_key );
+		if ( ! is_array( $address_bucket ) || ! isset( $address_bucket['count'], $address_bucket['reset'] ) || (int) $address_bucket['reset'] <= $now ) {
+			$address_bucket = array(
+				'count' => 0,
+				'reset' => $now + self::SITE_WINDOW,
+			);
+		}
+		if ( (int) $address_bucket['count'] >= self::ADDRESS_REGISTRATIONS_PER_DAY ) {
+			return new WP_Error(
+				'temporarily_unavailable',
+				'Too many app registrations right now; try again later.',
+				array(
+					'status'      => 429,
+					'retry_after' => max( 1, (int) $address_bucket['reset'] - $now ),
+				)
+			);
+		}
+
+		$key    = 'mcpwp_oauth_dcr_' . substr( self::hash_ip( $address . '|' . implode( ',', $hosts ) ), 0, 32 );
 		$bucket = get_transient( $key );
 
 		if ( ! is_array( $bucket ) || ! isset( $bucket['count'], $bucket['reset'] ) || (int) $bucket['reset'] <= $now ) {
@@ -903,6 +1004,9 @@ class Mcpwp_OAuth_Clients {
 
 		$bucket['count'] = (int) $bucket['count'] + 1;
 		set_transient( $key, $bucket, max( 1, (int) $bucket['reset'] - $now ) );
+
+		$address_bucket['count'] = (int) $address_bucket['count'] + 1;
+		set_transient( $address_key, $address_bucket, max( 1, (int) $address_bucket['reset'] - $now ) );
 
 		return true;
 	}

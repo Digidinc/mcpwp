@@ -439,6 +439,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-cloudflare.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-figma.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-oauth-clients.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-oauth-revocation.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-route-capability-map.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-oauth.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-broker.php';
@@ -704,6 +705,12 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// OAuth 2.1 well-known discovery endpoints + WWW-Authenticate hint on 401.
 	if ( class_exists( 'Mcpwp_OAuth_Well_Known' ) ) {
 		Mcpwp_OAuth_Well_Known::init();
+	}
+
+	// OAuth revocation epochs (#1101): a deleted user's tokens stay dead even
+	// if the database later reuses the user id.
+	if ( class_exists( 'Mcpwp_OAuth_Revocation' ) ) {
+		Mcpwp_OAuth_Revocation::init();
 	}
 
 	// Initialize white-label (shortcode, branding hooks, Elementor widget).

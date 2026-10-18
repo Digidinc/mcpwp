@@ -521,6 +521,9 @@ class Mcpwp_OAuth_Well_Known {
 			'token_endpoint'                        => $rest_base . '/oauth/token',
 			// D3: RFC 7591 Dynamic Client Registration (public clients only).
 			'registration_endpoint'                 => $rest_base . '/oauth/register',
+			// #1101: RFC 7009 token revocation (RFC 8414 §2).
+			'revocation_endpoint'                   => $rest_base . '/oauth/revoke',
+			'revocation_endpoint_auth_methods_supported' => array( 'none' ),
 			'response_types_supported'              => array( 'code' ),
 			'grant_types_supported'                 => array( 'authorization_code', 'refresh_token' ),
 			'code_challenge_methods_supported'      => array( 'S256' ),
