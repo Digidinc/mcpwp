@@ -49,7 +49,7 @@ final class InterimAdminScope1100Test extends TestCase {
 		return array( 'Authorization' => 'Bearer ' . $token );
 	}
 
-	private function key( array $scopes, string $role = 'custom', array $categories = array( 'forms', 'site', 'woocommerce' ) ): array {
+	private function key( array $scopes, string $role = 'custom', array $categories = array( 'forms', 'site', 'woocommerce', 'content', 'seo' ) ): array {
 		$created = 'admin' === $role
 			? $this->harness()->create_scoped_api_key( 'k', $scopes )
 			: $this->harness()->create_scoped_api_key( 'k', $scopes, $role, $categories );
@@ -75,6 +75,18 @@ final class InterimAdminScope1100Test extends TestCase {
 			'move widget'                 => array( 'POST', '/mcpwp/v1/widgets/text-1/move', array() ),
 			'create product (draft)'      => array( 'POST', '/mcpwp/v1/woocommerce/products', array( 'name' => 'x', 'status' => 'draft' ) ),
 			'create product (no status)'  => array( 'POST', '/mcpwp/v1/woocommerce/products', array( 'name' => 'x' ) ),
+			// Phase 1 (Kasra): site-wide settings.
+			'set favicon (POST)'          => array( 'POST', '/mcpwp/v1/favicon', array( 'attachment_id' => 3 ) ),
+			'set favicon (PUT)'           => array( 'PUT', '/mcpwp/v1/favicon', array( 'attachment_id' => 3 ) ),
+			'remove favicon'              => array( 'DELETE', '/mcpwp/v1/favicon', array() ),
+			'flush permalinks'            => array( 'POST', '/mcpwp/v1/flush-permalinks', array() ),
+			'flush page cache'            => array( 'POST', '/mcpwp/v1/cache-flush', array() ),
+			'signal settings (POST)'      => array( 'POST', '/mcpwp/v1/signals/settings', array() ),
+			'signal settings (PUT)'       => array( 'PUT', '/mcpwp/v1/signals/settings', array() ),
+			'set site context'            => array( 'POST', '/mcpwp/v1/site-context', array( 'context' => 'x' ) ),
+			'feedback relay'              => array( 'POST', '/mcpwp/v1/feedback/relay', array() ),
+			'create site blueprint'       => array( 'POST', '/mcpwp/v1/site-blueprints', array( 'name' => 'x' ) ),
+			'delete site blueprint'       => array( 'DELETE', '/mcpwp/v1/site-blueprints/abc', array() ),
 		);
 	}
 
@@ -111,6 +123,13 @@ final class InterimAdminScope1100Test extends TestCase {
 			'get form'           => array( 'GET', '/mcpwp/v1/forms/gravityforms/3', array(), 'read' ),
 			'list products'      => array( 'GET', '/mcpwp/v1/woocommerce/products', array(), 'read' ),
 			'update product'     => array( 'PUT', '/mcpwp/v1/woocommerce/products/5', array( 'id' => 5, 'status' => 'draft' ), 'write' ),
+			'get favicon'        => array( 'GET', '/mcpwp/v1/favicon', array(), 'read' ),
+			'get site context'   => array( 'GET', '/mcpwp/v1/site-context', array(), 'read' ),
+			'get signal settings' => array( 'GET', '/mcpwp/v1/signals/settings', array(), 'read' ),
+			'list blueprints'    => array( 'GET', '/mcpwp/v1/site-blueprints', array(), 'read' ),
+			'get blueprint'      => array( 'GET', '/mcpwp/v1/site-blueprints/abc', array(), 'read' ),
+			'extract blueprint'  => array( 'GET', '/mcpwp/v1/site-blueprints/extract', array(), 'read' ),
+			'submit feedback'    => array( 'POST', '/mcpwp/v1/feedback', array( 'message' => 'x' ), 'write' ),
 		);
 	}
 
@@ -127,10 +146,10 @@ final class InterimAdminScope1100Test extends TestCase {
 	}
 
 	public function test_tools_resolve_to_admin_in_parity_with_their_routes(): void {
-		foreach ( array( 'wp_get_form_entries', 'wp_add_widget', 'wp_update_widget', 'wp_delete_widget', 'wp_move_widget', 'wp_reorder_widgets', 'wc_create_product' ) as $tool ) {
+		foreach ( array( 'wp_get_form_entries', 'wp_add_widget', 'wp_update_widget', 'wp_delete_widget', 'wp_move_widget', 'wp_reorder_widgets', 'wc_create_product', 'wp_flush_permalinks', 'wp_flush_cache', 'wp_set_site_context', 'wp_create_site_blueprint' ) as $tool ) {
 			$this->assertSame( 'admin', $this->harness()->required_scope_for_tool( $tool ), $tool );
 		}
-		foreach ( array( 'wp_get_form', 'wp_list_forms', 'wp_list_sidebars', 'wp_get_widget', 'wc_list_products' ) as $tool ) {
+		foreach ( array( 'wp_get_form', 'wp_list_forms', 'wp_list_sidebars', 'wp_get_widget', 'wc_list_products', 'wp_get_site_context', 'wp_list_site_blueprints', 'wp_get_site_blueprint', 'wp_submit_feedback' ) as $tool ) {
 			$this->assertNotSame( 'admin', $this->harness()->required_scope_for_tool( $tool ), $tool );
 		}
 	}

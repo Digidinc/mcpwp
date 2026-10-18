@@ -15,7 +15,7 @@
  *    can write is bounded: at most 5 redirect URIs of at most 2,000 characters
  *    each, a 100-character plain-text name, 10 registrations per (IP, redirect
  *    hosts) per hour, 50 per site per rolling day, a purge of never-authorized
- *    clients older than 7 days, and a cap of 500 clients enforced by evicting
+ *    clients older than 24 hours, and a cap of 500 clients enforced by evicting
  *    the oldest never-authorized client (refusing only when all 500 have
  *    been authorized).
  *  - Every read-modify-write of the store runs under a lock row, and a
@@ -469,7 +469,7 @@ class Mcpwp_OAuth_Clients {
 	 *     users behind one Cloudflare or OpenAI egress address do not share
 	 *     one bucket, and a spoofable X-Forwarded-For is still ignored unless
 	 *     MCPWP_TRUST_PROXY_HEADERS says otherwise;
-	 *  3. under the store lock: the per-site rolling-day cap, the 7-day purge,
+	 *  3. under the store lock: the per-site rolling-day cap, the 24-hour purge,
 	 *     LRU eviction of a never-authorized client at the 500 cap, the write,
 	 *     and a re-read that proves the new client landed.
 	 *
@@ -624,7 +624,8 @@ class Mcpwp_OAuth_Clients {
 	}
 
 	/**
-	 * Drop clients never authorized and older than 7 days.
+	 * Drop clients never authorized and older than UNUSED_CLIENT_MAX_AGE
+	 * (24 hours).
 	 *
 	 * @param array $clients Records keyed by id.
 	 * @param int   $now     Current time.

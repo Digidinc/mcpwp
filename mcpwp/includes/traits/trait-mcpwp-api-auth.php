@@ -4396,6 +4396,25 @@ trait Mcpwp_Api_Auth {
 		if ( 'POST' === $method && '/mcpwp/v1/woocommerce/products' === untrailingslashit( $route ) ) {
 			return 'admin';
 		}
+		//  - Site-wide settings with no capability check (Kasra, #1100 phase 1):
+		//    the site icon (/favicon writes), rewrite flush, page-cache flush,
+		//    site-health signal settings, the site context (brand brief) write,
+		//    the feedback relay, and creating or deleting a stored site
+		//    blueprint. In wp-admin each of these needs manage_options. Reads
+		//    of the same routes stay where they were.
+		$route_exact = untrailingslashit( $route );
+		if ( $is_write && $this->route_matches( $route, '/mcpwp/v1/favicon' ) ) {
+			return 'admin';
+		}
+		if ( 'POST' === $method && in_array( $route_exact, array( '/mcpwp/v1/flush-permalinks', '/mcpwp/v1/cache-flush', '/mcpwp/v1/site-context', '/mcpwp/v1/feedback/relay', '/mcpwp/v1/site-blueprints' ), true ) ) {
+			return 'admin';
+		}
+		if ( $is_write && '/mcpwp/v1/signals/settings' === $route_exact ) {
+			return 'admin';
+		}
+		if ( 'DELETE' === $method && preg_match( '#^/mcpwp/v1/site-blueprints/[^/]+$#i', $route_exact ) ) {
+			return 'admin';
+		}
 
 		// Blanket-admin routes: every method (including GET) requires admin scope.
 		$admin_routes = array(
@@ -4944,6 +4963,11 @@ trait Mcpwp_Api_Auth {
 			'wp_move_widget',
 			'wp_reorder_widgets',
 			'wc_create_product',
+			// #1100 phase 1: mirrors the site-wide setting writes above.
+			'wp_flush_permalinks',
+			'wp_flush_cache',
+			'wp_set_site_context',
+			'wp_create_site_blueprint',
 			// WooCommerce orders/customers: mirrors the blanket-admin
 			// /woocommerce/orders and /woocommerce/customers routes (PR-2 round 2).
 			'wc_list_orders',
