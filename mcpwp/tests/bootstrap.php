@@ -250,15 +250,41 @@ class WP_REST_Response
     }
 }
 
+/**
+ * WP_REST_Request double that models core's parameter BUCKETS (#1110):
+ * JSON, POST (body), GET (query), URL, defaults — checked in
+ * get_parameter_order()'s order, exactly as wp-includes/rest-api/
+ * class-wp-rest-request.php does in WP 6.9 (unchanged through 7.1):
+ *  - get_param() returns the first bucket whose value isset() — a null
+ *    skips to the next bucket;
+ *  - get_params() merges the buckets lowest-priority first, so a null in a
+ *    higher bucket OVERRIDES a value below it;
+ *  - has_param() is array_key_exists() over the ordered buckets;
+ *  - set_param() writes every non-default bucket that has the key, else
+ *    the first bucket in the order.
+ * The JSON bucket is in the order only for a JSON content type (header
+ * Content-Type: application/json), as in core, or once set_json_params()
+ * (a test-only setter) is called.
+ *
+ * Constructor compatibility (core's 3rd argument is $attributes, not
+ * params): the $params argument lands in the bucket a real request of that
+ * method carries them in — POST (body) for POST/PUT/PATCH/DELETE, GET
+ * (query) otherwise — so every existing one-bucket caller reads the same
+ * values as before.
+ */
 class WP_REST_Request
 {
     private $method;
     private $route;
-    private $params;
     private $headers;
-    private $json_params;
-    private $query_params = array();
-    private $body_params = array();
+    private $params = array(
+        'JSON'     => null,
+        'POST'     => array(),
+        'GET'      => array(),
+        'URL'      => array(),
+        'defaults' => array(),
+    );
+    private $json_forced = false;
 
     public function __construct(
         $method = 'GET',
@@ -267,14 +293,12 @@ class WP_REST_Request
         $headers = array(),
         $json_params = null
     ) {
-        $this->method     = strtoupper($method);
-        $this->route      = $route;
-        $this->params     = is_array($params) ? $params : array();
-        // Constructor params model the request body (what a POST/PUT carries);
-        // query params are added with set_query_params().
-        $this->body_params = $this->params;
-        $this->headers    = is_array($headers) ? $headers : array();
-        $this->json_params = $json_params;
+        $this->method  = strtoupper($method);
+        $this->route   = $route;
+        $this->headers = is_array($headers) ? $headers : array();
+        $bucket        = in_array($this->method, array( 'POST', 'PUT', 'PATCH', 'DELETE' ), true) ? 'POST' : 'GET';
+        $this->params[ $bucket ] = is_array($params) ? $params : array();
+        $this->params['JSON']    = $json_params;
     }
 
     public function get_method()
@@ -287,9 +311,36 @@ class WP_REST_Request
         return $this->route;
     }
 
+    protected function is_json_content_type()
+    {
+        $type = (string) $this->get_header('content-type');
+        return '' !== $type && false !== stripos($type, 'json');
+    }
+
+    /** Core's order (WP_REST_Request::get_parameter_order()), filter included. */
+    public function get_parameter_order()
+    {
+        $order = array();
+        if ($this->json_forced || $this->is_json_content_type()) {
+            $order[] = 'JSON';
+        }
+        if (in_array($this->method, array( 'POST', 'PUT', 'PATCH', 'DELETE' ), true)) {
+            $order[] = 'POST';
+        }
+        $order[] = 'GET';
+        $order[] = 'URL';
+        $order[] = 'defaults';
+        return function_exists('apply_filters') ? apply_filters('rest_request_parameter_order', $order, $this) : $order;
+    }
+
     public function get_param($key)
     {
-        return isset($this->params[ $key ]) ? $this->params[ $key ] : null;
+        foreach ($this->get_parameter_order() as $type) {
+            if (isset($this->params[ $type ][ $key ])) {
+                return $this->params[ $type ][ $key ];
+            }
+        }
+        return null;
     }
 
     public function has_param($key)
@@ -300,24 +351,45 @@ class WP_REST_Request
         // "the caller sent this field, even empty" from "the caller never
         // mentioned it" (e.g. Mcpwp_REST_Elementor_Pro::
         // has_elementor_payload_in_request(), RC review finding #1).
-        return array_key_exists($key, $this->params);
+        foreach ($this->get_parameter_order() as $type) {
+            if (is_array($this->params[ $type ]) && array_key_exists($key, $this->params[ $type ])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public function set_param($key, $value)
     {
-        $this->params[ $key ] = $value;
+        $order = $this->get_parameter_order();
+        $found = false;
+        foreach ($order as $type) {
+            if ('defaults' !== $type && is_array($this->params[ $type ]) && array_key_exists($key, $this->params[ $type ])) {
+                $this->params[ $type ][ $key ] = $value;
+                $found                         = true;
+            }
+        }
+        if (! $found) {
+            $this->params[ $order[0] ][ $key ] = $value;
+        }
     }
 
     public function get_params()
     {
-        return $this->params;
+        $params = array();
+        foreach (array_reverse($this->get_parameter_order(), true) as $type) {
+            foreach ((array) $this->params[ $type ] as $key => $value) {
+                $params[ $key ] = $value;
+            }
+        }
+        return $params;
     }
 
     public function get_header($name)
     {
-        $target = strtolower($name);
+        $target = strtolower(str_replace('-', '_', $name));
         foreach ($this->headers as $header => $value) {
-            if (strtolower($header) === $target) {
+            if (strtolower(str_replace('-', '_', $header)) === $target) {
                 return $value;
             }
         }
@@ -329,35 +401,57 @@ class WP_REST_Request
         $this->headers[ $name ] = $value;
     }
 
+    // Core's setters REPLACE their bucket.
     public function set_body_params($params)
     {
-        if (is_array($params)) {
-            $this->body_params = array_merge($this->body_params, $params);
-            $this->params      = array_merge($this->params, $params);
-        }
+        $this->params['POST'] = $params;
     }
 
     public function set_query_params($params)
     {
-        if (is_array($params)) {
-            $this->query_params = array_merge($this->query_params, $params);
-            $this->params       = array_merge($this->params, $params);
-        }
+        $this->params['GET'] = $params;
+    }
+
+    public function set_url_params($params)
+    {
+        $this->params['URL'] = $params;
+    }
+
+    public function set_default_params($params)
+    {
+        $this->params['defaults'] = $params;
+    }
+
+    /** Test-only: a parsed JSON body, consulted first as for a JSON content type. */
+    public function set_json_params($params)
+    {
+        $this->params['JSON'] = $params;
+        $this->json_forced    = true;
     }
 
     public function get_query_params()
     {
-        return $this->query_params;
+        return $this->params['GET'];
     }
 
     public function get_body_params()
     {
-        return $this->body_params;
+        return $this->params['POST'];
+    }
+
+    public function get_url_params()
+    {
+        return $this->params['URL'];
+    }
+
+    public function get_default_params()
+    {
+        return $this->params['defaults'];
     }
 
     public function get_json_params()
     {
-        return $this->json_params;
+        return $this->params['JSON'];
     }
 
     // Real WP_REST_Request parses a JSON body into get_json_params() when
@@ -370,7 +464,7 @@ class WP_REST_Request
         $this->body = (string) $body;
         $decoded    = json_decode($this->body, true);
         if (is_array($decoded)) {
-            $this->json_params = $decoded;
+            $this->params['JSON'] = $decoded;
         }
     }
 
