@@ -1,11 +1,11 @@
 <?php
 /**
- * #1118 (PR-3c round 2) — the four gate findings, pinned:
+ * #1118 (PR-3c round 2) — the gate findings this PR keeps, pinned (the
+ * /post-meta id-meta refs were cut in the scope cut; they get their own PR):
  *  P0-1 a negative / ambiguous id is refused 400 for every principal;
  *  P0-2 only a clone's or landing page's SOURCE is template-exempt — a
  *       featured image, parent or media_id never is;
  *  P0-3 /elementor/clone charges the create cap of the SOURCE's type;
- *  P1   /post-meta {key, value}: a known id meta's value is a read ref.
  *
  * @package MCPWP
  */
@@ -30,6 +30,8 @@ final class PostRefRound2_1118Test extends TestCase {
 	const OWN_PAGE  = 9610;
 	const PRODUCT   = 9609;
 	const LIBRARY   = 9611;
+	const REVISION  = 9620; // A revision of another user's draft.
+	const INHERIT   = 9621; // A non-attachment custom type with status 'inherit'.
 
 	const AUTHOR_CAPS = array( 'read' => true, 'edit_posts' => true, 'edit_published_posts' => true, 'publish_posts' => true, 'delete_posts' => true, 'upload_files' => true );
 
@@ -61,9 +63,13 @@ final class PostRefRound2_1118Test extends TestCase {
 			self::PAGE_SRC  => $P( self::PAGE_SRC, 'page', 'publish', self::OTHER ),
 			self::PRODUCT   => $P( self::PRODUCT, 'product', 'publish', self::OTHER ),
 			self::LIBRARY   => $P( self::LIBRARY, 'elementor_library', 'publish', self::OTHER ),
+			self::REVISION  => $P( self::REVISION, 'revision', 'inherit', self::OTHER, self::DRAFT ),
+			self::INHERIT   => $P( self::INHERIT, 'mcpwp_thing', 'inherit', self::OTHER ),
 		);
 		$deny = array( self::DRAFT => false, self::ATT_DRAFT => false );
-		$read = array( self::OWN => true, self::OWN_PAGE => true, self::PUB => true, self::ATT_FREE => true, self::PAGE_SRC => true, self::PRODUCT => true, self::LIBRARY => true );
+		// REVISION / INHERIT read as readable on purpose: the rule hides them
+		// whatever read_post answers.
+		$read = array( self::OWN => true, self::OWN_PAGE => true, self::PUB => true, self::ATT_FREE => true, self::PAGE_SRC => true, self::PRODUCT => true, self::LIBRARY => true, self::REVISION => true, self::INHERIT => true );
 		$GLOBALS['mcpwp_test_post_caps'] = array(
 			self::AUTHOR      => array( 'read_post' => $deny + $read, 'edit_post' => array( self::OWN => true ) ),
 			self::PAGE_EDITOR => array( 'read_post' => $deny + $read, 'edit_post' => array( self::OWN_PAGE => true ) ),
@@ -249,30 +255,43 @@ final class PostRefRound2_1118Test extends TestCase {
 		$this->assertSame( 'not_found/404', $this->code( $this->check( 'POST', '/elementor/clone', array( 'source_id' => self::PAGE_SRC, 'parent' => 9699 ), $this->bot() ) ) );
 	}
 
-	// ── P1 ────────────────────────────────────────────────────────────────
+	// ── scope cut P0: revisions are hidden refs for user-run principals ──
 
-	public function test_id_meta_values_on_post_meta_are_read_refs(): void {
-		$a     = $this->token();
-		$route = '/post-meta/' . self::OWN;
+	public function test_a_revision_is_a_hidden_read_or_source_ref_for_user_run_principals(): void {
+		$a = $this->token();
+		$e = $this->token( self::PAGE_EDITOR );
 		$cases = array(
-			'thumbnail of a draft'          => array( array( 'key' => '_thumbnail_id', 'value' => self::ATT_DRAFT ), 'not_found/404' ),
-			'thumbnail public'              => array( array( 'key' => '_thumbnail_id', 'value' => self::ATT_FREE ), 'ALLOWED' ),
-			'thumbnail negative'            => array( array( 'key' => '_thumbnail_id', 'value' => -self::ATT_DRAFT ), 'invalid_post_ref/400' ),
-			'gallery csv with a draft file' => array( array( 'key' => '_product_image_gallery', 'value' => self::ATT_FREE . ', ' . self::ATT_DRAFT ), 'not_found/404' ),
-			'gallery csv public'            => array( array( 'key' => '_product_image_gallery', 'value' => self::ATT_FREE . ',' . self::ATT_FREE ), 'ALLOWED' ),
-			'gallery csv negative'          => array( array( 'key' => '_product_image_gallery', 'value' => self::ATT_FREE . ',-1' ), 'invalid_post_ref/400' ),
-			'upsells array'                 => array( array( 'key' => '_upsell_ids', 'value' => array( self::PUB, self::DRAFT ) ), 'not_found/404' ),
-			'upsells JSON string'           => array( array( 'key' => '_upsell_ids', 'value' => '[' . self::DRAFT . ']' ), 'not_found/404' ),
-			'crosssells'                    => array( array( 'key' => '_crosssell_ids', 'value' => array( self::DRAFT ) ), 'not_found/404' ),
-			'grouped children'              => array( array( 'key' => '_children', 'value' => array( self::DRAFT ) ), 'not_found/404' ),
-			'padded key'                    => array( array( 'key' => ' _thumbnail_id ', 'value' => self::ATT_DRAFT ), 'not_found/404' ),
-			'an ordinary key'               => array( array( 'key' => 'subtitle', 'value' => (string) self::DRAFT ), 'ALLOWED' ),
+			'editor clone source_id = revision (the live repro)' => array( 'POST', '/elementor/clone', array( 'source_id' => self::REVISION ), $e ),
+			'editor /pages/{revision}/clone'                      => array( 'POST', '/pages/' . self::REVISION . '/clone', array( 'id' => self::REVISION ), $e ),
+			'editor landing template_id = revision'               => array( 'POST', '/elementor/landing-page', array( 'template_id' => self::REVISION, 'title' => 'x' ), $e ),
+			'editor POST /pages parent = revision'                => array( 'POST', '/pages', array( 'title' => 'x', 'parent' => self::REVISION ), $e ),
+			'author featured_image = revision'                    => array( 'POST', '/posts', array( 'title' => 'x', 'featured_image' => self::REVISION ), $a ),
+			'author media_id = revision'                          => array( 'POST', '/posts/' . self::OWN . '/featured-image', array( 'id' => self::OWN, 'media_id' => self::REVISION ), $a ),
+			'author apply-link target = revision'                 => array( 'POST', '/content-graph/apply-link', array( 'source_id' => self::OWN, 'target_id' => self::REVISION ), $a ),
+			'author apply-link target = inherit custom type'      => array( 'POST', '/content-graph/apply-link', array( 'source_id' => self::OWN, 'target_id' => self::INHERIT ), $a ),
+			'author bulk posts[].featured_image = revision'       => array( 'POST', '/posts/bulk', array( 'posts' => array( array( 'title' => 'x', 'featured_image' => self::REVISION ) ) ), $a ),
 		);
-		foreach ( $cases as $label => list( $params, $expected ) ) {
-			$this->assertSame( $expected, $this->code( $this->check( 'POST', $route, array( 'id' => self::OWN ) + $params, $a ) ), $label );
+		foreach ( $cases as $label => list( $m, $r, $p, $h ) ) {
+			$this->assertSame( 'not_found/404', $this->code( $this->check( $m, $r, $p, $h ) ), $label );
 		}
-		$this->assertTrue( $this->check( 'POST', $route, array( 'id' => self::OWN, 'key' => '_thumbnail_id', 'value' => 9699 ), $this->bot() ), 'A bot key is unchanged (read-user): not even a missing id is judged.' );
-		$this->assertTrue( $this->check( 'GET', $route, array( 'id' => self::OWN, 'key' => '_thumbnail_id', 'value' => self::ATT_DRAFT ), $a ), 'Not on a read.' );
+		$missing = $this->check( 'POST', '/elementor/clone', array( 'source_id' => 9699 ), $e );
+		$hidden  = $this->check( 'POST', '/elementor/clone', array( 'source_id' => self::REVISION ), $e );
+		$this->assertSame( array( $missing->get_error_code(), $missing->get_error_message(), $missing->get_error_data() ), array( $hidden->get_error_code(), $hidden->get_error_message(), $hidden->get_error_data() ), 'The canonical 404: a revision reads exactly like a missing id.' );
+	}
+
+	public function test_a_revision_is_hidden_whatever_status_it_was_stored_with(): void {
+		// Core stores revisions as 'inherit', but the TYPE is the rule: a
+		// revision some importer left 'publish' is still a revision.
+		$GLOBALS['_mcpwp_test_posts'][9622] = new WP_Post( array( 'ID' => 9622, 'post_type' => 'revision', 'post_status' => 'publish', 'post_author' => self::OTHER, 'post_parent' => self::DRAFT, 'post_title' => 'odd revision' ) );
+		$GLOBALS['mcpwp_test_post_caps'][ self::AUTHOR ]['read_post'][9622] = true;
+		$this->assertSame( 'not_found/404', $this->code( $this->check( 'POST', '/content-graph/apply-link', array( 'source_id' => self::OWN, 'target_id' => 9622 ), $this->token() ) ) );
+	}
+
+	public function test_attachments_keep_read_post_and_bots_are_unchanged_for_revisions(): void {
+		$a = $this->token();
+		$this->assertTrue( $this->check( 'POST', '/posts', array( 'title' => 'x', 'featured_image' => self::ATT_FREE ), $a ), 'A readable attachment (inherit) still passes.' );
+		$this->assertSame( 'not_found/404', $this->code( $this->check( 'POST', '/posts', array( 'title' => 'x', 'featured_image' => self::ATT_DRAFT ), $a ) ), 'An unreadable one still does not.' );
+		$this->assertTrue( $this->check( 'POST', '/elementor/clone', array( 'source_id' => self::REVISION ), $this->bot( array( 'read', 'write', 'admin' ) ) ), 'A bot key: unchanged by this rule (an unrestricted key still clones it).' );
 	}
 
 	// ── the two PR-3c survivors (M8 / M9) ─────────────────────────────────

@@ -2862,24 +2862,6 @@ trait Mcpwp_Api_Auth {
 			}
 		}
 
-		// #1118 P1: POST /post-meta/{id} {key, value} — the value names a post
-		// when the key is a known id meta (get_post_ref_meta_value_keys()). A
-		// read-only reference (an attachment set as the thumbnail, a product
-		// linked as an upsell), so '@read-user': user-run principals, writes.
-		if ( $user_run && ! $is_read_method && preg_match( '#^/post-meta/\d+$#', $path ) && isset( $params['key'] ) && is_string( $params['key'] ) ) {
-			$meta_keys = self::get_post_ref_meta_value_keys();
-			$meta_key  = trim( $params['key'] );
-			if ( isset( $meta_keys[ $meta_key ] ) && array_key_exists( 'value', $params ) ) {
-				$values = self::post_ref_meta_values( $params['value'], $meta_keys[ $meta_key ] );
-				if ( null === $values ) {
-					return new WP_Error( 'invalid_post_ref', __( 'Post ids must be plain positive integers.', 'mcpwp' ), array( 'status' => 400 ) );
-				}
-				foreach ( $values as $meta_value ) {
-					$read[] = $meta_value;
-				}
-			}
-		}
-
 		if ( empty( $scalar ) && empty( $items ) && empty( $read ) ) {
 			return null;
 		}
@@ -2907,59 +2889,6 @@ trait Mcpwp_Api_Auth {
 	public static function menu_item_type_names_post( array $item ) {
 		$type = isset( $item['type'] ) && is_string( $item['type'] ) ? $item['type'] : '';
 		return in_array( $type, array( 'post_type', 'post', 'page' ), true );
-	}
-
-	/**
-	 * Post-meta keys whose VALUE names posts (#1118 P1), and the value's
-	 * shape: 'scalar' (one id), 'csv' ('1,2,3') or 'list' (an array, or a
-	 * JSON array string — the handler decodes one). Only keys /post-meta can
-	 * write: _elementor_* keys are refused there outright, so
-	 * _elementor_template_id is not listed.
-	 *
-	 * @return array<string,string>
-	 */
-	public static function get_post_ref_meta_value_keys() {
-		return array(
-			'_thumbnail_id'          => 'scalar', // Featured image (core).
-			'_product_image_gallery' => 'csv',    // WooCommerce gallery attachment ids.
-			'_upsell_ids'            => 'list',   // WooCommerce linked products.
-			'_crosssell_ids'         => 'list',
-			'_children'              => 'list',   // WooCommerce grouped product children.
-		);
-	}
-
-	/**
-	 * The post ids a meta value names, or null when one of them is ambiguous.
-	 *
-	 * @param mixed  $value Raw value.
-	 * @param string $shape 'scalar' | 'csv' | 'list'.
-	 * @return int[]|null
-	 */
-	public static function post_ref_meta_values( $value, $shape ) {
-		if ( 'list' === $shape && is_string( $value ) && '[' === substr( ltrim( $value ), 0, 1 ) ) {
-			$decoded = json_decode( $value, true );
-			$value   = is_array( $decoded ) ? $decoded : $value;
-		}
-		if ( 'csv' === $shape && is_string( $value ) ) {
-			$parts = explode( ',', $value );
-		} elseif ( 'list' === $shape && is_array( $value ) ) {
-			$parts = array_values( $value );
-		} else {
-			$parts = array( $value );
-		}
-		$ids = array();
-		foreach ( $parts as $part ) {
-			if ( is_string( $part ) && 'csv' === $shape ) {
-				$part = trim( $part );
-			}
-			if ( self::is_ambiguous_post_ref_value( $part ) ) {
-				return null;
-			}
-			if ( is_numeric( $part ) && (int) $part > 0 ) {
-				$ids[] = (int) $part;
-			}
-		}
-		return $ids;
 	}
 
 	/**
@@ -3078,6 +3007,20 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Whether a resolved row is a revision, or any non-attachment post with
+	 * the 'inherit' status (see get_post_ref_resolution()).
+	 *
+	 * @param array|null $row Resolved row.
+	 * @return bool
+	 */
+	protected static function post_ref_row_is_hidden_inherit( $row ) {
+		if ( ! is_array( $row ) ) {
+			return false;
+		}
+		return 'revision' === $row['post_type'] || ( 'inherit' === $row['post_status'] && 'attachment' !== $row['post_type'] );
+	}
+
+	/**
 	 * The request-scoped resolution of every declared post reference:
 	 * one query for all of them, memoized per request object so the guard
 	 * and every bulk handler read the SAME answer (and a handler called
@@ -3110,6 +3053,20 @@ trait Mcpwp_Api_Auth {
 			$rows = self::fetch_post_ref_rows( $ids );
 			foreach ( $ids as $id ) {
 				$resolution['hidden'][ $id ] = $this->post_ref_is_hidden( $id, $rows[ $id ] ?? null, $refs['route_category'] );
+			}
+			// #1118 scope cut, P0: a READ or SOURCE ref naming a revision — or
+			// any other non-attachment 'inherit' post — is hidden for a
+			// user-run principal. A revision carries its parent's full body
+			// but no visibility of its own; post_ref_is_hidden() checks
+			// read_post only for attachments, so cloning a revision of
+			// someone's draft copied the draft. Attachments keep read_post;
+			// bots are unchanged.
+			if ( $this->requester_acts_as_user() ) {
+				foreach ( $refs['read'] as $id ) {
+					if ( self::post_ref_row_is_hidden_inherit( $rows[ $id ] ?? null ) ) {
+						$resolution['hidden'][ $id ] = true;
+					}
+				}
 			}
 			$resolution['rows'] = $rows;
 		}
