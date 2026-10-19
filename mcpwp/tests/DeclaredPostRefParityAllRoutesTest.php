@@ -269,6 +269,10 @@ final class DeclaredPostRefParityAllRoutesTest extends TestCase {
 
 	/** Whether $path is $prefix or a sub-path of it (literal prefixes against a raw route regex). */
 	private function prefix_matches( string $path, string $prefix ): bool {
+		if ( false !== strpos( $prefix, '*' ) ) {
+			// #1101 PR-3c: '*' is one path segment — a regex group in a registered route.
+			return 1 === preg_match( '#^' . str_replace( '\\*', '[^/]+', preg_quote( $prefix, '#' ) ) . '(/|$)#', $path );
+		}
 		return $path === $prefix || 0 === strpos( $path, $prefix . '/' ) || 0 === strpos( $path, $prefix . '(' );
 	}
 
@@ -500,7 +504,15 @@ final class DeclaredPostRefParityAllRoutesTest extends TestCase {
 			}
 			$names = array_merge( $r['arg_names'], $this->regex_params( $r['route'] ) );
 
-			foreach ( $specs as $spec ) {
+			foreach ( $specs as $declared_spec ) {
+				// #1101 PR-3c: the class suffix is the guard's to parse.  A
+				// '@read-user' ref is checked for user-run principals only —
+				// this test drives API keys, which it deliberately does not
+				// reach (OAuthPostRefAudit1101cTest covers those).
+				list( $spec, $class ) = Mcpwp_REST_API::post_ref_spec_parts( $declared_spec );
+				if ( 'read-user' === $class ) {
+					continue;
+				}
 				$base = $this->spec_base( $spec );
 				// The spec applies where the route actually takes that param —
 				// or, for a per-item spec, on an args-less bulk route itself.
