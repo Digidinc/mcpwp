@@ -4430,6 +4430,36 @@ trait Mcpwp_Api_Auth {
 	 * @param string $stored_key Stored API key value.
 	 * @return bool True if key is valid.
 	 */
+	/**
+	 * Whether a stored value is a real password hash: phpass ($P$ / $H$),
+	 * bcrypt ($2a$ / $2b$ / $2y$) or WordPress 6.8+'s prefixed $wp$ form.
+	 *
+	 * @param mixed $value Stored value.
+	 * @return bool
+	 */
+	public static function is_password_hash_shaped( $value ) {
+		return is_string( $value ) && 1 === preg_match( '/^\$(?:P\$|H\$|2[aby]\$|wp\$)/', $value );
+	}
+
+	/**
+	 * Match a presented key against a SCOPED-STORE record's hash (#1098
+	 * round 2): hash-shaped values only, never the plaintext fallback of
+	 * is_api_key_match(). That fallback exists for the two legacy single-key
+	 * options a pre-1.0.14 site stored in plaintext; on a store record it let
+	 * any non-hash string — the literal '__NOT_SET__' an adoption bug wrote —
+	 * authenticate as itself.
+	 *
+	 * @param string $api_key Presented key.
+	 * @param mixed  $hash    Stored record hash.
+	 * @return bool
+	 */
+	protected function is_api_key_hash_match( $api_key, $hash ) {
+		if ( empty( $api_key ) || ! self::is_password_hash_shaped( $hash ) ) {
+			return false;
+		}
+		return (bool) wp_check_password( $api_key, $hash );
+	}
+
 	protected function is_api_key_match( $api_key, $stored_key ) {
 		if ( empty( $api_key ) || empty( $stored_key ) ) {
 			return false;
@@ -4481,6 +4511,45 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Whether the single 2.8 spai_api_key is revoked anywhere (#1098 round 2):
+	 *  - its exact hash is revoked in the scoped store (#1097), or
+	 *  - its exact hash is a REVOKED spai_api_keys record — 2.8 revoked the
+	 *    Primary key in its store and left the same hash in spai_api_key, or
+	 *  - it is a pre-1.0.14 PLAINTEXT value and the presented key matches a
+	 *    revoked record's hash in either store (a string compare can never
+	 *    see a plaintext value's revoked, rehashed copy).
+	 *
+	 * @param string $single    spai_api_key value.
+	 * @param string $api_key   Presented key.
+	 * @param array  $spai_keys spai_api_keys records.
+	 * @return bool
+	 */
+	protected function spai_single_key_is_revoked( $single, $api_key, array $spai_keys ) {
+		if ( $this->hash_is_revoked_in_scoped_store( $single ) ) {
+			return true;
+		}
+		$revoked = array();
+		foreach ( array_merge( $this->get_scoped_api_keys_raw(), $spai_keys ) as $record ) {
+			if ( is_array( $record ) && ! empty( $record['revoked_at'] ) && isset( $record['hash'] ) && '' !== (string) $record['hash'] ) {
+				$revoked[] = (string) $record['hash'];
+			}
+		}
+		foreach ( $revoked as $hash ) {
+			if ( hash_equals( $hash, $single ) ) {
+				return true;
+			}
+		}
+		if ( ! $this->looks_like_password_hash( $single ) ) {
+			foreach ( $revoked as $hash ) {
+				if ( $this->is_api_key_hash_match( $api_key, $hash ) ) {
+					return true;
+				}
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Whether a stored hash belongs to a REVOKED record in the scoped store.
 	 *
 	 * Exact string compare: the 2.8 migration copies hashes verbatim, so a
@@ -4515,7 +4584,7 @@ trait Mcpwp_Api_Auth {
 				continue;
 			}
 
-			if ( $this->is_api_key_match( $api_key, $key['hash'] ) ) {
+			if ( $this->is_api_key_hash_match( $api_key, $key['hash'] ) ) {
 				$record = $this->normalize_api_key_record( $key );
 				// A record with no id cannot be named in a ledger or bound by
 				// the two-person rule; it is not a principal (#536 round 2).
@@ -4696,7 +4765,7 @@ trait Mcpwp_Api_Auth {
 				if ( $this->hash_is_revoked_in_scoped_store( (string) $key['hash'] ) ) {
 					continue;
 				}
-				if ( $this->is_api_key_match( $api_key, $key['hash'] ) ) {
+				if ( $this->is_api_key_hash_match( $api_key, $key['hash'] ) ) { // A 2.8 store record: hashes only.
 					$record = $this->normalize_api_key_record( $key );
 					return '' === $record['id'] ? null : $record;
 				}
@@ -4705,7 +4774,7 @@ trait Mcpwp_Api_Auth {
 
 		// 2. Fall back to the single-key spai_api_key option.
 		$spai_single = get_option( 'spai_api_key' );
-		if ( ! empty( $spai_single ) && ! $this->hash_is_revoked_in_scoped_store( (string) $spai_single ) && $this->is_api_key_match( $api_key, $spai_single ) ) {
+		if ( ! empty( $spai_single ) && ! $this->spai_single_key_is_revoked( (string) $spai_single, $api_key, is_array( $spai_keys ) ? $spai_keys : array() ) && $this->is_api_key_match( $api_key, $spai_single ) ) {
 			// Synthesise a minimal key record consistent with normalize_api_key_record().
 			return $this->normalize_api_key_record(
 				array(
@@ -5749,6 +5818,66 @@ trait Mcpwp_Api_Auth {
 	 *                 invalid_categories:array}
 	 */
 	public function create_scoped_api_key( $label = '', $scopes = array(), $role = 'admin', $tool_categories = array(), $allow_destructive = false ) {
+		// #1098 round 2: every key-store writer holds the one store lock, so a
+		// create can never be lost to (or revive a record under) a concurrent
+		// adoption, revoke or regenerate. When the lock stays busy the create
+		// is REFUSED (503 key_store_busy), never written unlocked.
+		$token = $this->acquire_key_store_lock();
+		if ( false === $token ) {
+			return array(
+				'error'   => 'key_store_busy',
+				'message' => Mcpwp_Key_State::busy_message(),
+				'status'  => 503,
+			);
+		}
+		try {
+			return $this->create_scoped_api_key_unlocked( $label, $scopes, $role, $tool_categories, $allow_destructive );
+		} finally {
+			Mcpwp_Key_State::release_store_lock( $token );
+		}
+	}
+
+	/**
+	 * Take the key-store lock (Mcpwp_Key_State::acquire_store_lock()).
+	 *
+	 * @param int|null $wait_ms Wait budget; null = default.
+	 * @return string|false
+	 */
+	protected function acquire_key_store_lock( $wait_ms = null ) {
+		if ( ! class_exists( 'Mcpwp_Key_State' ) ) {
+			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
+		}
+		$this->key_store_busy = false;
+		$token                = Mcpwp_Key_State::acquire_store_lock( $wait_ms );
+		if ( false === $token ) {
+			$this->key_store_busy = true;
+		}
+		return $token;
+	}
+
+	/**
+	 * Whether the last key-store write was refused because the lock stayed busy.
+	 *
+	 * @var bool
+	 */
+	protected $key_store_busy = false;
+
+	/** @return bool */
+	public function key_store_was_busy() {
+		return (bool) $this->key_store_busy;
+	}
+
+	/**
+	 * create_scoped_api_key() without the lock — the caller holds it.
+	 *
+	 * @param string $label             Label.
+	 * @param array  $scopes            Scopes.
+	 * @param string $role              Role.
+	 * @param array  $tool_categories   Categories.
+	 * @param bool   $allow_destructive Destructive-gate opt-out.
+	 * @return array
+	 */
+	protected function create_scoped_api_key_unlocked( $label = '', $scopes = array(), $role = 'admin', $tool_categories = array(), $allow_destructive = false ) {
 		$plain_key = $this->generate_api_key();
 		$key_id    = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true );
 		$now       = current_time( 'mysql' );
@@ -5960,6 +6089,29 @@ trait Mcpwp_Api_Auth {
 			return false;
 		}
 
+		// #1098 round 2: under the store lock, from a fresh read — a revoke
+		// can no longer be undone by an adoption write that began before it,
+		// nor drop a record another writer just added. Busy → false, and
+		// key_store_was_busy() tells the caller it was not a missing key.
+		$token = $this->acquire_key_store_lock();
+		if ( false === $token ) {
+			return false;
+		}
+		try {
+			return $this->revoke_scoped_api_key_unlocked( $key_id );
+		} finally {
+			Mcpwp_Key_State::release_store_lock( $token );
+		}
+	}
+
+	/**
+	 * revoke_scoped_api_key() without the lock — the caller holds it.
+	 *
+	 * @param string $key_id Sanitized key id.
+	 * @return bool
+	 */
+	protected function revoke_scoped_api_key_unlocked( $key_id ) {
+
 		$keys     = $this->get_scoped_api_keys_raw();
 		$updated  = false;
 
@@ -6000,6 +6152,25 @@ trait Mcpwp_Api_Auth {
 		if ( empty( $legacy_key ) ) {
 			return null;
 		}
+		// #1098 round 2: a store writer like any other — under the lock.
+		$token = $this->acquire_key_store_lock();
+		if ( false === $token ) {
+			return null; // Fail closed for this one request; the next use retries.
+		}
+		try {
+			return $this->migrate_legacy_key_to_scoped_store_unlocked( $legacy_key );
+		} finally {
+			Mcpwp_Key_State::release_store_lock( $token );
+		}
+	}
+
+	/**
+	 * migrate_legacy_key_to_scoped_store() without the lock.
+	 *
+	 * @param string $legacy_key Legacy key option value.
+	 * @return array|null
+	 */
+	protected function migrate_legacy_key_to_scoped_store_unlocked( $legacy_key ) {
 
 		$legacy_key      = (string) $legacy_key;
 		$legacy_is_hashed = $this->looks_like_password_hash( $legacy_key );
@@ -6904,9 +7075,30 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Regenerate API key.
 	 *
-	 * @return string New API key (plain text).
+	 * @return string|WP_Error New API key (plain text), or 503 key_store_busy.
 	 */
 	public function regenerate_api_key() {
+		// #1098 round 2: one locked transaction — revoke all, delete the spai
+		// credentials, mint the new primary — so an adoption racing it cannot
+		// re-add a spai key after its options were deleted. The new key is
+		// minted through the UNLOCKED create core (no nesting).
+		$token = $this->acquire_key_store_lock();
+		if ( false === $token ) {
+			return new WP_Error( 'key_store_busy', Mcpwp_Key_State::busy_message(), array( 'status' => 503 ) );
+		}
+		try {
+			return $this->regenerate_api_key_unlocked();
+		} finally {
+			Mcpwp_Key_State::release_store_lock( $token );
+		}
+	}
+
+	/**
+	 * regenerate_api_key() without the lock — the caller holds it.
+	 *
+	 * @return string New API key (plain text).
+	 */
+	protected function regenerate_api_key_unlocked() {
 		// "Revokes EVERY key" (the Setup confirm) includes a 2.8 spai
 		// credential the scoped store never held (#1098): find_legacy_spai_key()
 		// reads these two options, so deleting them ends it.
@@ -6924,7 +7116,7 @@ trait Mcpwp_Api_Auth {
 
 		update_option( $this->get_scoped_api_keys_option_name(), $keys );
 
-		$created = $this->create_scoped_api_key( __( 'Primary API Key', 'mcpwp' ), $this->get_default_api_key_scopes() );
+		$created = $this->create_scoped_api_key_unlocked( __( 'Primary API Key', 'mcpwp' ), $this->get_default_api_key_scopes() );
 		update_option( 'mcpwp_api_key', wp_hash_password( $created['key'] ) );
 
 		return $created['key'];

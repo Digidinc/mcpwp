@@ -853,8 +853,11 @@ class Mcpwp_Activator {
 
 	/** Set once every 2.8 spai credential is in the scoped store or dead (#1098). */
 	const SPAI_ADOPTION_FLAG        = 'mcpwp_spai_credentials_adopted';
-	const SPAI_ADOPTION_LOCK_OPTION = 'mcpwp_spai_adoption_lock';
+	const SPAI_ADOPTION_LOCK_OPTION = 'mcpwp_key_store_lock'; // = Mcpwp_Key_State::STORE_LOCK_OPTION: every key-store writer holds it (#1098 round 2).
 	const SPAI_ADOPTION_LOCK_TTL    = 15;
+
+	/** Ids (never hashes) of spai records adoption refused to write (#1098 round 2). */
+	const SPAI_ADOPTION_REPORT = 'mcpwp_spai_adoption_report';
 
 	/** Label of an adopted record; the Setup page explains what it can do. */
 	const SPAI_ADOPTED_LABEL = 'Migrated 2.8 key';
@@ -905,36 +908,51 @@ class Mcpwp_Activator {
 			return true;
 		}
 
-		$lock_token = self::acquire_migration_lock( self::SPAI_ADOPTION_LOCK_OPTION, self::SPAI_ADOPTION_LOCK_TTL );
+		require_once __DIR__ . '/core/class-mcpwp-key-state.php';
+		// The key-store lock (#1098 round 2), shared with create / revoke /
+		// regenerate. No wait: a busy store just means the next load retries.
+		// Acquiring it drops the option caches, so every read below — the
+		// flag, the spai options, the store — comes from the database.
+		$lock_token = Mcpwp_Key_State::acquire_store_lock( 0 );
 		if ( false === $lock_token ) {
-			return false; // Another request owns it; it (or the next load) makes progress.
+			return false;
 		}
 
 		try {
 			if ( get_option( self::SPAI_ADOPTION_FLAG ) ) {
-				return true;
+				return true; // Finished by another request while we waited for the lock.
 			}
 
-			$spai_keys   = get_option( 'spai_api_keys', '__NOT_SET__' );
-			$spai_single = get_option( 'spai_api_key', '__NOT_SET__' );
+			// Absent is `false` — never a string — so no default can be taken
+			// for a key (#1098 round 2: the '__NOT_SET__' sentinel was adopted
+			// as a key whose secret was that literal string).
+			$spai_keys   = get_option( 'spai_api_keys', false );
+			$spai_single = get_option( 'spai_api_key', false );
 
-			if ( '__NOT_SET__' !== $spai_keys || '__NOT_SET__' !== $spai_single ) {
+			if ( false !== $spai_keys || false !== $spai_single ) {
 				$adopted = self::build_spai_adoption_records(
 					is_array( $spai_keys ) ? $spai_keys : array(),
-					is_string( $spai_single ) ? $spai_single : ''
+					( is_string( $spai_single ) && '' !== $spai_single ) ? $spai_single : ''
 				);
-				if ( ! empty( $adopted ) && ! self::append_and_verify_scoped_records( $adopted ) ) {
-					return false; // Originals kept, flag unset: retried next load.
+				if ( ! empty( $adopted ) ) {
+					// Adopted this run; the originals are deleted on a LATER run,
+					// once every adopted credential is confirmed still in the
+					// store. A record lost meanwhile to a writer that bypasses
+					// the lock (a stale full-array write) is re-adopted from the
+					// originals then, instead of locking its holder out.
+					self::append_and_verify_scoped_records( $adopted );
+					return false;
 				}
 				if ( ! self::delete_spai_credential_options() ) {
 					return false;
 				}
 			}
 
+			// Only after the deletes.
 			update_option( self::SPAI_ADOPTION_FLAG, 1, false );
 			return true;
 		} finally {
-			self::release_migration_lock( self::SPAI_ADOPTION_LOCK_OPTION, $lock_token );
+			Mcpwp_Key_State::release_store_lock( $lock_token );
 		}
 	}
 
@@ -960,8 +978,20 @@ class Mcpwp_Activator {
 			}
 		}
 
-		$now     = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
-		$adopted = array();
+		// P0 (#1098 round 2): a hash REVOKED in spai_api_keys is
+		// present too. 2.8 revoked a Primary key in its store but left the
+		// same hash in spai_api_key; without this the single-key twin was
+		// adopted as a live admin record, and deleting spai_api_keys then
+		// destroyed the only revoke record.
+		foreach ( $spai_keys as $key ) {
+			if ( is_array( $key ) && ! empty( $key['revoked_at'] ) && isset( $key['hash'] ) && '' !== (string) $key['hash'] ) {
+				$present[ (string) $key['hash'] ] = true;
+			}
+		}
+
+		$now        = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
+		$adopted    = array();
+		$not_hashed = array();
 
 		foreach ( $spai_keys as $key ) {
 			if ( ! is_array( $key ) || ! empty( $key['revoked_at'] ) ) {
@@ -971,8 +1001,20 @@ class Mcpwp_Activator {
 			if ( '' === $hash || isset( $present[ $hash ] ) ) {
 				continue;
 			}
+			// Not a real password hash: the bridge refuses it (hash-only match),
+			// so it is not adopted; reported by id. Its option is deleted.
+			if ( ! self::is_password_hash_shaped( $hash ) ) {
+				$not_hashed[] = isset( $key['id'] ) ? sanitize_key( (string) $key['id'] ) : '';
+				continue;
+			}
+			// A record with no id is not a principal: the bridge refuses it
+			// (#536 round 2, find_legacy_spai_key() → normalize_api_key_record()
+			// sanitizes the id the same way), so it is not adopted either.
 			$id = isset( $key['id'] ) ? sanitize_key( (string) $key['id'] ) : '';
-			if ( '' === $id || isset( $ids[ $id ] ) ) {
+			if ( '' === $id ) {
+				continue;
+			}
+			if ( isset( $ids[ $id ] ) ) {
 				$id = self::new_scoped_key_id();
 			}
 			$record = array(
@@ -995,11 +1037,12 @@ class Mcpwp_Activator {
 			$ids[ $id ]         = true;
 		}
 
-		if ( '' !== $spai_single && ! isset( $present[ $spai_single ] ) ) {
+		$single_hash = '' === $spai_single ? '' : self::single_spai_key_hash( $spai_single, $store, $spai_keys, $present );
+		if ( '' !== $single_hash ) {
 			$adopted[]                = array(
 				'id'            => self::new_scoped_key_id(),
 				'label'         => self::SPAI_ADOPTED_LABEL,
-				'hash'          => $spai_single,
+				'hash'          => $single_hash,
 				// As the bridge synthesised it: admin.
 				'scopes'        => array( 'read', 'write', 'admin' ),
 				'role'          => 'admin',
@@ -1008,7 +1051,7 @@ class Mcpwp_Activator {
 				'revoked_at'    => null,
 				'migrated_from' => 'spai',
 			);
-			$present[ $spai_single ] = true;
+			$present[ $single_hash ] = true;
 		}
 
 		// An EMPTY store honours the legacy mcpwp_api_key; the first record
@@ -1034,7 +1077,40 @@ class Mcpwp_Activator {
 			}
 		}
 
+		if ( ! empty( $not_hashed ) ) {
+			update_option( self::SPAI_ADOPTION_REPORT, array( 'skipped_not_hash_ids' => $not_hashed ), false );
+		}
+
 		return $adopted;
+	}
+
+	/**
+	 * The hash to adopt the single spai_api_key under, or '' when it must not
+	 * be adopted (already present, active or revoked).
+	 *
+	 * A pre-1.0.14 single key is stored in PLAINTEXT (#1098 round 2 P1-a). A
+	 * string compare against stored hashes can never match it, so it is
+	 * wp_check_password()'d against every stored hash — store records and
+	 * spai_api_keys records, active and revoked — and refused on a match
+	 * (a revoked rehashed copy stays revoked). Adopted, it is stored HASHED.
+	 * The plaintext never leaves this method.
+	 *
+	 * @param string $single    spai_api_key value.
+	 * @param array  $store     Scoped records.
+	 * @param array  $spai_keys spai_api_keys records.
+	 * @param array  $present   Hashes already present (string match).
+	 * @return string
+	 */
+	private static function single_spai_key_hash( $single, array $store, array $spai_keys, array $present ) {
+		if ( self::is_password_hash_shaped( $single ) ) {
+			return isset( $present[ $single ] ) ? '' : $single;
+		}
+		foreach ( array_merge( $store, $spai_keys ) as $record ) {
+			if ( is_array( $record ) && isset( $record['hash'] ) && '' !== (string) $record['hash'] && wp_check_password( $single, (string) $record['hash'] ) ) {
+				return '';
+			}
+		}
+		return wp_hash_password( $single );
 	}
 
 	/**
@@ -1045,6 +1121,24 @@ class Mcpwp_Activator {
 	 * @return bool
 	 */
 	private static function append_and_verify_scoped_records( array $adopted ) {
+		// General guard (#1098 round 2): adoption never writes a record whose
+		// stored value is not a real password hash. A plaintext 2.8 key is
+		// hashed before it gets here (single_spai_key_hash()); anything else
+		// is skipped and reported by id only.
+		$skipped = array();
+		$adopted = array_values( array_filter( $adopted, static function ( $record ) use ( &$skipped ) {
+			if ( is_array( $record ) && self::is_password_hash_shaped( $record['hash'] ?? null ) ) {
+				return true;
+			}
+			$skipped[] = is_array( $record ) ? (string) ( $record['id'] ?? '' ) : '';
+			return false;
+		} ) );
+		if ( ! empty( $skipped ) ) {
+			update_option( self::SPAI_ADOPTION_REPORT, array( 'skipped_not_hash_ids' => $skipped ), false );
+		}
+		if ( empty( $adopted ) ) {
+			return true;
+		}
 		$store = get_option( 'mcpwp_api_keys', array() );
 		$store = is_array( $store ) ? $store : array();
 		$held  = array();
@@ -1320,7 +1414,7 @@ class Mcpwp_Activator {
 	 * @return string|false The expiry token to pass to release_migration_lock(),
 	 *                       or false when another caller already holds it.
 	 */
-	private static function acquire_migration_lock( $lock_option, $ttl ) {
+	public static function acquire_migration_lock( $lock_option, $ttl ) {
 		global $wpdb;
 
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'insert' ) ) {
@@ -1393,7 +1487,7 @@ class Mcpwp_Activator {
 	 * @param string $lock_option Same option name passed to acquire.
 	 * @param string $token       The expiry value that acquire call returned.
 	 */
-	private static function release_migration_lock( $lock_option, $token ) {
+	public static function release_migration_lock( $lock_option, $token ) {
 		global $wpdb;
 
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'delete' ) ) {

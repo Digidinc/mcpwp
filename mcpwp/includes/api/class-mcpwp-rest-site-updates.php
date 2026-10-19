@@ -807,6 +807,11 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		// who already holds a key.
 		$revoked = $this->revoke_scoped_api_key( $key_id );
 
+		if ( ! $revoked && $this->key_store_was_busy() ) {
+			// #1098 round 2: another key write held the store lock; nothing changed.
+			return $this->error_response( 'key_store_busy', Mcpwp_Key_State::busy_message(), 503 );
+		}
+
 		if ( ! $revoked ) {
 			return $this->error_response(
 				'not_found',

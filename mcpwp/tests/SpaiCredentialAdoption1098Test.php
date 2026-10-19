@@ -92,6 +92,20 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		return (string) ( $r[0]['id'] ?? '' );
 	}
 
+	/**
+	 * Run adoption to completion, as successive page loads would: the first
+	 * run adopts, a later run confirms and deletes the originals (#1098
+	 * round 2). Returns true once complete.
+	 */
+	private function adopt(): bool {
+		for ( $i = 0; $i < 3; $i++ ) {
+			if ( Mcpwp_Activator::adopt_spai_credentials() ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private function key( string $tag ): string {
 		return 'spai_' . str_repeat( $tag, 24 );
 	}
@@ -106,7 +120,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		update_option( 'spai_api_key', $hash );
 		$this->assertTrue( $this->works( $key ), 'Before adoption: the bridge honours it (BridgeAuthTest compatibility).' );
 
-		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$this->assertTrue( $this->adopt() );
 
 		$this->assertSame( '__gone__', get_option( 'spai_api_key', '__gone__' ), 'The spai original is deleted.' );
 		$records = $this->records_with_hash( $hash );
@@ -123,7 +137,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 
 		$this->assertTrue( $auth->revoke_scoped_api_key( $records[0]['id'] ) );
 		$this->assertFalse( $this->works( $key ), 'Revoked in Active Keys: 401.' );
-		Mcpwp_Activator::adopt_spai_credentials();
+		$this->adopt();
 		$this->assertFalse( $this->works( $key ), 'And it stays dead.' );
 	}
 
@@ -157,7 +171,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->assertNotSame( $hash, get_option( 'mcpwp_api_key' ), 'Precondition: the migration did not copy it.' );
 		$this->assertSame( array(), $this->records_with_hash( $hash ), 'Precondition: no scoped record — the #1098 P1.' );
 
-		Mcpwp_Activator::adopt_spai_credentials();
+		$this->adopt();
 
 		$this->assertCount( 1, $this->records_with_hash( $hash ) );
 		$this->assertSame( '__gone__', get_option( 'spai_api_key', '__gone__' ) );
@@ -178,7 +192,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		// into the store by itself, which would hide what this pins.
 		$this->assertSame( array(), $this->store() );
 
-		Mcpwp_Activator::adopt_spai_credentials();
+		$this->adopt();
 
 		$this->assertCount( 2, $this->store(), 'Both written in the same append.' );
 
@@ -200,7 +214,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		) );
 		$before = array( $auth->verify_api_key( $this->request( $k2 ) ) );
 
-		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$this->assertTrue( $this->adopt() );
 
 		$this->assertSame( '__gone__', get_option( 'spai_api_keys', '__gone__' ) );
 		$r1 = $this->records_with_hash( $h1 );
@@ -223,7 +237,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		update_option( 'spai_api_keys', array( array( 'id' => 'rev1', 'label' => 'old', 'hash' => $hash, 'scopes' => array( 'read', 'write', 'admin' ), 'revoked_at' => null ) ) );
 		$this->assertFalse( $this->works( $key ), 'Precondition: dead (#1097 guard).' );
 
-		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$this->assertTrue( $this->adopt() );
 
 		$records = $this->records_with_hash( $hash );
 		$this->assertCount( 1, $records, 'No second, active record.' );
@@ -231,7 +245,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->assertSame( '__gone__', get_option( 'spai_api_key', '__gone__' ) );
 		$this->assertSame( '__gone__', get_option( 'spai_api_keys', '__gone__' ) );
 		$this->assertFalse( $this->works( $key ) );
-		Mcpwp_Activator::adopt_spai_credentials();
+		$this->adopt();
 		$this->assertFalse( $this->works( $key ), 'Stays dead.' );
 	}
 
@@ -242,7 +256,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$hash = wp_hash_password( $key );
 		update_option( 'spai_api_keys', array( array( 'id' => 'sr', 'hash' => $hash, 'revoked_at' => '2025-01-01 00:00:00' ) ) );
 
-		Mcpwp_Activator::adopt_spai_credentials();
+		$this->adopt();
 
 		$this->assertSame( array(), $this->records_with_hash( $hash ) );
 		$this->assertSame( '__gone__', get_option( 'spai_api_keys', '__gone__' ) );
@@ -256,7 +270,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		update_option( 'spai_api_keys', array( array( 'id' => 'live1', 'label' => 'old 2.8 key', 'hash' => $hash, 'revoked_at' => null ) ) );
 		update_option( 'spai_api_key', $hash );
 
-		Mcpwp_Activator::adopt_spai_credentials();
+		$this->adopt();
 
 		$this->assertCount( 1, $this->store() );
 		$this->assertSame( 'old 2.8 key', $this->store()[0]['label'], 'The existing record is left as it was.' );
@@ -268,20 +282,20 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$auth->create_scoped_api_key( 'existing', array( 'read' ), 'author' );
 		update_option( 'spai_api_key', wp_hash_password( $this->key( 'f2' ) ) );
 
-		Mcpwp_Activator::adopt_spai_credentials();
+		$this->adopt();
 		$after_first = $this->store();
 		$this->assertSame( 1, get_option( Mcpwp_Activator::SPAI_ADOPTION_FLAG ) );
 
 		// Even if a stale spai option reappeared, the flag ends it.
 		update_option( 'spai_api_key', wp_hash_password( $this->key( 'f3' ) ) );
 		$GLOBALS['mcpwp_test_options'][ Mcpwp_Activator::SPAI_ADOPTION_FLAG ] = 1;
-		Mcpwp_Activator::adopt_spai_credentials();
+		$this->adopt();
 		$this->assertSame( $after_first, $this->store() );
 
 		// And with the flag cleared, a re-run over the same data adds nothing.
 		update_option( 'spai_api_key', $after_first[1]['hash'] );
 		unset( $GLOBALS['mcpwp_test_options'][ Mcpwp_Activator::SPAI_ADOPTION_FLAG ] );
-		Mcpwp_Activator::adopt_spai_credentials();
+		$this->adopt();
 		$this->assertSame( $after_first, $this->store() );
 	}
 
@@ -291,27 +305,30 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 	 * would otherwise mask a broken skip here).
 	 */
 	public function test_the_builder_never_proposes_a_hash_the_store_already_holds(): void {
+		$revoked = wp_hash_password( 'spai_' . str_repeat( 'r0', 24 ) );
+		$live    = wp_hash_password( 'spai_' . str_repeat( 'l0', 24 ) );
 		update_option( 'mcpwp_api_keys', array(
-			array( 'id' => 'r', 'hash' => 'h-revoked', 'revoked_at' => '2026-10-01 00:00:00' ),
-			array( 'id' => 'l', 'hash' => 'h-live', 'revoked_at' => null ),
+			array( 'id' => 'r', 'hash' => $revoked, 'revoked_at' => '2026-10-01 00:00:00' ),
+			array( 'id' => 'l', 'hash' => $live, 'revoked_at' => null ),
 		) );
 		$m = new ReflectionMethod( 'Mcpwp_Activator', 'build_spai_adoption_records' );
 		$m->setAccessible( true );
-		foreach ( array( 'h-revoked', 'h-live' ) as $hash ) {
-			$this->assertSame( array(), $m->invoke( null, array( array( 'id' => 'x', 'hash' => $hash, 'revoked_at' => null ) ), '' ), "spai_api_keys record with $hash" );
-			$this->assertSame( array(), $m->invoke( null, array(), $hash ), "single spai_api_key $hash" );
+		foreach ( array( 'revoked' => $revoked, 'live' => $live ) as $label => $hash ) {
+			$this->assertSame( array(), $m->invoke( null, array( array( 'id' => 'x', 'hash' => $hash, 'revoked_at' => null ) ), '' ), "spai_api_keys record ($label hash)" );
+			$this->assertSame( array(), $m->invoke( null, array(), $hash ), "single spai_api_key ($label hash)" );
 		}
-		$fresh = $m->invoke( null, array(), 'h-new' );
+		$fresh = $m->invoke( null, array(), wp_hash_password( 'spai_' . str_repeat( 'n0', 24 ) ) );
 		$this->assertCount( 1, $fresh, 'A hash the store does not hold is proposed.' );
 	}
 
 	public function test_the_append_rechecks_a_fresh_read_so_a_concurrent_copy_is_not_duplicated(): void {
 		// A hash that landed in the store after the records were built (another
 		// request) must not be appended a second time.
-		update_option( 'mcpwp_api_keys', array( array( 'id' => 'race', 'hash' => 'h-race', 'revoked_at' => '2026-10-01 00:00:00' ) ) );
+		$hash = wp_hash_password( 'spai_' . str_repeat( 'rc', 24 ) );
+		update_option( 'mcpwp_api_keys', array( array( 'id' => 'race', 'hash' => $hash, 'revoked_at' => '2026-10-01 00:00:00' ) ) );
 		$m = new ReflectionMethod( 'Mcpwp_Activator', 'append_and_verify_scoped_records' );
 		$m->setAccessible( true );
-		$this->assertTrue( $m->invoke( null, array( array( 'id' => 'new', 'hash' => 'h-race', 'revoked_at' => null, 'label' => 'x' ) ) ) );
+		$this->assertTrue( $m->invoke( null, array( array( 'id' => 'new', 'hash' => $hash, 'revoked_at' => null, 'label' => 'x' ) ) ) );
 		$this->assertCount( 1, $this->store(), 'Not appended again.' );
 		$this->assertSame( '2026-10-01 00:00:00', $this->store()[0]['revoked_at'], 'And not resurrected.' );
 	}
@@ -341,7 +358,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->assertTrue( $this->works( $key ), 'Still honoured by the bridge meanwhile.' );
 
 		$GLOBALS['mcpwp_test_update_option_fail'] = array();
-		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials(), 'Next load retries.' );
+		$this->assertTrue( $this->adopt(), 'Later loads retry and complete.' );
 		$this->assertCount( 1, $this->records_with_hash( $hash ) );
 		$this->assertSame( '__gone__', get_option( 'spai_api_key', '__gone__' ) );
 	}
@@ -358,8 +375,9 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 			$this->markTestSkipped( 'This bootstrap does not read raw option rows through get_option().' );
 		}
 
-		$this->assertFalse( Mcpwp_Activator::adopt_spai_credentials() );
-		$this->assertFalse( get_option( Mcpwp_Activator::SPAI_ADOPTION_FLAG ) );
+		$this->assertFalse( Mcpwp_Activator::adopt_spai_credentials(), 'Run 1 adopts.' );
+		$this->assertFalse( Mcpwp_Activator::adopt_spai_credentials(), 'Run 2 tries the deletes; one does not take.' );
+		$this->assertFalse( get_option( Mcpwp_Activator::SPAI_ADOPTION_FLAG ), 'So the flag stays unset.' );
 		$this->assertCount( 1, $this->records_with_hash( $hash ), 'The adoption itself stands; a retry will not duplicate it.' );
 	}
 
@@ -382,7 +400,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		update_option( 'spai_api_keys', array( array( 'id' => 'x1', 'hash' => wp_hash_password( $this->key( 'h2' ) ), 'revoked_at' => null ) ) );
 
 		ob_start();
-		Mcpwp_Activator::adopt_spai_credentials();
+		$this->adopt();
 		$printed = ob_get_clean();
 
 		$this->assertSame( '', $printed );

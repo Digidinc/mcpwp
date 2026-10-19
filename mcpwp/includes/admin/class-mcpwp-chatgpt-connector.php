@@ -144,6 +144,10 @@ class Mcpwp_ChatGPT_Connector {
 		}
 
 		$had_link = $this->revoke();
+		if ( ! $had_link && method_exists( $this->auth, 'key_store_was_busy' ) && $this->auth->key_store_was_busy() ) {
+			// The old link could not be revoked: do not mint a second one beside it.
+			return new WP_Error( 'mcpwp_chatgpt_key_failed', Mcpwp_Key_State::busy_message() );
+		}
 
 		$created = $this->auth->create_scoped_api_key(
 			__( 'ChatGPT connector', 'mcpwp' ),
@@ -253,10 +257,17 @@ class Mcpwp_ChatGPT_Connector {
 	 */
 	public function revoke() {
 		$key_id = (string) get_option( self::OPTION_KEY_ID, '' );
-		delete_option( self::OPTION_KEY_ID );
 		if ( '' === $key_id ) {
+			delete_option( self::OPTION_KEY_ID );
 			return false;
 		}
-		return (bool) $this->auth->revoke_scoped_api_key( $key_id );
+		$revoked = (bool) $this->auth->revoke_scoped_api_key( $key_id );
+		// #1098 round 2: a revoke refused because the key store was busy
+		// leaves the link (and its id) in place, so it is never orphaned live.
+		if ( ! $revoked && method_exists( $this->auth, 'key_store_was_busy' ) && $this->auth->key_store_was_busy() ) {
+			return false;
+		}
+		delete_option( self::OPTION_KEY_ID );
+		return $revoked;
 	}
 }

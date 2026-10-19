@@ -26,12 +26,18 @@ trait Mcpwp_Admin_Setup_Trait {
 		if ( isset( $_POST['mcpwp_regenerate_key'] ) ) {
 			check_admin_referer( 'mcpwp_regenerate_key', 'mcpwp_nonce' );
 			$new_key = $this->regenerate_api_key();
-			add_settings_error(
-				'mcpwp_messages',
-				'mcpwp_key_regenerated',
-				__( 'API key has been regenerated. Copy it now — it will not be shown again.', 'mcpwp' ),
-				'updated'
-			);
+			if ( is_wp_error( $new_key ) ) {
+				// #1098 round 2: the key store was busy; nothing changed.
+				add_settings_error( 'mcpwp_messages', 'mcpwp_key_regenerate_busy', $new_key->get_error_message(), 'error' );
+				$new_key = null;
+			} else {
+				add_settings_error(
+					'mcpwp_messages',
+					'mcpwp_key_regenerated',
+					__( 'API key has been regenerated. Copy it now — it will not be shown again.', 'mcpwp' ),
+					'updated'
+				);
+			}
 		}
 
 		$new_scoped_key = null;
@@ -105,7 +111,7 @@ trait Mcpwp_Admin_Setup_Trait {
 					add_settings_error(
 						'mcpwp_messages',
 						'mcpwp_scoped_key_revoke_failed',
-						__( 'Unable to revoke key (it may already be revoked).', 'mcpwp' ),
+						$this->key_store_was_busy() ? Mcpwp_Key_State::busy_message() : __( 'Unable to revoke key (it may already be revoked).', 'mcpwp' ),
 						'error'
 					);
 				}
