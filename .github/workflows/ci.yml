@@ -58,3 +58,20 @@ jobs:
         # what actually ships. Dev-tooling advisories are tracked upstream and
         # patched when wrangler bumps. See #691.
         run: cd mcpwp-agency-proxy && npm audit --omit=dev --audit-level=high
+
+  mcp-server-stdio-smoke:
+    name: MCP Server Stdio Smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install dependencies (bun.lock is the build lockfile)
+        run: cd mcp-server && bun install --frozen-lockfile
+      - name: Build bundle
+        run: cd mcp-server && bun run build
+      - name: Stdio large-message smoke test
+        run: cd mcp-server && npm test
