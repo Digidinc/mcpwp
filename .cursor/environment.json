@@ -1,0 +1,12 @@
+{
+  "name": "MCPWP Dev",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "terminals": [
+    {
+      "name": "wordpress-rig",
+      "command": "bash .cursor/wp-rig-up.sh && sudo docker compose -f .cursor/wp-rig.compose.yml logs -f"
+    }
+  ],
+  "ports": [8086, 5175, 8000, 3100]
+}
