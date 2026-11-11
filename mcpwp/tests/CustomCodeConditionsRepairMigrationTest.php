@@ -12,6 +12,8 @@ final class CustomCodeConditionsRepairMigrationTest extends TestCase {
 		$GLOBALS['_mcpwp_test_meta']              = array();
 		$GLOBALS['mcpwp_test_wpdb_options']       = array();
 		$GLOBALS['mcpwp_test_wpdb_before_insert'] = null;
+		Mcpwp_Custom_Code_Conditions::initialize_legacy_cache_storage();
+		Mcpwp_Custom_Code_Conditions::register_hooks();
 	}
 
 	private function seed( int $id, array $conditions ): void {

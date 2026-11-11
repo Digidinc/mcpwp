@@ -33,12 +33,8 @@ final class CustomCodeCacheConvergenceTest extends TestCase {
 	}
 
 	private function drop_entry( $id ) {
-		$key = Mcpwp_Custom_Code_Cache_Entry::OPTION;
-		$cache = maybe_unserialize( $GLOBALS['mcpwp_test_wpdb_options'][$key] ?? '' );
-		if ( is_array( $cache ) ) {
-			foreach ( $cache as $location => $entries ) { unset( $cache[$location][$id] ); }
-			$GLOBALS['mcpwp_test_wpdb_options'][$key] = maybe_serialize( $cache );
-		}
+		$key = Mcpwp_Custom_Code_Cache_Entry::row_name( $id );
+		unset( $GLOBALS['mcpwp_test_wpdb_options'][ $key ], $GLOBALS['mcpwp_test_options'][ $key ] );
 	}
 
 	/**
@@ -56,7 +52,7 @@ final class CustomCodeCacheConvergenceTest extends TestCase {
 		$response = $this->create();
 		$this->assertInstanceOf( WP_REST_Response::class, $response );
 		$id = $response->get_data()['id'];
-		$this->assertSame( array( 'include/general' ), get_option( Mcpwp_Custom_Code_Cache_Entry::OPTION )['elementor_head'][$id] ?? null );
+		$this->assertSame( array( 'include/general' ), Mcpwp_Custom_Code_Cache_Entry::entry( $id )['conditions'] ?? null );
 		$this->assertGreaterThanOrEqual( 4, $reads, 'The dropped verification forces a fresh attempt.' );
 	}
 
@@ -68,7 +64,7 @@ final class CustomCodeCacheConvergenceTest extends TestCase {
 	public function test_persistent_failure_is_a_bounded_partial_write( $mode ): void {
 		$writes = 0;
 		$GLOBALS['mcpwp_test_wpdb_intercept'] = function ( $method, $query ) use ( $mode, &$writes ) {
-			if ( 'publish' === get_post_status( 1 ) && false !== strpos( $query, Mcpwp_Custom_Code_Cache_Entry::OPTION ) ) {
+			if ( 'publish' === get_post_status( 1 ) && false !== strpos( $query, Mcpwp_Custom_Code_Cache_Entry::row_name( 1 ) ) ) {
 				if ( 'get_row' === $method ) {
 					if ( 'throw' === $mode ) { throw new RuntimeException( 'forced cache failure' ); }
 					$this->drop_entry( 1 );

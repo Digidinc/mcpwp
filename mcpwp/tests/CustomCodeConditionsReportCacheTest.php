@@ -58,6 +58,10 @@ final class CustomCodeConditionsReportCacheTest extends TestCase {
 		$this->assertGreaterThan( 1, $first_queries );
 		$this->assertSame( array_values( range( 1, 1500 ) ), Mcpwp_Custom_Code_Conditions::report_ids() );
 		$this->assertCount( 1500, get_option( Mcpwp_Custom_Code_Conditions::QUARANTINE_OPTION ) );
+		// Isolate report-cache reuse from the separate bounded cache-entry
+		// maintenance pass, which may legitimately still be advancing.
+		update_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION, 1 );
+		update_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION, array( 'marker' => (string) get_option( Mcpwp_Custom_Code_Conditions::REPORT_MARKER, '' ), 'completed_at' => time() ) );
 
 		Mcpwp_Custom_Code_Conditions::refresh_admin_report();
 		$this->assertSame( $first_queries, $queries, 'An unchanged admin request reuses the cached report.' );

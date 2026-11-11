@@ -862,31 +862,34 @@ function mcpwp_test_cap_filters_grant($capability, $user_id)
 
 function get_option($name, $default = false)
 {
+	$pre = apply_filters('pre_option_' . $name, false, $name, $default);
+	if (false !== $pre) {
+		return $pre;
+	}
+	$value = $default;
     // Core's `notoptions` cache: a name this process already found missing
     // answers $default from the object cache without asking the database,
     // until update_option()/add_option() for that name (or a delete of the
     // `notoptions` key) clears it. Only populated by a test (#1101 round 2),
     // so no other test's reads change.
     if (isset($GLOBALS['mcpwp_test_object_cache']['options:notoptions'][ $name ])) {
-        return $default;
-    }
-    // A stale object-cache copy (#1096): a test arms this to model the cached
-    // snapshot a reader gets from the options API while the database row has
-    // moved on. Dropped by wp_cache_delete() of the option, or of `alloptions`.
-    if (isset($GLOBALS['mcpwp_test_option_cache_stale']) && array_key_exists($name, $GLOBALS['mcpwp_test_option_cache_stale'])) {
-        return $GLOBALS['mcpwp_test_option_cache_stale'][ $name ];
-    }
-    if (array_key_exists($name, $GLOBALS['mcpwp_test_options'])) {
-        return $GLOBALS['mcpwp_test_options'][ $name ];
+        return apply_filters('option_' . $name, $default, $name);
+    } elseif (isset($GLOBALS['mcpwp_test_option_cache_stale']) && array_key_exists($name, $GLOBALS['mcpwp_test_option_cache_stale'])) {
+        // A stale object-cache copy (#1096): a test arms this to model the cached
+        // snapshot a reader gets from the options API while the database row has
+        // moved on. Dropped by wp_cache_delete() of the option, or of `alloptions`.
+        $value = $GLOBALS['mcpwp_test_option_cache_stale'][ $name ];
+    } elseif (array_key_exists($name, $GLOBALS['mcpwp_test_options'])) {
+        $value = $GLOBALS['mcpwp_test_options'][ $name ];
     }
     // One options table in real WordPress: a row created behind the options
     // API (a first-writer-wins INSERT, #845) is what get_option() returns for
     // a name the options API has not stored. The options-API value still wins
     // when both exist, so every test that seeds through it reads what it seeded.
-    if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
-        return maybe_unserialize($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
+    elseif (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+        $value = maybe_unserialize($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
     }
-    return $default;
+    return apply_filters('option_' . $name, $value, $name);
 }
 
 if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
@@ -968,6 +971,18 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
             if (class_exists('Mcpwp_Post_Fields', false)) {
                 Mcpwp_Post_Fields::set_user_run_principal(false);
             }
+			if (class_exists('Mcpwp_Custom_Code_Conditions', false)) {
+				foreach (array(
+					'request_skipped' => array(), 'cache_bypass' => false,
+					'raw_read_depth' => 0, 'inspection' => array(),
+					'condition_lengths' => array(), 'meta_cache_guard' => false,
+					'legacy_cache_too_large' => false, 'entry_overlay' => null,
+				) as $name => $value) {
+					$property = new ReflectionProperty('Mcpwp_Custom_Code_Conditions', $name);
+					$property->setAccessible(true);
+					$property->setValue(null, $value);
+				}
+			}
         }
     }
 }
@@ -2602,6 +2617,22 @@ if (! isset($GLOBALS['wpdb'])) {
                     return $answer;
                 }
             }
+            if (preg_match('/^SELECT option_name, option_value FROM \S*options WHERE option_name LIKE /', trim((string) $query))) {
+                preg_match('/AS UNSIGNED\) > (\d+)/', $query, $after);
+                preg_match('/LIMIT (\d+)$/', $query, $page);
+                $prefix = 'mcpwp_custom_code_cache_entry_';
+                $all = array();
+                foreach ((array) ($GLOBALS['mcpwp_test_options'] ?? array()) as $name => $value) { $all[$name] = maybe_serialize($value); }
+                foreach ((array) ($GLOBALS['mcpwp_test_wpdb_options'] ?? array()) as $name => $value) { $all[$name] = $value; }
+                $rows = array();
+                foreach ($all as $name => $raw) {
+                    if (0 === strpos($name, $prefix) && (int) substr($name, strlen($prefix)) > (int) ($after[1] ?? 0)) {
+                        $rows[(int) substr($name, strlen($prefix))] = array('option_name'=>$name, 'option_value'=>$raw);
+                    }
+                }
+                ksort($rows);
+                return array_slice(array_values($rows), 0, (int) ($page[1] ?? 500));
+            }
             // #1030 round-5: Mcpwp_Api_Auth::fetch_post_ref_rows() — the
             // declared post-reference guard's one direct lookup. Answered
             // from the same in-memory post table get_post() reads, with no
@@ -2782,6 +2813,17 @@ if (! isset($GLOBALS['wpdb'])) {
                 if (MCPWP_TEST_WPDB_PASS !== $answer) {
                     return $answer;
                 }
+            }
+            if (preg_match("/^SELECT (OCTET_LENGTH\\(meta_value\\)|meta_value) FROM \\S*postmeta WHERE post_id = (\\d+) AND meta_key = '((?:[^'\\\\]|\\\\.)*)'/s", trim((string)$query), $m)) {
+                $id=(int)$m[2];$key=str_replace("\\'","'",$m[3]);
+                if (! array_key_exists($key,$GLOBALS['_mcpwp_test_meta'][$id]??array())) {return null;}
+                $raw=(string)maybe_serialize($GLOBALS['_mcpwp_test_meta'][$id][$key]);
+                if ('meta_value'===$m[1] && preg_match('/OCTET_LENGTH\\(meta_value\\) <= (\\d+)/',$query,$bound) && strlen($raw)>(int)$bound[1]) {return null;}
+                return 'meta_value'===$m[1]?$raw:strlen($raw);
+            }
+            if (preg_match("/^SELECT OCTET_LENGTH\\(option_value\\) FROM \\S*options WHERE option_name = '([^']+)'/", trim((string)$query), $m)) {
+                $raw=$GLOBALS['mcpwp_test_wpdb_options'][$m[1]]??(array_key_exists($m[1],$GLOBALS['mcpwp_test_options'])?maybe_serialize($GLOBALS['mcpwp_test_options'][$m[1]]):null);
+                return null===$raw?null:strlen((string)$raw);
             }
             // MySQL named locks (#981 review round 2; since #1042 only the
             // approvals create path, Mcpwp_Approvals::insert_new(), takes one).
@@ -3254,6 +3296,25 @@ if (! isset($GLOBALS['wpdb'])) {
                 }
             }
 
+            // Per-document cache rows compare only a short SHA-256 digest.
+            if (preg_match("/^UPDATE (\\S*options) SET option_value = '((?:[^'\\\\]|\\\\.)*)' WHERE option_name = '((?:[^'\\\\]|\\\\.)*)' AND SHA2\\(option_value, 256\\) = '([0-9A-Fa-f]{64})'$/s", trim((string) $query), $m)) {
+                $name = str_replace("\\'", "'", $m[3]);
+                $raw = array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())
+                    ? $GLOBALS['mcpwp_test_wpdb_options'][$name]
+                    : (array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array()) ? maybe_serialize($GLOBALS['mcpwp_test_options'][$name]) : null);
+                if (null === $raw || hash('sha256', (string) $raw) !== strtolower($m[4])) { return 0; }
+                $this->exact_option_value_compare = true;
+                try {
+                    return $this->update($m[1], array('option_value' => str_replace("\\'", "'", $m[2])), array('option_name' => $name, 'option_value' => $raw));
+                } finally { $this->exact_option_value_compare = false; }
+            }
+            if (preg_match("/^DELETE FROM (\\S*options) WHERE option_name = '((?:[^'\\\\]|\\\\.)*)' AND SHA2\\(option_value, 256\\) = '([0-9A-Fa-f]{64})'$/s", trim((string) $query), $m)) {
+                $name = str_replace("\\'", "'", $m[2]);
+                $raw = $GLOBALS['mcpwp_test_wpdb_options'][$name] ?? null;
+                if (null === $raw || hash('sha256', (string) $raw) !== strtolower($m[3])) { return 0; }
+                return $this->delete($m[1], array('option_name' => $name, 'option_value' => $raw));
+            }
+
             return 0;
         }
         public function get_col_charset($table, $column)
@@ -3648,6 +3709,13 @@ if (! function_exists('wp_schedule_single_event')) {
             'hook'      => $hook,
             'args'      => $args,
         );
+        return true;
+    }
+}
+
+if (! function_exists('wp_cache_set')) {
+    function wp_cache_set($key, $value, $group = '', $expire = 0) {
+        $GLOBALS['mcpwp_test_object_cache'][(string) $group . ':' . (string) $key] = array('value'=>$value,'expires'=>(int)$expire>0?time()+(int)$expire:0,'ttl'=>(int)$expire);
         return true;
     }
 }
@@ -5268,8 +5336,15 @@ require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-settings.ph
 require_once dirname(__DIR__) . '/includes/class-mcpwp-oauth-well-known.php';
 // Encryption + migration classes.
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-encryption.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-custom-code-cache-entry.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-custom-code-conditions.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-integration-manager.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-encryption-migration.php';
+
+// Production registers these during plugins_loaded. The unit harness loads
+// classes directly, so install the same runtime filters once for option/meta
+// behavior tests.
+Mcpwp_Custom_Code_Conditions::register_hooks();
 
 // Escaping helpers — no-ops for tests, but required by any class that renders
 // output (Site Health results, admin notices).

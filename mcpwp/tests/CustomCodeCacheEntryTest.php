@@ -5,116 +5,93 @@ use PHPUnit\Framework\TestCase;
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-custom-code-cache-entry.php';
 
 final class CustomCodeCacheEntryTest extends TestCase {
+
 	protected function setUp(): void {
-		$GLOBALS['mcpwp_test_options'] = array();
-		$GLOBALS['mcpwp_test_wpdb_options'] = array();
+		$GLOBALS['mcpwp_test_options']            = array();
+		$GLOBALS['mcpwp_test_wpdb_options']       = array();
 		$GLOBALS['mcpwp_test_wpdb_before_insert'] = null;
 		$GLOBALS['mcpwp_test_wpdb_before_update'] = null;
 		unset( $GLOBALS['mcpwp_test_wpdb_read_fails'] );
 	}
 
 	protected function tearDown(): void {
-		$GLOBALS['mcpwp_test_wpdb_before_insert'] = null;
-		$GLOBALS['mcpwp_test_wpdb_before_update'] = null;
-		unset( $GLOBALS['mcpwp_test_wpdb_read_fails'] );
+		unset( $GLOBALS['mcpwp_test_wpdb_before_insert'], $GLOBALS['mcpwp_test_wpdb_before_update'], $GLOBALS['mcpwp_test_wpdb_read_fails'] );
 	}
 
-	private function raw_cache( array $cache ) {
-		$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Custom_Code_Cache_Entry::OPTION ] = maybe_serialize( $cache );
+	private function raw_entry( $id, $location = 'elementor_head', array $conditions = array( 'include/general' ) ) {
+		$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Custom_Code_Cache_Entry::row_name( $id ) ] = maybe_serialize(
+			array( 'id' => $id, 'location' => $location, 'conditions' => $conditions )
+		);
 	}
 
-	private function cache() {
-		return maybe_unserialize( $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Custom_Code_Cache_Entry::OPTION ] ?? '' );
-	}
+	public function test_sync_touches_only_its_small_private_row_and_preserves_peers(): void {
+		$this->raw_entry( 22, 'elementor_body_end', array( 'exclude/general' ) );
+		$global = array();
+		for ( $id = 1; $id <= 1500; ++$id ) {
+			$global['elementor_head'][ $id ] = array( 'include/general' );
+		}
+		$GLOBALS['mcpwp_test_wpdb_options']['elementor_pro_theme_builder_conditions'] = maybe_serialize( $global );
 
-	public function test_sync_preserves_other_entries_and_moves_only_its_own_id(): void {
-		$this->raw_cache( array(
-			'elementor_head' => array( 11 => array( 'include/general' ), 22 => array( 'exclude/general' ) ),
-			'elementor_body_end' => array( 11 => array( 'include/general' ) ),
-		) );
 		$this->assertTrue( Mcpwp_Custom_Code_Cache_Entry::sync( 11, 'elementor_footer', array( 'include/singular/page/5' ) ) );
-		$cache = $this->cache();
-		$this->assertArrayNotHasKey( 11, $cache['elementor_head'] );
-		$this->assertArrayNotHasKey( 11, $cache['elementor_body_end'] );
-		$this->assertSame( array( 'exclude/general' ), $cache['elementor_head'][22] );
-		$this->assertSame( array( 'include/singular/page/5' ), $cache['elementor_footer'][11] );
-		$this->assertArrayNotHasKey( 'mcpwp_custom_code_cache_write_lock', $GLOBALS['mcpwp_test_wpdb_options'] );
+		$entry = Mcpwp_Custom_Code_Cache_Entry::entry( 11 );
+		$this->assertSame( 'elementor_footer', $entry['location'] );
+		$this->assertSame( array( 'include/singular/page/5' ), $entry['conditions'] );
+		$this->assertSame( 'elementor_body_end', Mcpwp_Custom_Code_Cache_Entry::entry( 22 )['location'] );
+		$this->assertSame( maybe_serialize( $global ), $GLOBALS['mcpwp_test_wpdb_options']['elementor_pro_theme_builder_conditions'] );
+		$queries = implode( "\n", $GLOBALS['wpdb']->queries );
+		$this->assertLessThan( 4096, strlen( $queries ), 'Normal entry CAS SQL must not grow with the 1,500-entry legacy cache.' );
 	}
 
-	public function test_interleaved_drop_retries_and_restores_its_entry(): void {
-		$this->raw_cache( array( 'elementor_head' => array( 22 => array( 'include/general' ) ) ) );
+	public function test_interleaved_same_entry_cas_retries_to_the_latest_write(): void {
+		$this->raw_entry( 11 );
 		$once = true;
-		$GLOBALS['mcpwp_test_wpdb_before_update'] = function () use ( &$once ) {
-			if ( ! $once ) {
+		$GLOBALS['mcpwp_test_wpdb_before_update'] = function ( $name ) use ( &$once ) {
+			if ( ! $once || Mcpwp_Custom_Code_Cache_Entry::row_name( 11 ) !== $name ) {
 				return;
 			}
 			$once = false;
-			$cache = maybe_unserialize( $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Custom_Code_Cache_Entry::OPTION ] );
-			unset( $cache['elementor_head'][11] );
-			$cache['elementor_head'][33] = array( 'include/general' );
-			$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Custom_Code_Cache_Entry::OPTION ] = maybe_serialize( $cache );
+			$GLOBALS['mcpwp_test_wpdb_options'][ $name ] = maybe_serialize(
+				array( 'id' => 11, 'location' => 'elementor_head', 'conditions' => array( 'exclude/general' ) )
+			);
 		};
-		$this->assertTrue( Mcpwp_Custom_Code_Cache_Entry::sync( 11, 'elementor_head', array( 'include/general' ) ) );
-		$cache = $this->cache();
-		$this->assertSame( array( 'include/general' ), $cache['elementor_head'][11] );
-		$this->assertSame( array( 'include/general' ), $cache['elementor_head'][22] );
-		$this->assertSame( array( 'include/general' ), $cache['elementor_head'][33] );
+		$this->assertTrue( Mcpwp_Custom_Code_Cache_Entry::sync( 11, 'elementor_body_end', array( 'include/singular/page/5' ) ) );
+		$this->assertSame( 'elementor_body_end', Mcpwp_Custom_Code_Cache_Entry::entry( 11 )['location'] );
 	}
 
-		public function test_an_already_matching_entry_succeeds_without_a_compare_and_swap(): void {
-		$this->raw_cache( array( 'elementor_head' => array( 11 => array( 'include/general' ), 22 => array( 'include/general' ) ) ) );
-		$writes = 0;
-		$hook = null;
-		$hook = static function () use ( &$hook, &$writes ) {
-			++$writes;
-			$GLOBALS['mcpwp_test_wpdb_before_update'] = $hook;
-			throw new RuntimeException( 'CAS must not run for an identical entry.' );
-		};
-		$GLOBALS['mcpwp_test_wpdb_before_update'] = $hook;
-		$this->assertTrue( Mcpwp_Custom_Code_Cache_Entry::sync( 11, 'elementor_head', array( 'include/general' ) ) );
-		$this->assertSame( 0, $writes );
-
-	}
-
-	public function test_persistent_compare_and_swap_conflict_returns_partial_write_after_three_attempts(): void {
-		$this->raw_cache( array() );
-		$hook = null;
-		$changes = 0;
-		$hook = function () use ( &$hook, &$changes ) {
-			++$changes;
-			$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Custom_Code_Cache_Entry::OPTION ] = maybe_serialize( array( 'elementor_head' => array( 99 + $changes => array( 'include/general' ) ) ) );
-			$GLOBALS['mcpwp_test_wpdb_before_update'] = $hook;
-		};
-		$GLOBALS['mcpwp_test_wpdb_before_update'] = $hook;
-		$result = Mcpwp_Custom_Code_Cache_Entry::sync( 11, 'elementor_head', array( 'include/general' ) );
+	public function test_oversized_conditions_are_refused_before_any_option_row_is_written(): void {
+		$conditions = array_fill( 0, Mcpwp_Custom_Code_Cache_Entry::MAX_CONDITIONS + 1, 'include/general' );
+		$result = Mcpwp_Custom_Code_Cache_Entry::sync( 11, 'elementor_head', $conditions );
 		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'conditions_cache_sync_failed', $result->get_error_code() );
-		$this->assertSame( 11, $result->get_error_data()['resource_id'] );
-		$this->assertTrue( $result->get_error_data()['partial_write'] );
-		$this->assertSame( 3, $result->get_error_data()['attempts'] );
+		$this->assertSame( 'conditions_too_large', $result->get_error_code() );
+		$this->assertSame( 413, $result->get_error_data()['status'] );
+		$this->assertArrayNotHasKey( Mcpwp_Custom_Code_Cache_Entry::row_name( 11 ), $GLOBALS['mcpwp_test_wpdb_options'] );
 	}
 
-	public function test_remove_prunes_only_an_empty_target_location_and_preserves_peers(): void {
-		$this->raw_cache(
-			array(
-				'elementor_head'     => array( 11 => array( 'include/general' ) ),
-				'elementor_body_end' => array( 22 => array( 'exclude/general' ), 11 => array( 'include/general' ) ),
-			)
-		);
+	public function test_serialized_size_limit_rejects_few_but_large_conditions(): void {
+		$conditions = array_fill( 0, 2, str_repeat( 'x', Mcpwp_Custom_Code_Cache_Entry::MAX_CONDITIONS_BYTES ) );
+		$result = Mcpwp_Custom_Code_Cache_Entry::sync( 11, 'elementor_head', $conditions );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'conditions_too_large', $result->get_error_code() );
+	}
+
+	public function test_remove_deletes_only_the_target_private_row(): void {
+		$this->raw_entry( 11 );
+		$this->raw_entry( 22, 'elementor_body_end' );
 		$this->assertTrue( Mcpwp_Custom_Code_Cache_Entry::remove( 11 ) );
-		$cache = $this->cache();
-		$this->assertArrayNotHasKey( 'elementor_head', $cache );
-		$this->assertSame( array( 'exclude/general' ), $cache['elementor_body_end'][22] );
-		$this->assertArrayNotHasKey( 11, $cache['elementor_body_end'] );
-	}
-	public function test_a_transient_raw_read_failure_is_retried(): void {
-		$this->raw_cache( array() );
-		$reads = 0;
-		$GLOBALS['mcpwp_test_wpdb_read_fails'] = static function ( $name ) use ( &$reads ) {
-			return Mcpwp_Custom_Code_Cache_Entry::OPTION === $name && 1 === ++$reads;
-		};
-		$this->assertTrue( Mcpwp_Custom_Code_Cache_Entry::sync( 11, 'elementor_head', array( 'include/general' ) ) );
-		$this->assertSame( 3, $reads, 'A fresh read and verification follow the failed read.' );
+		$this->assertNull( Mcpwp_Custom_Code_Cache_Entry::entry( 11 ) );
+		$this->assertSame( 'elementor_body_end', Mcpwp_Custom_Code_Cache_Entry::entry( 22 )['location'] );
 	}
 
+	public function test_entries_are_numeric_keyset_paginated_for_large_overlays(): void {
+		for ( $id = 1; $id <= 1200; ++$id ) {
+			$this->raw_entry( $id );
+		}
+		$first = Mcpwp_Custom_Code_Cache_Entry::entries( 0, 500 );
+		$this->assertCount( 500, $first );
+		$this->assertSame( 1, array_key_first( $first ) );
+		$this->assertSame( 500, array_key_last( $first ) );
+		$second = Mcpwp_Custom_Code_Cache_Entry::entries( 500, 500 );
+		$this->assertSame( 501, array_key_first( $second ) );
+		$this->assertSame( 1000, array_key_last( $second ) );
+	}
 }

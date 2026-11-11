@@ -480,6 +480,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			)
 		);
 
+		$args['update_post_meta_cache'] = false;
 		$args['post_type']      = $this->custom_code_cpt;
 		$args['posts_per_page'] = isset( $args['posts_per_page'] ) ? $args['posts_per_page'] : 50;
 		$args['paged']          = isset( $args['paged'] ) ? $args['paged'] : 1;
@@ -556,35 +557,41 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response_from_wp_error( $post_id );
 		}
 
-		if ( class_exists( 'Mcpwp_Action_Log' ) ) {
-			Mcpwp_Action_Log::capture_custom_code_create( $post_id );
-		}
-		$saved = $this->save_custom_code_meta( $post_id, $prepared );
-		if ( is_wp_error( $saved ) ) {
-			$this->log_activity( 'create_elementor_custom_code', $request, null, $this->get_wp_error_status( $saved ) );
-			return $saved;
-		}
-
-		// Conditions and source must be ready before the snippet can run.
-		if ( 'publish' === $prepared['status'] ) {
-			$published = wp_update_post( array( 'ID' => $post_id, 'post_status' => 'publish', 'page_template' => 'default' ), true );
-			if ( is_wp_error( $published ) ) {
-				return $published;
+		try {
+			if ( class_exists( 'Mcpwp_Action_Log' ) ) {
+				Mcpwp_Action_Log::capture_custom_code_create( $post_id );
 			}
-			$synced = $this->sync_custom_code_conditions_cache( $post_id );
-			if ( is_wp_error( $synced ) ) {
-				return $synced;
+			$saved = $this->save_custom_code_meta( $post_id, $prepared );
+			if ( is_wp_error( $saved ) ) {
+				$this->log_activity( 'create_elementor_custom_code', $request, null, $this->get_wp_error_status( $saved ) );
+				return $saved;
 			}
+
+			// Conditions and source must be ready before the snippet can run.
+			if ( 'publish' === $prepared['status'] ) {
+				$published = wp_update_post( array( 'ID' => $post_id, 'post_status' => 'publish', 'page_template' => 'default' ), true );
+				if ( is_wp_error( $published ) ) {
+					return new WP_Error( 'custom_code_publish_failed', __( 'Custom Code could not be published. Read the snippet before retrying an update.', 'mcpwp' ), array( 'status' => 500, 'resource_id' => (int) $post_id, 'partial_write' => true ) );
+				}
+				$synced = $this->sync_custom_code_conditions_cache( $post_id );
+				if ( is_wp_error( $synced ) ) {
+					return $synced;
+				}
+			}
+
+			$data = array(
+				'id'      => (int) $post_id,
+				'snippet' => $this->format_custom_code_snippet( get_post( $post_id ), true, $prepared['code'] ),
+			);
+
+			$this->log_activity( 'create_elementor_custom_code', $request, $this->redact_custom_code_payload( $data ) );
+
+			return $this->custom_code_success_response( $data, 201 );
+		} catch ( \Throwable $exception ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP Custom Code create failed for snippet ' . (int) $post_id . ': ' . $exception->getMessage() );
+			return new WP_Error( 'custom_code_save_failed', __( 'Custom Code could not be saved. Read the snippet before retrying an update.', 'mcpwp' ), array( 'status' => 500, 'resource_id' => (int) $post_id, 'partial_write' => true ) );
 		}
-
-		$data = array(
-			'id'      => (int) $post_id,
-			'snippet' => $this->format_custom_code_snippet( get_post( $post_id ), true, $prepared['code'] ),
-		);
-
-		$this->log_activity( 'create_elementor_custom_code', $request, $this->redact_custom_code_payload( $data ) );
-
-		return $this->custom_code_success_response( $data, 201 );
 	}
 
 	/**
@@ -620,6 +627,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		if ( is_wp_error( $post ) ) {
 			$this->log_activity( 'update_elementor_custom_code', $request, null, 404 );
 			return $post;
+		}
+
+		$inspection = Mcpwp_Custom_Code_Conditions::inspect( $post->ID );
+		if ( null === $request->get_param( 'conditions' ) && is_wp_error( $inspection ) && 'conditions_too_large' === $inspection->get_error_code() ) {
+			return $inspection;
 		}
 
 		$prepared = $this->prepare_custom_code_payload( $request, false );
@@ -842,6 +854,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			);
 		}
 
+		$inspection = Mcpwp_Custom_Code_Conditions::inspect( $id );
+		if ( 'publish' === $status && is_wp_error( $inspection ) && 'conditions_too_large' === $inspection->get_error_code() ) {
+			return $inspection;
+		}
+
 		$update = wp_update_post(
 			array(
 				'ID'          => $id,
@@ -1061,6 +1078,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			}
 			$converted = Mcpwp_Custom_Code_Conditions::convert( $conditions );
 			if ( is_wp_error( $converted ) ) {
+				if ( 'conditions_too_large' === $converted->get_error_code() ) {
+					return $converted;
+				}
 				return $this->error_response( 'invalid_conditions', __( 'Every display condition must be convertible without changing its scope.', 'mcpwp' ), 400 );
 			}
 			$payload['conditions'] = $this->normalize_custom_code_conditions( $converted );
@@ -1668,13 +1688,17 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return string|WP_Error Save engine or recoverable failure receipt.
 	 */
 	private function save_custom_code_conditions( $post_id, $conditions ) {
-		$previous = Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id );
+		$snapshot = Mcpwp_Custom_Code_Conditions::inspect( $post_id );
+		$previous = is_wp_error( $snapshot )
+			? ( 'conditions_too_large' === $snapshot->get_error_code() ? null : Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id ) )
+			: $snapshot['raw'];
 		try {
 			$strings = Mcpwp_Custom_Code_Conditions::convert( $conditions );
 			if ( is_wp_error( $strings ) ) {
 				throw new RuntimeException( $strings->get_error_message() );
 			}
 			update_post_meta( $post_id, '_elementor_conditions', wp_slash( $strings ) );
+			Mcpwp_Custom_Code_Conditions::invalidate_cache_view( $post_id );
 			if ( Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id ) !== $strings ) {
 				throw new RuntimeException( 'Condition metadata was not persisted.' );
 			}
@@ -1682,7 +1706,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' ) && class_exists( '\\Elementor\\Plugin' ) ? 'mcpwp_conditions_cache_entry' : 'fallback_meta';
 		} catch ( \Throwable $exception ) {
 			try {
-				update_post_meta( $post_id, '_elementor_conditions', wp_slash( $previous ) );
+				if ( null !== $previous ) {
+					update_post_meta( $post_id, '_elementor_conditions', wp_slash( $previous ) );
+					Mcpwp_Custom_Code_Conditions::invalidate_cache_view( $post_id );
+				}
 			} catch ( \Throwable $restore_error ) {
 				// The partial-write receipt covers an unavailable metadata store.
 			}
@@ -1701,12 +1728,12 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return true|WP_Error Verified cache or partial-write receipt.
 	 */
 	private function sync_custom_code_conditions_cache( $post_id ) {
-		$raw = Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id );
-		$conditions = $this->coerce_conditions_to_strings( $raw, $post_id );
-		if ( is_wp_error( $conditions ) ) {
-			Mcpwp_Custom_Code_Conditions::quarantine( $post_id, $raw );
-			return true;
+		$snapshot = Mcpwp_Custom_Code_Conditions::inspect( $post_id );
+		if ( is_wp_error( $snapshot ) ) {
+			Mcpwp_Custom_Code_Conditions::quarantine( $post_id, $snapshot );
+			return Mcpwp_Custom_Code_Cache_Entry::remove( $post_id );
 		}
+		$conditions = $snapshot['conditions'];
 		Mcpwp_Custom_Code_Conditions::clear_quarantine( $post_id );
 		if ( ! class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' ) || ! class_exists( '\\Elementor\\Plugin' ) ) {
 			return true;
@@ -1796,6 +1823,15 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return array Formatted snippet.
 	 */
 	private function format_custom_code_snippet( $post, $include_code = false, $submitted_code = null ) {
+		$inspection = Mcpwp_Custom_Code_Conditions::inspect( $post->ID );
+		if ( is_wp_error( $inspection ) && 'conditions_too_large' === $inspection->get_error_code() ) {
+			$data = array( 'id' => (int) $post->ID, 'title' => (string) $post->post_title, 'status' => (string) $post->post_status, 'modified_gmt' => (string) $post->post_modified_gmt, 'conditions' => array() );
+			if ( $this->custom_code_admin_reporting_allowed() ) {
+				$data['quarantined'] = true;
+				$data['quarantine_reason'] = 'conditions_too_large';
+			}
+			return $data;
+		}
 		$meta = get_post_meta( $post->ID );
 
 		$matching_meta_keys = array();
@@ -1852,9 +1888,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			$data['code'] = $code['content'];
 		}
 
-		if ( $this->custom_code_admin_reporting_allowed() && is_wp_error( Mcpwp_Custom_Code_Conditions::convert( Mcpwp_Custom_Code_Conditions::raw_conditions( $post->ID ) ) ) ) {
+		if ( $this->custom_code_admin_reporting_allowed() && is_wp_error( $inspection ) ) {
 			$data['quarantined'] = true;
-			$data['quarantine_reason'] = 'conditions_not_convertible';
+			$data['quarantine_reason'] = Mcpwp_Custom_Code_Conditions::quarantine_reason( $post->ID );
 		}
 
 		return $data;

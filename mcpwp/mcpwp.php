@@ -223,8 +223,6 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		return;
 	}
 
-	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-custom-code-conditions.php';
-	Mcpwp_Custom_Code_Conditions::register_hooks();
 	if ( ! get_option( 'mcpwp_custom_code_cache_lock_retired' ) ) {
 		delete_option( 'mcpwp_custom_code_cache_write_lock' );
 		update_option( 'mcpwp_custom_code_cache_lock_retired', 1, false );
@@ -320,6 +318,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-workflows.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-feedback.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-custom-code-cache-entry.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-custom-code-conditions.php';
+	Mcpwp_Custom_Code_Conditions::initialize_legacy_cache_storage();
+	Mcpwp_Custom_Code_Conditions::register_hooks();
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption-migration.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-integration-manager.php';
 	Mcpwp_Integration_Manager::register_option_guard();

@@ -68,6 +68,8 @@ final class ElementorCustomCodeConditionsCacheSyncTest extends TestCase {
 		}
 
 		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
+		Mcpwp_Custom_Code_Conditions::initialize_legacy_cache_storage();
+		Mcpwp_Custom_Code_Conditions::register_hooks();
 	}
 
 	/**
@@ -259,6 +261,7 @@ final class ElementorCustomCodeConditionsCacheSyncTest extends TestCase {
 			),
 			true
 		);
+		update_post_meta( $post_id, '_elementor_conditions', array( 'include/general' ) );
 		update_option(
 			'elementor_pro_theme_builder_conditions',
 			array(

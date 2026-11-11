@@ -19,7 +19,7 @@ final class CustomCodePublishedCacheBackfillTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
-		unset( $GLOBALS['mcpwp_test_wpdb_read_fails'] );
+		unset( $GLOBALS['mcpwp_test_wpdb_read_fails'], $GLOBALS['mcpwp_test_wpdb_intercept'] );
 		ini_set( 'error_log', $this->error_log );
 	}
 
@@ -34,9 +34,8 @@ final class CustomCodePublishedCacheBackfillTest extends TestCase {
 		$this->seed( 683, 'publish', array( array( 'type' => 'include', 'name' => 'singular', 'sub_id' => '5' ) ) );
 		$this->assertTrue( Mcpwp_Activator::repair_custom_code_conditions() );
 		$this->assertSame( array( 'include/general' ), get_post_meta( 682, '_elementor_conditions', true ) );
-		$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
-		$this->assertSame( array( 'include/general' ), $cache['elementor_head'][682] ?? null );
-		$this->assertArrayNotHasKey( 683, $cache['elementor_head'] ?? array() );
+		$this->assertSame( array( 'include/general' ), Mcpwp_Custom_Code_Cache_Entry::entry( 682 )['conditions'] ?? null );
+		$this->assertNull( Mcpwp_Custom_Code_Cache_Entry::entry( 683 ) );
 		$this->assertContains( 683, Mcpwp_Custom_Code_Conditions::skipped_ids() );
 	}
 
@@ -44,52 +43,51 @@ final class CustomCodePublishedCacheBackfillTest extends TestCase {
 		update_option( 'mcpwp_custom_code_conditions_repaired', 1 );
 		$this->seed( 682 );
 		$this->assertTrue( Mcpwp_Activator::repair_custom_code_conditions() );
-		$this->assertSame( array( 'include/general' ), get_option( 'elementor_pro_theme_builder_conditions', array() )['elementor_head'][682] ?? null );
+		$this->assertSame( array( 'include/general' ), Mcpwp_Custom_Code_Cache_Entry::entry( 682 )['conditions'] ?? null );
 	}
 
 	public function test_admin_refresh_backfills_late_missing_and_stale_entries(): void {
 		$this->seed( 682 );
 		Mcpwp_Custom_Code_Conditions::refresh_admin_report();
 		$this->seed( 686, 'publish', array( 'include/singular/page/5' ), 'elementor_body_end' );
-		update_option( 'elementor_pro_theme_builder_conditions', array( 'elementor_head' => array( 686 => array( 'include/general' ) ) ) );
+		Mcpwp_Custom_Code_Cache_Entry::sync( 686, 'elementor_head', array( 'include/general' ) );
 		Mcpwp_Custom_Code_Conditions::invalidate_report_on_meta( 1, 686, '_elementor_conditions' );
 		Mcpwp_Custom_Code_Conditions::refresh_admin_report();
-		$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
-		$this->assertSame( array( 'include/general' ), $cache['elementor_head'][682] ?? null );
-		$this->assertSame( array( 'include/singular/page/5' ), $cache['elementor_body_end'][686] ?? null );
-		$this->assertArrayNotHasKey( 686, $cache['elementor_head'] ?? array() );
+		$this->assertSame( 'elementor_head', Mcpwp_Custom_Code_Cache_Entry::entry( 682 )['location'] ?? null );
+		$this->assertSame( 'elementor_body_end', Mcpwp_Custom_Code_Cache_Entry::entry( 686 )['location'] ?? null );
 	}
 
 	public function test_drafts_and_trash_are_not_added_and_reruns_are_idempotent(): void {
 		$this->seed( 682 );$this->seed( 684, 'draft' );$this->seed( 685, 'trash' );
 		Mcpwp_Activator::repair_custom_code_conditions();
-		$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
-		$this->assertArrayHasKey( 682, $cache['elementor_head'] ?? array() );
-		$this->assertArrayNotHasKey( 684, $cache['elementor_head'] ?? array() );
-		$this->assertArrayNotHasKey( 685, $cache['elementor_head'] ?? array() );
+		$this->assertNotNull( Mcpwp_Custom_Code_Cache_Entry::entry( 682 ) );
+		$this->assertNull( Mcpwp_Custom_Code_Cache_Entry::entry( 684 ) );
+		$this->assertNull( Mcpwp_Custom_Code_Cache_Entry::entry( 685 ) );
 		Mcpwp_Activator::repair_custom_code_conditions();Mcpwp_Custom_Code_Conditions::refresh_admin_report();
-		$this->assertSame( $cache, get_option( 'elementor_pro_theme_builder_conditions' ) );
+		$this->assertSame( 'elementor_head', Mcpwp_Custom_Code_Cache_Entry::entry( 682 )['location'] );
 	}
 
 	public function test_one_sync_failure_is_reported_and_does_not_stop_other_published_entries(): void {
 		$this->seed( 682 );$this->seed( 686 );
 		$reads=0;
 		$GLOBALS['mcpwp_test_wpdb_read_fails'] = static function ( $name ) use ( &$reads ) {
-			return 'elementor_pro_theme_builder_conditions' === $name && ++$reads <= 3;
+			return Mcpwp_Custom_Code_Cache_Entry::row_name( 682 ) === $name && ++$reads <= 3;
 		};
 		$log=tempnam(sys_get_temp_dir(),'cache-backfill-');ini_set('error_log',$log);
 		try {
 			$this->assertTrue( Mcpwp_Activator::repair_custom_code_conditions( 30.0 ) );
-			$cache=get_option('elementor_pro_theme_builder_conditions',array());
-			$this->assertSame(array('include/general'),$cache['elementor_head'][686]??null);
+			$this->assertSame(array('include/general'),Mcpwp_Custom_Code_Cache_Entry::entry(686)['conditions']??null);
 			$this->assertContains(682,get_option('mcpwp_custom_code_cache_repair_failed_ids',array()));
 			$this->assertStringContainsString('682',file_get_contents($log));
 			ob_start();Mcpwp_Custom_Code_Conditions::render_admin_notice();$notice=ob_get_clean();
 			$this->assertStringContainsString('682',$notice);
 			$this->assertStringContainsString('682',Mcpwp_Custom_Code_Conditions::site_health_test()['description']);
 			$this->assertContains(682,Mcpwp_Custom_Code_Conditions::annotate_response(array(),false)['custom_code_cache_repair_failed_ids']);
+			$state = get_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, array() );
+			$state[682]['next_retry'] = time() - 1;
+			update_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, $state );
 			Mcpwp_Custom_Code_Conditions::refresh_admin_report();
-			$this->assertSame(array('include/general'),get_option('elementor_pro_theme_builder_conditions')['elementor_head'][682]??null);
+			$this->assertSame(array('include/general'),Mcpwp_Custom_Code_Cache_Entry::entry(682)['conditions']??null);
 			$this->assertSame(array(),get_option('mcpwp_custom_code_cache_repair_failed_ids',array()));
 		} finally { unlink($log); }
 	}
@@ -112,11 +110,67 @@ final class CustomCodePublishedCacheBackfillTest extends TestCase {
 		try {
 			Mcpwp_Custom_Code_Conditions::refresh_admin_report();
 			$this->assertSame( 1, get_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION ) );
-			$this->assertCount( Mcpwp_Activator::CUSTOM_CODE_REPAIR_BATCH_SIZE + 1, get_option( 'elementor_pro_theme_builder_conditions' )['elementor_head'] );
+			$this->assertNotNull( Mcpwp_Custom_Code_Cache_Entry::entry( Mcpwp_Activator::CUSTOM_CODE_REPAIR_BATCH_SIZE + 1 ) );
 			$completed_scans = $scans;
 			Mcpwp_Custom_Code_Conditions::refresh_admin_report();
 			$this->assertSame( $completed_scans, $scans, 'A completed, unchanged admin request remains scan-free.' );
 		} finally { unset( $GLOBALS['mcpwp_test_wpdb_intercept'] ); }
+	}
+
+	public function test_parked_failure_does_not_gate_the_next_full_rescan(): void {
+		Mcpwp_Custom_Code_Conditions::register_hooks();
+		$this->seed( 9 );
+		$this->seed( 11 );
+		$attempts = 0;
+		$GLOBALS['mcpwp_test_wpdb_read_fails'] = static function ( $name ) use ( &$attempts ) {
+			if ( Mcpwp_Custom_Code_Cache_Entry::row_name( 9 ) === $name ) {
+				++$attempts;
+				return true;
+			}
+			return false;
+		};
+
+		for ( $pass = 0; $pass < Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_MAX_ATTEMPTS; ++$pass ) {
+			$state = get_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, array() );
+			if ( isset( $state[9] ) ) {
+				$state[9]['next_retry'] = time() - 1;
+				update_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, $state );
+			}
+			Mcpwp_Activator::repair_custom_code_conditions( 30.0, true );
+		}
+		$state = get_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, array() );
+		$this->assertTrue( $state[9]['parked'] ?? false );
+		$this->assertSame( Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_MAX_ATTEMPTS, $state[9]['attempts'] ?? 0 );
+
+		Mcpwp_Custom_Code_Cache_Entry::remove( 11 );
+		$backfill = get_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION, array() );
+		$backfill['completed_at'] = time() - Mcpwp_Custom_Code_Conditions::REPORT_TTL - 1;
+		update_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION, $backfill );
+		$this->assertTrue( Mcpwp_Activator::custom_code_cache_full_rescan_due() );
+
+		Mcpwp_Custom_Code_Conditions::refresh_admin_report();
+		$this->assertSame( array( 'include/general' ), Mcpwp_Custom_Code_Cache_Entry::entry( 11 )['conditions'] ?? null );
+		$state = get_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, array() );
+		$this->assertSame( Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_MAX_ATTEMPTS, $state[9]['attempts'] ?? 0, 'A peer rescan must respect the parked document backoff.' );
+		ob_start();
+		Mcpwp_Custom_Code_Conditions::render_admin_notice();
+		$notice = ob_get_clean();
+		$this->assertStringContainsString( 'repair failed', $notice );
+		$this->assertStringContainsString( '9', $notice );
+		$this->assertStringContainsString( 'repair failed', Mcpwp_Custom_Code_Conditions::site_health_test()['description'] );
+		update_post_meta( 9, '_elementor_conditions', array( 'exclude/general' ) );
+		$this->assertArrayNotHasKey( 9, get_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, array() ) );
+	}
+
+	public function test_oversized_legacy_conditions_are_quarantined_without_caching_or_blocking_a_peer(): void {
+		$large = array_fill( 0, 150000, 'include/general' );
+		$this->seed( 700, 'publish', $large );
+		$this->seed( 701 );
+		$this->assertTrue( Mcpwp_Activator::repair_custom_code_conditions( 30.0 ) );
+		$this->assertNull( Mcpwp_Custom_Code_Cache_Entry::entry( 700 ) );
+		$this->assertContains( 700, Mcpwp_Custom_Code_Conditions::skipped_ids() );
+		$this->assertSame( 'conditions_too_large', Mcpwp_Custom_Code_Conditions::quarantine_reason( 700 ) );
+		$this->assertSame( array( 'include/general' ), Mcpwp_Custom_Code_Cache_Entry::entry( 701 )['conditions'] ?? null );
 	}
 
 }
