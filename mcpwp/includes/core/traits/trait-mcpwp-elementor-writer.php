@@ -541,11 +541,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 			|| ! isset( $element['id'], $element['elType'], $element['widgetType'], $element['settings'] )
 			|| ! is_string( $element['id'] )
 			// Elementor's own IDs are short hex strings, while existing MCPWP
-			// libraries also contain stable alphanumeric IDs of other lengths.
+			// libraries also contain stable IDs of other lengths and underscores
+			// (e.g. cl_timeline_widget, #999). Elementor preserves those IDs.
 			// Identity is compared exactly after this shape check, so length is not
 			// a safety boundary; requiring it made the live six-character `hbev1d`
 			// leaf miss the harmless empty-elements normalization (#769).
-			|| 1 !== preg_match( '/^[A-Za-z0-9]+\z/', $element['id'] )
+			|| 1 !== preg_match( '/^[A-Za-z0-9_]+\z/', $element['id'] )
 			|| 'widget' !== $element['elType']
 			|| ! is_string( $element['widgetType'] )
 			|| '' === $element['widgetType']

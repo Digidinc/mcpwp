@@ -227,7 +227,30 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 	}
 
 	public function unsafe_empty_elements_normalization_provider(): array {
+		$html_widget = array(
+			'id'         => 'cl_timeline_widget',
+			'elType'     => 'widget',
+			'widgetType' => 'html',
+			'settings'   => array( 'html' => '<p>Exact &amp; content</p>' ),
+		);
+
 		return array(
+			'underscore identity still differs' => array(
+				$html_widget,
+				array_merge( $html_widget, array( 'id' => 'other_widget', 'elements' => array() ) ),
+			),
+			'underscore widget type still differs' => array(
+				$html_widget,
+				array_merge( $html_widget, array( 'widgetType' => 'heading', 'elements' => array() ) ),
+			),
+			'underscore non-empty children are meaningful' => array(
+				$html_widget,
+				array_merge( $html_widget, array( 'elements' => array( array( 'id' => 'child001' ) ) ) ),
+			),
+			'underscore HTML entities are not normalized' => array(
+				$html_widget,
+				array_merge( $html_widget, array( 'settings' => array( 'html' => '<p>Exact & content</p>' ), 'elements' => array() ) ),
+			),
 			'container is not a leaf' => array(
 				array( 'id' => 'root0001', 'elType' => 'section', 'settings' => array() ),
 				array( 'id' => 'root0001', 'elType' => 'section', 'settings' => array(), 'elements' => array() ),
@@ -288,12 +311,51 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 
 	public function accepted_leaf_widget_id_provider(): array {
 		return array(
+			'HTML widget from issue 999'       => array( 'cl_timeline_widget' ),
 			'native seven-character hex'       => array( '5412776' ),
 			'Upcoming Dates six-character ID'  => array( 'hbev1d' ),
 			'Partners nine-character ID'       => array( 'hpartmi01' ),
 			'Closing CTA ten-character ID'     => array( 'hclo0secb1' ),
 			'Closing CTA eleven-character ID'  => array( 'hclo0seceye' ),
 		);
+	}
+
+	/**
+	 * #999: the HTML bytes are unchanged by rendering; only `elements: []`
+	 * is added to the legacy leaf with an underscore-containing ID.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_html_widget_edit_accepts_empty_children_without_normalizing_html(): void {
+		$this->install_elementor();
+		$this->install_reflecting_wpdb();
+
+		$tree = $this->part( 'timeline', true, true, 'cl_timeline_widget' )['elementor_data'];
+		$widget =& $tree[0]['elements'][0]['elements'][0];
+		$widget['widgetType'] = 'html';
+		$widget['settings']   = array( 'html' => '<p>Original</p>' );
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] = wp_json_encode( $tree );
+		$html = '<p data-label="Timeline">Updated \\"quoted\\" – &amp; exact</p>';
+
+		$result = ( new Mcpwp_Elementor_Basic() )->edit_widget(
+			self::PAGE_ID,
+			'cl_timeline_widget',
+			array( 'html' => $html )
+		);
+
+		$this->assertIsArray( $result );
+		$this->assertTrue( $result['render_verified'], wp_json_encode( $result ) );
+		$this->assertSame( $html, $result['widget']['settings']['html'] );
+		$this->assertSame( array(), $result['widget']['elements'] );
+
+		$stored = json_decode( get_post_meta( self::PAGE_ID, '_elementor_data', true ), true );
+		$this->assertSame( $html, $stored[0]['elements'][0]['elements'][0]['settings']['html'] );
+		$changed = $stored;
+		$changed[0]['elements'][0]['elements'][0]['settings']['html'] = '<p>Changed content</p>';
+		$method = new ReflectionMethod( Mcpwp_Elementor_Basic::class, 'elementor_values_match' );
+		$method->setAccessible( true );
+		$this->assertFalse( $method->invoke( new Mcpwp_Elementor_Basic(), $stored, $changed ) );
 	}
 
 	public function test_empty_elements_is_not_normalized_inside_arbitrary_settings_maps(): void {
