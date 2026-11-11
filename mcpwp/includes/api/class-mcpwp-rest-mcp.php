@@ -5417,33 +5417,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Small, explicit synonym groups for #911's "known synonyms" case —
-	 * concepts different tools spell differently. A near-miss key is mapped
-	 * onto the schema's own member of its group only when the tool's schema
-	 * carries EXACTLY one member of that group (see remap_near_miss_params());
-	 * with more than one present, which one the caller meant is a guess this
-	 * issue asks not to make, so it is refused instead (a tie, not a map).
+	 * Empty extension point for parameter synonyms (#911, #994).
 	 *
-	 * Empty today (adversarial review of PR #986, round 1, BLOCK-1). The
-	 * `id`/`page_id`/`post_id` group this started with was removed entirely:
-	 * across the 295-tool schema dump, `id` is the sole group member on ~105
-	 * tools, and it means a completely different resource on each — a term,
-	 * a menu, a webhook, a WooCommerce order, a course, a sidebar widget —
-	 * never uniformly "a post or page". `wp_delete_term({post_id: 12})` would
-	 * have silently mapped `post_id` onto `id` and deleted TERM 12, which is
-	 * not what a caller typing "post_id" out of habit meant. #831's per-tool
-	 * `param_aliases` (curated, one tool at a time) is the correct place for
-	 * a genuine `page_id` -> `id` rename; this generic table is not, for any
-	 * pairing where the target's meaning varies by tool.
-	 *
-	 * `content`/`content_html` was considered and also dropped: the schema
-	 * shows `content` meaning a post/page body on some tools but a course,
-	 * lesson, quiz or event DESCRIPTION, a translation, or raw Gutenberg
-	 * block markup on others — not uniformly "post content" either, so it
-	 * does not clear the bar a synonym entry here needs to clear. Kept as an
-	 * empty table, not deleted outright, for a future pairing that a schema
-	 * check actually clears — e.g. a synonym that means the exact same thing
-	 * on every tool that has one of its members.
+	 * Active near-miss mapping handles case and separator variants only.
+	 * The former id/page_id/post_id and content/content_html groups were
+	 * removed because their meanings differ across tools. Per-tool renames
+	 * belong in param_aliases. Any future synonym group must have the same
+	 * meaning on every tool that declares one of its members, and mapping
+	 * must still require exactly one candidate in that tool's schema.
 	 *
 	 * @var string[][]
 	 */
@@ -5517,9 +5498,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * Normalize a parameter key for case/separator-insensitive matching
 	 * (#911's generic normalizer) — `postId`, `post-id`, `POST_ID` and
 	 * `post_id` all reduce to `postid`. Word-level synonyms (`content_html`
-	 * vs `content`) are NOT caught here on purpose — they normalize to
-	 * different strings and are handled only by the explicit
-	 * PARAM_SYNONYM_GROUPS table above, never guessed generically.
+	 * vs `content`) normalize to different strings and are not mapped.
+	 * PARAM_SYNONYM_GROUPS is an empty extension point, not an active set
+	 * of synonym mappings.
 	 *
 	 * @param string $key Raw parameter key.
 	 * @return string Normalized form, lowercase alphanumeric only.
@@ -5573,9 +5554,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * where the caller's key is an unambiguous near-miss (#911).
 	 *
 	 * For each key in $arguments that is not already a known param:
-	 *  - a case/separator variant of exactly one known param, or a member of
-	 *    a PARAM_SYNONYM_GROUPS group of which the schema carries exactly one
-	 *    other member, is the key's sole candidate;
+	 *  - a case/separator variant of exactly one known param is the key's
+	 *    sole candidate. The synonym loop is reserved for future entries in
+	 *    PARAM_SYNONYM_GROUPS, which is currently empty;
 	 *  - a key with zero candidates is left alone (genuinely unknown — the
 	 *    caller gets a fuzzy did-you-mean instead, from validate_tool_arguments());
 	 *  - a key with more than one candidate is a tie and is never mapped —
@@ -5880,6 +5861,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * call must not be a different price or a different idempotency identity
 	 * just because of which near-miss spelling reached the server (adversarial
 	 * review of PR #986, round 1, WARN-2 and its NIT).
+	 *
+	 * Records stored with a deprecated alias before canonical hashing was
+	 * introduced can return idempotency_conflict on retry until their TTL
+	 * expires; those older records are not rewritten (#994).
 	 *
 	 * Deliberately reuses validate_tool_arguments() itself, not a re-fetch of
 	 * the schema plus a second call to remap_near_miss_params() — one
