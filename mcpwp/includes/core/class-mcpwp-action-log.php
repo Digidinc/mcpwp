@@ -62,6 +62,12 @@ class Mcpwp_Action_Log {
 		'wp_patch_elementor',
 	);
 
+	private static $custom_code_write_tools = array(
+		'wp_create_elementor_custom_code', 'wp_update_elementor_custom_code',
+		'wp_enable_elementor_custom_code', 'wp_disable_elementor_custom_code',
+		'wp_sanitize_elementor_custom_code',
+	);
+
 	private static $write_prefixes = array(
 		'wp_create_', 'wp_update_', 'wp_delete_', 'wp_set_',
 		'wp_add_', 'wp_remove_', 'wp_replace_', 'wp_edit_',
@@ -73,6 +79,27 @@ class Mcpwp_Action_Log {
 	private static $pending = array();
 
 	// ---- Public API ----
+
+	/**
+	 * Bind a newly inserted snippet to its innermost pending create call.
+	 * The ID comes from wp_insert_post(), never a caller-supplied create ID.
+	 * Custom Code rollback remains unsupported: post snapshots do not restore
+	 * its source meta and Elementor conditions cache together.
+	 *
+	 * @param int $post_id Newly created snippet ID.
+	 */
+	public static function capture_custom_code_create( $post_id ) {
+		foreach ( array_reverse( array_keys( self::$pending ) ) as $log_id ) {
+			$pending = self::$pending[ $log_id ];
+			if ( 'wp_create_elementor_custom_code' !== $pending['tool_name'] || ! empty( $pending['resource']['id'] ) ) {
+				continue;
+			}
+			$resource = array( 'type' => 'post', 'id' => (int) $post_id );
+			self::$pending[ $log_id ]['resource']           = $resource;
+			self::$pending[ $log_id ]['resource_post_type'] = self::resolve_resource_post_type( $resource );
+			break;
+		}
+	}
 
 	/**
 	 * Called BEFORE tool executes. Captures before-state. Returns log_id or null for non-write tools.
@@ -644,6 +671,9 @@ class Mcpwp_Action_Log {
 	// ---- Private helpers ----
 
 	private static function is_write_tool( $tool_name ) {
+		if ( in_array( $tool_name, self::$custom_code_write_tools, true ) ) {
+			return true;
+		}
 		foreach ( self::$write_prefixes as $prefix ) {
 			if ( 0 === strpos( $tool_name, $prefix ) ) {
 				return true;
@@ -663,6 +693,11 @@ class Mcpwp_Action_Log {
 	}
 
 	private static function detect_resource( $tool_name, $arguments ) {
+		if ( in_array( $tool_name, self::$custom_code_write_tools, true ) ) {
+			$id = 'wp_create_elementor_custom_code' !== $tool_name && isset( $arguments['id'] ) ? (int) $arguments['id'] : 0;
+			return array( 'type' => 'post', 'id' => $id );
+		}
+
 		if ( in_array( $tool_name, self::$elementor_write_tools, true ) ) {
 			$id = isset( $arguments['id'] ) ? $arguments['id'] : ( isset( $arguments['page_id'] ) ? $arguments['page_id'] : '' );
 			return array( 'type' => 'elementor', 'id' => (int) $id );

@@ -533,7 +533,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response_from_wp_error( $post_id );
 		}
 
-		$this->save_custom_code_meta( $post_id, $prepared );
+		if ( class_exists( 'Mcpwp_Action_Log' ) ) {
+			Mcpwp_Action_Log::capture_custom_code_create( $post_id );
+		}
+		$saved = $this->save_custom_code_meta( $post_id, $prepared );
+		if ( is_wp_error( $saved ) ) {
+			$this->log_activity( 'create_elementor_custom_code', $request, null, $this->get_wp_error_status( $saved ) );
+			return $saved;
+		}
 
 		$data = array(
 			'id'      => (int) $post_id,
@@ -659,7 +666,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response_from_wp_error( $updated );
 		}
 
-		$this->save_custom_code_meta( (int) $post->ID, $prepared );
+		$saved = $this->save_custom_code_meta( (int) $post->ID, $prepared );
+		if ( is_wp_error( $saved ) ) {
+			$this->log_activity( 'update_elementor_custom_code', $request, null, $this->get_wp_error_status( $saved ) );
+			return $saved;
+		}
 
 		$data = array(
 			'id'      => (int) $post->ID,
@@ -1178,6 +1189,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$normalized = array();
 		foreach ( $conditions as $condition ) {
+			if ( is_string( $condition ) ) {
+				list( $type, $name, $sub_name, $sub_id ) = array_pad( explode( '/', $condition, 4 ), 4, '' );
+				$condition = compact( 'type', 'name', 'sub_name', 'sub_id' );
+			}
 			if ( ! is_array( $condition ) ) {
 				continue;
 			}
@@ -1553,6 +1568,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 *
 	 * @param int   $post_id  Snippet post ID.
 	 * @param array $payload  Prepared payload.
+	 * @return void|WP_Error Error if Elementor Pro could not save conditions.
 	 */
 	private function save_custom_code_meta( $post_id, $payload ) {
 		if ( isset( $payload['location'] ) ) {
@@ -1582,6 +1598,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'_mcpwp_custom_code_conditions_engine',
 				is_wp_error( $result ) ? 'fallback_meta' : (string) $result
 			);
+			if ( is_wp_error( $result ) ) {
+				return $result;
+			}
 		}
 
 		// #974/#976 review W1 + W2: unconditional, regardless of which
@@ -1620,7 +1639,26 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return string|WP_Error Save engine name or error.
 	 */
 	private function save_custom_code_conditions( $post_id, $conditions ) {
-		update_post_meta( $post_id, '_elementor_conditions', $conditions );
+		// Pro reads this meta while constructing documents too. Never expose
+		// our API's object arrays, even when Pro is absent or its save fails.
+		$conditions = array_map(
+			function ( $condition ) {
+				return array(
+					'type'     => $condition['type'],
+					'name'     => $condition['name'],
+					'sub_name' => isset( $condition['sub_name'] ) ? $condition['sub_name'] : '',
+					'sub_id'   => isset( $condition['sub_id'] ) ? $condition['sub_id'] : '',
+				);
+			},
+			$conditions
+		);
+		$strings = array_map(
+			function ( $condition ) {
+				return rtrim( implode( '/', $condition ), '/' );
+			},
+			$conditions
+		);
+		update_post_meta( $post_id, '_elementor_conditions', $strings );
 
 		if (
 			class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' )
@@ -1639,8 +1677,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				}
 
 				return 'elementor_pro_conditions_manager';
-			} catch ( Exception $exception ) {
-				return new WP_Error( 'conditions_save_failed', $exception->getMessage(), array( 'status' => 500 ) );
+			} catch ( \Throwable $exception ) {
+				// WordPress post/meta writes have already happened. Report that
+				// explicitly so callers repair this ID instead of retrying create.
+				return new WP_Error( 'conditions_save_failed', $exception->getMessage(), array( 'status' => 500, 'resource_id' => (int) $post_id, 'partial_write' => true ) );
 			}
 		}
 
@@ -1878,7 +1918,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					$conditions         = $conditions_manager->get_document_conditions( $document );
 					return is_array( $conditions ) ? $this->normalize_custom_code_conditions( $conditions ) : array();
 				}
-			} catch ( Exception $exception ) {
+			} catch ( \Throwable $exception ) {
 				// Fall back to stored meta below.
 			}
 		}
