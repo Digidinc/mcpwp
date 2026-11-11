@@ -46,6 +46,44 @@ restarting the plugin. A generation stored in the same restored database cannot
 prove that the database was not rolled back; the plugin does not claim otherwise.
 No plugin-owned full-database restore operation exists.
 
+Provider definitions declare `secret_bindings`, mapping destination or credential
+identity fields to the saved credentials and derived token fields bound to them.
+On every CAS merge attempt, a changed effective destination removes those stored
+fields unless that same patch supplies them. Unrelated fields remain preserved;
+REST/MCP explicitly supplied empty strings still clear a field.
+
+| Provider | Destination or identity -> bound fields |
+|---|---|
+| Screenshot | `url` -> `token` |
+| Jev | `endpoint` -> `api_key`; `cf_account_id` -> `cf_api_token` |
+| PostHog | `host` -> `token` |
+| Figma | `oauth_client_id` -> `oauth_client_secret`, OAuth access/refresh tokens, token type and expiry |
+| Cloudflare | `zone_id` -> `api_token` |
+| WP Engine staging | `install_id` -> `api_token` |
+| Kinsta staging | `site_id` -> `api_key` |
+| Pressable staging | `site_id` -> `api_token` |
+| DataForSEO | `login` -> `password` |
+
+Provider-declared `destination_rules` compare the same effective values used by
+the send path: Screenshot/PostHog trim trailing slashes, PostHog resolves its
+configured default host constant, and Jev trims and resolves its default endpoint.
+Jev account IDs are compared after its existing normalization. Equivalent default
+or slash forms preserve credentials. Other single-key providers have fixed
+endpoints; Google Indexing's service-account JSON is one atomic field, so changing
+its contents does not inherit part of a previously stored JSON credential.
+Figma file selection does not change the OAuth credential identity.
+
+The WP Admin update form treats blank inputs as placeholders, omitting them from
+its patch on both the client and server. Separate per-field clear checkboxes send
+an allowlisted `clear_fields` list; the handler turns only those selections into
+explicit empty values. This admin-only convention preserves the REST/MCP wire
+contract. A changed destination still requires its credential to be entered again.
+
+Restore generation metadata must be a non-negative integer with room to advance;
+strings, floats, negatives and near-maximum integers are rejected before storage.
+The shared version helper also refuses unsafe live counters, and configure,
+remove, restore and encryption migration propagate that refusal without writing.
+
 Snapshots are internal and contain decrypted configuration. They must never be
 returned by REST/MCP endpoints or written to logs. Existing provider encryption
 and encryption-migration failure-clearing semantics are preserved.

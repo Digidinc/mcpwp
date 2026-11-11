@@ -252,6 +252,108 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
         $this->assertNotSame($snapshot['record_id'], $after['record_id']);
     }
 
+    /** @dataProvider destinationChanges */
+    public function test_destination_updates_require_the_bound_credential_in_the_same_patch(string $provider, string $field, string $old, string $new, array $secrets): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $config = array_fill_keys($secrets, 'bound-fixture');
+        $config[$field] = $old;
+        $this->assertTrue($manager->set_provider_config($provider, $config));
+        $this->assertTrue($manager->set_provider_config($provider, array($field => $old)));
+        foreach ($secrets as $secret) {
+            $this->assertTrue('bound-fixture' === ($manager->get_provider_config($provider)[$secret] ?? null), 'unchanged destination preserves credentials');
+        }
+        $this->assertTrue($manager->set_provider_config($provider, array($field => $new)));
+        foreach ($secrets as $secret) {
+            $this->assertTrue(empty($manager->get_provider_config($provider)[$secret]), 'a different destination has no inherited credential');
+        }
+        $patch = array_fill_keys($secrets, 'replacement-fixture');
+        $patch[$field] = $old;
+        $this->assertTrue($manager->set_provider_config($provider, $patch));
+        foreach ($secrets as $secret) {
+            $this->assertTrue('replacement-fixture' === $manager->get_provider_config($provider)[$secret], 'same-request credentials are retained');
+        }
+    }
+
+    public function destinationChanges(): array
+    {
+        return array(
+            'screenshot' => array('screenshot', 'url', 'https://a.example', 'https://b.example', array('token')),
+            'jev endpoint' => array('jev', 'endpoint', 'https://a.example', 'https://b.example', array('api_key')),
+            'jev default endpoint' => array('jev', 'endpoint', '', 'https://b.example', array('api_key')),
+            'posthog default host' => array('posthog', 'host', '', 'https://b.example', array('token')),
+            'jev account' => array('jev', 'cf_account_id', str_repeat('a', 32), str_repeat('b', 32), array('cf_api_token')),
+            'posthog' => array('posthog', 'host', 'https://a.example', 'https://b.example', array('token')),
+            'figma client' => array('figma', 'oauth_client_id', 'old-client', 'new-client', array('oauth_client_secret', 'access_token', 'refresh_token', 'token_type', 'expires_at')),
+            'cloudflare' => array('cloudflare', 'zone_id', 'old-zone', 'new-zone', array('api_token')),
+            'wpengine' => array('wpengine_staging', 'install_id', 'old-install', 'new-install', array('api_token')),
+            'kinsta' => array('kinsta_staging', 'site_id', 'old-site', 'new-site', array('api_key')),
+            'pressable' => array('pressable_staging', 'site_id', 'old-site', 'new-site', array('api_token')),
+            'dataforseo account' => array('dataforseo', 'login', 'old@example.test', 'new@example.test', array('password')),
+        );
+    }
+
+    /** @dataProvider equivalentDestinations */
+    public function test_effectively_unchanged_destinations_preserve_their_credentials(string $provider, string $field, string $old, string $new, string $secret): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $config = array($secret => 'same-destination-fixture');
+        if ('' !== $old) { $config[$field] = $old; }
+        $this->assertTrue($manager->set_provider_config($provider, $config));
+        $this->assertTrue($manager->set_provider_config($provider, array($field => $new)));
+        $this->assertTrue('same-destination-fixture' === ($manager->get_provider_config($provider)[$secret] ?? null), 'equivalent effective destinations retain the credential');
+    }
+
+    public function equivalentDestinations(): array
+    {
+        return array(
+            array('posthog', 'host', '', 'https://us.i.posthog.com', 'token'),
+            array('posthog', 'host', 'https://a.example', 'https://a.example/', 'token'),
+            array('screenshot', 'url', 'https://a.example', 'https://a.example/', 'token'),
+            array('jev', 'endpoint', '', 'https://api.typesafe.ai/v1/systemone', 'api_key'),
+        );
+    }
+
+    public function test_destination_binding_is_applied_again_after_a_cas_conflict(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://a.example', 'token' => 'old-fixture')));
+        $this->between_read_and_write(function () use ($manager): void {
+            $this->assertTrue($manager->set_provider_config('screenshot', array('token' => 'rotated-fixture')));
+        });
+        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://b.example')));
+        $this->assertTrue(empty($manager->get_provider_config('screenshot')['token']), 'retry cannot carry a concurrent credential to the new destination');
+    }
+
+    public function test_jev_binding_keeps_the_other_transport_and_normalizes_account_ids(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('jev', array('endpoint' => 'https://a.example', 'api_key' => 'api-fixture', 'cf_account_id' => str_repeat('a', 32), 'cf_api_token' => 'cf-fixture')));
+        $this->assertTrue($manager->set_provider_config('jev', array('cf_account_id' => str_repeat('A', 32))));
+        $this->assertTrue('cf-fixture' === $manager->get_provider_config('jev')['cf_api_token'], 'same normalized account retains its credential');
+        $this->assertTrue($manager->set_provider_config('jev', array('endpoint' => 'https://b.example')));
+        $config = $manager->get_provider_config('jev');
+        $this->assertTrue(empty($config['api_key']));
+        $this->assertTrue('cf-fixture' === $config['cf_api_token'], 'only the changed destination loses its credential');
+    }
+
+    /** @dataProvider unsafeRestoreGenerations */
+    public function test_restore_rejects_generation_values_that_cannot_advance_safely($generation): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'fixture')));
+        $before = $this->records();
+        $backup = $before;
+        $backup['figma']['generation'] = $generation;
+        $this->assertFalse($manager->restore_provider_records($backup));
+        $this->assertTrue($before === $this->records(), 'invalid backup metadata is refused without writing');
+    }
+
+    public function unsafeRestoreGenerations(): array
+    {
+        return array(array(PHP_INT_MAX), array(PHP_INT_MAX - 1), array(42.0), array('42'), array(-1));
+    }
+
     /** @dataProvider versionConflictCases */
     public function test_version_is_rechecked_inside_every_cas_attempt(string $mutation): void
     {
@@ -358,28 +460,28 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
     public function test_partial_config_saves_preserve_omitted_fields_and_allow_explicit_clearing(): void
     {
         $manager = Mcpwp_Integration_Manager::get_instance();
-        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://worker.example', 'token' => 'fixture-token')));
-        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://new.example')));
-        $config = $manager->get_provider_config('screenshot');
-        $this->assertTrue('fixture-token' === ($config['token'] ?? null), 'omitted token survives');
-        $this->assertSame('https://new.example', $config['url']);
-        $this->assertTrue($manager->set_provider_config('screenshot', array('token' => '')));
-        $config = $manager->get_provider_config('screenshot');
-        $this->assertSame('', $config['token']);
-        $this->assertSame('https://new.example', $config['url']);
+        $this->assertTrue($manager->set_provider_config('figma', array('default_file_key' => 'OLD', 'oauth_client_secret' => 'fixture-token')));
+        $this->assertTrue($manager->set_provider_config('figma', array('default_file_key' => 'NEW')));
+        $config = $manager->get_provider_config('figma');
+        $this->assertTrue('fixture-token' === ($config['oauth_client_secret'] ?? null), 'omitted token survives');
+        $this->assertSame('NEW', $config['default_file_key']);
+        $this->assertTrue($manager->set_provider_config('figma', array('oauth_client_secret' => '')));
+        $config = $manager->get_provider_config('figma');
+        $this->assertSame('', $config['oauth_client_secret']);
+        $this->assertSame('NEW', $config['default_file_key']);
     }
 
     public function test_partial_config_merge_is_reapplied_after_a_conflict(): void
     {
         $manager = Mcpwp_Integration_Manager::get_instance();
-        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://old.example', 'token' => 'old-fixture')));
+        $this->assertTrue($manager->set_provider_config('figma', array('default_file_key' => 'OLD', 'oauth_client_secret' => 'old-fixture')));
         $this->between_read_and_write(function () use ($manager): void {
-            $this->assertTrue($manager->set_provider_config('screenshot', array('token' => 'new-fixture')));
+            $this->assertTrue($manager->set_provider_config('figma', array('oauth_client_secret' => 'new-fixture')));
         });
-        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://new.example')));
-        $config = $manager->get_provider_config('screenshot');
-        $this->assertTrue('new-fixture' === ($config['token'] ?? null), 'concurrent field update survives retry');
-        $this->assertSame('https://new.example', $config['url']);
+        $this->assertTrue($manager->set_provider_config('figma', array('default_file_key' => 'NEW')));
+        $config = $manager->get_provider_config('figma');
+        $this->assertTrue('new-fixture' === ($config['oauth_client_secret'] ?? null), 'concurrent field update survives retry');
+        $this->assertSame('NEW', $config['default_file_key']);
     }
 
     public function test_single_field_provider_config_keeps_its_existing_save_behavior(): void
@@ -395,7 +497,7 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
     {
         $manager = Mcpwp_Integration_Manager::get_instance();
         $this->assertTrue($manager->set_provider_config('jev', array('api_key' => 'jev-fixture-token', 'transport' => 'off')));
-        $this->assertTrue($manager->set_provider_config('jev', array('endpoint' => 'https://jev.example')));
+        $this->assertTrue($manager->set_provider_config('jev', array('transport' => 'off')));
         $config = $manager->get_provider_config('jev');
         $this->assertSame('off', $config['transport']);
         $this->assertTrue('jev-fixture-token' === ($config['api_key'] ?? null), 'omitted Jev key survives');

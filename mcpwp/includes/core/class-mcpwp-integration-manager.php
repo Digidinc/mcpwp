@@ -99,6 +99,10 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'free',
 			'description' => 'Cloudflare Browser Rendering for high-quality headless Chromium screenshots. Without this, screenshots use WordPress mshots (lower quality, delayed).',
+			'destination_rules' => array( 'url' => array( 'rtrim_slash' => true ) ),
+			'secret_bindings' => array(
+				'url' => array( 'token' ),
+			),
 			'fields'      => array(
 				'url'   => array(
 					'label'       => 'Worker URL',
@@ -132,6 +136,9 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'pro',
 			'description' => 'Read Figma design context into MCPWP so models can inspect approved frames and then turn them into archetypes, parts, and site briefs. Supports either a personal access token or a Figma OAuth app.',
+			'secret_bindings' => array(
+				'oauth_client_id' => array( 'oauth_client_secret', 'access_token', 'refresh_token', 'token_type', 'expires_at' ),
+			),
 			'fields'      => array(
 				'personal_access_token' => array(
 					'label'       => 'Personal Access Token',
@@ -160,6 +167,10 @@ class Mcpwp_Integration_Manager {
 			'url'         => 'https://us.posthog.com/settings/project-details',
 			'tier'        => 'free',
 			'description' => 'Product analytics for the MCPWP admin interface. Tracks key admin actions (API key copy, connection test, upgrade clicks) to help understand plugin adoption.',
+			'destination_rules' => array( 'host' => array( 'default' => 'https://us.i.posthog.com', 'default_constant' => 'MCPWP_POSTHOG_DEFAULT_HOST', 'empty_default' => true, 'rtrim_slash' => true ) ),
+			'secret_bindings' => array(
+				'host' => array( 'token' ),
+			),
 			'fields'      => array(
 				'token' => array(
 					'label'       => 'Project API Key',
@@ -178,6 +189,9 @@ class Mcpwp_Integration_Manager {
 			'url'         => 'https://app.dataforseo.com/api-access',
 			'tier'        => 'pro',
 			'description' => 'Keyword search volume, difficulty and search visibility. You bring your own DataForSEO account; usage is billed to you directly.',
+			'secret_bindings' => array(
+				'login' => array( 'password' ),
+			),
 			'fields'      => array(
 				'login'    => array(
 					'label'       => 'API Login',
@@ -197,6 +211,9 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'pro',
 			'description' => 'Enables staging push/pull via the WP Engine Installs API. Only needed on WP Engine hosted sites.',
+			'secret_bindings' => array(
+				'install_id' => array( 'api_token' ),
+			),
 			'fields'      => array(
 				'install_id' => array(
 					'label'       => 'Install ID',
@@ -216,6 +233,9 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'pro',
 			'description' => 'Enables staging push/pull via the Kinsta Environments API. Only needed on Kinsta hosted sites.',
+			'secret_bindings' => array(
+				'site_id' => array( 'api_key' ),
+			),
 			'fields'      => array(
 				'site_id' => array(
 					'label'       => 'Site ID',
@@ -235,6 +255,9 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'pro',
 			'description' => 'Enables staging push/pull via the Pressable Site API. Only needed on Pressable hosted sites.',
+			'secret_bindings' => array(
+				'site_id' => array( 'api_token' ),
+			),
 			'fields'      => array(
 				'site_id'   => array(
 					'label'       => 'Site ID',
@@ -254,6 +277,9 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'free',
 			'description' => 'Connect this site\'s Cloudflare zone to fix Bot Fight Mode/Security Level blocking MCP requests, purge cache after content edits, and manage Speed settings (Early Hints, HTTP/3, Rocket Loader, Polish) that affect Core Web Vitals. Use a scoped API Token (Zone Settings: Edit, Zone WAF: Edit, Cache Purge: Purge) — not the Global API Key.',
+			'secret_bindings' => array(
+				'zone_id' => array( 'api_token' ),
+			),
 			'fields'      => array(
 				'api_token' => array(
 					'label'       => 'API Token',
@@ -273,6 +299,11 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'free',
 			'description' => 'Optional: TypeSafe\'s Jev evaluation model ranks the approval queue by priority so the most urgent pending changes surface first. Either bring your own TypeSafe API key (billed to you directly, input tokens only, $0.042/1M), or run the same model through Cloudflare Workers AI: enter your Cloudflare account ID and create a Workers AI token with Workers AI:Read permission for your account (same pricing, https://developers.cloudflare.com/ai/models/typesafe/jev/). Jev never uses the Cloudflare integration\'s zone token. A TypeSafe key is preferred when both are set; the transport setting forces one, or "off" stops all sending. Removing this integration deletes every Jev credential. Jev only routes — it never approves, rejects, applies, or blocks anything, and it has no say over scope checks or safety reports.',
+			'destination_rules' => array( 'endpoint' => array( 'default' => 'https://api.typesafe.ai/v1/systemone', 'default_constant' => 'Mcpwp_Jev::DEFAULT_ENDPOINT', 'trim' => true ) ),
+			'secret_bindings' => array(
+				'endpoint' => array( 'api_key' ),
+				'cf_account_id' => array( 'cf_api_token' ),
+			),
 			'fields'      => array(
 				'api_key'       => array(
 					'label'       => 'API Key (TypeSafe)',
@@ -348,13 +379,26 @@ class Mcpwp_Integration_Manager {
 		throw new RuntimeException( 'Provider records require Mcpwp_Integration_Manager::restore_provider_records(); raw option replacement is not supported.' );
 	}
 
+	/** Whether a generation can be advanced without integer overflow. */
+	private static function generation_can_advance( $generation ) {
+		return is_int( $generation ) && $generation >= 0 && $generation < PHP_INT_MAX - 1;
+	}
+
 	/**
 	 * Assign a version for any provider mutation, including ciphertext migration.
 	 * Backup versions are a floor only; their incarnation is never trusted.
+	 *
+	 * @return array|WP_Error Versioned record, or unsafe generation metadata.
 	 */
 	public static function advance_record_version( $current, array $next, $floor = 0, $restore = false ) {
-		$generation = is_array( $current ) && isset( $current['generation'] ) ? (int) $current['generation'] : 0;
-		$generation = max( $generation, (int) $floor, $restore && isset( $next['generation'] ) ? (int) $next['generation'] : 0 );
+		$live   = is_array( $current ) && array_key_exists( 'generation', $current ) ? $current['generation'] : 0;
+		$saved  = $restore && array_key_exists( 'generation', $next ) ? $next['generation'] : 0;
+		foreach ( array( $live, $saved, $floor ) as $value ) {
+			if ( ! self::generation_can_advance( $value ) ) {
+				return new WP_Error( 'invalid_generation', __( 'Provider generation metadata cannot be advanced safely.', 'mcpwp' ) );
+			}
+		}
+		$generation = max( $live, $saved, $floor );
 		$record_id  = is_array( $current ) && isset( $current['record_id'] ) ? $current['record_id'] : '';
 		$next['generation'] = $generation + 1;
 		$next['record_id']  = ! $restore && '' !== $record_id ? $record_id : bin2hex( random_bytes( 16 ) );
@@ -372,7 +416,8 @@ class Mcpwp_Integration_Manager {
 	public function restore_provider_records( array $backup ) {
 		unset( $backup[ self::GENERATIONS_KEY ] );
 		foreach ( $backup as $provider => $record ) {
-			if ( ! is_array( $record ) || ! isset( $record['key_encrypted'] ) || ! is_string( $record['key_encrypted'] ) ) {
+			if ( ! is_array( $record ) || ! isset( $record['key_encrypted'] ) || ! is_string( $record['key_encrypted'] )
+				|| ( array_key_exists( 'generation', $record ) && ! self::generation_can_advance( $record['generation'] ) ) ) {
 				$this->last_save_error = 'invalid_config';
 				return false;
 			}
@@ -383,11 +428,18 @@ class Mcpwp_Integration_Manager {
 				$restored = array();
 				foreach ( $records as $provider => $record ) {
 					if ( self::GENERATIONS_KEY !== $provider && is_array( $record ) && ! isset( $backup[ $provider ] ) ) {
-						$counters[ $provider ] = max( (int) ( $counters[ $provider ] ?? 0 ), (int) ( $record['generation'] ?? 0 ) ) + 1;
+						$removed = self::advance_record_version( $record, array(), $counters[ $provider ] ?? 0 );
+						if ( is_wp_error( $removed ) ) {
+							return $removed;
+						}
+						$counters[ $provider ] = $removed['generation'];
 					}
 				}
 				foreach ( $backup as $provider => $record ) {
 					$restored[ $provider ] = self::advance_record_version( $records[ $provider ] ?? null, $record, $counters[ $provider ] ?? 0, true );
+					if ( is_wp_error( $restored[ $provider ] ) ) {
+						return $restored[ $provider ];
+					}
 					$counters[ $provider ] = $restored[ $provider ]['generation'];
 				}
 				$restored[ self::GENERATIONS_KEY ] = $counters;
@@ -489,6 +541,16 @@ class Mcpwp_Integration_Manager {
 					return $error;
 				}
 
+				foreach ( self::PROVIDERS[ $provider ]['secret_bindings'] ?? array() as $destination => $secrets ) {
+					if ( array_key_exists( $destination, $config ) && $this->binding_destination( $provider, $destination, $stored ) !== $this->binding_destination( $provider, $destination, $merged ) ) {
+						foreach ( $secrets as $secret ) {
+							if ( ! array_key_exists( $secret, $config ) ) {
+								unset( $merged[ $secret ] );
+							}
+						}
+					}
+				}
+
 				$encrypted = $encryption->encrypt( wp_json_encode( $merged ) );
 				if ( false === $encrypted ) {
 					$error = new WP_Error( 'encryption_failed' );
@@ -516,6 +578,20 @@ class Mcpwp_Integration_Manager {
 			Mcpwp_Encryption_Migration::clear_provider_failure( $provider );
 		}
 		return true;
+	}
+
+	/** Compare the effective destination using its provider-declared send rules. */
+	private function binding_destination( $provider, $field, array $config ) {
+		$value = (string) ( $config[ $field ] ?? '' );
+		$rules = self::PROVIDERS[ $provider ]['destination_rules'][ $field ] ?? array();
+		if ( ! empty( $rules['trim'] ) ) {
+			$value = trim( $value );
+		}
+		if ( '' === $value || ( ! empty( $rules['empty_default'] ) && empty( $value ) ) ) {
+			$value = isset( $rules['default_constant'] ) && defined( $rules['default_constant'] )
+				? constant( $rules['default_constant'] ) : ( $rules['default'] ?? '' );
+		}
+		return ! empty( $rules['rtrim_slash'] ) ? rtrim( $value, '/' ) : $value;
 	}
 
 	/**
@@ -730,9 +806,16 @@ class Mcpwp_Integration_Manager {
 						return null;
 					}
 					unset( $records[ $provider ] );
-					$counters[ $provider ] = max( $generation, (int) ( $counters[ $provider ] ?? 0 ) ) + 1;
+					$removed = self::advance_record_version( $current, array(), $counters[ $provider ] ?? 0 );
+					if ( is_wp_error( $removed ) ) {
+						return $removed;
+					}
+					$counters[ $provider ] = $removed['generation'];
 				} else {
 					$next = self::advance_record_version( $current, $next, $counters[ $provider ] ?? 0 );
+					if ( is_wp_error( $next ) ) {
+						return $next;
+					}
 					$counters[ $provider ] = $next['generation'];
 					$records[ $provider ] = $next;
 				}

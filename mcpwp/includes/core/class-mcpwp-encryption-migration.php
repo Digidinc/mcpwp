@@ -309,6 +309,10 @@ class Mcpwp_Encryption_Migration {
 				$next['key_encrypted'] = $new_data[ $provider ]['key_encrypted'];
 				$floor = $latest[ Mcpwp_Integration_Manager::GENERATIONS_KEY ][ $provider ] ?? 0;
 				$latest[ $provider ] = Mcpwp_Integration_Manager::advance_record_version( $current, $next, $floor );
+				if ( is_wp_error( $latest[ $provider ] ) ) {
+					self::defer_retry();
+					return;
+				}
 				$latest[ Mcpwp_Integration_Manager::GENERATIONS_KEY ][ $provider ] = $latest[ $provider ]['generation'];
 				$to_verify[ $provider ]               = $digest;
 			}

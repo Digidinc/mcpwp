@@ -374,6 +374,10 @@
 			form.find('.mcpwp-save-integration').toggleClass('is-hidden');
 		});
 
+		$(document).on('change', '.mcpwp-clear-config-field', function() {
+			$(this).closest('.mcpwp-field-row').find('.mcpwp-config-field').prop('disabled', this.checked);
+		});
+
 		$(document).on('click', '.mcpwp-save-integration', function() {
 			var btn      = $(this);
 			var form     = btn.closest('.mcpwp-integration-key-form');
@@ -385,7 +389,11 @@
 			if (isMulti) {
 				data.config = {};
 				form.find('.mcpwp-config-field').each(function() {
-					data.config[$(this).data('field')] = $(this).val();
+					if (!$(this).prop('disabled') && $(this).val() !== '') data.config[$(this).data('field')] = $(this).val();
+				});
+				data.clear_fields = [];
+				form.find('.mcpwp-clear-config-field:checked').each(function() {
+					data.clear_fields.push($(this).data('field'));
 				});
 			} else {
 				data.key = form.find('.mcpwp-integration-key-input').val();
