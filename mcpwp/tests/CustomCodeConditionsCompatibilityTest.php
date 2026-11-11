@@ -5,13 +5,20 @@ use PHPUnit\Framework\TestCase;
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-action-log.php';
 
 final class CustomCodeConditionsCompatibilityTest extends TestCase {
+	private $error_log;
 
 	protected function setUp(): void {
+		$this->error_log = ini_get( 'error_log' );
+		ini_set( 'error_log', '/dev/null' );
 		$GLOBALS['mcpwp_test_options']     = array();
 		$GLOBALS['_mcpwp_test_posts']      = array();
 		$GLOBALS['_mcpwp_test_meta']       = array();
 		$GLOBALS['mcpwp_test_wpdb_rows']   = array();
 		$GLOBALS['mcpwp_test_current_user'] = 1;
+	}
+
+	protected function tearDown(): void {
+		ini_set( 'error_log', $this->error_log );
 	}
 
 	private function controller(): Mcpwp_REST_Elementor_Pro {
@@ -80,10 +87,10 @@ final class CustomCodeConditionsCompatibilityTest extends TestCase {
 		$property->setValue( \ElementorPro\Modules\ThemeBuilder\Module::instance(), $manager );
 		$method = new ReflectionMethod( Mcpwp_REST_Elementor_Pro::class, 'save_custom_code_conditions' );
 		$method->setAccessible( true );
-		$result = $method->invoke( $this->controller(), 682, array( array( 'type' => 'exclude', 'name' => 'singular', 'sub_id' => '42' ) ) );
+		$result = $method->invoke( $this->controller(), 682, array( array( 'type' => 'exclude', 'name' => 'singular', 'sub_name' => 'page', 'sub_id' => '42' ) ) );
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'conditions_save_failed', $result->get_error_code() );
-		$this->assertSame( array( 'exclude/singular//42' ), get_post_meta( 682, '_elementor_conditions', true ) );
+		$this->assertSame( '', get_post_meta( 682, '_elementor_conditions', true ) );
 	}
 
 	/**
@@ -108,7 +115,9 @@ final class CustomCodeConditionsCompatibilityTest extends TestCase {
 		$id = array_key_first( $GLOBALS['_mcpwp_test_posts'] );
 		$this->assertSame( $id, $response->get_error_data()['resource_id'] );
 		$this->assertTrue( $response->get_error_data()['partial_write'] ?? false );
-		$this->assertSame( array( 'include/general', 'exclude/singular/page/42' ), get_post_meta( $id, '_elementor_conditions', true ) );
+		$this->assertSame( 'draft', get_post_status( $id ) );
+		$this->assertSame( '', get_post_meta( $id, '_elementor_conditions', true ) );
+		update_post_meta( $id, '_elementor_conditions', array( 'exclude/general' ) );
 		$response = $controller->update_custom_code( new WP_REST_Request( 'POST', '/', array(
 			'id' => $id, 'conditions' => array( array( 'type' => 'include', 'name' => 'general' ) ),
 		) ) );
@@ -117,7 +126,7 @@ final class CustomCodeConditionsCompatibilityTest extends TestCase {
 		$this->assertSame( 'conditions_save_failed', $response->get_error_code() );
 		$this->assertSame( $id, $response->get_error_data()['resource_id'] );
 		$this->assertTrue( $response->get_error_data()['partial_write'] ?? false );
-		$this->assertSame( array( 'include/general' ), get_post_meta( $id, '_elementor_conditions', true ) );
+		$this->assertSame( array( 'exclude/general' ), get_post_meta( $id, '_elementor_conditions', true ) );
 	}
 
 	public function test_custom_code_writes_capture_snippet_id_without_enabling_rollback(): void {

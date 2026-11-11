@@ -4860,6 +4860,19 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				'code'   => $error_code,
 				'status' => $status,
 			);
+			$rest_error_data = isset( $data['data'] ) && is_array( $data['data'] ) ? $data['data'] : array();
+
+			// A Custom Code conditions save can have persisted its post/meta
+			// before Elementor Pro rejects the conditions. These two values are
+			// a deliberately narrow receipt, not a general pass-through of REST
+			// error data: callers need the affected resource and an explicit
+			// signal to repair it rather than retry a create through any MCP door.
+			if ( isset( $rest_error_data['resource_id'] ) && is_scalar( $rest_error_data['resource_id'] ) && (int) $rest_error_data['resource_id'] > 0 ) {
+				$error_data['resource_id'] = (int) $rest_error_data['resource_id'];
+			}
+			if ( isset( $rest_error_data['partial_write'] ) && true === $rest_error_data['partial_write'] ) {
+				$error_data['partial_write'] = true;
+			}
 
 			// Carry forward hint and guide from the REST error response.
 			if ( isset( $data['data']['hint'] ) ) {
@@ -6303,6 +6316,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 		if ( ! empty( $error['guide'] ) && is_string( $error['guide'] ) ) {
 			$lines[] = 'Next: ' . $error['guide'];
+		}
+		if ( isset( $error['resource_id'] ) ) {
+			$lines[] = 'Resource ID: ' . $error['resource_id'];
+		}
+		if ( ! empty( $error['partial_write'] ) ) {
+			$lines[] = 'Partial write: true';
 		}
 
 		return array(

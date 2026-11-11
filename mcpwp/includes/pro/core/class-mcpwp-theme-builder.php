@@ -393,6 +393,11 @@ class Mcpwp_Theme_Builder {
 		// even recognise. The fix is to never write that shape ourselves and
 		// let Elementor Pro own the option entirely, as #975 already does for
 		// deletes via Conditions_Manager::purge_post_from_cache().
+		require_once dirname( __DIR__, 2 ) . '/class-mcpwp-activator.php';
+		$repaired = Mcpwp_Activator::ensure_custom_code_conditions_repaired();
+		if ( is_wp_error( $repaired ) ) {
+			return $repaired;
+		}
 		$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
 		$conditions_manager->save_conditions( $template_id, $formatted_conditions );
 

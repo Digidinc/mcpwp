@@ -885,6 +885,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 		foreach ( $sites as $blog_id ) {
 			switch_to_blog( $blog_id );
 			Mcpwp_Activator::activate();
+			Mcpwp_Activator::repair_custom_code_conditions( 0.0 );
 			Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 			try {
 				Mcpwp_Migrate::run();
@@ -903,6 +904,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 		}
 	} else {
 		Mcpwp_Activator::activate();
+		Mcpwp_Activator::repair_custom_code_conditions( 0.0 );
 		Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 		try {
 			Mcpwp_Migrate::run();
@@ -986,3 +988,22 @@ register_deactivation_hook( __FILE__, 'mcpwp_deactivate' );
 
 // Load plugin after WordPress is loaded
 add_action( 'plugins_loaded', 'mcpwp_load_plugin' );
+
+// Legacy Custom Code condition repair writes postmeta. Keep the upgrade
+// migration on an administrator-controlled admin request so an API read can
+// never mutate a site's snippets. Write paths run their own synchronous
+// pre-regenerate guard when Elementor Pro needs a safe cache rebuild.
+add_action(
+	'admin_init',
+	static function () {
+		if ( ! current_user_can( 'manage_options' ) || get_option( 'mcpwp_custom_code_conditions_repaired' ) ) {
+			return;
+		}
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		$result = Mcpwp_Activator::repair_custom_code_conditions();
+		if ( is_wp_error( $result ) && defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP Custom Code conditions repair failed: ' . $result->get_error_code() );
+		}
+	}
+);
