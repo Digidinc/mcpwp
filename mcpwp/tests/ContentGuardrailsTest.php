@@ -1671,6 +1671,81 @@ final class ContentGuardrailsTest extends TestCase {
 		$this->assertSame( 'resolved', $dup[0]['status'] );
 	}
 
+	private function guardrail_issue( array $over ): array {
+		return array_merge( array(
+			'post_id' => 7301, 'title' => 'T', 'url' => '', 'type' => 'page',
+			'category' => 'content_guardrails', 'code' => 'duplicate_edit',
+			'severity' => 'warning', 'message' => 'm', 'recommendation' => 'r',
+		), $over );
+	}
+
+	private function stored_guardrail_issue(): array {
+		$all = Mcpwp_SEO_Audit_Store::list_issues( array( 'post_id' => 7301, 'reveal_non_public' => true ) );
+		return array_values( array_filter( $all['issues'], function ( $i ) { return 'duplicate_edit' === $i['code']; } ) )[0];
+	}
+
+	public function test_reopened_issue_does_not_resurrect_old_representation(): void {
+		$key = Mcpwp_SEO_Audit_Store::upsert_issue( $this->guardrail_issue( array( 'representation' => 'elementor' ) ) );
+		$this->assertTrue( Mcpwp_SEO_Audit_Store::resolve_issue_if_open( 7301, 'content_guardrails', 'duplicate_edit', 'elementor' ) );
+		$this->assertSame( array(), $this->stored_guardrail_issue()['representations'] );
+
+		Mcpwp_SEO_Audit_Store::upsert_issue( $this->guardrail_issue( array( 'representation' => 'post_content' ) ) );
+		$reopened = $this->stored_guardrail_issue();
+		$this->assertSame( 'open', $reopened['status'] );
+		$this->assertSame( array( 'post_content' ), $reopened['representations'] );
+		$this->assertSame( 'post_content', $reopened['representation'] );
+
+		$this->assertTrue( Mcpwp_SEO_Audit_Store::resolve_issue_if_open( 7301, 'content_guardrails', 'duplicate_edit', 'post_content' ) );
+		$this->assertSame( 'resolved', $this->stored_guardrail_issue()['status'] );
+	}
+
+	public function test_legacy_resolved_record_reopens_without_its_old_representation(): void {
+		$key = Mcpwp_SEO_Audit_Store::upsert_issue( $this->guardrail_issue( array( 'representation' => 'elementor' ) ) );
+		$opt = Mcpwp_SEO_Audit_Store::GUARDRAIL_ISSUES_OPTION;
+		$all = get_option( $opt );
+		unset( $all[ $key ]['representations'] );
+		$all[ $key ]['status'] = 'resolved'; // Legacy: single `representation`, resolved.
+		update_option( $opt, $all );
+
+		Mcpwp_SEO_Audit_Store::upsert_issue( $this->guardrail_issue( array( 'representation' => 'post_content' ) ) );
+		$this->assertSame( array( 'post_content' ), $this->stored_guardrail_issue()['representations'] );
+		Mcpwp_SEO_Audit_Store::resolve_issue_if_open( 7301, 'content_guardrails', 'duplicate_edit', 'post_content' );
+		$this->assertSame( 'resolved', $this->stored_guardrail_issue()['status'] );
+	}
+
+	public function test_expired_issue_clears_representations_and_reopens_clean(): void {
+		$key = Mcpwp_SEO_Audit_Store::upsert_issue( $this->guardrail_issue( array( 'representation' => 'elementor' ) ) );
+		$opt = Mcpwp_SEO_Audit_Store::GUARDRAIL_ISSUES_OPTION;
+		$all = get_option( $opt );
+		$all[ $key ]['last_seen_at'] = gmdate( 'c', time() - 40 * DAY_IN_SECONDS );
+		update_option( $opt, $all );
+
+		$expired = $this->stored_guardrail_issue();
+		$this->assertSame( 'resolved', $expired['status'] );
+		$this->assertSame( array(), $expired['representations'] );
+
+		Mcpwp_SEO_Audit_Store::upsert_issue( $this->guardrail_issue( array( 'representation' => 'post_content' ) ) );
+		$this->assertSame( array( 'post_content' ), $this->stored_guardrail_issue()['representations'] );
+	}
+
+	public function test_legacy_open_record_is_a_set_of_one_and_representation_still_written(): void {
+		$key = Mcpwp_SEO_Audit_Store::upsert_issue( $this->guardrail_issue( array( 'representation' => 'elementor' ) ) );
+		$opt = Mcpwp_SEO_Audit_Store::GUARDRAIL_ISSUES_OPTION;
+		$all = get_option( $opt );
+		unset( $all[ $key ]['representations'] );
+		update_option( $opt, $all );
+
+		Mcpwp_SEO_Audit_Store::upsert_issue( $this->guardrail_issue( array( 'representation' => 'post_content' ) ) );
+		$rec = $this->stored_guardrail_issue();
+		$this->assertSame( array( 'elementor', 'post_content' ), $rec['representations'] );
+		$this->assertSame( 'elementor', $rec['representation'] );
+
+		$this->assertFalse( Mcpwp_SEO_Audit_Store::resolve_issue_if_open( 7301, 'content_guardrails', 'duplicate_edit', 'elementor' ) );
+		$rec = $this->stored_guardrail_issue();
+		$this->assertSame( 'open', $rec['status'] );
+		$this->assertSame( 'post_content', $rec['representation'] );
+	}
+
 	/**
 	 * @dataProvider copy_key_provider
 	 */
@@ -1700,6 +1775,16 @@ final class ContentGuardrailsTest extends TestCase {
 			'not copy: heading_tag'  => array( 'heading_tag', false ),
 			'not copy: _id'          => array( '_id', false ),
 			'not copy: __dynamic__'  => array( '__dynamic__', false ),
+			'copy: label_days'       => array( 'label_days', true ),
+			'copy: label_seconds'    => array( 'label_seconds', true ),
+			'copy: subheading'       => array( 'subheading', true ),
+			'copy: item_name'        => array( 'item_name', true ),
+			'copy: item_price'       => array( 'item_price', true ),
+			'copy: item_2'           => array( 'item_2', true ),
+			'copy: item_title'       => array( 'item_title', true ),
+			'not copy: flex_align_content'  => array( 'flex_align_content', false ),
+			'not copy: classic_show_title'  => array( 'classic_show_title', false ),
+			'not copy: show_title'   => array( 'show_title', false ),
 		);
 	}
 

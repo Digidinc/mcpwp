@@ -111,7 +111,9 @@ class Mcpwp_SEO_Audit_Store {
 		// The issue is keyed (post, category, code), so every representation
 		// that flags it must be remembered, not just the last one (#996).
 		// A legacy record carries only the single `representation`.
-		$representations = self::issue_representations( $record );
+		// A record that is not open starts afresh: its old representations
+		// were resolved and must not come back with the reopen.
+		$representations = 'open' === ( $record['status'] ?? 'open' ) ? self::issue_representations( $record ) : array();
 		$raised_by       = sanitize_key( (string) ( $issue['representation'] ?? '' ) );
 		if ( '' !== $raised_by && ! in_array( $raised_by, $representations, true ) ) {
 			$representations[] = $raised_by;
@@ -216,8 +218,8 @@ class Mcpwp_SEO_Audit_Store {
 				self::save_guardrail_issues( $issues );
 				return false;
 			}
-			$issues[ $key ]['representations'] = array();
 		}
+		$issues[ $key ]['representations'] = array();
 
 		$issues[ $key ]['status']           = 'resolved';
 		$issues[ $key ]['resolved_at']       = gmdate( 'c' );
@@ -682,7 +684,8 @@ class Mcpwp_SEO_Audit_Store {
 			}
 			$last_seen = isset( $issue['last_seen_at'] ) ? strtotime( (string) $issue['last_seen_at'] ) : false;
 			if ( false !== $last_seen && $last_seen < $cutoff ) {
-				$issues[ $key ]['status']         = 'resolved';
+				$issues[ $key ]['status']          = 'resolved';
+				$issues[ $key ]['representations'] = array();
 				$issues[ $key ]['resolved_at']     = gmdate( 'c' );
 				$issues[ $key ]['resolved_run_id'] = '';
 				$changed                           = true;

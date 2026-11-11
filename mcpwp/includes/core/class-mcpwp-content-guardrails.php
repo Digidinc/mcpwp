@@ -3009,6 +3009,8 @@ class Mcpwp_Content_Guardrails {
 		'quote', 'excerpt', 'question', 'answer', 'name', 'job_title', 'company',
 		'before_text', 'highlighted_text', 'rotating_text', 'after_text',
 		'footer_additional_info', 'ribbon_title', 'button', 'inner_text',
+		'subheading', 'item_name', 'item_price',
+		'label_days', 'label_hours', 'label_minutes', 'label_seconds',
 	);
 
 	/**
@@ -3093,12 +3095,28 @@ class Mcpwp_Content_Guardrails {
 		// is not copy because of "text", and "video_title" is not style because
 		// "video" contains "id". The LAST segment is the head noun that says what
 		// the control holds ("image_caption" is a caption, "title_color" a
-		// color); a trailing variant marker (title_text_a, item_2) is dropped.
+		// color); a trailing one-letter or numeric variant marker (title_text_a,
+		// title_2) is dropped first. A bare `item_2` is the one numbered key that
+		// is itself copy, so it is accepted up front.
+		if ( preg_match( '/^item_\d+$/', $lower ) ) {
+			return true;
+		}
 		$segments = array_values( array_filter( explode( '_', $lower ), 'strlen' ) );
+
+		// Switchers (show_title, classic_show_title, hide_*) hold a toggle, not copy.
+		if ( array_intersect( $segments, array( 'show', 'hide' ) ) ) {
+			return false;
+		}
+
 		while ( count( $segments ) > 1 && preg_match( '/^[a-z]?\d*$/', end( $segments ) ) ) {
 			array_pop( $segments );
 		}
 		if ( empty( $segments ) ) {
+			return false;
+		}
+		// "content" after align/justify is a layout control (flex_align_content).
+		$count = count( $segments );
+		if ( $count > 1 && 'content' === $segments[ $count - 1 ] && in_array( $segments[ $count - 2 ], array( 'align', 'justify' ), true ) ) {
 			return false;
 		}
 		$head = end( $segments );
