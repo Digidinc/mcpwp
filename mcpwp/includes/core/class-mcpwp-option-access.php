@@ -781,7 +781,8 @@ class Mcpwp_Option_Access {
 			$form    = null;
 			$decoded = self::decode_leaf( $data, $form );
 			if ( null === $decoded ) {
-				return ( $under_secret && self::looks_like_secret_value( $data ) ) || self::looks_like_credential( $data ) || self::is_opaque_serialized( $data ) ? '[redacted]' : $data;
+				// Logs never retain secret-named values, regardless of length.
+				return $under_secret || self::looks_like_credential( $data ) || self::is_opaque_serialized( $data ) ? '[redacted]' : $data;
 			}
 			$decoded = $decoded instanceof stdClass ? (array) $decoded : $decoded;
 			$walked  = self::redact_for_log( $decoded, $keys, $under_secret, $depth + 1 );

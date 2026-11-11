@@ -207,6 +207,30 @@ final class IntegrationWriteFailureSurfacedTest extends TestCase
         $this->assertArrayNotHasKey('pexels', $this->records());
     }
 
+    public function test_configure_activity_log_redacts_short_secrets(): void
+    {
+        update_option('mcpwp_settings', array('enable_logging' => true));
+        foreach (array('x', 'xy', 'abc', '0', '1', 'yes', 'long-fixture-secret') as $secret) {
+            $GLOBALS['mcpwp_test_wpdb_rows'] = array();
+            $result = $this->controller()->configure_integration($this->request(array(
+                'provider' => 'figma',
+                'config' => array('oauth_client_secret' => $secret),
+            )));
+            $this->assertInstanceOf(WP_REST_Response::class, $result);
+            $rows = $GLOBALS['mcpwp_test_wpdb_rows'][ $GLOBALS['wpdb']->prefix . 'mcpwp_activity_log' ] ?? array();
+            $this->assertNotEmpty($rows, 'configure writes an activity record');
+            $logged = false;
+            foreach ($rows as $row) {
+                $data = json_decode($row['request_data'] ?? '', true);
+                if (isset($data['config']['oauth_client_secret'])) {
+                    $logged = true;
+                    $this->assertSame('[redacted]', $data['config']['oauth_client_secret']);
+                }
+            }
+            $this->assertTrue($logged, 'configured secret field is present only as a redacted marker');
+        }
+    }
+
     public function test_rest_key_only_write_to_multi_field_provider_returns_actionable_400(): void
     {
         $manager = Mcpwp_Integration_Manager::get_instance();

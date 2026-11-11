@@ -208,6 +208,51 @@ final class FigmaProGateTest extends TestCase
         $this->assertCount(0, $this->http, 'no Figma request on Free');
     }
 
+    /** @dataProvider oauthSavePaths */
+    public function test_oauth_writeback_preserves_settings_changed_during_http(string $path): void
+    {
+        $this->setTier(true);
+        $this->configure(array(
+            'oauth_client_id' => 'client',
+            'oauth_client_secret' => 'old-fixture',
+            'default_file_key' => 'OLD',
+            'access_token' => 'expired-fixture',
+            'refresh_token' => 'refresh-fixture',
+            'expires_at' => '2000-01-01 00:00:00',
+        ));
+        require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-integrations.php';
+        add_filter('pre_http_request', function ($response, $args, $url) {
+            if (false !== strpos($url, '/oauth/token')) {
+                $request = new WP_REST_Request('POST', '/mcpwp/v1/integrations/configure');
+                $request->set_param('provider', 'figma');
+                $request->set_param('config', array('default_file_key' => 'NEW', 'oauth_client_secret' => 'rotated-fixture'));
+                $this->assertInstanceOf(WP_REST_Response::class, (new Mcpwp_REST_Integrations())->configure_integration($request));
+            }
+            return $response;
+        }, 20, 3);
+
+        $figma = new Mcpwp_Figma();
+        if ('callback' === $path) {
+            set_transient('mcpwp_figma_oauth_state_race', array('created_at' => time()), 600);
+            $this->assertIsArray($figma->exchange_oauth_code('code', 'race'));
+        } else {
+            $refresh = new ReflectionMethod(Mcpwp_Figma::class, 'refresh_oauth_token');
+            $refresh->setAccessible(true);
+            $this->assertIsArray($refresh->invoke($figma, Mcpwp_Integration_Manager::get_instance()->get_provider_config('figma')));
+        }
+
+        $config = Mcpwp_Integration_Manager::get_instance()->get_provider_config('figma');
+        $this->assertSame('NEW', $config['default_file_key'], 'OAuth owns tokens, not the concurrent file selection');
+        $this->assertTrue('rotated-fixture' === $config['oauth_client_secret'], 'concurrent credential rotation survives');
+        $this->assertTrue('fresh-access' === $config['access_token'], 'new access token stored');
+        $this->assertTrue('fresh-refresh' === $config['refresh_token'], 'new refresh token stored');
+    }
+
+    public function oauthSavePaths(): array
+    {
+        return array('refresh' => array('refresh'), 'admin callback' => array('callback'));
+    }
+
     public function test_pro_keeps_the_scheduled_sync_and_figma_access(): void
     {
         $this->setTier(true);
