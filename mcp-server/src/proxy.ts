@@ -45,6 +45,12 @@ export class McpProxy {
   private requestedProtocolVersion: string | null = null;
   private protocolVersion: string | null = null;
   private negotiation: Promise<void> | null = null;
+  /**
+   * `instructions` from WordPress's `initialize` result (#1074): the "Finding
+   * Tools" guidance that explains the `core` tool list. The host's own
+   * `initialize` is answered by the SDK, so it is carried over separately.
+   */
+  private instructions: string | null = null;
 
   constructor(site: SiteConfig, sessionId = "") {
     const base = site.url.replace(/\/+$/, "");
@@ -60,7 +66,26 @@ export class McpProxy {
   setRequestedProtocolVersion(version: string | null): void {
     this.requestedProtocolVersion = version;
     this.protocolVersion = null;
+    this.instructions = null;
     this.negotiation = null;
+  }
+
+  /**
+   * The upstream `initialize` instructions, negotiating first if needed.
+   * Null when WordPress sent none or could not be reached; never throws, and
+   * gives up after `timeoutMs` so a slow site cannot stall the host handshake.
+   */
+  async getInstructions(timeoutMs = 5000): Promise<string | null> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, timeoutMs);
+    });
+    try {
+      await Promise.race([this.negotiate(), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
+    return this.instructions;
   }
 
   /** The version WordPress agreed to, once negotiated. */
@@ -84,6 +109,9 @@ export class McpProxy {
         .then((response) => {
           const version = response?.result?.protocolVersion;
           this.protocolVersion = typeof version === "string" ? version : null;
+          const instructions = response?.result?.instructions;
+          this.instructions =
+            typeof instructions === "string" && instructions !== "" ? instructions : null;
         })
         .catch(() => {
           // Unreachable or a pre-#906 plugin: go on without the header and

@@ -24,6 +24,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { loadConfig, getActiveSite } from "./config.js";
+import { withUpstreamInstructions } from "./initialize.js";
 import { McpProxy } from "./proxy.js";
 import { runSetup } from "./setup.js";
 
@@ -376,9 +377,24 @@ async function main() {
     // Observe (never alter) inbound messages through the public Transport
     // interface, to learn the host's requested protocol version.
     const deliver = transport.onmessage;
+    let initializeId: unknown;
     transport.onmessage = (message) => {
       noteHostInitialize(message);
+      if ((message as { method?: unknown }).method === "initialize") {
+        initializeId = (message as { id?: unknown }).id;
+      }
       deliver?.(message);
+    };
+    // #1074: the SDK answers `initialize` without instructions. Add the ones
+    // WordPress sent (the "Finding Tools" guidance) to that one response.
+    const deliverOut = transport.send.bind(transport);
+    transport.send = async (message, options) => {
+      const id = (message as { id?: unknown }).id;
+      if (initializeId !== undefined && id === initializeId && "result" in message) {
+        initializeId = undefined;
+        return deliverOut(withUpstreamInstructions(message, await activeProxy.getInstructions()), options);
+      }
+      return deliverOut(message, options);
     };
     log("info", `MCPWP Server v${VERSION} running as "${serverName}" (proxy mode)`);
     log("info", `Proxying to: ${site.url} | session: ${sessionId}`);

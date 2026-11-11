@@ -62,11 +62,108 @@ async function makeEnvWithTwoSites(): Promise<{ env: Env; sites: SiteEntry[] }> 
   return { env, sites };
 }
 
+const UPSTREAM_INSTRUCTIONS = '# MCPWP\n\n## Finding Tools\n\nUse `mcpwp_find_tools` then `mcpwp_call`.';
+
+function initResponse(result: Record<string, unknown>): Response {
+  return new Response(JSON.stringify({ jsonrpc: '2.0', id: 1, result }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  });
+}
+
+type InitResult = { result: { protocolVersion: string; instructions?: string; serverInfo: { name: string } } };
+
 describe('handleInitialize', () => {
-  it('returns MCP capabilities', () => {
-    const result = handleInitialize(1) as { result: { protocolVersion: string; serverInfo: { name: string } } };
-    expect(result.result.protocolVersion).toBe('2024-11-05');
+  it('returns MCP capabilities', async () => {
+    const result = (await handleInitialize(1)) as InitResult;
+    expect(result.result.protocolVersion).toBe('2025-11-25');
     expect(result.result.serverInfo.name).toBe('mcpwp-agency-proxy');
+  });
+
+  it('negotiates a supported client version and falls back to the latest (#1074)', async () => {
+    const ok = (await handleInitialize(1, undefined, undefined, undefined, '2025-03-26')) as InitResult;
+    expect(ok.result.protocolVersion).toBe('2025-03-26');
+    const unknown = (await handleInitialize(1, undefined, undefined, undefined, '1999-01-01')) as InitResult;
+    expect(unknown.result.protocolVersion).toBe('2025-11-25');
+  });
+
+  it('single site: forwards that site\'s instructions and negotiated version upstream (#1074)', async () => {
+    const { env } = await makeEnvWithSite();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      initResponse({ protocolVersion: '2025-06-18', instructions: UPSTREAM_INSTRUCTIONS })
+    );
+    const result = (await handleInitialize(1, AGENCY_ID, env, undefined, '2025-06-18')) as InitResult;
+    expect(result.result.instructions).toContain(UPSTREAM_INSTRUCTIONS);
+    expect(result.result.instructions).toContain('_site');
+    expect(result.result.protocolVersion).toBe('2025-06-18');
+    const [, init] = fetchSpy.mock.calls[0] as [string, { body: string }];
+    expect(JSON.parse(init.body).params.protocolVersion).toBe('2025-06-18');
+  });
+
+  it('reports the version an older plugin answered with (#1074)', async () => {
+    const { env } = await makeEnvWithSite();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      initResponse({ protocolVersion: '2025-03-26', instructions: UPSTREAM_INSTRUCTIONS })
+    );
+    const result = (await handleInitialize(1, AGENCY_ID, env, undefined, '2025-11-25')) as InitResult;
+    expect(result.result.protocolVersion).toBe('2025-03-26');
+  });
+
+  it('multiple sites, no hint: generic instructions and no upstream call (#1074)', async () => {
+    const { env } = await makeEnvWithTwoSites();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch');
+    const result = (await handleInitialize(1, AGENCY_ID, env)) as InitResult;
+    expect(result.result.instructions).toContain('proxy_list_sites');
+    expect(result.result.instructions).toContain('mcpwp_find_tools');
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it('multiple sites with a hint: uses the hinted site\'s instructions (#1074)', async () => {
+    const { env } = await makeEnvWithTwoSites();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      initResponse({ protocolVersion: '2025-11-25', instructions: UPSTREAM_INSTRUCTIONS })
+    );
+    const result = (await handleInitialize(1, AGENCY_ID, env, SITE_ID_B, '2025-11-25')) as InitResult;
+    expect(result.result.instructions).toContain(UPSTREAM_INSTRUCTIONS);
+    expect((vi.mocked(globalThis.fetch).mock.calls[0] as [string])[0]).toBe('https://client-b.com/wp-json/mcpwp/v1/mcp');
+  });
+
+  it('falls back to generic instructions when the site is unreachable (#1074)', async () => {
+    const { env } = await makeEnvWithSite();
+    vi.spyOn(globalThis, 'fetch').mockRejectedValueOnce(new Error('network error'));
+    const result = (await handleInitialize(1, AGENCY_ID, env)) as InitResult;
+    expect(result.result.instructions).toContain('proxy_list_sites');
+    expect(result.result.protocolVersion).toBe('2025-11-25');
+  });
+});
+
+describe('MCP-Protocol-Version forwarding (#1074)', () => {
+  it('tools/list sends the client\'s version upstream', async () => {
+    const { env } = await makeEnvWithSite();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(initResponse({ tools: [] }));
+    await handleToolsList(1, AGENCY_ID, env, undefined, '2025-11-25');
+    const [, init] = fetchSpy.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(init.headers['MCP-Protocol-Version']).toBe('2025-11-25');
+  });
+
+  it('tools/call sends the client\'s version upstream', async () => {
+    const { env } = await makeEnvWithSite();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(initResponse({ content: [] }));
+    await handleToolsCall(1, { name: 'wp_list_pages', arguments: { _site: SITE_ID_A } }, AGENCY_ID, env, '2025-06-18');
+    const [, init] = fetchSpy.mock.calls[0] as [string, { headers: Record<string, string> }];
+    expect(init.headers['MCP-Protocol-Version']).toBe('2025-06-18');
+  });
+
+  it('sends no header without a client version, and never an unsupported one', async () => {
+    const { env } = await makeEnvWithSite();
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(initResponse({ tools: [] }))
+      .mockResolvedValueOnce(initResponse({ tools: [] }));
+    await handleToolsList(1, AGENCY_ID, env);
+    await handleToolsList(1, AGENCY_ID, env, undefined, 'bogus\r\nX-Evil: 1');
+    for (const call of fetchSpy.mock.calls) {
+      expect((call[1] as { headers: Record<string, string> }).headers['MCP-Protocol-Version']).toBeUndefined();
+    }
   });
 });
 

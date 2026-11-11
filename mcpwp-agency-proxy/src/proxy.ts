@@ -151,12 +151,86 @@ export async function fetchNoRedirect(
   return resp;
 }
 
+// ─── MCP protocol version (#1074) ────────────────────────────────────────────
+//
+// WordPress negotiates the MCP version per request (#906): no
+// `MCP-Protocol-Version` header means 2025-03-26, which keeps
+// `annotations.title` and drops `outputSchema`/`structuredContent`. The
+// gateway is stateless, so it forwards the version its client negotiated
+// (initialize) or sent (every later request) on each upstream call.
+
+export const SUPPORTED_PROTOCOL_VERSIONS = [
+  '2025-11-25',
+  '2025-06-18',
+  '2025-03-26',
+  '2024-11-05',
+] as const;
+export const LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0];
+
+/** A version this gateway knows, or null — a bad header is never echoed upstream. */
+export function supportedProtocolVersion(value: unknown): string | null {
+  return typeof value === 'string' && (SUPPORTED_PROTOCOL_VERSIONS as readonly string[]).includes(value)
+    ? value
+    : null;
+}
+
+function upstreamHeaders(apiKey: string, protocolVersion?: string | null): Record<string, string> {
+  const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-API-Key': apiKey };
+  const version = supportedProtocolVersion(protocolVersion);
+  if (version) headers['MCP-Protocol-Version'] = version;
+  return headers;
+}
+
 // ─── Fetch helpers that use decryptForAgency (#546) ─────────────────────────
+
+/**
+ * Run `initialize` against one site and return its result (protocolVersion,
+ * instructions). Null on any failure: the gateway then falls back to generic
+ * instructions rather than failing the client's handshake.
+ */
+export async function fetchInitialize(
+  site: SiteEntry,
+  encKey: string,
+  agencyId: string,
+  protocolVersion: string
+): Promise<{ protocolVersion?: string; instructions?: string } | null> {
+  if (checkSsrfUrl(site.url)) return null;
+  try {
+    const { plaintext: apiKey } = await decryptForAgency(site.api_key_enc, encKey, agencyId);
+    const resp = await fetchNoRedirect(siteUrl(site.url), {
+      method: 'POST',
+      headers: upstreamHeaders(apiKey),
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion,
+          capabilities: {},
+          clientInfo: { name: 'mcpwp-agency-proxy', version: '1.0.0' },
+        },
+      }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!resp.ok) return null;
+    const data = (await resp.json()) as { result?: { protocolVersion?: unknown; instructions?: unknown } };
+    const result = data.result;
+    if (!result) return null;
+    return {
+      protocolVersion: typeof result.protocolVersion === 'string' ? result.protocolVersion : undefined,
+      instructions:
+        typeof result.instructions === 'string' && result.instructions !== '' ? result.instructions : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
 
 export async function fetchToolsList(
   site: SiteEntry,
   encKey: string,
-  agencyId: string
+  agencyId: string,
+  protocolVersion?: string | null
 ): Promise<unknown[]> {
   // #545: re-validate URL on every forward (DNS rebinding defense)
   const ssrfErr = checkSsrfUrl(site.url);
@@ -166,7 +240,7 @@ export async function fetchToolsList(
   // Blocker A: redirect:'manual' via fetchNoRedirect — 3xx throws rather than follows.
   const resp = await fetchNoRedirect(siteUrl(site.url), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+    headers: upstreamHeaders(apiKey, protocolVersion),
     body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
     signal: AbortSignal.timeout(30000),
   });
@@ -183,7 +257,8 @@ export async function forwardToolCall(
   args: Record<string, unknown>,
   encKey: string,
   reqId: unknown,
-  agencyId: string
+  agencyId: string,
+  protocolVersion?: string | null
 ): Promise<unknown> {
   // #545: re-validate URL on every forward
   const ssrfErr = checkSsrfUrl(site.url);
@@ -201,7 +276,7 @@ export async function forwardToolCall(
     // Blocker A: redirect:'manual' via fetchNoRedirect — 3xx throws rather than follows.
     resp = await fetchNoRedirect(siteUrl(site.url), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-API-Key': apiKey },
+      headers: upstreamHeaders(apiKey, protocolVersion),
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: reqId,
