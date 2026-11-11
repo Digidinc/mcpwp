@@ -456,6 +456,91 @@ final class OAuthServerHardeningTest extends TestCase {
 		$this->assertSame( 429, $this->ctrl()->handle_register( $request )->get_status(), 'A forged forwarding header buys no fresh allowance.' );
 	}
 
+	/**
+	 * Simulate an object cache that serves the count the pre-check cached until
+	 * the entry is dropped (wp_cache_delete): returns a reader for
+	 * mcpwp_test_transient_hook.
+	 */
+	private function stale_counters(): void {
+		$snapshot = array();
+		foreach ( $GLOBALS['mcpwp_test_transients'] as $name => $item ) {
+			if ( 0 === strpos( $name, 'mcpwp_oauth_dcr_' ) ) {
+				$snapshot[ $name ] = $item['value'];
+			}
+		}
+		$GLOBALS['mcpwp_test_cache_deletes']  = array();
+		$GLOBALS['mcpwp_test_transient_hook'] = static function ( $name ) use ( $snapshot ) {
+			if ( ! isset( $snapshot[ $name ] ) ) {
+				return null;
+			}
+			foreach ( $GLOBALS['mcpwp_test_cache_deletes'] as $dropped ) {
+				if ( 'options' === $dropped[0] && '_transient_' . $name === $dropped[1] && $dropped[2] ) {
+					return null; // Dropped under the store lock: read the store.
+				}
+			}
+			return $snapshot[ $name ];
+		};
+	}
+
+	/** R2-1: the per-minute ceiling is re-read from the store under the lock, not from a cached count. */
+	public function test_the_per_minute_ceiling_is_read_fresh_under_the_lock(): void {
+		$now = time();
+		for ( $i = 0; $i < Mcpwp_OAuth_Clients::SITE_REGISTRATIONS_PER_MINUTE - 1; $i++ ) {
+			$this->assertIsArray( $this->register( '198.51.' . intdiv( $i, 200 ) . '.' . ( $i % 200 + 1 ), $i, $now ) );
+		}
+		$this->stale_counters(); // A parallel request has just taken the 60th slot; this request's pre-check cached 59.
+		$minute                                                              = $GLOBALS['mcpwp_test_transients'][ Mcpwp_OAuth_Clients::MINUTE_BUCKET ];
+		$minute['value']['count']                                            = Mcpwp_OAuth_Clients::SITE_REGISTRATIONS_PER_MINUTE;
+		$GLOBALS['mcpwp_test_transients'][ Mcpwp_OAuth_Clients::MINUTE_BUCKET ] = $minute;
+
+		$result = $this->register( '192.0.2.201', 900, $now );
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'The re-check under the lock sees the real count.' );
+		$this->assertSame( 429, $result->get_error_data()['status'] );
+	}
+
+	/** R2-1: the hourly (address, hosts) limit likewise. */
+	public function test_the_hourly_bucket_is_read_fresh_under_the_lock(): void {
+		$now = time();
+		$uri = array( 'redirect_uris' => array( 'https://same-host.example/cb' ) );
+		for ( $i = 0; $i < 9; $i++ ) {
+			$this->assertIsArray( Mcpwp_OAuth_Clients::register( $uri, '192.0.2.202', $now ) );
+		}
+		$this->stale_counters();
+		foreach ( $GLOBALS['mcpwp_test_transients'] as $name => $item ) {
+			if ( 0 === strpos( $name, 'mcpwp_oauth_dcr_' ) && 'mcpwp_oauth_dcr_site_minute' !== $name ) {
+				$GLOBALS['mcpwp_test_transients'][ $name ]['value']['count'] = 10;
+			}
+		}
+
+		$result = Mcpwp_OAuth_Clients::register( $uri, '192.0.2.202', $now );
+
+		$this->assertInstanceOf( WP_Error::class, $result, 'The tenth is the last: the eleventh is refused on the real count.' );
+		$this->assertSame( 429, $result->get_error_data()['status'] );
+	}
+
+	/** R2-2: an option that was absent at the pre-check is read from the store under the lock. */
+	public function test_the_absent_option_cache_is_dropped_under_the_lock(): void {
+		delete_option( Mcpwp_OAuth_Clients::OPTION );
+		$GLOBALS['mcpwp_test_cache_deletes'] = array();
+
+		$this->assertIsArray( $this->register( '192.0.2.203', 1 ) );
+
+		$under_lock = array_map(
+			static function ( $d ) {
+				return $d[0] . ':' . $d[1];
+			},
+			array_filter(
+				$GLOBALS['mcpwp_test_cache_deletes'],
+				static function ( $d ) {
+					return $d[2];
+				}
+			)
+		);
+		$this->assertContains( 'options:notoptions', $under_lock );
+		$this->assertContains( 'options:' . Mcpwp_OAuth_Clients::OPTION, $under_lock );
+	}
+
 	// ── 3. Access tokens: Authorization: Bearer only ──────────────────────
 
 	public function test_an_access_token_is_refused_in_x_api_key_and_the_query_string(): void {
@@ -693,6 +778,20 @@ final class OAuthServerHardeningTest extends TestCase {
 
 		$this->redeem( $code, 'test_client', array( 'client_secret' => 'cc_secret' ) );
 		$this->assertFalse( $this->works( $data['access_token'] ), 'The client itself, authenticated, does.' );
+	}
+
+	/** A confidential client must prove itself to trigger the revocation: omitting the secret revokes nothing. */
+	public function test_a_replay_without_the_secret_for_a_confidential_client_revokes_nothing(): void {
+		$settings                             = get_option( 'mcpwp_settings', array() );
+		$settings['oauth_client_secret_hash'] = wp_hash_password( 'cc_secret' );
+		update_option( 'mcpwp_settings', $settings );
+
+		$code = $this->seed_code( 'test_client' );
+		$data = $this->redeem( $code, 'test_client', array( 'client_secret' => 'cc_secret' ) )->get_data();
+		$this->age_redeemed_marker( $code );
+
+		$this->assertSame( 'invalid_grant', $this->redeem( $code, 'test_client' )->get_data()['error'] );
+		$this->assertTrue( $this->works( $data['access_token'] ) );
 	}
 
 	public function test_an_unknown_code_revokes_nothing(): void {

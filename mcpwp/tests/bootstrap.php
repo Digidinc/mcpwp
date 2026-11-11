@@ -3482,6 +3482,9 @@ if (! function_exists('wp_cache_delete')) {
         // delete made every cache invalidation unobservable: removing one
         // could not fail a test (#845 review).
         unset($GLOBALS['mcpwp_test_object_cache'][ (string) $group . ':' . (string) $key ]);
+        // Observable: which cache entries were dropped, and whether the OAuth
+        // client-store lock was held at the time.
+        $GLOBALS['mcpwp_test_cache_deletes'][] = array((string) $group, (string) $key, isset($GLOBALS['mcpwp_test_wpdb_options']['mcpwp_oauth_clients_lock']));
         return true;
     }
 }

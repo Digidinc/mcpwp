@@ -23,8 +23,8 @@
  *    moment the oldest pending registration expires.  A client registered by
  *    an authenticated administrator, or one that completed an authorization,
  *    never counts and never expires.  The store is capped at 500 clients,
- *    enforced by evicting the oldest never-authorized, non-administrator
- *    client that has outlived the expiry window (refusing when none has).
+ *    answered with a 429 that names the way out (an administrator deletes
+ *    apps); it never evicts a client.
  *  - Every read-modify-write of the store runs under a lock row, and a
  *    registration is verified in storage before its id is returned; a lost
  *    race is a 503 "retry", never a later invalid_client.
@@ -504,7 +504,7 @@ class Mcpwp_OAuth_Clients {
 	 *     writes anything;
 	 *  3. under the store lock: the same checks again on a fresh read (the
 	 *     authoritative ones), the 1-hour purge, the 500 cap (refused, never
-	 *     displacing a registration that has not expired), the write, and a
+	 *     displacing a client), the write, and a
 	 *     re-read that proves the new client landed; only then are the hourly
 	 *     and per-minute buckets counted.  A request that passed the lock-free
 	 *     pre-check and fails the re-check did take the lock; it counts
@@ -584,22 +584,19 @@ class Mcpwp_OAuth_Clients {
 
 		$clients = self::purge_stale( self::all(), $now );
 
-		$plan = self::plan_registration( $clients, $ip, $hosts, $now, $privileged );
+		$plan = self::plan_registration( $clients, $ip, $hosts, $now, $privileged, true );
 		if ( is_wp_error( $plan ) ) {
 			return $plan;
 		}
-		// At the cap, evict the oldest never-authorized client to make room.
-		// An authorized client is never evicted: someone is using it.
-		while ( count( $clients ) >= self::MAX_CLIENTS ) {
-			$victim = self::oldest_never_authorized( $clients );
-			if ( null === $victim ) {
-				return new WP_Error(
-					'temporarily_unavailable',
-					'Too many app registrations right now; try again later.',
-					array( 'status' => 429 )
-				);
-			}
-			unset( $clients[ $victim ] );
+		// The store cap.  After the purge every client left is live, authorized
+		// or administrator-registered, so the cap never clears by itself: the
+		// answer says so (no Retry-After) and names the way out.
+		if ( count( $clients ) >= self::MAX_CLIENTS ) {
+			return new WP_Error(
+				'temporarily_unavailable',
+				'This site has reached its limit of registered apps. An administrator can delete apps under MCPWP > Setup > Advanced > AI apps.',
+				array( 'status' => 429 )
+			);
 		}
 
 		$clients[ $record['client_id'] ] = $record;
@@ -640,9 +637,10 @@ class Mcpwp_OAuth_Clients {
 	 * @param string[] $hosts      Redirect hosts.
 	 * @param int      $now        Current time.
 	 * @param bool     $privileged Authenticated administrator: no limits.
+	 * @param bool     $fresh      Under the store lock: drop cached counters first.
 	 * @return array|WP_Error array( 'state' => array ), or the 429.
 	 */
-	private static function plan_registration( array $clients, $ip, array $hosts, $now, $privileged ) {
+	private static function plan_registration( array $clients, $ip, array $hosts, $now, $privileged, $fresh = false ) {
 		if ( $privileged ) {
 			return array( 'state' => array() );
 		}
@@ -673,6 +671,9 @@ class Mcpwp_OAuth_Clients {
 			return self::limit_error( $oldest + self::UNUSED_CLIENT_MAX_AGE - $now );
 		}
 
+		if ( $fresh ) {
+			self::flush_transient_cache( self::MINUTE_BUCKET );
+		}
 		$minute = get_transient( self::MINUTE_BUCKET );
 		if ( ! is_array( $minute ) || ! isset( $minute['count'], $minute['reset'] ) || (int) $minute['reset'] <= $now ) {
 			$minute = array(
@@ -684,7 +685,7 @@ class Mcpwp_OAuth_Clients {
 			return self::limit_error( (int) $minute['reset'] - $now );
 		}
 
-		$state = self::check_registration_slot( $ip, $hosts, $now );
+		$state = self::check_registration_slot( $ip, $hosts, $now, $fresh );
 		if ( is_wp_error( $state ) ) {
 			return $state;
 		}
@@ -720,30 +721,6 @@ class Mcpwp_OAuth_Clients {
 				'retry_after' => max( 1, (int) $retry_after ),
 			)
 		);
-	}
-
-	/**
-	 * Id of the oldest (by created_at) client never authorized, or null.
-	 *
-	 * @param array $clients Records keyed by id.
-	 * @return string|null
-	 */
-	private static function oldest_never_authorized( array $clients ) {
-		$evictable_before = time() - self::UNUSED_CLIENT_MAX_AGE;
-		$victim           = null;
-		$oldest = PHP_INT_MAX;
-		foreach ( $clients as $client_id => $record ) {
-			// Only a client that has outlived its expiry window may be
-			// evicted: a registration is valid until then.
-			if ( self::is_exempt_from_limits( $record ) || (int) $record['created_at'] >= $evictable_before ) {
-				continue;
-			}
-			if ( (int) $record['created_at'] < $oldest ) {
-				$oldest = (int) $record['created_at'];
-				$victim = $client_id;
-			}
-		}
-		return $victim;
 	}
 
 	/**
@@ -1021,6 +998,27 @@ class Mcpwp_OAuth_Clients {
 	public static function flush_option_cache( $name ) {
 		if ( function_exists( 'wp_cache_delete' ) ) {
 			wp_cache_delete( $name, 'options' );
+			// An option that was absent is remembered as absent: without this a
+			// reader that saw "no such option" keeps seeing it after another
+			// request has written it.
+			wp_cache_delete( 'notoptions', 'options' );
+		}
+	}
+
+	/**
+	 * Drop every cached copy of a transient (its value and timeout rows in the
+	 * options cache, its entry in an external object cache) so the next
+	 * get_transient() reads the store.  Used under the store lock before a
+	 * counter is re-checked: a count cached by the lock-free pre-check is stale
+	 * the moment another request commits.
+	 *
+	 * @param string $name Transient name (without the _transient_ prefix).
+	 */
+	public static function flush_transient_cache( $name ) {
+		self::flush_option_cache( '_transient_' . $name );
+		self::flush_option_cache( '_transient_timeout_' . $name );
+		if ( function_exists( 'wp_cache_delete' ) ) {
+			wp_cache_delete( $name, 'transient' );
 		}
 	}
 
@@ -1072,11 +1070,15 @@ class Mcpwp_OAuth_Clients {
 	 * @param string   $ip    Caller IP.
 	 * @param string[] $hosts Redirect hosts.
 	 * @param int      $now   Current time.
+	 * @param bool     $fresh Drop the cached copy first (under the store lock).
 	 * @return array|WP_Error Bucket state for commit_registration_slot(), or the 429.
 	 */
-	public static function check_registration_slot( $ip, array $hosts, $now ) {
+	public static function check_registration_slot( $ip, array $hosts, $now, $fresh = false ) {
 		$address = self::rate_limit_address( $ip );
 		$key     = 'mcpwp_oauth_dcr_' . substr( self::hash_ip( $address . '|' . implode( ',', $hosts ) ), 0, 32 );
+		if ( $fresh ) {
+			self::flush_transient_cache( $key );
+		}
 		$bucket  = get_transient( $key );
 		if ( ! is_array( $bucket ) || ! isset( $bucket['count'], $bucket['reset'] ) || (int) $bucket['reset'] <= $now ) {
 			$bucket = array(

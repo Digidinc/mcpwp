@@ -410,6 +410,8 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		$this->assertSame( 429, $result->get_error_data()['status'] );
 		$this->assertCount( 500, Mcpwp_OAuth_Clients::all() );
 		$this->assertArrayHasKey( $oldest, Mcpwp_OAuth_Clients::all() );
+		$this->assertStringContainsString( 'delete apps', $result->get_error_message(), 'The answer names the way out.' );
+		$this->assertArrayNotHasKey( 'retry_after', $result->get_error_data(), 'It never clears by itself: no Retry-After.' );
 	}
 
 	public function test_cap_refuses_only_when_all_500_have_been_authorized(): void {

@@ -109,8 +109,10 @@ A token stops working at once when any of these happens:
   with `invalid_grant`;
 - an **authorization code is presented a second time**: the tokens its first redemption created are
   revoked (RFC 6749 §4.1.2) and the request is refused with `invalid_grant`. This happens only when
-  the presenter authenticates as the client the code was redeemed for (the same client id and
-  redirect URI, and a correct secret when one is sent), only within one day of the redemption, and not
+  the presenter authenticates as the client the code was redeemed for: the same client id and
+  redirect URI and, for the site's configured confidential client, its correct client secret (omitting
+  the secret, or sending a wrong one, revokes nothing; a registered public client has no secret, so
+  its client id and exact redirect URI are what is checked), only within one day of the redemption, and not
   within 10 seconds of it: a client that submits its callback twice in parallel gets `invalid_grant` for
   the loser and keeps the winner's tokens.
 
@@ -140,17 +142,27 @@ Registration is unauthenticated by design, so it is bounded. Nothing is ever dis
   headers; without it every caller behind the proxy shares one address.
 - Site-wide: at most **100** pending registrations at once, and **60 registrations per minute**
   whatever the number of addresses (this bounds the writes an anonymous flood can cause).
-- A limit that is hit answers `429` with a `Retry-After` equal to the moment the oldest pending
-  registration (or the minute) expires.
+- A per-address, per-site or per-minute limit that is hit answers `429` with a `Retry-After`: the moment
+  the oldest pending registration (or the minute, or the hour) expires.
+- **Residual risk:** five addresses (5 x 20) can hold all 100 pending slots, and anyone with 60
+  registrations a minute can keep refilling them, so a determined flood from many addresses can shut
+  anonymous registration for as long as it lasts (each registration lasts at most one hour). It
+  cannot displace an existing registration, and an authenticated administrator is exempt.
 - An **authenticated administrator** (a logged-in cookie with the REST nonce, or an administrator's
   application password) is exempt from all of these limits. Not exempt: a cookie without the nonce, a
   non-administrator, an API key, or forwarding headers. A client an administrator registers counts
-  against no limit and is not purged for age; it is kept until it is used or deleted.
-- At most 500 clients are stored; at that number a newcomer is refused rather than displacing a client
-  that has not expired.
-- A request the limits refuse is decided before the store lock and counts nothing. Under contention, a
-  request that passed that first check but fails the re-check made under the lock did take the lock;
-  it still counts nothing.
+  against no limit and is not purged for age; it is kept until it is used or deleted. (The 500-client
+  store cap below still applies.)
+- At most 500 clients are stored. Pending ones expire, so what is left at the cap is authorized or
+  administrator-registered clients, which never expire: the newcomer (an administrator too) is refused
+  with `429` and a message, with no `Retry-After`, because it does not clear by itself. An administrator
+  makes room by deleting apps under **MCPWP → Setup → Advanced → AI apps** (one at a time; there is no
+  bulk delete).
+- The limits are checked twice: first without the lock (a request it refuses never touches the lock and
+  counts nothing), then again under the lock on counts read fresh from the store, never from a cached
+  copy, so parallel requests cannot overrun the per-minute or per-hour limit. A request that passed the
+  first check and fails the second did take the lock; it still counts nothing. Under heavy contention a
+  request within the limits can wait about a second for the lock and then get `503` (retry).
 
 `client_credentials` and `/oauth/revoke` are rate-limited per address; the limiter's answer is an OAuth
 error body (`429`).

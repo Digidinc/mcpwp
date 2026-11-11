@@ -723,11 +723,15 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		if ( ! isset( $marker['redirect_uri'] ) || ! hash_equals( (string) $marker['redirect_uri'], (string) $redirect_uri ) ) {
 			return;
 		}
+		$settings     = $this->get_oauth_settings();
+		$confidential = '' !== $settings['oauth_client_id'] && hash_equals( $settings['oauth_client_id'], (string) $client_id ) && ! empty( $settings['oauth_client_secret_hash'] );
 		if ( '' !== (string) $client_secret ) {
 			if ( ! $this->verify_oauth_client_credentials( $client_id, (string) $client_secret ) ) {
 				return;
 			}
-		} elseif ( null === $this->resolve_client( $client_id ) ) {
+		} elseif ( $confidential || null === $this->resolve_client( $client_id ) ) {
+			// A confidential client must prove itself; a public one must at
+			// least be a client that exists.
 			return;
 		}
 		if ( time() - (int) ( $marker['redeemed_at'] ?? 0 ) < self::REPLAY_GRACE_SECONDS ) {
