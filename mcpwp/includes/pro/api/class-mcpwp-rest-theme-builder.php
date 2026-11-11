@@ -290,7 +290,7 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 		$result = $this->theme_builder->set_template_conditions( $template_id, $conditions );
 
 		if ( is_wp_error( $result ) ) {
-			return $this->error_response_from_wp_error( $result );
+			return $result;
 		}
 
 		$this->log_activity( 'set_template_conditions', $request, array(

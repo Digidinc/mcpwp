@@ -369,48 +369,25 @@ class Mcpwp_Theme_Builder {
 			);
 		}
 
-		// Save conditions via Elementor's conditions manager.
-		//
-		// save_conditions() (real ElementorPro\...\Conditions_Manager, verified
-		// against the installed source, not re-derived) writes `_elementor_conditions`
-		// post meta AND already calls $this->cache->regenerate() itself before
-		// returning — the explicit regenerate() below is deliberately kept as a
-		// defensive second call (harmless: regenerate() rebuilds from scratch
-		// and is idempotent) for an older Elementor Pro build whose
-		// save_conditions() might not do this internally. Nothing here writes
-		// `elementor_pro_theme_builder_conditions` directly any more (#976):
-		// this class previously also wrote it itself, in
-		// update_global_conditions_index(), shaped `{ condition_key =>
-		// [template_ids] }` — the wrong axis. Elementor Pro's own
-		// Conditions_Cache stores `{ location => { template_id =>
-		// [condition_strings] } }`, LOCATION first (confirmed reading
-		// ElementorPro\Modules\ThemeBuilder\Classes\Conditions_Cache::add()/
-		// regenerate() directly). That wrong-shaped write was harmless only
-		// because both regenerate() calls immediately overwrote it in the
-		// normal case; any path where regenerate() is skipped or throws
-		// between the two writes left `elementor_pro_theme_builder_conditions`
-		// genuinely malformed, which #975's own delete-cleanup fix could not
-		// even recognise. The fix is to never write that shape ourselves and
-		// let Elementor Pro own the option entirely, as #975 already does for
-		// deletes via Conditions_Manager::purge_post_from_cache().
+		// Match Pro's persisted strings and {location => {id => conditions}}
+		// cache shape while updating only this document with bounded CAS.
 		require_once dirname( __DIR__, 2 ) . '/class-mcpwp-activator.php';
-		$lock = Mcpwp_Activator::acquire_custom_code_cache_lock();
-		if ( is_wp_error( $lock ) ) {
-			return $lock;
+		require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-encryption.php';
+		require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-custom-code-cache-entry.php';
+		$strings = Mcpwp_Custom_Code_Conditions::convert( $formatted_conditions );
+		if ( is_wp_error( $strings ) ) {
+			return $strings;
 		}
-		try {
-			$repaired = Mcpwp_Activator::ensure_custom_code_conditions_repaired();
-			if ( is_wp_error( $repaired ) ) {
-				return $repaired;
-			}
-			$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-			$conditions_manager->save_conditions( $template_id, $formatted_conditions );
+		$document = \Elementor\Plugin::instance()->documents->get( $template_id );
+		if ( ! $document ) {
+			return new WP_Error( 'template_not_found', __( 'Template not found.', 'mcpwp' ), array( 'status' => 404 ) );
+		}
+		update_post_meta( $template_id, '_elementor_conditions', wp_slash( $strings ) );
+		$synced = Mcpwp_Custom_Code_Cache_Entry::sync( $template_id, $document->get_location(), $strings );
+		if ( is_wp_error( $synced ) ) {
+			return $synced;
+		}
 
-			// Clear cache.
-			$conditions_manager->get_cache()->regenerate();
-		} finally {
-			Mcpwp_Activator::release_custom_code_cache_lock( $lock );
-		}
 
 		// Always the same shape, warnings or not. A response that changes
 		// structure depending on whether anything went wrong is the same trap
@@ -1137,104 +1114,18 @@ class Mcpwp_Theme_Builder {
 	}
 
 	/**
-	 * Remove a deleted template's ID from Elementor Pro's real conditions
-	 * cache/option (#952) — trash or force delete alike, since Elementor
-	 * never does this itself: `wp_delete_post()` does not touch
-	 * `elementor_pro_theme_builder_conditions`, and nothing else runs
-	 * afterward that would. (Elementor Pro's own Conditions_Manager DOES
-	 * self-clean on `wp_trash_post` — see `handle_before_delete_post()`'s
-	 * docblock for why that never actually fires for us here.)
+	 * Remove only the deleted document's entry with bounded compare-and-swap.
 	 *
-	 * Delegates the actual removal to Elementor Pro's own purpose-built
-	 * Conditions_Manager::purge_post_from_cache() rather than re-deriving
-	 * the option's shape here a second time: a hand-rolled removal that
-	 * disagreed with Elementor's real internal shape (or a future Elementor
-	 * Pro release that changes it) would silently do nothing, which is a
-	 * worse failure than doing nothing loudly.
-	 *
-	 * Two hazards found in adversarial review (WARN-2) that a naive call to
-	 * purge_post_from_cache() would hit:
-	 *
-	 * 1. Conditions_Manager (and its Conditions_Cache) is a per-request
-	 *    singleton, loaded from the option once at construction. If
-	 *    anything earlier in THIS SAME request already called
-	 *    regenerate() — Elementor's own save_conditions() does, and
-	 *    set_template_conditions() calls it again explicitly — and that
-	 *    call threw partway through its rebuild, the singleton's in-memory
-	 *    state now holds only whatever it had rebuilt before the crash,
-	 *    while the option on disk is untouched (regenerate() never reached
-	 *    its own save()). purge_post_from_cache() would persist that
-	 *    truncated in-memory state, wiping every OTHER template's real
-	 *    binding, not just the one being deleted. Refreshing the cache
-	 *    from the option immediately before purging discards any such
-	 *    staleness — the fix is to trust the option, not this request's
-	 *    possibly-corrupted copy of it.
-	 * 2. The natural-looking fallback for an Elementor Pro build old
-	 *    enough not to have purge_post_from_cache() is
-	 *    get_cache()->regenerate() — but its rebuild query matches only
-	 *    public statuses, so it would silently drop every draft or
-	 *    scheduled template's binding too, not just remove the one
-	 *    template actually being deleted. The fallback instead removes
-	 *    this one template directly from the stored option — same real
-	 *    shape, no Elementor object involved, so there is nothing to leave
-	 *    stale.
-	 *
-	 * Callers: handle_before_delete_post() above, wired to WordPress's
-	 * before_delete_post — see that method's docblock for every path that
-	 * reaches this through it.
-	 *
-	 * @param int $template_id Template ID.
-	 * @return bool True if the template was actually removed (and the
-	 *              option written); false if it was never in the cache, or
-	 *              Elementor Pro's Theme Builder is not available.
+	 * @param int $template_id Deleted document ID.
+	 * @return bool Whether the target cache entry was removed or absent.
 	 */
 	public function cleanup_after_template_delete( $template_id ) {
-		require_once dirname( __DIR__, 2 ) . '/class-mcpwp-activator.php';
-		return Mcpwp_Activator::with_custom_code_cache_lock(
-			function () use ( $template_id ) {
-				return $this->cleanup_after_template_delete_locked( $template_id );
-			}
-		);
-	}
-
-	private function cleanup_after_template_delete_locked( $template_id ) {
 		if ( ! $this->is_available() || ! $this->template_is_in_conditions_cache( $template_id ) ) {
 			return false;
 		}
-
-		try {
-			$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-
-			if ( method_exists( $conditions_manager, 'purge_post_from_cache' ) ) {
-				// WARN-2 hazard 1: never purge without first proving this
-				// singleton's in-memory cache actually matches the option —
-				// a regenerate() elsewhere in this request may have thrown
-				// partway through and left it holding less than what is
-				// really on disk.
-				if ( method_exists( $conditions_manager, 'get_cache' ) ) {
-					$cache = $conditions_manager->get_cache();
-					if ( is_object( $cache ) && method_exists( $cache, 'refresh' ) ) {
-						$cache->refresh();
-					}
-				}
-
-				$conditions_manager->purge_post_from_cache( $template_id );
-			} else {
-				// WARN-2 hazard 2: regenerate() is not a safe substitute —
-				// see docblock above.
-				$this->remove_template_from_stored_conditions_option( $template_id );
-			}
-
-			$this->drop_empty_condition_locations();
-		} catch ( \Throwable $e ) {
-			// Best-effort: a cache that fails to update here self-heals on
-			// the next conditions write (set_template_conditions() always
-			// calls regenerate()), and a delete must never fail on account
-			// of it.
-			return false;
-		}
-
-		return true;
+		require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-encryption.php';
+		require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-custom-code-cache-entry.php';
+		return true === Mcpwp_Custom_Code_Cache_Entry::remove( $template_id );
 	}
 
 	/**

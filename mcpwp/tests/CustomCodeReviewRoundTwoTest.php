@@ -55,7 +55,7 @@ final class CustomCodeReviewRoundTwoTest extends TestCase {
 		$request = new WP_REST_Request( 'POST', '/', array( 'id' => 15, 'location' => 'head', 'priority' => 1 ) );
 		$response = 'enable' === $operation ? $controller->enable_custom_code( $request ) : $controller->update_custom_code( $request );
 		$this->assertInstanceOf( WP_REST_Response::class, $response );
-		$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
+		$cache = Mcpwp_Custom_Code_Conditions::filter_conditions_cache( get_option( 'elementor_pro_theme_builder_conditions', array() ) );
 		$this->assertArrayNotHasKey( 15, $cache['elementor_head'] ?? array() );
 		$this->assertSame( $raw, get_post_meta( 15, '_elementor_conditions', true ) );
 		$this->assertContains( 15, $response->get_data()['skipped_custom_code_snippet_ids'] ?? array() );

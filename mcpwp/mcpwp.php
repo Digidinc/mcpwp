@@ -225,6 +225,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-custom-code-conditions.php';
 	Mcpwp_Custom_Code_Conditions::register_hooks();
+	if ( ! get_option( 'mcpwp_custom_code_cache_lock_retired' ) ) {
+		delete_option( 'mcpwp_custom_code_cache_write_lock' );
+		update_option( 'mcpwp_custom_code_cache_lock_retired', 1, false );
+	}
 
 	// Load traits first
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-state.php';

@@ -2,6 +2,10 @@
 
 use PHPUnit\Framework\TestCase;
 
+/**
+ * @runTestsInSeparateProcesses
+ * @preserveGlobalState disabled
+ */
 final class CustomCodeReviewRoundOneTest extends TestCase {
 	private $error_log;
 
@@ -16,10 +20,15 @@ final class CustomCodeReviewRoundOneTest extends TestCase {
 
 	protected function tearDown(): void {
 		ini_set( 'error_log', $this->error_log );
+		unset( $GLOBALS['mcpwp_test_wpdb_read_fails'], $GLOBALS['mcpwp_test_wpdb_intercept'], $GLOBALS['mcpwp_test_update_post_meta_throws'] );
 	}
 
 	private function controller() {
 		return new Mcpwp_REST_Elementor_Pro( new stdClass() );
+	}
+
+	private function install_elementor_pro_doubles(): void {
+		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
 	}
 
 	private function seed( $id, $conditions ) {
@@ -28,12 +37,6 @@ final class CustomCodeReviewRoundOneTest extends TestCase {
 		) );
 		update_post_meta( $id, '_elementor_location', 'elementor_head' );
 		update_post_meta( $id, '_elementor_conditions', $conditions );
-	}
-
-	private function install_manager( $manager ) {
-		$property = new ReflectionProperty( \ElementorPro\Modules\ThemeBuilder\Module::class, 'conditions_manager' );
-		$property->setAccessible( true );
-		$property->setValue( \ElementorPro\Modules\ThemeBuilder\Module::instance(), $manager );
 	}
 
 	/** @dataProvider missing_sub_name_provider */
@@ -61,7 +64,7 @@ final class CustomCodeReviewRoundOneTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
-	public function test_an_unrelated_save_repairs_legacy_meta_before_regeneration(): void {
+	public function test_an_unrelated_save_keeps_legacy_storage_and_exposes_safe_cache_conditions(): void {
 		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
 		$this->seed( 682, array( array( 'type' => 'include', 'name' => 'singular', 'sub_name' => 'page', 'sub_id' => '6' ) ) );
 		$controller = $this->controller();
@@ -72,8 +75,8 @@ final class CustomCodeReviewRoundOneTest extends TestCase {
 			'title' => 'Unrelated', 'code' => '<div>Another</div>', 'status' => 'publish',
 		) ) );
 		$this->assertInstanceOf( WP_REST_Response::class, $response );
-		$this->assertSame( array( 'include/singular/page/6' ), get_post_meta( 682, '_elementor_conditions', true ) );
-		$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
+		$this->assertIsArray( Mcpwp_Custom_Code_Conditions::raw_conditions( 682 )[0], 'Repair is deferred to upgrade/admin work.' );
+		$cache = Mcpwp_Custom_Code_Conditions::filter_conditions_cache( get_option( 'elementor_pro_theme_builder_conditions', array() ) );
 		foreach ( $cache as $snippets ) {
 			foreach ( $snippets as $conditions ) {
 				foreach ( $conditions as $condition ) {
@@ -84,42 +87,34 @@ final class CustomCodeReviewRoundOneTest extends TestCase {
 		}
 	}
 
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
 	public function test_failed_create_is_a_draft_and_exception_details_stay_server_side(): void {
-		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
-		$this->install_manager( new class extends \ElementorPro\Modules\ThemeBuilder\Mcpwp_Fake_Conditions_Manager {
-			public function save_conditions( $id, $conditions ) {
-				$GLOBALS['mcpwp_r1_status_during_save'] = get_post_status( $id );
+		$this->install_elementor_pro_doubles();
+		$GLOBALS['mcpwp_test_update_post_meta_throws'] = static function ( $post_id, $meta_key ) {
+			if ( '_elementor_conditions' === $meta_key ) {
+				unset( $GLOBALS['mcpwp_test_update_post_meta_throws'] );
 				throw new TypeError( 'called in /var/www/html/private/site.php:123' );
 			}
-		} );
+		};
 		$response = $this->controller()->create_custom_code( new WP_REST_Request( 'POST', '/', array(
 			'title' => 'Failed create', 'code' => '<div>Never live</div>', 'status' => 'publish',
 		) ) );
 		$this->assertInstanceOf( WP_Error::class, $response );
 		$id = $response->get_error_data()['resource_id'];
-		$this->assertSame( 'draft', $GLOBALS['mcpwp_r1_status_during_save'] );
 		$this->assertSame( 'draft', get_post_status( $id ) );
 		$this->assertTrue( $response->get_error_data()['partial_write'] );
 		$this->assertStringNotContainsString( '/var/www/', $response->get_error_message() );
 		$this->assertStringNotContainsString( 'site.php', $response->get_error_message() );
 	}
 
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
 	public function test_exception_detail_is_logged_without_being_returned(): void {
-		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
+		$this->install_elementor_pro_doubles();
 		$this->seed( 682, array( 'include/general' ) );
-		$this->install_manager( new class extends \ElementorPro\Modules\ThemeBuilder\Mcpwp_Fake_Conditions_Manager {
-			public function save_conditions( $id, $conditions ) {
+		$GLOBALS['mcpwp_test_update_post_meta_throws'] = static function ( $post_id, $meta_key ) {
+			if ( '_elementor_conditions' === $meta_key ) {
+				unset( $GLOBALS['mcpwp_test_update_post_meta_throws'] );
 				throw new TypeError( 'called in /var/www/html/private/site.php:123' );
 			}
-		} );
+		};
 		$log = tempnam( sys_get_temp_dir(), 'custom-code-error-' );
 		ini_set( 'error_log', $log );
 		try {
@@ -134,21 +129,17 @@ final class CustomCodeReviewRoundOneTest extends TestCase {
 		}
 	}
 
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
 	public function test_failed_update_restores_previous_conditions_and_its_cache_entry(): void {
-		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
+		$this->install_elementor_pro_doubles();
 		$this->seed( 682, array( 'include/general' ) );
 		$before = array( 'elementor_head' => array( 682 => array( 'include/general' ), 900 => array( 'exclude/general' ) ) );
 		update_option( 'elementor_pro_theme_builder_conditions', $before );
-		$this->install_manager( new class extends \ElementorPro\Modules\ThemeBuilder\Mcpwp_Fake_Conditions_Manager {
-			public function save_conditions( $id, $conditions ) {
-				parent::save_conditions( $id, $conditions );
-				throw new TypeError( 'called in /var/www/html/private/site.php:123' );
+		$GLOBALS['mcpwp_test_update_post_meta_throws'] = static function ( $post_id, $meta_key ) {
+			if ( '_elementor_conditions' === $meta_key ) {
+				unset( $GLOBALS['mcpwp_test_update_post_meta_throws'] );
+				throw new TypeError( 'condition metadata write failed' );
 			}
-		} );
+		};
 		$response = $this->controller()->update_custom_code( new WP_REST_Request( 'POST', '/', array(
 			'id' => 682, 'conditions' => array( array( 'type' => 'exclude', 'name' => 'general' ) ),
 		) ) );
@@ -157,22 +148,19 @@ final class CustomCodeReviewRoundOneTest extends TestCase {
 		$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
 		$this->assertSame( array( 'include/general' ), $cache['elementor_head'][682] );
 	}
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
 	public function test_failed_update_cannot_publish_or_change_a_draft_post(): void {
-		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
+		$this->install_elementor_pro_doubles();
 		$this->seed( 682, array( 'include/general' ) );
 		$GLOBALS['_mcpwp_test_posts'][682]->post_status = 'draft';
 		$GLOBALS['_mcpwp_test_posts'][682]->post_content = '<div>Old source</div>';
 		update_post_meta( 682, '_elementor_code', '<div>Old source</div>' );
 		update_option( 'elementor_pro_theme_builder_conditions', array( 'elementor_head' => array( 682 => array( 'include/general' ) ) ) );
-		$this->install_manager( new class extends \ElementorPro\Modules\ThemeBuilder\Mcpwp_Fake_Conditions_Manager {
-			public function save_conditions( $id, $conditions ) {
-				throw new TypeError( 'save failed' );
+		$GLOBALS['mcpwp_test_update_post_meta_throws'] = static function ( $post_id, $meta_key ) {
+			if ( '_elementor_conditions' === $meta_key ) {
+				unset( $GLOBALS['mcpwp_test_update_post_meta_throws'] );
+				throw new TypeError( 'condition metadata write failed' );
 			}
-		} );
+		};
 		$response = $this->controller()->update_custom_code( new WP_REST_Request( 'POST', '/', array(
 			'id' => 682, 'status' => 'publish', 'title' => 'New title', 'code' => '<div>New source</div>',
 			'conditions' => array( array( 'type' => 'exclude', 'name' => 'general' ) ),

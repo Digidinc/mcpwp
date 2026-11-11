@@ -19,15 +19,18 @@ class Mcpwp_Custom_Code_Conditions {
 	const REPORT_MARKER     = 'mcpwp_custom_code_conditions_report_marker';
 	const FINGERPRINT_META  = '_mcpwp_conditions_quarantine_fingerprint';
 	const REPORT_PREVIEW    = 20;
+	const REPORT_TTL        = 600;
 
 	private static $request_skipped = array();
 	private static $cache_bypass    = false;
+	private static $raw_read_depth  = 0;
 
 	public static function register_hooks() {
 		// This is Elementor Pro's own rebuild query. Excluding unsafe IDs here
 		// means Pro never calls explode() on their raw legacy arrays.
 		add_filter( 'elementor/theme/conditions/cache/regenerate/query_args', array( __CLASS__, 'filter_regenerate_query' ) );
 		add_filter( 'option_elementor_pro_theme_builder_conditions', array( __CLASS__, 'filter_conditions_cache' ) );
+		add_filter( 'get_post_metadata', array( __CLASS__, 'filter_pro_rebuild_conditions_meta' ), 10, 5 );
 		add_action( 'admin_init', array( __CLASS__, 'refresh_admin_report' ) );
 		add_action( 'admin_notices', array( __CLASS__, 'render_admin_notice' ) );
 		add_filter( 'site_status_tests', array( __CLASS__, 'register_site_health_test' ) );
@@ -95,7 +98,12 @@ class Mcpwp_Custom_Code_Conditions {
 
 	/** Raw stored conditions; API reads must use this instead of a cache view. */
 	public static function raw_conditions( $post_id ) {
-		$value = get_post_meta( (int) $post_id, '_elementor_conditions', true );
+		++self::$raw_read_depth;
+		try {
+			$value = get_post_meta( (int) $post_id, '_elementor_conditions', true );
+		} finally {
+			--self::$raw_read_depth;
+		}
 		return is_array( $value ) ? $value : array();
 	}
 
@@ -104,24 +112,61 @@ class Mcpwp_Custom_Code_Conditions {
 		if ( ! is_array( $args ) ) {
 			return $args;
 		}
-		// This callback runs only on Elementor's write-side rebuild. Repair
-		// convertible legacy maps before Pro sees them. A failed concurrent
-		// compare-and-swap still leaves a non-string value below, so it is
-		// excluded from THIS rebuild rather than risking explode(array).
-		if ( class_exists( 'Mcpwp_Activator' ) && method_exists( 'Mcpwp_Activator', 'ensure_custom_code_conditions_repaired' ) ) {
-			Mcpwp_Activator::ensure_custom_code_conditions_repaired();
-		}
-		$ids = self::regenerate_excluded_ids();
+		// A regeneration must not trigger a full-site repair scan. The cached
+		// operator report excludes known unsafe records; the metadata boundary
+		// below safely denies a late, out-of-band record during this rebuild.
+		$ids = self::cached_report_ids();
 		if ( ! empty( $ids ) ) {
 			$args['post__not_in'] = array_values( array_unique( array_merge( isset( $args['post__not_in'] ) ? (array) $args['post__not_in'] : array(), $ids ) ) );
 		}
 		return $args;
 	}
 
+	/**
+	 * Elementor Pro reads this meta while rebuilding its cache. Only on that
+	 * exact call stack, give an unconvertible snippet a safe deny condition.
+	 * API reads use raw_conditions() and therefore still receive the stored
+	 * value unchanged.
+	 *
+	 * @param mixed  $check     Short-circuit value.
+	 * @param int    $post_id   Post ID.
+	 * @param string $meta_key  Meta key.
+	 * @param bool   $single    Whether one value was requested.
+	 * @param string $meta_type Metadata type.
+	 * @return mixed
+	 */
+	public static function filter_pro_rebuild_conditions_meta( $check, $post_id, $meta_key, $single, $meta_type ) {
+		if ( null !== $check || 'post' !== $meta_type || '_elementor_conditions' !== $meta_key || self::$raw_read_depth > 0 || ! self::is_snippet( $post_id ) || ! self::in_elementor_cache_regeneration() ) {
+			return $check;
+		}
+		$raw = self::raw_conditions( $post_id );
+		$conditions = self::convert( $raw );
+		if ( is_wp_error( $conditions ) ) {
+			self::mark_skipped( $post_id );
+			$conditions = array( 'exclude/general' );
+		}
+		// get_metadata() unwraps this outer row for single=true. Returning an
+		// array-of-values for both shapes is the core metadata filter contract.
+		return array( $conditions );
+	}
+
 	/** Remove unsafe cache entries when Pro reads the persisted cache. */
 	public static function filter_conditions_cache( $cache ) {
 		if ( self::$cache_bypass || ! is_array( $cache ) ) {
 			return $cache;
+		}
+		// A cache option can contain thousands of template rows. Prime posts
+		// and meta in bulk before classifying each Custom Code entry so the
+		// safety filter does not turn one option read into N+1 queries.
+		$ids = array();
+		foreach ( $cache as $templates ) {
+			if ( is_array( $templates ) ) {
+				$ids = array_merge( $ids, array_keys( $templates ) );
+			}
+		}
+		$ids = array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
+		if ( ! empty( $ids ) && function_exists( '_prime_post_caches' ) ) {
+			_prime_post_caches( $ids, false, true );
 		}
 		foreach ( $cache as $location => $templates ) {
 			if ( ! is_array( $templates ) ) {
@@ -152,11 +197,7 @@ class Mcpwp_Custom_Code_Conditions {
 		if ( ! $persist ) {
 			return true;
 		}
-		return self::with_cache_write_lock(
-			static function () use ( $post_id, $raw ) {
-				return self::quarantine_locked( $post_id, $raw );
-			}
-		);
+		return self::quarantine_locked( $post_id, $raw );
 	}
 
 	private static function quarantine_locked( $post_id, array $raw ) {
@@ -171,10 +212,6 @@ class Mcpwp_Custom_Code_Conditions {
 		if ( $new ) {
 			update_post_meta( $post_id, self::FINGERPRINT_META, $fingerprint );
 		}
-		$result = self::evict_persisted_cache_entry( $post_id );
-		if ( is_wp_error( $result ) ) {
-			return $result;
-		}
 		if ( $new ) {
 			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 			error_log( 'MCPWP Custom Code conditions skipped for snippet ' . (int) $post_id . '.' );
@@ -183,11 +220,7 @@ class Mcpwp_Custom_Code_Conditions {
 	}
 
 	public static function clear_quarantine( $post_id ) {
-		return self::with_cache_write_lock(
-			static function () use ( $post_id ) {
-				return self::clear_quarantine_locked( $post_id );
-			}
-		);
+		return self::clear_quarantine_locked( $post_id );
 	}
 
 	private static function clear_quarantine_locked( $post_id ) {
@@ -218,8 +251,8 @@ class Mcpwp_Custom_Code_Conditions {
 		return $ids;
 	}
 
-	public static function annotate_response( array $data ) {
-		$ids = self::report_ids();
+	public static function annotate_response( array $data, $allow_scan = true ) {
+		$ids = $allow_scan ? self::report_ids() : self::cached_report_ids();
 		if ( ! empty( $ids ) ) {
 			$data['skipped_custom_code_snippet_ids'] = $ids;
 		}
@@ -236,17 +269,14 @@ class Mcpwp_Custom_Code_Conditions {
 		}
 		$marker = self::report_marker();
 		$report = get_option( self::REPORT_OPTION, array() );
-		if ( is_array( $report ) && isset( $report['marker'], $report['ids'] ) && (string) $report['marker'] === $marker && is_array( $report['ids'] ) ) {
+		if ( self::report_is_fresh( $report, $marker ) ) {
 			return;
 		}
 		$ids = self::skipped_ids();
-		$result = self::quarantine_many( $ids );
-		if ( is_wp_error( $result ) ) {
-			return $result;
-		}
+		self::quarantine_many( $ids );
 		// Keep the marker sampled before the scan. A concurrent snippet change
 		// then leaves this report stale and forces the next admin refresh.
-		update_option( self::REPORT_OPTION, array( 'marker' => $marker, 'ids' => self::quarantine_ids() ), false );
+		update_option( self::REPORT_OPTION, array( 'marker' => $marker, 'ids' => self::quarantine_ids(), 'expires_at' => time() + self::REPORT_TTL ), false );
 	}
 
 	public static function render_admin_notice() {
@@ -285,9 +315,12 @@ class Mcpwp_Custom_Code_Conditions {
 	 */
 	public static function report_ids() {
 		$report = get_option( self::REPORT_OPTION, array() );
-		if ( is_array( $report ) && isset( $report['marker'], $report['ids'] ) && (string) $report['marker'] === self::report_marker() && is_array( $report['ids'] ) ) {
+		if ( self::report_is_fresh( $report, self::report_marker() ) ) {
 			return array_values( array_unique( array_map( 'intval', $report['ids'] ) ) );
 		}
+		// API reads stay write-free, but an expired report must not leave a
+		// direct SQL edit invisible indefinitely. This scan is bounded by the
+		// ten-minute report TTL and never persists a new report.
 		return self::skipped_ids();
 	}
 
@@ -311,13 +344,9 @@ class Mcpwp_Custom_Code_Conditions {
 		return $ids;
 	}
 
-	/** Persist many unsafe IDs with one list write and one cache write. */
+	/** Persist many unsafe IDs with one compact list write. */
 	private static function quarantine_many( array $ids ) {
-		return self::with_cache_write_lock(
-			static function () use ( $ids ) {
-				return self::quarantine_many_locked( $ids );
-			}
-		);
+		return self::quarantine_many_locked( $ids );
 	}
 
 	private static function quarantine_many_locked( array $ids ) {
@@ -325,16 +354,6 @@ class Mcpwp_Custom_Code_Conditions {
 		sort( $ids );
 		if ( $ids !== get_option( self::QUARANTINE_OPTION, array() ) ) {
 			update_option( self::QUARANTINE_OPTION, $ids, false );
-		}
-
-		$cache = self::persisted_cache_without_locked( $ids );
-		if ( null !== $cache ) {
-			self::$cache_bypass = true;
-			try {
-				update_option( 'elementor_pro_theme_builder_conditions', $cache, false );
-			} finally {
-				self::$cache_bypass = false;
-			}
 		}
 
 		foreach ( $ids as $post_id ) {
@@ -348,61 +367,6 @@ class Mcpwp_Custom_Code_Conditions {
 			error_log( 'MCPWP Custom Code conditions skipped for snippet ' . $post_id . '.' );
 		}
 		return true;
-	}
-
-	/** @return array|null Changed persisted cache, or null when no change. */
-	private static function persisted_cache_without( array $ids ) {
-		return self::with_cache_write_lock(
-			static function () use ( $ids ) {
-				return self::persisted_cache_without_locked( $ids );
-			}
-		);
-	}
-
-	/** @return array|null Changed persisted cache, or null when no change. */
-	private static function persisted_cache_without_locked( array $ids ) {
-		self::$cache_bypass = true;
-		try {
-			$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
-		} finally {
-			self::$cache_bypass = false;
-		}
-		if ( ! is_array( $cache ) ) {
-			return null;
-		}
-		$changed = false;
-		foreach ( $cache as $location => $templates ) {
-			if ( ! is_array( $templates ) ) {
-				continue;
-			}
-			foreach ( $ids as $post_id ) {
-				if ( array_key_exists( $post_id, $cache[ $location ] ) ) {
-					unset( $cache[ $location ][ $post_id ] );
-					$changed = true;
-				}
-			}
-		}
-		return $changed ? $cache : null;
-	}
-
-	/**
-	 * Service writers share the document/cache mutex with REST and Theme
-	 * Builder writers. Isolated service tests intentionally run without the
-	 * activator, where there is no shared cache writer to serialize against.
-	 */
-	private static function with_cache_write_lock( callable $callback ) {
-		if ( ! class_exists( 'Mcpwp_Activator' ) || ! method_exists( 'Mcpwp_Activator', 'acquire_custom_code_cache_lock' ) ) {
-			return call_user_func( $callback );
-		}
-		$token = Mcpwp_Activator::acquire_custom_code_cache_lock();
-		if ( is_wp_error( $token ) ) {
-			return $token;
-		}
-		try {
-			return call_user_func( $callback );
-		} finally {
-			Mcpwp_Activator::release_custom_code_cache_lock( $token );
-		}
 	}
 
 	/** Invalidate only when the underlying snippet set may have changed. */
@@ -423,6 +387,32 @@ class Mcpwp_Custom_Code_Conditions {
 		return (string) get_option( self::REPORT_MARKER, '' );
 	}
 
+	private static function report_is_fresh( $report, $marker ) {
+		return is_array( $report )
+			&& isset( $report['marker'], $report['ids'], $report['expires_at'] )
+			&& (string) $report['marker'] === $marker
+			&& is_array( $report['ids'] )
+			&& (int) $report['expires_at'] >= time();
+	}
+
+	/** @return int[] Cached report IDs without initiating a live scan. */
+	private static function cached_report_ids() {
+		$report = get_option( self::REPORT_OPTION, array() );
+		if ( self::report_is_fresh( $report, self::report_marker() ) ) {
+			return array_values( array_unique( array_map( 'intval', $report['ids'] ) ) );
+		}
+		return self::quarantine_ids();
+	}
+
+	private static function in_elementor_cache_regeneration() {
+		foreach ( debug_backtrace( DEBUG_BACKTRACE_IGNORE_ARGS ) as $frame ) {
+			if ( isset( $frame['class'], $frame['function'] ) && 'ElementorPro\\Modules\\ThemeBuilder\\Classes\\Conditions_Cache' === $frame['class'] && 'regenerate' === $frame['function'] ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private static function bump_report_marker() {
 		update_option( self::REPORT_MARKER, wp_generate_uuid4(), false );
 	}
@@ -441,6 +431,7 @@ class Mcpwp_Custom_Code_Conditions {
 		$cursor = 0;
 		$bad = array();
 		do {
+			$wpdb->last_error = '';
 			$ids = $wpdb->get_col( $wpdb->prepare( "SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND ID > %d ORDER BY ID ASC LIMIT %d", 'elementor_snippet', $cursor, 200 ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.PreparedSQL.NotPrepared
 			if ( ! is_array( $ids ) || ! empty( $wpdb->last_error ) ) {
 				return $bad;
@@ -455,66 +446,6 @@ class Mcpwp_Custom_Code_Conditions {
 			}
 		} while ( 200 === count( $ids ) );
 		return $bad;
-	}
-
-	/** @return int[] Invalid and not-yet-persisted legacy records. */
-	private static function regenerate_excluded_ids() {
-		global $wpdb;
-		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'get_col' ) ) {
-			return array();
-		}
-		$cursor = 0;
-		$excluded = array();
-		do {
-			$ids = $wpdb->get_col( $wpdb->prepare( "SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND ID > %d ORDER BY ID ASC LIMIT %d", 'elementor_snippet', $cursor, 200 ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.PreparedSQL.NotPrepared
-			if ( ! is_array( $ids ) || ! empty( $wpdb->last_error ) ) {
-				return $excluded;
-			}
-			foreach ( $ids as $id ) {
-				$id = (int) $id;
-				$raw = self::raw_conditions( $id );
-				$non_string = false;
-				foreach ( $raw as $condition ) {
-					if ( ! is_string( $condition ) ) {
-						$non_string = true;
-						break;
-					}
-				}
-				if ( $non_string || is_wp_error( self::convert( $raw ) ) ) {
-					$excluded[] = $id;
-					self::mark_skipped( $id );
-				}
-				$cursor = $id;
-			}
-		} while ( 200 === count( $ids ) );
-		return $excluded;
-	}
-
-	private static function evict_persisted_cache_entry( $post_id ) {
-		return self::with_cache_write_lock(
-			static function () use ( $post_id ) {
-				return self::evict_persisted_cache_entry_locked( $post_id );
-			}
-		);
-	}
-
-	private static function evict_persisted_cache_entry_locked( $post_id ) {
-		self::$cache_bypass = true;
-		try {
-			$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
-			if ( ! is_array( $cache ) ) {
-				return true;
-			}
-			foreach ( $cache as $location => $templates ) {
-				if ( is_array( $templates ) ) {
-					unset( $cache[ $location ][ (int) $post_id ] );
-				}
-			}
-			update_option( 'elementor_pro_theme_builder_conditions', $cache, false );
-		} finally {
-			self::$cache_bypass = false;
-		}
-		return true;
 	}
 
 	private static function invalid() {

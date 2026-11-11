@@ -258,7 +258,7 @@ final class ElementorProConditionsIndexCleanupTest extends TestCase {
 	 */
 	public function test_a_broken_purge_does_not_propagate(): void {
 		$this->install_elementor_pro_doubles();
-		$GLOBALS['mcpwp_theme_test_purge_throws'] = true;
+		$GLOBALS['mcpwp_test_wpdb_read_fails'] = static function ( $name ) { return 'elementor_pro_theme_builder_conditions' === $name; };
 
 		update_option( 'elementor_pro_theme_builder_conditions', array( 'header' => array( 7 => array( 'include/general' ) ) ) );
 

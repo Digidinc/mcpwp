@@ -10,6 +10,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 require_once dirname( __DIR__, 2 ) . '/class-mcpwp-activator.php';
+require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-encryption.php';
+require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-custom-code-cache-entry.php';
 
 /**
  * REST API controller for Elementor Pro features.
@@ -27,9 +29,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	private $custom_code_cpt = 'elementor_snippet';
 
 	/** Quarantine reporting belongs only to authorized Custom Code responses. */
-	private function custom_code_success_response( $data, $status = 200 ) {
+	private function custom_code_success_response( $data, $status = 200, $read_report = false ) {
 		if ( is_array( $data ) && $this->custom_code_admin_reporting_allowed() ) {
-			$data = Mcpwp_Custom_Code_Conditions::annotate_response( $data );
+			$data = Mcpwp_Custom_Code_Conditions::annotate_response( $data, $read_report );
 		}
 		return parent::success_response( $data, $status );
 	}
@@ -498,7 +500,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'page'      => (int) $args['paged'],
 				'per_page'  => (int) $args['posts_per_page'],
 				'post_type' => $this->custom_code_cpt,
-			)
+			),
+			200,
+			true
 		);
 	}
 
@@ -526,15 +530,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			);
 		}
 
-		$lock = Mcpwp_Activator::acquire_custom_code_cache_lock();
-		if ( is_wp_error( $lock ) ) {
-			return $lock;
-		}
-		try {
-			return $this->create_custom_code_prepared( $request, $prepared );
-		} finally {
-			Mcpwp_Activator::release_custom_code_cache_lock( $lock );
-		}
+		return $this->create_custom_code_prepared( $request, $prepared );
 	}
 
 	private function create_custom_code_prepared( $request, $prepared ) {
@@ -575,7 +571,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			if ( is_wp_error( $published ) ) {
 				return $published;
 			}
-			$this->sync_custom_code_conditions_cache( $post_id );
+			$synced = $this->sync_custom_code_conditions_cache( $post_id );
+			if ( is_wp_error( $synced ) ) {
+				return $synced;
+			}
 		}
 
 		$data = array(
@@ -607,7 +606,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'get_elementor_custom_code', $request, array( 'id' => (int) $post->ID ) );
 
-		return $this->custom_code_success_response( $data );
+		return $this->custom_code_success_response( $data, 200, true );
 	}
 
 	/**
@@ -666,18 +665,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			);
 		}
 
-		$lock = Mcpwp_Activator::acquire_custom_code_cache_lock();
-		if ( is_wp_error( $lock ) ) {
-			return $lock;
-		}
-		try {
-			wp_cache_delete( (int) $post->ID, 'posts' );
-			wp_cache_delete( (int) $post->ID, 'post_meta' );
-			$post = $this->get_custom_code_post( $post->ID );
-			return is_wp_error( $post ) ? $post : $this->update_custom_code_prepared( $request, $post, $prepared );
-		} finally {
-			Mcpwp_Activator::release_custom_code_cache_lock( $lock );
-		}
+		return $this->update_custom_code_prepared( $request, $post, $prepared );
 	}
 
 	private function update_custom_code_prepared( $request, $post, $prepared ) {
@@ -724,6 +712,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response_from_wp_error( $updated );
 		}
 
+
+		$synced = $this->sync_custom_code_conditions_cache( (int) $post->ID );
+		if ( is_wp_error( $synced ) ) {
+			return $synced;
+		}
 
 		$data = array(
 			'id'      => (int) $post->ID,
@@ -825,18 +818,6 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	private function set_custom_code_status( $request, $status ) {
-		$lock = Mcpwp_Activator::acquire_custom_code_cache_lock();
-		if ( is_wp_error( $lock ) ) {
-			return $lock;
-		}
-		try {
-			return $this->set_custom_code_status_locked( $request, $status );
-		} finally {
-			Mcpwp_Activator::release_custom_code_cache_lock( $lock );
-		}
-	}
-
-	private function set_custom_code_status_locked( $request, $status ) {
 		$id   = absint( $request->get_param( 'id' ) );
 		$post = get_post( $id );
 
@@ -881,7 +862,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		// status-filtered regenerate() never wrote in the first place) and
 		// later enabled here would stay permanently absent from Elementor
 		// Pro's real conditions cache and never render.
-		$this->sync_custom_code_conditions_cache( $id );
+		$synced = $this->sync_custom_code_conditions_cache( $id );
+		if ( is_wp_error( $synced ) ) {
+			return $synced;
+		}
 
 		$data = array(
 			'id'      => $id,
@@ -1636,7 +1620,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 *
 	 * @param int   $post_id  Snippet post ID.
 	 * @param array $payload  Prepared payload.
-	 * @return void|WP_Error Error if Elementor Pro could not save conditions.
+	 * @return true|WP_Error Verified metadata or a partial-write receipt.
 	 */
 	private function save_custom_code_meta( $post_id, $payload ) {
 		if ( isset( $payload['conditions'] ) ) {
@@ -1671,236 +1655,68 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			update_post_meta( $post_id, '_mcpwp_wrapper_tags_removed', (bool) $payload['wrapper_tags_removed'] ? '1' : '0' );
 		}
 
-		// #974/#976 review W1 + W2: unconditional, regardless of which
-		// fields this call actually touched — location alone is enough to
-		// leave the cache stale (W2), and this is also the ONLY place a
-		// freshly created snippet's cache entry gets written at all. See
-		// sync_custom_code_conditions_cache()'s docblock.
-		$this->sync_custom_code_conditions_cache( $post_id );
+		// The caller verifies the display cache after finalizing post status.
+		return true;
 	}
 
 	/**
-	 * Save Elementor display conditions through Elementor Pro when available.
+	 * Persist the canonical condition strings and verify only this document.
+	 * Full-site Pro cache regeneration is reserved for operator rebuilds.
 	 *
-	 * Used to also call update_custom_code_conditions_index() here, writing
-	 * `elementor_pro_theme_builder_conditions` itself under the same wrong
-	 * axis #976 removed from Mcpwp_Theme_Builder — `{ condition_key =>
-	 * [post_ids] }` instead of Elementor Pro's real `{ location =>
-	 * { post_id => [condition_strings] } }`. Elementor Pro's own Custom Code
-	 * renderer (modules/custom-code/module.php print_snippets()) never reads
-	 * that option directly either way: it always goes through
-	 * `Plugin::instance()->modules_manager->get_modules('theme-builder')
-	 * ->get_conditions_manager()->get_documents_for_location()`, which reads
-	 * Elementor's own Conditions_Cache in its real shape — confirmed against
-	 * the installed Elementor Pro source. So the wrong-axis write was pure
-	 * dead weight in the common case (immediately below, where
-	 * Conditions_Manager::save_conditions() + regenerate() write the real
-	 * shape and would just overwrite it), and in the case where those
-	 * ThemeBuilder classes are not loaded at all, that same renderer cannot
-	 * run either — Custom Code's frontend print path hard-depends on the
-	 * ThemeBuilder module, so there is no live scenario where writing that
-	 * option ourselves would ever be read back by anything. Removed
-	 * entirely, same fix as #976.
-	 *
-	 * @param int   $post_id    Snippet post ID.
-	 * @param array $conditions Normalized conditions.
-	 * @return string|WP_Error Save engine name or error.
+	 * @param int   $post_id Snippet ID.
+	 * @param array $conditions Validated condition maps.
+	 * @return string|WP_Error Save engine or recoverable failure receipt.
 	 */
 	private function save_custom_code_conditions( $post_id, $conditions ) {
-		$previous = get_post_meta( $post_id, '_elementor_conditions', true );
-		$previous_cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
-
+		$previous = Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id );
 		try {
-			// Pro's save regenerates ALL documents, including unrelated snippets.
-			$repaired = Mcpwp_Activator::ensure_custom_code_conditions_repaired();
-			if ( is_wp_error( $repaired ) ) {
-				throw new RuntimeException( $repaired->get_error_message() );
-			}
-			$previous = get_post_meta( $post_id, '_elementor_conditions', true );
-			$previous_cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
-			$strings = Mcpwp_Activator::coerce_custom_code_conditions_to_strings( $conditions );
+			$strings = Mcpwp_Custom_Code_Conditions::convert( $conditions );
 			if ( is_wp_error( $strings ) ) {
 				throw new RuntimeException( $strings->get_error_message() );
 			}
-			// Pro can construct the document before saving it. Expose only
-			// string meta during that call, and restore it if the call fails.
 			update_post_meta( $post_id, '_elementor_conditions', wp_slash( $strings ) );
+			if ( Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id ) !== $strings ) {
+				throw new RuntimeException( 'Condition metadata was not persisted.' );
+			}
 			Mcpwp_Custom_Code_Conditions::clear_quarantine( $post_id );
-
-			if (
-				class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' )
-				&& class_exists( '\\Elementor\\Plugin' )
-				&& method_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module', 'instance' )
-			) {
-				$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-				$conditions_manager->save_conditions( $post_id, $conditions );
-				return 'elementor_pro_conditions_manager';
-			}
-			return 'fallback_meta';
+			return class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' ) && class_exists( '\\Elementor\\Plugin' ) ? 'mcpwp_conditions_cache_entry' : 'fallback_meta';
 		} catch ( \Throwable $exception ) {
-			if ( is_array( $previous ) ) {
+			try {
 				update_post_meta( $post_id, '_elementor_conditions', wp_slash( $previous ) );
-			} else {
-				delete_post_meta( $post_id, '_elementor_conditions' );
+			} catch ( \Throwable $restore_error ) {
+				// The partial-write receipt covers an unavailable metadata store.
 			}
-			$this->restore_custom_code_conditions_cache_entry( $post_id, $previous_cache );
-			// Server-only diagnostic; paths and dependency details are private.
 			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 			error_log( 'MCPWP Custom Code conditions save failed: ' . $exception->getMessage() );
-			return new WP_Error(
-				'conditions_save_failed',
-				__( 'Elementor Pro could not save display conditions. Read the snippet before retrying an update.', 'mcpwp' ),
-				array( 'status' => 500, 'resource_id' => (int) $post_id, 'partial_write' => true )
-			);
-		}
-	}
-
-	/** Restore only this snippet's cache entries, preserving other documents. */
-	private function restore_custom_code_conditions_cache_entry( $post_id, $previous ) {
-		$current = get_option( 'elementor_pro_theme_builder_conditions', array() );
-		if ( ! is_array( $current ) || ! is_array( $previous ) ) {
-			return;
-		}
-		foreach ( $current as $location => $snippets ) {
-			if ( is_array( $snippets ) ) {
-				unset( $current[ $location ][ $post_id ] );
-			}
-		}
-		foreach ( $previous as $location => $snippets ) {
-			if ( is_array( $snippets ) && array_key_exists( $post_id, $snippets ) ) {
-				$current[ $location ][ $post_id ] = $snippets[ $post_id ];
-			}
-		}
-		update_option( 'elementor_pro_theme_builder_conditions', $current );
-		try {
-			if ( class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' ) ) {
-				$manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-				if ( method_exists( $manager, 'get_cache' ) && method_exists( $manager->get_cache(), 'refresh' ) ) {
-					$manager->get_cache()->refresh();
-				}
-			}
-		} catch ( \Throwable $exception ) {
-			// The persisted entry is restored even if Pro cannot refresh its instance.
+			return new WP_Error( 'conditions_save_failed', __( 'Display conditions could not be saved. Read the snippet before retrying an update.', 'mcpwp' ), array( 'status' => 500, 'resource_id' => (int) $post_id, 'partial_write' => true ) );
 		}
 	}
 
 	/**
-	 * Keep THIS snippet's entry in Elementor Pro's real conditions cache
-	 * in sync with its current location + conditions, regardless of its
-	 * post_status.
+	 * Rebuild and verify this snippet's cache entry without a global rebuild.
+	 * The shared helper merges against the exact stored option bytes and
+	 * retries conflicts at most three times with a short jitter.
 	 *
-	 * #974/#976 review, W1 + W2 (against #990): #976 made
-	 * set_template_conditions()/save_custom_code_conditions() delegate the
-	 * shared `elementor_pro_theme_builder_conditions` option entirely to
-	 * Elementor Pro's own Conditions_Manager/Conditions_Cache — correct
-	 * shape, but `Conditions_Cache::regenerate()`'s rebuild query carries
-	 * no explicit `post_status` (confirmed reading the installed
-	 * conditions-cache.php directly), so outside `is_admin()` — every REST
-	 * request this plugin serves — it matches PUBLISHED posts only. Two
-	 * live consequences, both seen on a real rig:
-	 *
-	 *  - W1: create a snippet as draft with conditions, then enable it
-	 *    (the `/enable` route, or `update status:publish`) — regenerate()
-	 *    ran while it was still draft and never saw it; nothing after
-	 *    `/enable` (a bare wp_update_post() for post_status alone) ever
-	 *    re-runs it. The snippet is genuinely published and correctly
-	 *    conditioned, and never renders.
-	 *  - W2: change ONLY `location` (head -> body_end) on an already-cached
-	 *    snippet. save_custom_code_conditions() — the one place that used
-	 *    to touch the cache at all — only runs when `conditions` is part
-	 *    of the payload; a location-only update never calls it, so the
-	 *    cache keeps filing the snippet under its stale former location.
-	 *
-	 * The fix delegates to Elementor Pro's own API for ONE post directly —
-	 * `Conditions_Cache::update()`/`add()`/`remove()` — instead of the
-	 * status-filtered, whole-site `regenerate()` query. Those methods
-	 * derive the document's CURRENT location (Theme_Document::get_location(),
-	 * which for a Custom Code document resolves `_elementor_location` meta
-	 * — confirmed reading theme-document.php + custom-code/document.php)
-	 * and store whatever conditions are handed to them, with no status
-	 * filter at all. That is safe to do unconditionally, including for a
-	 * draft: Elementor Pro's OWN render gate
-	 * (`Conditions_Manager::get_location_templates()`) re-checks
-	 * `get_post_status() === 'publish'` at render time, on every request —
-	 * a draft's entry sitting in the cache is simply skipped there, never
-	 * rendered. Keeping the cache in permanent sync is therefore both
-	 * simpler and correct, rather than trying to add/remove entries in
-	 * lockstep with publish/draft transitions.
-	 *
-	 * Called unconditionally from the end of save_custom_code_meta()
-	 * (covers create and every update, whichever fields changed) and from
-	 * set_custom_code_status() (covers enable/disable) — the two places a
-	 * Custom Code snippet's status, location, or conditions can change. One
-	 * method, every call site; see #991 below for the delete-side sibling.
-	 *
-	 * @param int $post_id Snippet post ID.
-	 * @return void
+	 * @param int $post_id Snippet ID.
+	 * @return true|WP_Error Verified cache or partial-write receipt.
 	 */
 	private function sync_custom_code_conditions_cache( $post_id ) {
 		$raw = Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id );
 		$conditions = $this->coerce_conditions_to_strings( $raw, $post_id );
 		if ( is_wp_error( $conditions ) ) {
 			Mcpwp_Custom_Code_Conditions::quarantine( $post_id, $raw );
-			return;
+			return true;
 		}
 		Mcpwp_Custom_Code_Conditions::clear_quarantine( $post_id );
-		if (
-			! class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' )
-			|| ! class_exists( '\\Elementor\\Plugin' )
-			|| ! method_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module', 'instance' )
-		) {
-			return;
+		if ( ! class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' ) || ! class_exists( '\\Elementor\\Plugin' ) ) {
+			return true;
 		}
-
-		try {
-			$document = \Elementor\Plugin::instance()->documents->get( $post_id );
-			if ( ! $document ) {
-				return;
-			}
-
-			$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-			if ( ! method_exists( $conditions_manager, 'get_cache' ) ) {
-				return;
-			}
-
-			$cache = $conditions_manager->get_cache();
-			if ( ! $cache ) {
-				return;
-			}
-
-			// #975 WARN-2 pattern: this Cache instance is a per-request
-			// singleton loaded from the option once, at construction. Never
-			// mutate-then-save from a possibly-stale in-memory copy —
-			// refresh from the real option immediately before touching it.
-			if ( method_exists( $cache, 'refresh' ) ) {
-				$cache->refresh();
-			}
-
-			// The exact value Elementor Pro's OWN regenerate() would store
-			// for this post (raw `_elementor_conditions` meta, string-array
-			// form — save_custom_code_conditions() already ran this through
-			// Conditions_Manager::save_conditions(), which overwrites this
-			// meta with that form; never the object-array shape this class
-			// uses for its own API contract).
-
-			if ( method_exists( $cache, 'update' ) ) {
-				$cache->update( $document, $conditions );
-			} elseif ( method_exists( $cache, 'remove' ) && method_exists( $cache, 'add' ) ) {
-				$cache->remove( $post_id )->add( $document, $conditions );
-			} else {
-				return;
-			}
-
-			if ( method_exists( $cache, 'save' ) ) {
-				$cache->save();
-			}
-		} catch ( \Throwable $e ) {
-			// Best-effort, same posture as Mcpwp_Theme_Builder::
-			// cleanup_after_template_delete(): a cache that fails to sync
-			// here self-heals on the next conditions write, and this must
-			// never fail the create/update/enable/disable that triggered
-			// it.
+		if ( 'publish' !== get_post_status( $post_id ) ) {
+			return Mcpwp_Custom_Code_Cache_Entry::remove( $post_id );
 		}
+		$location = get_post_meta( $post_id, '_elementor_location', true );
+		$location = is_string( $location ) && '' !== $location ? $location : 'elementor_head';
+		return Mcpwp_Custom_Code_Cache_Entry::sync( $post_id, $location, $conditions );
 	}
 
 	/**
@@ -1938,25 +1754,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return array Conditions.
 	 */
 	private function get_custom_code_conditions( $post_id ) {
-		if (
-			class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' )
-			&& class_exists( '\\Elementor\\Plugin' )
-			&& method_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module', 'instance' )
-		) {
-			try {
-				$document = \Elementor\Plugin::instance()->documents->get( $post_id );
-				if ( $document ) {
-					$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-					$conditions         = $conditions_manager->get_document_conditions( $document );
-					return is_array( $conditions ) ? $this->normalize_custom_code_conditions( $conditions ) : array();
-				}
-			} catch ( \Throwable $exception ) {
-				// Fall back to stored meta below.
-			}
-		}
-
-		$conditions = Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id );
-		return $this->normalize_custom_code_conditions( $conditions );
+		return $this->normalize_custom_code_conditions( Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id ) );
 	}
 
 	/**

@@ -989,6 +989,10 @@ function update_option($name, $value, $autoload = null)
         return false;
     }
     $GLOBALS['mcpwp_test_options'][ $name ] = $value;
+    // Options API and raw CAS helpers address the same database row.
+    if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+        $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = maybe_serialize($value);
+    }
     unset($GLOBALS['mcpwp_test_object_cache']['options:notoptions'][ $name ]);
     // Recorded so tests can assert a caller passed autoload=false explicitly
     // (e.g. a large/rarely-read option that must not load on every request).
@@ -3301,6 +3305,9 @@ if (! isset($GLOBALS['wpdb'])) {
                     return false;
                 }
                 $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
+                if (isset($GLOBALS['mcpwp_test_raw_option_after_write']) && is_callable($GLOBALS['mcpwp_test_raw_option_after_write'])) {
+                    call_user_func($GLOBALS['mcpwp_test_raw_option_after_write'], $name, maybe_unserialize((string) $data['option_value']));
+                }
                 $this->last_error = '';
                 return 1;
             }
@@ -3361,6 +3368,9 @@ if (! isset($GLOBALS['wpdb'])) {
                     $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
                 } else {
                     $GLOBALS['mcpwp_test_options'][ $name ] = maybe_unserialize((string) $data['option_value']);
+                }
+                if (isset($GLOBALS['mcpwp_test_raw_option_after_write']) && is_callable($GLOBALS['mcpwp_test_raw_option_after_write'])) {
+                    call_user_func($GLOBALS['mcpwp_test_raw_option_after_write'], $name, maybe_unserialize((string) $data['option_value']));
                 }
                 // One-shot hook after a successful write, so a test can alter
                 // what was stored before the caller reads it back.
@@ -3657,6 +3667,10 @@ if (! function_exists('wp_cache_delete')) {
         // delete made every cache invalidation unobservable: removing one
         // could not fail a test (#845 review).
         unset($GLOBALS['mcpwp_test_object_cache'][ (string) $group . ':' . (string) $key ]);
+        // A raw row becomes visible after its options cache is invalidated.
+        if ('options' === $group && array_key_exists($key, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+            unset($GLOBALS['mcpwp_test_options'][ $key ]);
+        }
         // Observable: which cache entries were dropped, and whether the OAuth
         // client-store lock was held at the time.
         $GLOBALS['mcpwp_test_cache_deletes'][] = array((string) $group, (string) $key, isset($GLOBALS['mcpwp_test_wpdb_options']['mcpwp_oauth_clients_lock']));
@@ -4726,7 +4740,13 @@ function update_post_meta($post_id, $key, $value)
     // unfiltered_html grant when the write throws rather than returns. Off
     // unless a test asks for it.
     if (! empty($GLOBALS['mcpwp_test_update_post_meta_throws'])) {
-        throw new \RuntimeException('seeded meta failure');
+        $fails = $GLOBALS['mcpwp_test_update_post_meta_throws'];
+        if (is_callable($fails)) {
+            $fails = $fails($post_id, $key, $value);
+        }
+        if ($fails) {
+            throw new \RuntimeException('seeded meta failure');
+        }
     }
 
     // Mirror WP core, which unslashes on write (update_metadata() calls

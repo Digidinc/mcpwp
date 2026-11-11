@@ -4,6 +4,10 @@ use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-action-log.php';
 
+/**
+ * @runTestsInSeparateProcesses
+ * @preserveGlobalState disabled
+ */
 final class CustomCodeConditionsCompatibilityTest extends TestCase {
 	private $error_log;
 
@@ -19,10 +23,15 @@ final class CustomCodeConditionsCompatibilityTest extends TestCase {
 
 	protected function tearDown(): void {
 		ini_set( 'error_log', $this->error_log );
+		unset( $GLOBALS['mcpwp_test_wpdb_read_fails'], $GLOBALS['mcpwp_test_wpdb_intercept'], $GLOBALS['mcpwp_test_update_post_meta_throws'] );
 	}
 
 	private function controller(): Mcpwp_REST_Elementor_Pro {
 		return new Mcpwp_REST_Elementor_Pro( new stdClass() );
+	}
+
+	private function install_elementor_pro_doubles(): void {
+		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
 	}
 
 	private function create( $controller ) {
@@ -71,42 +80,32 @@ final class CustomCodeConditionsCompatibilityTest extends TestCase {
 		$this->assertSame( $conditions, $list['snippets'][0]['conditions'] );
 	}
 
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
-	public function test_save_type_error_leaves_parseable_meta_and_returns_a_typed_error(): void {
-		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
-		$manager = new class {
-			public function save_conditions( $id, $conditions ) {
-				throw new TypeError( 'Pro conditions failure' );
+	public function test_condition_meta_write_failure_leaves_previous_meta_and_returns_a_typed_error(): void {
+		$this->install_elementor_pro_doubles();
+		$GLOBALS['mcpwp_test_update_post_meta_throws'] = static function ( $post_id, $meta_key ) {
+			if ( '_elementor_conditions' === $meta_key ) {
+				unset( $GLOBALS['mcpwp_test_update_post_meta_throws'] );
+				throw new TypeError( 'condition metadata write failed' );
 			}
 		};
-		$property = new ReflectionProperty( \ElementorPro\Modules\ThemeBuilder\Module::class, 'conditions_manager' );
-		$property->setAccessible( true );
-		$property->setValue( \ElementorPro\Modules\ThemeBuilder\Module::instance(), $manager );
 		$method = new ReflectionMethod( Mcpwp_REST_Elementor_Pro::class, 'save_custom_code_conditions' );
 		$method->setAccessible( true );
 		$result = $method->invoke( $this->controller(), 682, array( array( 'type' => 'exclude', 'name' => 'singular', 'sub_name' => 'page', 'sub_id' => '42' ) ) );
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'conditions_save_failed', $result->get_error_code() );
-		$this->assertSame( '', get_post_meta( 682, '_elementor_conditions', true ) );
+		$this->assertSame( 682, $result->get_error_data()['resource_id'] );
+		$this->assertTrue( $result->get_error_data()['partial_write'] );
+		$this->assertSame( array(), get_post_meta( 682, '_elementor_conditions', true ) );
 	}
 
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
-	public function test_public_create_and_update_report_pro_save_errors(): void {
-		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
-		$manager = new class {
-			public function save_conditions( $id, $conditions ) {
-				throw new TypeError( 'Pro conditions failure' );
+	public function test_public_create_and_update_report_condition_meta_write_errors(): void {
+		$this->install_elementor_pro_doubles();
+		$GLOBALS['mcpwp_test_update_post_meta_throws'] = static function ( $post_id, $meta_key ) {
+			if ( '_elementor_conditions' === $meta_key ) {
+				unset( $GLOBALS['mcpwp_test_update_post_meta_throws'] );
+				throw new TypeError( 'condition metadata write failed' );
 			}
 		};
-		$property = new ReflectionProperty( \ElementorPro\Modules\ThemeBuilder\Module::class, 'conditions_manager' );
-		$property->setAccessible( true );
-		$property->setValue( \ElementorPro\Modules\ThemeBuilder\Module::instance(), $manager );
 		$controller = $this->controller();
 		$response   = $this->create( $controller );
 		$this->assertInstanceOf( WP_Error::class, $response );
@@ -116,8 +115,14 @@ final class CustomCodeConditionsCompatibilityTest extends TestCase {
 		$this->assertSame( $id, $response->get_error_data()['resource_id'] );
 		$this->assertTrue( $response->get_error_data()['partial_write'] ?? false );
 		$this->assertSame( 'draft', get_post_status( $id ) );
-		$this->assertSame( '', get_post_meta( $id, '_elementor_conditions', true ) );
+		$this->assertSame( array(), get_post_meta( $id, '_elementor_conditions', true ) );
 		update_post_meta( $id, '_elementor_conditions', array( 'exclude/general' ) );
+		$GLOBALS['mcpwp_test_update_post_meta_throws'] = static function ( $post_id, $meta_key ) {
+			if ( '_elementor_conditions' === $meta_key ) {
+				unset( $GLOBALS['mcpwp_test_update_post_meta_throws'] );
+				throw new TypeError( 'condition metadata write failed' );
+			}
+		};
 		$response = $controller->update_custom_code( new WP_REST_Request( 'POST', '/', array(
 			'id' => $id, 'conditions' => array( array( 'type' => 'include', 'name' => 'general' ) ),
 		) ) );

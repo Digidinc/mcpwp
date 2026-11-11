@@ -9,10 +9,17 @@ final class CustomCodeConditionsIsolationServiceTest extends TestCase {
 
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options'] = array();
+		$GLOBALS['mcpwp_test_wpdb_options'] = array();
 		$GLOBALS['_mcpwp_test_posts'] = array();
 		$GLOBALS['_mcpwp_test_meta'] = array();
 		$GLOBALS['mcpwp_test_current_user'] = 1;
 		$GLOBALS['mcpwp_test_user_caps'] = array( 1 => array( 'manage_options' => true ) );
+		$GLOBALS['wpdb']->last_error = '';
+		foreach ( array( 'request_skipped' => array(), 'cache_bypass' => false, 'raw_read_depth' => 0 ) as $property_name => $value ) {
+			$property = new ReflectionProperty( Mcpwp_Custom_Code_Conditions::class, $property_name );
+			$property->setAccessible( true );
+			$property->setValue( null, $value );
+		}
 		$this->error_log = ini_get( 'error_log' );
 		ini_set( 'error_log', '/dev/null' );
 	}
@@ -45,17 +52,17 @@ final class CustomCodeConditionsIsolationServiceTest extends TestCase {
 		$this->snippet( 15, array( array( 'type' => 'include', 'name' => 'singular', 'sub_id' => '5' ) ) );
 		$this->snippet( 16, array( 'include/general' ) );
 		$args = Mcpwp_Custom_Code_Conditions::filter_regenerate_query( array( 'post__not_in' => array( 99 ) ) );
-		$this->assertContains( 15, $args['post__not_in'] );
+		$this->assertSame( array( 99 ), $args['post__not_in'], 'A cold report preserves callers\' exclusions and avoids a full scan; Pro-only metadata isolation handles late records.' );
 		$this->assertNotContains( 16, $args['post__not_in'] );
 		$this->assertContains( 99, $args['post__not_in'] );
 	}
 
-	public function test_raw_reader_and_quarantine_evict_only_that_cached_snippet(): void {
+	public function test_raw_reader_and_quarantine_report_without_mutating_the_shared_cache(): void {
 		$this->snippet( 15, array( array( 'type' => 'include', 'name' => 'singular', 'sub_id' => '5' ) ) );
 		update_option( 'elementor_pro_theme_builder_conditions', array( 'elementor_head' => array( 15 => array( 'include/general' ), 99 => array( 'include/general' ) ) ) );
 		$this->assertSame( array( array( 'type' => 'include', 'name' => 'singular', 'sub_id' => '5' ) ), Mcpwp_Custom_Code_Conditions::raw_conditions( 15 ) );
 		Mcpwp_Custom_Code_Conditions::quarantine( 15, Mcpwp_Custom_Code_Conditions::raw_conditions( 15 ) );
-		$this->assertArrayNotHasKey( 15, get_option( 'elementor_pro_theme_builder_conditions' )['elementor_head'] );
+		$this->assertArrayHasKey( 15, get_option( 'elementor_pro_theme_builder_conditions' )['elementor_head'] );
 		$this->assertSame( array( 'include/general' ), get_option( 'elementor_pro_theme_builder_conditions' )['elementor_head'][99] );
 		$this->assertSame( array( 15 ), Mcpwp_Custom_Code_Conditions::annotate_response( array() )['skipped_custom_code_snippet_ids'] );
 	}
@@ -99,7 +106,7 @@ final class CustomCodeConditionsIsolationServiceTest extends TestCase {
 		$this->assertSame( $raw, Mcpwp_Custom_Code_Conditions::raw_conditions( 16 ) );
 		$guarded = Mcpwp_Custom_Code_Conditions::filter_regenerate_query( array() );
 		$this->assertArrayNotHasKey( 'post__not_in', $guarded );
-		$this->assertSame( array( 'include/general' ), Mcpwp_Custom_Code_Conditions::raw_conditions( 16 ) );
+		$this->assertSame( $raw, Mcpwp_Custom_Code_Conditions::raw_conditions( 16 ) );
 	}
 
 	public function test_admin_refresh_records_late_unsafe_ids_once_while_cache_reads_stay_write_free(): void {

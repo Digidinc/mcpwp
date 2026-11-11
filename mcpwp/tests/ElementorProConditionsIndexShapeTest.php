@@ -41,11 +41,11 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 		$GLOBALS['_mcpwp_test_posts']       = array();
 		$GLOBALS['_mcpwp_test_meta']        = array();
 		$GLOBALS['mcpwp_test_current_user'] = 1;
-		unset( $GLOBALS['mcpwp_test_option_store_after_hook'] );
+		unset( $GLOBALS['mcpwp_test_option_store_after_hook'], $GLOBALS['mcpwp_test_raw_option_after_write'] );
 	}
 
 	protected function tearDown(): void {
-		unset( $GLOBALS['mcpwp_test_option_store_after_hook'] );
+		unset( $GLOBALS['mcpwp_test_option_store_after_hook'], $GLOBALS['mcpwp_test_raw_option_after_write'] );
 	}
 
 	private function seed_template( int $id, string $status = 'publish' ): void {
@@ -74,6 +74,7 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 			}
 		};
 
+		$GLOBALS['mcpwp_test_raw_option_after_write'] = $GLOBALS['mcpwp_test_option_store_after_hook'];
 		$call();
 
 		return $writes;
@@ -142,7 +143,7 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 
 		$this->assertNotEmpty(
 			$writes,
-			'set_template_conditions() must actually write the option through Elementor Pro\'s own manager for this test to mean anything.'
+			'set_template_conditions() must persist an actual cache write for this test to mean anything.'
 		);
 		$this->assertNoWriteIsWrongAxis( $writes );
 	}
@@ -232,13 +233,13 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 				$response = $controller->create_custom_code( $request );
 
 				$this->assertSame( 201, $response->get_status(), 'The happy path must still succeed.' );
-				$this->assertSame( 'elementor_pro_conditions_manager', $response->get_data()['snippet']['conditions_engine'] );
+				$this->assertSame( 'mcpwp_conditions_cache_entry', $response->get_data()['snippet']['conditions_engine'] );
 			}
 		);
 
 		$this->assertNotEmpty(
 			$writes,
-			'save_custom_code_conditions() must actually write the option through Elementor Pro\'s own manager for this test to mean anything.'
+			'save_custom_code_conditions() must persist an actual cache write for this test to mean anything.'
 		);
 		$this->assertNoWriteIsWrongAxis( $writes );
 	}

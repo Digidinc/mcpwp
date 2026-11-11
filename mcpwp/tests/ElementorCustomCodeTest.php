@@ -43,6 +43,10 @@ final class ElementorCustomCodeTest extends TestCase {
 		);
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_create_custom_code_preserves_raw_script_and_reads_back_conditions(): void {
 		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
 		$request    = new WP_REST_Request(
