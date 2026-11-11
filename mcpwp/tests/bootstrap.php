@@ -180,6 +180,14 @@ class WP_Error
         return $this->data;
     }
 
+    /** Replace data for the active code, as WP_Error::add_data() does. */
+    public function add_data($data, $code = '')
+    {
+        if ('' === $code || $this->code === $code) {
+            $this->data = $data;
+        }
+    }
+
     /**
      * Real WP_Error::remove() drops every message and the data recorded
      * under $code. This double only ever holds one code, so "remove the

@@ -82,17 +82,18 @@ final class ErrorStatusPassthroughTest extends TestCase {
 	}
 
 	/** @dataProvider success_response_error_provider */
-	public function test_success_response_routes_errors_through_the_shared_error_helper( $data, $expected_status ): void {
-		require_once dirname( __DIR__ ) . '/includes/class-mcpwp-error-hints.php';
-
+	public function test_success_response_normalizes_only_the_error_status( $data, $expected_status ): void {
 		$controller = new Mcpwp_Test_Error_Status_Controller();
-		$result     = $controller->public_success_response( new WP_Error( 'invalid_post_type', 'Invalid type.', $data ), 201 );
+		$error      = new WP_Error( 'invalid_post_type', 'Invalid type.', $data );
+		$result     = $controller->public_success_response( $error, 201 );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $error, $result );
 		$this->assertSame( 'invalid_post_type', $result->get_error_code() );
 		$this->assertSame( 'Invalid type.', $result->get_error_message() );
-		$this->assertSame( $expected_status, $result->get_error_data()['status'] );
-		$this->assertArrayHasKey( 'hint', $result->get_error_data() );
+		$expected_data           = (array) $data;
+		$expected_data['status'] = $expected_status;
+		$this->assertSame( $expected_data, $result->get_error_data() );
 	}
 
 	public static function success_response_error_provider(): array {
@@ -100,6 +101,27 @@ final class ErrorStatusPassthroughTest extends TestCase {
 			'no status'       => array( null, 400 ),
 			'forbidden'       => array( array( 'status' => 403 ), 403 ),
 			'backend failure' => array( array( 'status' => 503 ), 503 ),
+			'invalid status'  => array( array( 'status' => 200, 'hint' => 'Backend hint.', 'guide' => array( 'retry' => false ) ), 400 ),
+			'string status'   => array( array( 'status' => '503', 'resource' => 'posts' ), 400 ),
+		);
+	}
+
+	public function test_list_posts_revision_preserves_the_backend_security_hint(): void {
+		require_once dirname( __DIR__ ) . '/includes/class-mcpwp-error-hints.php';
+
+		$controller = new Mcpwp_REST_Posts();
+		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/posts', array( 'post_type' => 'revision' ) );
+		$result     = $controller->list_posts( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_post_type', $result->get_error_code() );
+		$this->assertSame( 'Invalid or unsupported post type.', $result->get_error_message() );
+		$this->assertSame(
+			array(
+				'status' => 400,
+				'hint'   => 'Post type "revision" is blocked for security reasons. Use wp_site_info to check available post types, or wp_list_content(post_type=\'...\') for custom post types.',
+			),
+			$result->get_error_data()
 		);
 	}
 

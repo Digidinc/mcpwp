@@ -461,7 +461,14 @@ abstract class Mcpwp_REST_API {
 	protected function success_response( $data, $status = 200 ) {
 		// A handler may pass a backend failure here; never serialize it as success.
 		if ( is_wp_error( $data ) ) {
-			return $this->error_response_from_wp_error( $data );
+			// Keep backend messages and data (including specific hints) intact.
+			$error_data = (array) $data->get_error_data();
+			$status     = $this->get_wp_error_status( $data );
+			if ( ! isset( $error_data['status'] ) || $error_data['status'] !== $status ) {
+				$error_data['status'] = $status;
+				$data->add_data( $error_data );
+			}
+			return $data;
 		}
 
 		// Merge any content-guardrails notice recorded for a post ID
