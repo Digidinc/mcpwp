@@ -109,6 +109,98 @@ final class BrokerWellKnownTest extends TestCase {
 		);
 	}
 
+	// ── Advertised scopes: broker grants read/write only ───────────────────
+
+	public function test_broker_enrolled_advertises_only_read_and_write_scopes(): void {
+		$this->enroll();
+
+		$metadata = Mcpwp_OAuth_Well_Known::build_protected_resource_metadata();
+
+		$this->assertSame(
+			array( 'read', 'write' ),
+			$metadata['scopes_supported'],
+			'The broker rejects any request carrying admin with invalid_scope; a client asks for every advertised scope.'
+		);
+	}
+
+	public function test_broker_enrolled_with_legacy_oauth_on_still_omits_admin(): void {
+		$this->enroll();
+		update_option( 'mcpwp_settings', array( 'oauth_enabled' => true ) );
+
+		$metadata = Mcpwp_OAuth_Well_Known::build_protected_resource_metadata();
+
+		$this->assertNotContains( 'admin', $metadata['scopes_supported'] );
+	}
+
+	public function test_not_enrolled_scopes_are_unchanged(): void {
+		update_option( 'mcpwp_settings', array( 'oauth_enabled' => true ) );
+
+		$metadata = Mcpwp_OAuth_Well_Known::build_protected_resource_metadata();
+
+		$this->assertSame( array( 'read', 'write', 'admin' ), $metadata['scopes_supported'] );
+	}
+
+	public function test_half_enrolled_site_keeps_own_authorization_server_scopes(): void {
+		update_option( 'mcpwp_broker_enrollment', array( 'site_id' => 'abc' ) );
+		update_option( 'mcpwp_settings', array( 'oauth_enabled' => true ) );
+
+		$metadata = Mcpwp_OAuth_Well_Known::build_protected_resource_metadata();
+
+		$this->assertSame( array( 'read', 'write', 'admin' ), $metadata['scopes_supported'] );
+	}
+
+	/**
+	 * Run the real dispatcher (maybe_serve_well_known -> emit_json) in a child
+	 * process, because it calls exit() on a match, and return what it printed.
+	 *
+	 * @param array  $options Options to seed (name => value).
+	 * @param string $uri     Request URI.
+	 * @return string Raw response body.
+	 */
+	private function serve_in_child_process( array $options, string $uri ): string {
+		$script = sprintf(
+			'require %s; $GLOBALS["mcpwp_test_options"] = %s; $_SERVER["REQUEST_URI"] = %s; Mcpwp_OAuth_Well_Known::maybe_serve_well_known( true, null ); echo "FELL_THROUGH";',
+			var_export( __DIR__ . '/bootstrap.php', true ),
+			var_export( $options, true ),
+			var_export( $uri, true )
+		);
+
+		$output = array();
+		exec( escapeshellarg( PHP_BINARY ) . ' -d display_errors=0 -r ' . escapeshellarg( $script ) . ' 2>&1', $output );
+
+		return implode( "\n", $output );
+	}
+
+	public function test_served_protected_resource_document_for_broker_site_has_no_admin_scope(): void {
+		$body = $this->serve_in_child_process(
+			array(
+				'mcpwp_broker_enrollment' => array(
+					'site_id'         => 'abc',
+					'audience'        => home_url(),
+					'site_credential' => 'x',
+				),
+			),
+			'/.well-known/oauth-protected-resource'
+		);
+
+		$this->assertStringNotContainsString( 'FELL_THROUGH', $body, 'The dispatcher must serve the document, not fall through to WordPress.' );
+		$doc = json_decode( $body, true );
+		$this->assertIsArray( $doc, 'Served body must be JSON: ' . $body );
+		$this->assertSame( array( 'https://mumcp.com' ), $doc['authorization_servers'] );
+		$this->assertSame( array( 'read', 'write' ), $doc['scopes_supported'] );
+	}
+
+	public function test_served_protected_resource_document_for_self_issued_site_is_unchanged(): void {
+		$body = $this->serve_in_child_process(
+			array( 'mcpwp_settings' => array( 'oauth_enabled' => true ) ),
+			'/.well-known/oauth-protected-resource'
+		);
+
+		$doc = json_decode( $body, true );
+		$this->assertIsArray( $doc, 'Served body must be JSON: ' . $body );
+		$this->assertSame( array( 'read', 'write', 'admin' ), $doc['scopes_supported'] );
+	}
+
 	// ── Not enrolled — prior behavior must be unchanged ─────────────────────
 
 	public function test_not_enrolled_legacy_oauth_off_does_not_serve(): void {

@@ -287,14 +287,20 @@ class Mcpwp_OAuth_Well_Known {
 
 		if ( self::is_broker_enrolled() ) {
 			$authorization_servers = array( 'https://mumcp.com' );
+			// The broker only ever grants read and write (OAuth never grants
+			// admin; admin stays on the X-API-Key path). A client requests every
+			// scope a resource advertises, so advertising `admin` here makes the
+			// broker refuse the authorization request with invalid_scope.
+			$scopes_supported = array( 'read', 'write' );
 		} else {
 			$authorization_servers = array( $origin . '/.well-known/oauth-authorization-server' . $prefix );
+			$scopes_supported      = array( 'read', 'write', 'admin' );
 		}
 
 		return array(
 			'resource'                 => $resource,
 			'authorization_servers'    => $authorization_servers,
-			'scopes_supported'         => array( 'read', 'write', 'admin' ),
+			'scopes_supported'         => $scopes_supported,
 			'bearer_methods_supported' => array( 'header' ),
 		);
 	}

@@ -29,6 +29,7 @@ The `mcpwp_at_` bearer tokens issued carry only the granted scopes.
 
 - **PKCE S256 mandatory** — `plain` and missing challenge rejected.
 - **Scope clamped to the WP user's capability** — a Subscriber consenting cannot mint an admin-scoped token (admin→`manage_options`, write→`edit_posts`, else `read`); an absent scope defaults to `read`, never admin.
+- **Broker-enrolled sites advertise `read` and `write` only** — the protected-resource metadata of a site whose authorization server is the mumcp.com broker lists exactly the scopes the broker grants. Advertising `admin` there made clients request it and the broker refuse with `invalid_scope`. Admin stays on the `X-API-Key` path.
 - **Single-use auth codes**, 60s TTL, bound to client_id + redirect_uri + PKCE challenge + user; replay rejected.
 - **redirect_uri exact-match allow-list** — no open redirect.
 - **Refresh tokens** rotate on use and are user-bound.
