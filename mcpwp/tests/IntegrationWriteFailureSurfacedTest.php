@@ -207,6 +207,19 @@ final class IntegrationWriteFailureSurfacedTest extends TestCase
         $this->assertArrayNotHasKey('pexels', $this->records());
     }
 
+    public function test_rest_key_only_write_to_multi_field_provider_returns_actionable_400(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://worker.example', 'token' => 'fixture-token')));
+        $before = $this->records();
+        $result = $this->controller()->store_key($this->request(array('provider' => 'screenshot', 'key' => 'replacement')));
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('invalid_config', $result->get_error_code());
+        $this->assertSame(400, $result->get_error_data()['status']);
+        $this->assertStringContainsString('/integrations/configure', $result->get_error_message());
+        $this->assertTrue($before === $this->records(), 'REST refusal preserves ciphertext');
+    }
+
     public function test_rest_store_key_reports_a_lost_write(): void
     {
         $this->seed(array('pexels' => $this->record('v2:pexels-blob')));

@@ -360,6 +360,12 @@ class Mcpwp_Integration_Manager {
 			return false;
 		}
 
+		if ( $this->is_multi_field_provider( $provider ) ) {
+			$this->last_save_error         = 'invalid_config';
+			$this->last_save_error_message = __( 'This provider requires named config fields. Use /integrations/configure to update its configuration.', 'mcpwp' );
+			return false;
+		}
+
 		$encryption = Mcpwp_Encryption::get_instance();
 		$encrypted  = $encryption->encrypt( $key );
 		if ( false === $encrypted ) {
@@ -379,7 +385,7 @@ class Mcpwp_Integration_Manager {
 	}
 
 	/**
-	 * Store multi-field config for a provider (e.g. screenshot worker URL + token).
+	 * Merge multi-field config for a provider (e.g. screenshot worker URL + token).
 	 *
 	 * @param string $provider Provider slug.
 	 * @param array  $config   Associative array of field values.
@@ -394,30 +400,58 @@ class Mcpwp_Integration_Manager {
 		}
 
 		$this->last_save_error_message = '';
-		$config = $this->validate_provider_config( $provider, is_array( $config ) ? $config : array() );
-		if ( is_wp_error( $config ) ) {
-			$this->last_save_error         = 'invalid_config';
-			$this->last_save_error_message = $config->get_error_message();
-			return false;
-		}
 
+		$config     = is_array( $config ) ? $config : array();
+		$error      = null;
 		$encryption = Mcpwp_Encryption::get_instance();
-		$encrypted  = $encryption->encrypt( wp_json_encode( $config ) );
-		if ( false === $encrypted ) {
-			$this->last_save_error = 'encryption_failed';
+		$outcome    = $this->write_records(
+			function ( array $records ) use ( $provider, $config, $encryption, &$error ) {
+				$stored = array();
+				if ( $this->is_multi_field_provider( $provider ) && isset( $records[ $provider ] ) ) {
+					$record    = $records[ $provider ];
+					$decrypted = is_array( $record ) && ! empty( $record['key_encrypted'] ) ? $encryption->decrypt( $record['key_encrypted'] ) : false;
+					$stored    = false !== $decrypted && ! empty( $record['multi_field'] ) ? json_decode( $decrypted, true ) : false;
+					if ( ! is_array( $stored ) ) {
+						$error = new WP_Error( 'invalid_config', __( 'The stored provider configuration could not be read. Remove it explicitly before configuring it again.', 'mcpwp' ) );
+						return $error;
+					}
+				}
+
+				// Merge inside each compare-and-swap attempt, so a retry keeps
+				// concurrent field changes too. Explicit empty values clear fields.
+				$merged = $this->validate_provider_config( $provider, array_merge( $stored, $config ) );
+				if ( is_wp_error( $merged ) ) {
+					$error = new WP_Error( 'invalid_config', $merged->get_error_message() );
+					return $error;
+				}
+
+				$encrypted = $encryption->encrypt( wp_json_encode( $merged ) );
+				if ( false === $encrypted ) {
+					$error = new WP_Error( 'encryption_failed' );
+					return $error;
+				}
+
+				$records[ $provider ] = array(
+					'key_encrypted' => $encrypted,
+					'configured_at' => current_time( 'mysql' ),
+					'last_tested'   => null,
+					'test_status'   => null,
+					'multi_field'   => true,
+				);
+				return $records;
+			}
+		);
+
+		if ( self::WRITE_STORED !== $outcome ) {
+			$this->last_save_error         = $error ? $error->get_error_code() : 'integration_write_failed';
+			$this->last_save_error_message = $error ? $error->get_error_message() : '';
 			return false;
 		}
 
-		return $this->save_provider_record(
-			$provider,
-			array(
-				'key_encrypted' => $encrypted,
-				'configured_at' => current_time( 'mysql' ),
-				'last_tested'   => null,
-				'test_status'   => null,
-				'multi_field'   => true,
-			)
-		);
+		if ( class_exists( 'Mcpwp_Encryption_Migration' ) ) {
+			Mcpwp_Encryption_Migration::clear_provider_failure( $provider );
+		}
+		return true;
 	}
 
 	/**
@@ -671,7 +705,8 @@ class Mcpwp_Integration_Manager {
 	 * INSERT, so two first saves cannot overwrite each other either.
 	 *
 	 * @param callable $change Receives the current records; returns the new
-	 *                         records, or null when there is nothing to write.
+	 *                         records, null when there is nothing to write, or
+	 *                         WP_Error to abort.
 	 * @return string WRITE_STORED, WRITE_UNCHANGED or WRITE_FAILED.
 	 */
 	private function write_records( callable $change ) {
@@ -687,6 +722,10 @@ class Mcpwp_Integration_Manager {
 			$present = Mcpwp_Encryption::ROW_PRESENT === $row['state'];
 			$records = $present ? maybe_unserialize( $row['value'] ) : array();
 			$next    = call_user_func( $change, is_array( $records ) ? $records : array() );
+
+			if ( is_wp_error( $next ) ) {
+				return self::WRITE_FAILED;
+			}
 
 			if ( null === $next ) {
 				return self::WRITE_UNCHANGED;

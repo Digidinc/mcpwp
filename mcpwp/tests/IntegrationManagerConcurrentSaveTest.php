@@ -140,6 +140,82 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
         };
     }
 
+    /** #1004: a key-only write must never replace a structured record. */
+    public function test_key_only_writes_refuse_every_multi_field_provider(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        foreach (Mcpwp_Integration_Manager::PROVIDERS as $provider => $definition) {
+            if (!isset($definition['fields'])) {
+                continue;
+            }
+            $this->assertTrue($manager->set_provider_config($provider, array('token' => 'fixture-token')));
+            $before = $this->records();
+            $this->assertFalse($manager->set_provider_key($provider, 'replacement'), $provider);
+            $this->assertSame('invalid_config', $manager->get_last_save_error());
+            $this->assertTrue($before === $this->records(), 'refused write leaves ciphertext unchanged');
+        }
+    }
+
+    public function test_partial_config_saves_preserve_omitted_fields_and_allow_explicit_clearing(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://worker.example', 'token' => 'fixture-token')));
+        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://new.example')));
+        $config = $manager->get_provider_config('screenshot');
+        $this->assertTrue('fixture-token' === ($config['token'] ?? null), 'omitted token survives');
+        $this->assertSame('https://new.example', $config['url']);
+        $this->assertTrue($manager->set_provider_config('screenshot', array('token' => '')));
+        $config = $manager->get_provider_config('screenshot');
+        $this->assertSame('', $config['token']);
+        $this->assertSame('https://new.example', $config['url']);
+    }
+
+    public function test_partial_config_merge_is_reapplied_after_a_conflict(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://old.example', 'token' => 'old-fixture')));
+        $this->between_read_and_write(function () use ($manager): void {
+            $this->assertTrue($manager->set_provider_config('screenshot', array('token' => 'new-fixture')));
+        });
+        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://new.example')));
+        $config = $manager->get_provider_config('screenshot');
+        $this->assertTrue('new-fixture' === ($config['token'] ?? null), 'concurrent field update survives retry');
+        $this->assertSame('https://new.example', $config['url']);
+    }
+
+    public function test_single_field_provider_config_keeps_its_existing_save_behavior(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_key('gemini', 'old-fixture'));
+        $this->assertTrue($manager->set_provider_config('gemini', array('api_key' => 'new-fixture')));
+        $config = $manager->get_provider_config('gemini');
+        $this->assertTrue('new-fixture' === ($config['api_key'] ?? null), 'single-field config saves remain supported');
+    }
+
+    public function test_partial_jev_config_is_validated_after_merging_and_stays_encrypted(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('jev', array('api_key' => 'jev-fixture-token', 'transport' => 'off')));
+        $this->assertTrue($manager->set_provider_config('jev', array('endpoint' => 'https://jev.example')));
+        $config = $manager->get_provider_config('jev');
+        $this->assertSame('off', $config['transport']);
+        $this->assertTrue('jev-fixture-token' === ($config['api_key'] ?? null), 'omitted Jev key survives');
+        $before = $this->records();
+        $this->assertFalse(str_contains(serialize($before), 'jev-fixture-token'), 'stored record contains no plaintext key');
+        $this->assertFalse($manager->set_provider_config('jev', array('transport' => 'invalid')));
+        $this->assertSame('invalid_config', $manager->get_last_save_error());
+        $this->assertTrue($before === $this->records(), 'validation failure preserves ciphertext');
+    }
+
+    public function test_partial_config_refuses_unreadable_stored_ciphertext(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->seed(array('screenshot' => $this->record('v2:invalid-ciphertext') + array('multi_field' => true)));
+        $before = $this->records();
+        $this->assertFalse($manager->set_provider_config('screenshot', array('url' => 'https://new.example')));
+        $this->assertTrue($before === $this->records(), 'unreadable credentials are never discarded');
+    }
+
     public function test_two_interleaved_saves_of_different_providers_both_survive(): void
     {
         $this->seed(array('pexels' => $this->record('v2:pexels-blob')));
