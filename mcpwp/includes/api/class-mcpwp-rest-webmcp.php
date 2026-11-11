@@ -253,6 +253,13 @@ class Mcpwp_REST_WebMCP extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error
 	 */
 	public function handle_call( $request ) {
+		$params = array( 'name' => $request->get_param( 'name' ), 'arguments' => $request->get_param( 'arguments' ) );
+		return Mcpwp_WooCommerce_Audit::run_call( $params, $request, Mcpwp_WebMCP::principal_record( get_current_user_id() )['id'], function ( $context ) use ( $request ) {
+			return $this->handle_admitted_call( $request, $context );
+		}, 'rest' );
+	}
+
+	private function handle_admitted_call( $request, $audit_context = null ) {
 		$user_id   = get_current_user_id();
 		$tool_name = $request->get_param( 'name' );
 		$arguments = $request->get_param( 'arguments' );
@@ -313,6 +320,7 @@ class Mcpwp_REST_WebMCP extends Mcpwp_REST_API {
 			)
 		);
 
+		Mcpwp_WooCommerce_Audit::bind( $audit_context, $internal );
 		$previous = Mcpwp_WebMCP::begin_dispatch( $user_id );
 		try {
 			$response = rest_do_request( $internal );

@@ -326,6 +326,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-jev.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-jev-triage.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-action-log.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-woocommerce-audit.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-audit-store.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-autofix.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-search-performance.php';

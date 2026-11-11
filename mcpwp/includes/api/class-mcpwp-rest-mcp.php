@@ -1324,18 +1324,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param WP_REST_Request $request Request.
 	 * @return array
 	 */
-	private function handle_tools_call_idempotent( $id, $params, $request, $depth = 0 ) {
+	private function handle_tools_call_idempotent( $id, $params, $request, $depth = 0, $audit_context = null ) {
 		$request_id = isset( $params['_meta']['request_id'] ) ? $params['_meta']['request_id'] : null;
 
 		if ( null === $request_id ) {
-			return $this->handle_tools_call( $id, $params, $request );
+			return $this->handle_tools_call( $id, $params, $request, $audit_context );
 		}
 
 		// Two re-entries at most: a store that answers differently on
 		// consecutive reads must not turn into unbounded recursion. Past
 		// that, the call runs unprotected and says so.
 		if ( $depth >= 2 ) {
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'claim store inconsistent' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_stored', 'claim store inconsistent' );
 		}
 
 		if ( ! is_string( $request_id ) || '' === $request_id || strlen( $request_id ) > 128 || ! preg_match( '/^[A-Za-z0-9_\-:.]+$/', $request_id ) ) {
@@ -1357,19 +1357,19 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// tools alike) does not know cannot be classified, so it is not
 		// pinned — and the client is told.
 		if ( '' === $tool_name || ! isset( $tool_map[ $tool_name ] ) ) {
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_applicable', 'tool not in the built-in map' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_applicable', 'tool not in the built-in map' );
 		}
 
 		$tool_method = isset( $tool_map[ $tool_name ]['method'] ) ? strtoupper( (string) $tool_map[ $tool_name ]['method'] ) : 'POST';
 
 		if ( 'GET' === $tool_method ) {
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_applicable', 'read tool' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_applicable', 'read tool' );
 		}
 
 		// A tool whose result cannot prove completion (a deploy that absorbs
 		// failures into a success body) opts out in the map.
 		if ( isset( $tool_map[ $tool_name ]['pin'] ) && false === $tool_map[ $tool_name ]['pin'] ) {
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_applicable', 'result cannot prove completion' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_applicable', 'result cannot prove completion' );
 		}
 
 		// No principal, no pinning. 'anon' would be a namespace shared by
@@ -1379,7 +1379,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$scope      = self::principal_scope( $key_record );
 
 		if ( '' === $scope ) {
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'no per-user principal id on this session' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_stored', 'no per-user principal id on this session' );
 		}
 
 		$store_key = self::idempotency_key( $scope, $request_id );
@@ -1419,7 +1419,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// re-checked here: a category disabled or a key downgraded since
 			// the first call must not keep being served the old result.
 			if ( ! $this->tool_currently_permitted( $tool_name, $key_record ) ) {
-				return $this->handle_tools_call( $id, $params, $request );
+				return $this->handle_tools_call( $id, $params, $request, $audit_context );
 			}
 
 			if ( isset( $existing['response'] ) && is_array( $existing['response'] ) ) {
@@ -1466,10 +1466,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// runs; only then is the call run unprotected, and said so.
 			$done = get_transient( $store_key );
 			if ( is_array( $done ) && isset( $done['state'] ) && 'done' === $done['state'] ) {
-				return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1 );
+				return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1, $audit_context );
 			}
 
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'claim store unavailable' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_stored', 'claim store unavailable' );
 		}
 
 		if ( Mcpwp_Idempotency_Claim::HELD === $claim ) {
@@ -1480,7 +1480,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			if ( null === $lease ) {
 				$done = get_transient( $store_key );
 				if ( is_array( $done ) && isset( $done['state'] ) && 'done' === $done['state'] ) {
-					return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1 );
+					return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1, $audit_context );
 				}
 				$claim = Mcpwp_Idempotency_Claim::acquire( $lease_name, $now, $args_hash );
 				if ( Mcpwp_Idempotency_Claim::ACQUIRED !== $claim ) {
@@ -1514,7 +1514,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			}
 		}
 
-		$response = $this->handle_tools_call( $id, $params, $request );
+		$response = $this->handle_tools_call( $id, $params, $request, $audit_context );
 
 		try {
 			$completed = is_array( $response )
@@ -1853,7 +1853,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$arguments = isset( $target['arguments'] ) && is_array( $target['arguments'] ) ? $target['arguments'] : array();
 		$definition = $this->audit_tool_definition( $name );
 		$record = $this->get_current_api_key_record();
-		$callback = function () use ( $id, $params, $request ) {
+		$callback = function ( $audit_context = null ) use ( $id, $params, $request ) {
 			$resolved = $this->resolve_mcpwp_call( $params );
 			if ( null !== $resolved['error'] ) {
 				$this->fire_tool_called( 'mcpwp_call', microtime( true ), $this->analytics_code_for_client_code( $resolved['error']['code'] ) );
@@ -1861,14 +1861,19 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			}
 			$params = $resolved['params'];
 			return $this->conform_tool_call_result(
-				$this->handle_tools_call_idempotent( $id, $params, $request ),
+				$this->handle_tools_call_idempotent( $id, $params, $request, 0, $audit_context ),
 				isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '',
 				isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array()
 			);
 		};
-		return class_exists( 'Mcpwp_Action_Log' )
-			? Mcpwp_Action_Log::with_attempt( $name, $arguments, isset( $record['id'] ) ? (string) $record['id'] : '', $definition['category'], $definition['annotations'], $callback, 'mcp', $request )
-			: $callback();
+		$actor = $this->get_audit_key_id();
+		$response = Mcpwp_WooCommerce_Audit::run_call( $params, $request, $actor, function ( $context ) use ( $callback, $name, $arguments, $record, $definition, $request ) {
+			if ( null !== $context && 'write' === $context->kind ) {
+				return $callback( $context );
+			}
+			return Mcpwp_Action_Log::with_attempt( $name, $arguments, isset( $record['id'] ) ? (string) $record['id'] : '', $definition['category'], $definition['annotations'], static function () use ( $callback, $context ) { return $callback( $context ); }, 'mcp', $request );
+		} );
+		return is_wp_error( $response ) ? $this->tool_error_result( $id, $response->get_error_code(), $response->get_error_message(), $response->get_error_data() ) : $response;
 	}
 
 	/**
@@ -4404,7 +4409,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param WP_REST_Request $request Original REST request.
 	 * @return array JSON-RPC response.
 	 */
-	private function handle_tools_call( $id, $params, $request ) {
+	private function handle_tools_call( $id, $params, $request, $audit_context = null ) {
 		$start         = microtime( true );
 		$raw_tool_name = isset( $params['name'] ) ? $params['name'] : null;
 
@@ -4770,6 +4775,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				? $route
 				: '/mcpwp/v1' . $route;
 			$internal_request = new WP_REST_Request( $method, $full_route );
+			Mcpwp_WooCommerce_Audit::bind( $audit_context, $internal_request );
 
 			// Set remaining arguments as params.
 			// For write methods, also set body params so get_param() finds them

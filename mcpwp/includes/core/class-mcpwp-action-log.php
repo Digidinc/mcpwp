@@ -68,8 +68,6 @@ class Mcpwp_Action_Log {
 
 	/** Active attempts are scoped to this PHP request, never to client headers. */
 	private static $attempts = array();
-	private static $rest_dispatching = array();
-	private static $refusals = array();
 
 	/**
 	 * One receipt for every outcome, including refusals, replays and exceptions.
@@ -127,164 +125,23 @@ class Mcpwp_Action_Log {
 		self::$attempts[ $index ]['log_id'] = self::begin( $attempt['tool_name'], $arguments, $attempt['api_key_id'], $attempt['category'], $attempt['annotations'] );
 	}
 
-	/** Auth refusals happen before either the MCP handler or REST callback. */
-	public static function record_refusal( $request, $error, $record ) {
-		if ( ! is_wp_error( $error ) || ! $request instanceof WP_REST_Request ) {
-			return;
-		}
-		$key = spl_object_id( $request );
-		if ( isset( self::$refusals[ $key ] ) && self::$refusals[ $key ] === $request ) {
-			return;
-		}
-		if ( count( self::$refusals ) >= 64 ) {
-			unset( self::$refusals[ array_key_first( self::$refusals ) ] );
-		}
-		self::$refusals[ $key ] = $request;
-		foreach ( self::$attempts as $index => $attempt ) {
-			if ( $attempt['request'] === $request ) {
-				if ( isset( $record['id'] ) ) {
-					self::$attempts[ $index ]['api_key_id'] = (string) $record['id'];
-				}
-				return; // The enclosing REST attempt owns this refusal.
-			}
-		}
-		$tool = self::rest_tool( $request );
-		if ( null !== $tool ) {
-			$log_id = self::begin( $tool['name'], $tool['arguments'], $record['id'] ?? '', 'woocommerce', $tool['annotations'], false );
-			self::complete( $log_id, 0, false, $error->get_error_code() );
-			return;
-		}
-		if ( '/mcpwp/v1/batch' === rtrim( $request->get_route(), '/' ) ) {
-			self::record_batch_refusal( $request->get_param( 'operations' ), $error, $record );
-			return;
-		}
-		if ( '/mcpwp/v1/mcp' !== rtrim( $request->get_route(), '/' ) ) {
-			return;
-		}
-		$body = $request->get_json_params();
-		$calls = isset( $body['method'] ) ? array( $body ) : ( is_array( $body ) ? $body : array() );
-		foreach ( $calls as $call ) {
-			if ( ! is_array( $call ) || 'tools/call' !== ( $call['method'] ?? null ) ) {
-				continue;
-			}
-			$params = $call['params'] ?? array();
-			if ( 'mcpwp_call' === ( $params['name'] ?? null ) ) {
-				$params = $params['arguments'] ?? array();
-			}
-			$name = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
-			$arguments = isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array();
-			if ( 'wp_batch' === $name ) {
-				self::record_batch_refusal( $arguments['operations'] ?? null, $error, $record );
-			}
-			$definition = ( new Mcpwp_REST_MCP() )->audit_tool_definition( $name );
-			$log_id = self::begin( $name, $arguments, $record['id'] ?? '', $definition['category'], $definition['annotations'], false );
-			self::complete( $log_id, 0, false, $error->get_error_code() );
-		}
-	}
-
-	/** A batch refused before dispatch still attempted each declared operation. */
-	private static function record_batch_refusal( $operations, $error, $record ) {
-		if ( ! is_array( $operations ) || count( $operations ) > Mcpwp_REST_Batch::MAX_OPERATIONS ) {
-			return; // Over-limit batches never admit any child operations.
-		}
-		foreach ( $operations as $operation ) {
-			if ( ! is_array( $operation ) || ! isset( $operation['path'], $operation['method'] ) || ! is_string( $operation['path'] ) || ! is_string( $operation['method'] ) ) {
-				continue;
-			}
-			$path = $operation['path'];
-			if ( 0 !== strpos( $path, '/mcpwp/v1/' ) ) {
-				$path = '/mcpwp/v1/' . ltrim( $path, '/' );
-			}
-			$arguments = isset( $operation['body'] ) && is_array( $operation['body'] ) ? $operation['body'] : array();
-			$request = new WP_REST_Request( strtoupper( $operation['method'] ), $path );
-			$request->set_body_params( $arguments );
-			$tool = self::rest_tool( $request );
-			if ( null !== $tool ) {
-				$log_id = self::begin( $tool['name'], $tool['arguments'], $record['id'] ?? '', 'woocommerce', $tool['annotations'], false );
-				self::complete( $log_id, 0, false, $error->get_error_code() );
-			}
-		}
-	}
-
-	/** Match every WooCommerce write from the declared tool map, not endpoints. */
-	private static function rest_tool( $request ) {
-		$registry = new Mcpwp_MCP_Pro_Tools();
-		foreach ( $registry->get_tool_map() as $name => $mapping ) {
-			if ( 0 !== strpos( $name, 'wc_' ) || $mapping['method'] !== $request->get_method() ) {
-				continue;
-			}
-			$annotations = $registry->get_tool_annotations( $name );
-			if ( ! empty( $annotations['readOnlyHint'] ) ) {
-				continue;
-			}
-			$pattern = str_replace( '\\{id\\}', '(?P<id>[^/]+)', preg_quote( '/mcpwp/v1' . $mapping['route'], '#' ) );
-			if ( preg_match( '#^' . $pattern . '/?$#', $request->get_route(), $matches ) ) {
-				$arguments = $request->get_params();
-				if ( isset( $matches['id'] ) ) {
-					$arguments['id'] = $matches['id'];
-				}
-				return array( 'name' => $name, 'arguments' => $arguments, 'annotations' => $annotations );
-			}
-		}
-		return null;
-	}
-
-	/**
-	 * Wrap normal WP dispatch, including validation and permission refusals.
-	 * Re-entry uses the identical request and normal gates. Unlike
-	 * rest_post_dispatch, this also runs for rest_do_request() batch children.
-	 */
-	public static function audit_rest_dispatch( $result, $server, $request ) {
-		$key = spl_object_id( $request );
-		if ( isset( self::$rest_dispatching[ $key ] ) ) {
-			return $result;
-		}
-		$tool = self::rest_tool( $request );
-		if ( null === $tool ) {
-			return $result;
-		}
-		// A routed MCP attempt already owns this same execution's receipt.
-		$parent = end( self::$attempts );
-		if ( $parent && 'mcp' === $parent['format'] && $parent['tool_name'] === $tool['name'] ) {
-			return $result;
-		}
-		self::$rest_dispatching[ $key ] = true;
-		try {
-			return self::with_attempt( $tool['name'], $tool['arguments'], '', 'woocommerce', $tool['annotations'], static function () use ( $result, $request ) {
-				return null !== $result ? rest_ensure_response( $result ) : rest_do_request( $request );
-			}, 'rest', $request );
-		} finally {
-			unset( self::$rest_dispatching[ $key ] );
-		}
-	}
-
-	/** Read only the principal authenticated by the real permission callback. */
-	public static function rest_context( $response, $handler, $request ) {
-		$index = count( self::$attempts ) - 1;
-		if ( $index >= 0 && self::$attempts[ $index ]['request'] === $request ) {
-			$permission = $handler['permission_callback'] ?? null;
-			$controller = is_array( $permission ) ? $permission[0] : null;
-			if ( is_object( $controller ) && method_exists( $controller, 'get_audit_key_id' ) ) {
-				self::$attempts[ $index ]['api_key_id'] = $controller->get_audit_key_id();
-			}
-		}
-		return $response;
-	}
-
-	/** rest_dispatch_request runs after successful permissions, before mutation. */
+	/** Legacy non-WooCommerce snapshot boundary. WC ownership lives in its context. */
 	public static function capture_rest_attempt( $response, $request, $route, $handler ) {
-		self::rest_context( $response, $handler, $request );
 		$attempt = end( self::$attempts );
-		if ( null === $response && $attempt ) {
-			$tool = self::rest_tool( $request );
-			if ( $attempt['request'] === $request || ( 'mcp' === $attempt['format'] && $tool && $tool['name'] === $attempt['tool_name'] ) ) {
-				self::capture_attempt( $tool ? $tool['arguments'] : $attempt['arguments'] );
-			} elseif ( 'mcp' === $attempt['format'] && null === $attempt['log_id'] ) {
-				// Non-WooCommerce MCP routes still use the same authorized boundary.
-				self::capture_attempt( $attempt['arguments'] );
-			}
+		if ( null === $response && $attempt && 'mcp' === $attempt['format'] && null === $attempt['log_id'] && null === Mcpwp_WooCommerce_Audit::route_definition( $request ) ) {
+			self::capture_attempt( $attempt['arguments'] );
 		}
 		return $response;
+	}
+
+	/** Sole persistence API called by the WooCommerce context finalizer. */
+	public static function record_woocommerce_attempt( $context ) {
+		return self::insert(
+			self::generate_id(), $context->tool, 'woocommerce', $context->api_key_id,
+			Mcpwp_WooCommerce_Audit::redact_arguments( $context->arguments ),
+			null, null, 'other', $context->resource_id, '', '',
+			$context->duration_ms, $context->success ? 1 : 0, $context->error_code, 0, false
+		);
 	}
 
 	public static function register_site_health( $tests ) {
@@ -1201,21 +1058,21 @@ class Mcpwp_Action_Log {
 		$written = $wpdb->insert(
 			$wpdb->prefix . self::TABLE,
 			array(
-				'log_id'             => (string) $log_id,
+				'log_id'             => Mcpwp_WooCommerce_Audit::bound( $log_id, 44 ),
 				'timestamp'          => current_time( 'mysql', true ),
-				'tool_name'          => (string) $tool_name,
-				'category'           => (string) $category,
-				'api_key_id'         => (string) $api_key_id,
+				'tool_name'          => Mcpwp_WooCommerce_Audit::bound( $tool_name, 100 ),
+				'category'           => Mcpwp_WooCommerce_Audit::bound( $category, 50 ),
+				'api_key_id'         => Mcpwp_WooCommerce_Audit::bound( $api_key_id, 100 ),
 				'arguments'          => $encoded_args,
 				'before_snap'        => $before_snap,
 				'after_snap'         => $after_snap,
-				'resource_type'      => (string) $resource_type,
-				'resource_id'        => (string) $resource_id,
-				'resource_post_type' => (string) $resource_post_type,
-				'snapshot_skipped'   => (string) $snapshot_skipped,
+				'resource_type'      => Mcpwp_WooCommerce_Audit::bound( $resource_type, 50 ),
+				'resource_id'        => Mcpwp_WooCommerce_Audit::bound( $resource_id, 255 ),
+				'resource_post_type' => Mcpwp_WooCommerce_Audit::bound( $resource_post_type, 40 ),
+				'snapshot_skipped'   => Mcpwp_WooCommerce_Audit::bound( $snapshot_skipped, 20 ),
 				'duration_ms'        => (int) $duration_ms,
 				'success'            => (int) $success,
-				'error_code'         => (string) $error_code,
+				'error_code'         => Mcpwp_WooCommerce_Audit::bound( $error_code, 50 ),
 				'rollback_supported' => (int) $rollback_supported,
 				'rolled_back'        => 0,
 			),

@@ -1020,15 +1020,15 @@ trait Mcpwp_Api_Auth {
 				$this->mcpwp_metered          = self::$mcpwp_verdicts[ $memo_id ][3];
 				$this->mcpwp_audit_key_id = self::$mcpwp_verdicts[ $memo_id ][4] ?? '';
 				$this->maybe_enter_guardrails_context( self::$mcpwp_verdicts[ $memo_id ][1] );
-				if ( class_exists( 'Mcpwp_Action_Log' ) ) {
-					Mcpwp_Action_Log::record_refusal( $request, self::$mcpwp_verdicts[ $memo_id ][1], array( 'id' => $this->mcpwp_audit_key_id ) );
+				if ( class_exists( 'Mcpwp_WooCommerce_Audit' ) ) {
+					Mcpwp_WooCommerce_Audit::auth_result( $request, self::$mcpwp_verdicts[ $memo_id ][1], $this->mcpwp_audit_key_id );
 				}
 				return self::$mcpwp_verdicts[ $memo_id ][1];
 			}
 
 			$verdict = $this->compute_api_key_verdict( $request );
-			if ( class_exists( 'Mcpwp_Action_Log' ) ) {
-				Mcpwp_Action_Log::record_refusal( $request, $verdict, array( 'id' => $this->mcpwp_audit_key_id ) );
+			if ( class_exists( 'Mcpwp_WooCommerce_Audit' ) ) {
+				Mcpwp_WooCommerce_Audit::auth_result( $request, $verdict, $this->mcpwp_audit_key_id );
 			}
 
 			// Holding the request keeps its object id from being reused for
@@ -1399,6 +1399,7 @@ trait Mcpwp_Api_Auth {
 			return $rate_limit_check;
 		}
 
+		$this->mcpwp_audit_key_id = isset( $matched_key['id'] ) ? (string) $matched_key['id'] : '';
 		$required_scope = $this->get_required_scope_for_request( $request );
 		if ( ! $this->key_has_scope( $matched_key, $required_scope ) ) {
 			$granted = isset( $matched_key['scopes'] ) ? $matched_key['scopes'] : array();
@@ -3959,6 +3960,7 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
+		$this->mcpwp_audit_key_id = isset( $matched_key['id'] ) ? (string) $matched_key['id'] : '';
 		$required_scope = $this->get_required_scope_for_request( $request );
 		if ( ! $this->key_has_scope( $matched_key, $required_scope ) ) {
 			return new WP_Error(

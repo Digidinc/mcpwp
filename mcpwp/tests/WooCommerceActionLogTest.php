@@ -72,7 +72,7 @@ final class WooCommerceActionLogTest extends TestCase {
 		return array(
 			'create product' => array( 'wc_create_product', array( 'name' => 'Test product' ), array( 'id' => 73 ), '73' ),
 			'update product' => array( 'wc_update_product', array( 'id' => 41, 'name' => 'Updated' ), array( 'id' => 41 ), '41' ),
-			'delete product' => array( 'wc_delete_product', array( 'id' => 42 ), array( 'deleted' => true ), '42' ),
+			'delete product' => array( 'wc_delete_product', array( 'id' => 42 ), array( 'deleted' => true, 'id' => 42 ), '42' ),
 			'update order' => array( 'wc_update_order', array( 'id' => 43, 'status' => 'completed' ), array( 'id' => 43 ), '43' ),
 			'create category' => array( 'wc_create_product_category', array( 'name' => 'Test category' ), array( 'id' => 74 ), '74' ),
 			'update category' => array( 'wc_update_product_category', array( 'id' => 44, 'name' => 'Updated' ), array( 'id' => 44 ), '44' ),

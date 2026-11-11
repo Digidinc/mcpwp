@@ -60,6 +60,10 @@ final class ActionLogAttemptTest extends TestCase {
 	}
 
 	public function test_direct_rest_and_batch_subrequests_share_the_route_auditor(): void {
+		add_filter( 'rest_dispatch_request', static function ( $pre, $request ) {
+			Mcpwp_WooCommerce_Audit::auth_result( $request, true, 'verified-key' );
+			return $pre;
+		}, 10, 2 );
 		$registry = new Mcpwp_MCP_Pro_Tools();
 		$seen = array();
 		foreach ( $registry->get_tool_map() as $name => $mapping ) {
@@ -73,7 +77,7 @@ final class ActionLogAttemptTest extends TestCase {
 				$previous = Mcpwp_REST_Batch::$is_batch_sub_request;
 				Mcpwp_REST_Batch::$is_batch_sub_request = $batch;
 				try {
-					$response = Mcpwp_Action_Log::audit_rest_dispatch( null, null, $request );
+					$response = Mcpwp_WooCommerce_Audit::rest_dispatch( null, null, $request );
 				} finally {
 					Mcpwp_REST_Batch::$is_batch_sub_request = $previous;
 				}
@@ -171,19 +175,22 @@ final class ActionLogAttemptTest extends TestCase {
 	public function test_repeated_permission_checks_do_not_duplicate_a_refusal(): void {
 		$request = new WP_REST_Request( 'PUT', '/mcpwp/v1/woocommerce/products/41' );
 		$error = new WP_Error( 'insufficient_scope', 'Denied', array( 'status' => 403 ) );
-		Mcpwp_Action_Log::with_attempt( 'wc_update_product', array( 'id' => 41 ), '', 'woocommerce', array( 'readOnlyHint' => false ), static function () use ( $request, $error ) {
-			Mcpwp_Action_Log::record_refusal( $request, $error, array( 'id' => 'verified-key' ) );
+		$context = Mcpwp_WooCommerce_Audit::new_attempt( 'wc_update_product', array( 'id' => 41 ), '', $request );
+		Mcpwp_WooCommerce_Audit::bind( $context, $request );
+		Mcpwp_WooCommerce_Audit::execute( $context, static function () use ( $request, $error ) {
+			Mcpwp_WooCommerce_Audit::auth_result( $request, $error, 'verified-key' );
 			return $error;
-		}, 'rest', $request );
-		Mcpwp_Action_Log::record_refusal( $request, $error, array( 'id' => 'verified-key' ) );
+		}, 'rest' );
+		Mcpwp_WooCommerce_Audit::auth_result( $request, $error, 'verified-key' );
 		$this->assertCount( 1, $this->rows() );
 		$this->assertSame( 'verified-key', $this->rows()[0]['api_key_id'] );
 		$this->assertNull( $this->rows()[0]['before_snap'] );
 	}
 
 	public function test_internal_rest_dispatch_does_not_duplicate_the_mcp_receipt(): void {
+		$GLOBALS['mcpwp_test_rest_response_override'] = array( 'id' => 41 );
 		add_filter( 'rest_dispatch_request', static function ( $pre, $request ) {
-			return Mcpwp_Action_Log::audit_rest_dispatch( $pre, null, $request );
+			return Mcpwp_WooCommerce_Audit::rest_dispatch( $pre, null, $request );
 		}, 10, 2 );
 		add_filter( 'rest_dispatch_request', array( 'Mcpwp_Action_Log', 'capture_rest_attempt' ), 20, 4 );
 		$this->call( 'wc_update_product', array( 'id' => 41, 'name' => 'Changed' ) );
@@ -197,8 +204,8 @@ final class ActionLogAttemptTest extends TestCase {
 			array( 'method' => 'PUT', 'path' => '/woocommerce/orders/42', 'body' => array( 'status' => 'completed' ) ),
 		) ) );
 		$error = new WP_Error( 'insufficient_scope', 'Denied', array( 'status' => 403 ) );
-		Mcpwp_Action_Log::record_refusal( $request, $error, array( 'id' => 'verified-key' ) );
-		Mcpwp_Action_Log::record_refusal( $request, $error, array( 'id' => 'verified-key' ) );
+		Mcpwp_WooCommerce_Audit::auth_result( $request, $error, 'verified-key' );
+		Mcpwp_WooCommerce_Audit::auth_result( $request, $error, 'verified-key' );
 		$rows = $this->rows();
 		$this->assertCount( 2, $rows );
 		$this->assertSame( array( '41', '42' ), array_column( $rows, 'resource_id' ) );
@@ -241,8 +248,7 @@ final class ActionLogAttemptTest extends TestCase {
 		$this->assertSame( $key['id'], $controller->get_audit_key_id() );
 		$invalid = new WP_REST_Request( 'PUT', '/mcpwp/v1/woocommerce/products/41', array( 'id' => 41 ), array( 'X-API-Key' => 'mcpwp_invalid_fixture' ) );
 		$this->assertInstanceOf( WP_Error::class, $controller->verify_api_key( $invalid ) );
-		$this->assertCount( 1, $this->rows() );
-		$this->assertSame( '', $this->rows()[0]['api_key_id'] );
+		$this->assertCount( 0, $this->rows() );
 		$this->assertSame( '', $controller->get_audit_key_id() );
 	}
 

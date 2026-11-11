@@ -165,6 +165,18 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	}
 
 	public function handle_batch( $request ) {
+		$operations = $request->get_param( 'operations' );
+		if ( ! is_array( $operations ) || empty( $operations ) || count( $operations ) > self::MAX_OPERATIONS ) {
+			return $this->handle_admitted_batch( $request );
+		}
+		$params = array( 'name' => 'wp_batch', 'arguments' => array( 'operations' => $operations ) );
+		return Mcpwp_WooCommerce_Audit::run_call( $params, $request, $this->get_audit_key_id(), function ( $context ) use ( $request ) {
+			Mcpwp_WooCommerce_Audit::bind( $context, $request );
+			return $this->handle_admitted_batch( $request );
+		}, 'rest' );
+	}
+
+	private function handle_admitted_batch( $request ) {
 		$this->log_activity( 'batch_request', $request );
 
 		$operations = $request->get_param( 'operations' );
@@ -191,6 +203,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 			);
 		}
 
+		Mcpwp_WooCommerce_Audit::begin_batch( $request, $this->get_audit_key_id() );
 		$results = array();
 
 		// One spend budget for the whole fan-out tree of this HTTP request
@@ -495,7 +508,8 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		self::$is_batch_sub_request = true;
 
 		try {
-			$response = rest_do_request( $internal_request );
+			$parent = Mcpwp_WooCommerce_Audit::begin_batch( $request, $this->get_audit_key_id() );
+			$response = Mcpwp_WooCommerce_Audit::dispatch_child( $parent, $index, $internal_request, static function () use ( $internal_request ) { return rest_do_request( $internal_request ); } );
 		} finally {
 			self::$is_batch_sub_request = $previous_sub_request;
 		}
