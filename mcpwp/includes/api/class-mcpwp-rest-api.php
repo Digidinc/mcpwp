@@ -70,9 +70,9 @@ abstract class Mcpwp_REST_API {
 			$body = $request->get_body();
 			$type = strtolower( (string) $request->get_header( 'Content-Type' ) );
 			if ( false !== strpos( $type, 'multipart/form-data' ) ) {
-				// PHP has consumed the parts; only the core decides whether
-				// this input format can safely create a theme template.
-				$sources[] = new Mcpwp_Raw_Parameter_Source( 'multipart', '', 'body' );
+				// PHP consumed the parts. Preserve the body independently of
+				// query parameters for the core's presence/input-limit guard.
+				$sources[] = new Mcpwp_Raw_Parameter_Source( 'multipart', $request->get_body_params(), 'body' );
 			} elseif ( '' !== $body && ( false !== strpos( $type, 'json' ) || false !== strpos( $type, 'application/x-www-form-urlencoded' ) ) ) {
 				$sources[] = new Mcpwp_Raw_Parameter_Source( false !== strpos( $type, 'json' ) ? 'json' : 'form', $body, 'body' );
 			}

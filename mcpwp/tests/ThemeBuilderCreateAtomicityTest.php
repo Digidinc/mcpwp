@@ -1214,21 +1214,26 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$this->assertSame( 400, $response->get_error_data()['status'] );
 	}
 
+	public static function multipart_content_types(): array {
+		return array( array( 'multipart/form-data; boundary=php-consumed-parts' ), array( 'Multipart/Form-Data; boundary=php-consumed-parts' ) );
+	}
+
 	/**
+	 * @dataProvider multipart_content_types
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
-	public function test_multipart_without_intent_is_explicitly_unsupported(): void {
+	public function test_multipart_without_intent_creates_normally( string $type ): void {
 		$this->install_elementor( false );
 		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', array(
-			'title' => 'Multipart', 'type' => 'single', 'dry_runs' => '1',
-		), array( 'Content-Type' => 'multipart/form-data; boundary=php-consumed-parts' ) );
+			'title' => 'Multipart', 'type' => 'single',
+		), array( 'Content-Type' => $type ) );
 		$response = ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
-		$this->assertInstanceOf( WP_Error::class, $response );
-		$this->assertSame( 'invalid_params', $response->get_error_code() );
-		$this->assertSame( 400, $response->get_error_data()['status'] );
-		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertInstanceOf( WP_REST_Response::class, $response );
+		$this->assertSame( 201, $response->get_status() );
+		$this->assertSame( 'publish', $response->get_data()['status'] );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 	}
 
 	/**
@@ -1268,7 +1273,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
-	public function test_multipart_query_intent_is_also_fail_closed(): void {
+	public function test_multipart_clear_false_query_does_not_block_plain_body(): void {
 		$this->install_elementor( false );
 		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', array(
@@ -1276,10 +1281,9 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		), array( 'Content-Type' => 'multipart/form-data; boundary=php-consumed-parts' ) );
 		$request->set_query_params( array( 'preview' => '0' ) );
 		$response = ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
-		$this->assertInstanceOf( WP_Error::class, $response );
-		$this->assertSame( 'invalid_params', $response->get_error_code() );
-		$this->assertSame( 400, $response->get_error_data()['status'] );
-		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertInstanceOf( WP_REST_Response::class, $response );
+		$this->assertSame( 201, $response->get_status() );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 	}
 
 	/**
@@ -1299,6 +1303,136 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$this->assertSame( 'invalid_params', $data['results'][0]['data']['code'] );
 		$this->assertSame( 200, $data['results'][1]['status'] );
 		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	public static function query_separator_sets(): array {
+		return array(
+			array( 'query', '&;', 'dry_run=1;dry_run=0&title=x', array( 'dry_run=1', 'dry_run=0', 'title=x' ) ),
+			array( 'query', ';', 'dry_run=1;dry_run=0', array( 'dry_run=1', 'dry_run=0' ) ),
+			array( 'query', '&|;', 'a=1|b=2;c=3&d=4', array( 'a=1', 'b=2', 'c=3', 'd=4' ) ),
+			array( 'query', '', 'a=1&b=2;c=3', array( 'a=1', 'b=2;c=3' ) ),
+			array( 'query', '&;', 'dry_run=1%3Bdry_run%3D0&preview=0', array( 'dry_run=1%3Bdry_run%3D0', 'preview=0' ) ),
+			array( 'body', '&;', 'dry_run=1;dry_run=0&title=x', array( 'dry_run=1;dry_run=0', 'title=x' ) ),
+		);
+	}
+
+	/** @dataProvider query_separator_sets */
+	public function test_form_split_matches_source_separator_rules( string $channel, string $separators, string $raw, array $expected ): void {
+		$this->assertTrue( method_exists( Mcpwp_Theme_Builder::class, 'split_form_fields' ), 'One source-aware splitter must own field boundaries.' );
+		$this->assertSame( $expected, Mcpwp_Theme_Builder::split_form_fields( $raw, $channel, $separators ) );
+	}
+
+	public static function multipart_field_limits(): array {
+		return array( array( false, true ), array( true, true ), array( false, false ), array( true, false ) );
+	}
+
+	/**
+	 * @dataProvider multipart_field_limits
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_multipart_field_limit_refuses_only_at_or_above_bound( bool $nested, bool $at_limit ): void {
+		$this->install_elementor( false );
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
+		$limit = (int) ini_get( 'max_input_vars' );
+		if ( $limit < 3 ) {
+			$this->markTestSkipped( 'This boundary test requires a finite limit above the required fields.' );
+		}
+		$data = array( 'title' => 'Bounded', 'type' => 'single' );
+		$count = $limit - 2 - ( $at_limit ? 0 : 1 );
+		for ( $i = 0; $i < $count; ++$i ) {
+			if ( $nested ) {
+				$data['padding'][ $i ] = 'x';
+			} else {
+				$data[ 'padding_' . $i ] = 'x';
+			}
+		}
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $data, array( 'Content-Type' => 'multipart/form-data; boundary=php-consumed-parts' ) );
+		$response = ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
+		if ( $at_limit ) {
+			$this->assertInstanceOf( WP_Error::class, $response );
+			$this->assertSame( 'invalid_params', $response->get_error_code() );
+			$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+		} else {
+			$this->assertInstanceOf( WP_REST_Response::class, $response );
+			$this->assertSame( 201, $response->get_status() );
+			$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
+		}
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_plain_multipart_batch_template_still_creates(): void {
+		$this->install_elementor( false );
+		$this->dispatch_template_args( 'REST', array( 'dry_run' => true ) );
+		$body = array( 'operations' => array( array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => array( 'title' => 'Multipart batch', 'type' => 'single' ) ) ) );
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/batch', $body, array( 'Content-Type' => 'Multipart/Form-Data; boundary=php-consumed-parts' ) );
+		$data = ( new Mcpwp_REST_Batch() )->handle_batch( $request )->get_data();
+		$this->assertSame( 201, $data['results'][0]['status'] );
+		$this->assertSame( 'publish', $data['results'][0]['data']['status'] );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_multipart_body_intent_is_refused_at_arbitrary_depth(): void {
+		$this->install_elementor( false );
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
+		$body = array( 'title' => 'Nested', 'type' => 'single', 'metadata' => array( 'custom' => array( 'DryRun' => false ) ) );
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $body, array( 'Content-Type' => 'multipart/form-data; boundary=php-consumed-parts' ) );
+		$response = ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'invalid_params', $response->get_error_code() );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	public static function multipart_template_sibling_orders(): array {
+		return array( array( false ), array( true ) );
+	}
+
+	/**
+	 * @dataProvider multipart_template_sibling_orders
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_multipart_template_intent_is_scoped_to_its_operation( bool $reverse ): void {
+		$this->install_elementor( false );
+		$this->dispatch_template_args( 'REST', array( 'dry_run' => true ) );
+		$operations = array(
+			array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => array( 'title' => 'Refuse', 'type' => 'single', 'custom' => array( 'DryRun' => false ) ) ),
+			array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => array( 'title' => 'Create', 'type' => 'single' ) ),
+		);
+		if ( $reverse ) {
+			$operations = array_reverse( $operations );
+		}
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/batch', array( 'operations' => $operations ), array( 'Content-Type' => 'multipart/form-data; boundary=php-consumed-parts' ) );
+		$data = ( new Mcpwp_REST_Batch() )->handle_batch( $request )->get_data();
+		$this->assertSame( 400, $data['results'][ $reverse ? 1 : 0 ]['status'] );
+		$this->assertSame( 201, $data['results'][ $reverse ? 0 : 1 ]['status'] );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	public static function post_field_isolation_cases(): array {
+		return array(
+			array( '&', 'dry_run=0', 'dry_run=0' ),
+			array( '&;', 'note=x;dry_run=1', 'note=x%3Bdry_run=1' ),
+			array( '&;', 'dry_run=%30', 'dry_run=%30' ),
+			array( '&%', '%64ry_run=1', null ),
+			array( '&B', 'dry_run=%3B', null ),
+			array( '&6', 'dry_run=6', null ),
+			array( '&|', 'dry|run=0', 'dry%7Crun=0' ),
+			array( '&=', 'dry_run=0', null ),
+		);
+	}
+
+	/** @dataProvider post_field_isolation_cases */
+	public function test_post_field_cannot_be_resplit_by_query_configuration( string $separators, string $field, $expected ): void {
+		$this->assertTrue( method_exists( Mcpwp_Theme_Builder::class, 'prepare_post_field' ) );
+		$this->assertSame( $expected, Mcpwp_Theme_Builder::prepare_post_field( $field, $separators ) );
 	}
 
 }

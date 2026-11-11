@@ -755,6 +755,121 @@ class Mcpwp_Theme_Builder {
 	}
 
 	/**
+	 * Query separators follow PHP configuration; POST bodies always use &.
+	 * The optional separator set allows direct parity tests on SAPIs where
+	 * arg_separator.input cannot be changed with ini_set().
+	 *
+	 * @param string      $raw Raw form/query bytes.
+	 * @param string      $channel Query or body.
+	 * @param string|null $query_separators Explicit query separators for tests.
+	 * @return array Ordered raw fields.
+	 */
+	public static function split_form_fields( $raw, $channel, $query_separators = null ) {
+		$separators = 'query' === $channel ? ( null === $query_separators ? (string) ini_get( 'arg_separator.input' ) : $query_separators ) : '&';
+		return preg_split( '~[' . preg_quote( '' === $separators ? '&' : $separators, '~' ) . ']~', $raw );
+	}
+
+	/**
+	 * Isolate a POST field from parse_str's query grammar. If a configured
+	 * delimiter collides with an existing percent escape, or with its own
+	 * escaped representation, PHP cannot safely parse this isolated field.
+	 * Return unreadable evidence instead of guessing a parameter name/value.
+	 *
+	 * @param string      $field One ampersand-delimited POST field.
+	 * @param string|null $query_separators Explicit query separators for tests.
+	 * @return string|null Field safe for PHP parsing, or unknown history.
+	 */
+	public static function prepare_post_field( $field, $query_separators = null ) {
+		$separators = null === $query_separators ? (string) ini_get( 'arg_separator.input' ) : $query_separators;
+		$extra = implode( '', array_diff( str_split( $separators ), array( '&' ) ) );
+		if ( '' === $extra ) {
+			return $field;
+		}
+		if ( false !== strpbrk( $extra, '%0123456789abcdefABCDEF' ) ) {
+			preg_match_all( '/%[0-9a-fA-F]{2}/', $field, $escapes );
+			foreach ( $escapes[0] as $escape ) {
+				if ( false !== strpbrk( $escape, $extra ) ) {
+					return null;
+				}
+			}
+		}
+		$quoted = array();
+		foreach ( str_split( $extra ) as $separator ) {
+			if ( '=' !== $separator ) {
+				$quoted[ $separator ] = rawurlencode( $separator );
+			}
+		}
+		$field = strtr( $field, $quoted );
+		return false === strpbrk( $field, $extra ) ? $field : null;
+	}
+
+	/**
+	 * Observe the parsed multipart BODY, without interpreting query flags or
+	 * inventing unavailable part history. Count visible scalar leaves only.
+	 *
+	 * @param Mcpwp_Raw_Parameter_Source $source Parsed body snapshot.
+	 * @return array Visible intent/field counts and the configured input cap.
+	 */
+	public static function multipart_input_evidence( $source, $ignore_operations = false ) {
+		$document = $source->document;
+		if ( ! isset( $document->multipart_totals ) ) {
+			$totals = array( 'fields' => 0, 'limit' => (int) ini_get( 'max_input_vars' ), 'unreadable' => ! is_array( $document->raw ) );
+			$pending = $totals['unreadable'] ? array() : array( $document->raw );
+			while ( ! empty( $pending ) ) {
+				foreach ( array_pop( $pending ) as $value ) {
+					if ( is_array( $value ) ) {
+						$pending[] = $value;
+					} else {
+						++$totals['fields'];
+					}
+				}
+			}
+			$document->multipart_totals = $totals;
+			$document->multipart = array();
+		}
+		$cache_key = wp_json_encode( array( $source->path, $ignore_operations ) );
+		if ( ! isset( $document->multipart[ $cache_key ] ) ) {
+			$state = $document->multipart_totals;
+			$state['intent_keys'] = 0;
+			$selected = $document->raw;
+			foreach ( $source->path as $segment ) {
+				$selected = is_array( $selected ) && array_key_exists( $segment, $selected ) ? $selected[ $segment ] : array();
+			}
+			if ( $ignore_operations && is_array( $selected ) ) {
+				// Global multipart fields still apply, but operation bodies
+				// are inspected only through their selected source views.
+				foreach ( self::INTENT_PARAMETER_PATHS as $path ) {
+					$slot =& $selected;
+					foreach ( $path as $segment ) {
+						if ( ! is_array( $slot ) || ! array_key_exists( $segment, $slot ) ) {
+							unset( $slot );
+							continue 2;
+						}
+						$slot =& $slot[ $segment ];
+					}
+					if ( is_array( $slot ) ) {
+						unset( $slot['operations'] );
+					}
+					unset( $slot );
+				}
+			}
+			$pending = is_array( $selected ) ? array( $selected ) : array();
+			while ( ! empty( $pending ) ) {
+				foreach ( array_pop( $pending ) as $key => $value ) {
+					if ( self::is_dry_run_key( $key ) ) {
+						++$state['intent_keys'];
+					}
+					if ( is_array( $value ) ) {
+						$pending[] = $value;
+					}
+				}
+			}
+			$document->multipart[ $cache_key ] = $state;
+		}
+		return $document->multipart[ $cache_key ];
+	}
+
+	/**
 	 * Count raw intent keys by relevant container, before last-key-wins can
 	 * erase repeats. String contents are skipped; JSON keys are decoded so
 	 * escaped spellings count too. Shared documents are tokenized only once.
@@ -766,16 +881,21 @@ class Mcpwp_Theme_Builder {
 	public static function raw_intent_evidence( $source ) {
 		$document = $source->document;
 		if ( 'multipart' === $document->format ) {
-			// Preserve format uncertainty in replay identity as well. PHP may
-			// have erased every earlier intent key, not just its value.
-			return array( 'counts' => array(), 'values' => array(), 'occurrences' => array( 'unsupported_multipart' => array() ) );
+			return array( 'counts' => array(), 'values' => array(), 'occurrences' => array( 'multipart_guard:' . wp_json_encode( $source->path ) => self::multipart_input_evidence( $source ) ) );
 		}
 		if ( null === $document->keys ) {
 			$document->keys = array();
 			if ( 'form' === $document->format ) {
 				// Parse each field independently: PHP owns bracket/NUL/dot/
 				// space handling, while separate fields retain every repeat.
-				foreach ( explode( '&', $document->raw ) as $field ) {
+				foreach ( self::split_form_fields( $document->raw, $source->channel ) as $field ) {
+					if ( 'body' === $source->channel ) {
+						$field = self::prepare_post_field( $field );
+						if ( null === $field ) {
+							$document->keys = false;
+							break;
+						}
+					}
 					parse_str( $field, $parameters );
 					self::record_php_intent_fields( $document, $parameters );
 				}
@@ -923,10 +1043,12 @@ class Mcpwp_Theme_Builder {
 	private function is_create_dry_run( $bags ) {
 		$values = array();
 		$sources = array();
+		$multipart_sources = array();
 		foreach ( self::intent_parameter_bags( $bags ) as $bag ) {
 			if ( $bag instanceof Mcpwp_Raw_Parameter_Source ) {
 				if ( 'multipart' === $bag->document->format ) {
-					return new WP_Error( 'invalid_params', __( 'multipart/form-data is not supported for theme template creation. Send application/json or application/x-www-form-urlencoded.', 'mcpwp' ), array( 'status' => 400 ) );
+					$multipart_sources[] = $bag;
+					continue;
 				}
 				$sources[] = $bag;
 				continue;
@@ -935,6 +1057,22 @@ class Mcpwp_Theme_Builder {
 				if ( self::is_dry_run_key( $key ) ) {
 					$values[] = $value;
 				}
+			}
+		}
+		$scoped_multipart = new SplObjectStorage();
+		foreach ( $multipart_sources as $source ) {
+			if ( ! empty( $source->path ) ) {
+				$scoped_multipart[ $source->document ] = true;
+			}
+		}
+		foreach ( $multipart_sources as $source ) {
+			$multipart = self::multipart_input_evidence( $source, empty( $source->path ) && $scoped_multipart->contains( $source->document ) );
+			if ( $multipart['unreadable'] || $multipart['intent_keys'] > 0 ) {
+				return new WP_Error( 'invalid_params', __( 'Multipart preview intent cannot be verified from the consumed parts. Send application/json or application/x-www-form-urlencoded.', 'mcpwp' ), array( 'status' => 400 ) );
+			}
+			// PHP's input cap is request-wide, even for a selected operation.
+			if ( $multipart['limit'] >= 0 && $multipart['fields'] >= $multipart['limit'] ) {
+				return new WP_Error( 'invalid_params', __( 'Multipart input reaches max_input_vars; a preview field may have been dropped. Send application/json or fewer fields.', 'mcpwp' ), array( 'status' => 400 ) );
 			}
 		}
 		$documents = self::raw_intent_documents( $sources );
