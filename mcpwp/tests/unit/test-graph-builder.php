@@ -109,6 +109,7 @@ final class GraphBuilderTest extends TestCase
     public function test_extract_post_link_targets_resolves_via_slug_path(): void
     {
         $this->post(25, array('post_name' => 'about-us'));
+        $GLOBALS['mcpwp_test_permalinks'][25] = 'https://example.com/about-us/';
         $source = $this->post(10, array(
             'post_content' => '<a href="https://example.com/about-us/">About</a>',
         ));
@@ -1135,6 +1136,70 @@ final class GraphBuilderTest extends TestCase
         ));
 
         $this->assertSame(array(630), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    // ---------------------------------------------------------------------
+    // #1000: single-segment links get the same permalink check as nested
+    // paths, and the url_to_postid() fallback is limited to covered types.
+    // ---------------------------------------------------------------------
+
+    public function test_single_segment_link_does_not_resolve_to_a_post_with_a_prefixed_permalink(): void
+    {
+        // Date-based permalinks: the post named "news" lives at
+        // /2026/09/news/, so /news/ is not its URL.
+        $this->post(640, array('post_type' => 'post', 'post_name' => 'news'));
+        $GLOBALS['mcpwp_test_permalinks'][640] = 'https://example.com/2026/09/news/';
+
+        $source = $this->post(641, array(
+            'post_content' => '<a href="https://example.com/news/">news</a>',
+        ));
+
+        $this->assertSame(array(), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_single_segment_link_resolves_when_it_is_the_posts_own_permalink(): void
+    {
+        $this->post(642, array('post_type' => 'post', 'post_name' => 'news'));
+        $GLOBALS['mcpwp_test_permalinks'][642] = 'https://example.com/news/';
+
+        $source = $this->post(643, array(
+            'post_content' => '<a href="https://example.com/news/">news</a>',
+        ));
+
+        $this->assertSame(array(642), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_single_segment_link_to_an_unpublished_post_keeps_its_slug_match(): void
+    {
+        // A draft has no pretty permalink (plain ?p=ID), so there is
+        // nothing to compare and the slug match stands, as it always has.
+        $this->post(644, array('post_type' => 'post', 'post_name' => 'coming-soon', 'post_status' => 'draft'));
+        $GLOBALS['mcpwp_test_permalinks'][644] = 'https://example.com/?p=644';
+
+        $source = $this->post(645, array(
+            'post_content' => '<a href="https://example.com/coming-soon/">soon</a>',
+        ));
+
+        $this->assertSame(array(644), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_fallback_result_that_is_not_a_covered_type_creates_no_edge(): void
+    {
+        // Two covered rows share the slug (ambiguous -> fallback), and the
+        // fallback answers with an attachment, which has no graph node.
+        $this->post(650, array('post_type' => 'post', 'post_name' => 'gallery'));
+        $GLOBALS['mcpwp_test_public_post_types'][] = 'sm_team';
+        $this->post(651, array('post_type' => 'sm_team', 'post_name' => 'gallery'));
+        $this->post(652, array('post_type' => 'attachment', 'post_name' => 'gallery-img', 'post_status' => 'inherit'));
+        $GLOBALS['mcpwp_test_url_to_postid'] = array(
+            'https://example.com/gallery/' => 652,
+        );
+
+        $source = $this->post(653, array(
+            'post_content' => '<a href="https://example.com/gallery/">gallery</a>',
+        ));
+
+        $this->assertSame(array(), Mcpwp_Graph_Builder::extract_post_link_targets($source));
     }
 
     /**

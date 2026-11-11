@@ -2019,9 +2019,24 @@ class Mcpwp_Graph_Builder {
 		// fallback; that is precisely BLOCK-2's bug when left unresolved.
 		foreach ( $simple_slugs as $slug => $normalized_keys ) {
 			$matches = array_values( array_filter( $by_slug[ $slug ] ?? array(), array( __CLASS__, 'is_covered_post_type_row' ) ) );
-			$resolved = 1 === count( $matches ) ? (int) $matches[0]['ID'] : 0;
+			$candidate = 1 === count( $matches ) ? (int) $matches[0]['ID'] : 0;
+
+			// #1000: the slug matching is not evidence the href names that
+			// post. With a permalink structure that prefixes the slug
+			// (/%year%/%monthnum%/%postname%/), /news/ shares a slug with a
+			// post whose URL is /2026/09/news/. Apply the same check the
+			// nested-path branch uses, per href: the candidate's own
+			// permalink must equal the href's normalized URL.
+			//
+			// A post WordPress gives no pretty URL (a draft, pending or
+			// scheduled post carries a plain ?p=ID permalink) has nothing
+			// to compare, so it keeps the slug match it always had.
+			$candidate_perm = $candidate ? get_permalink( $candidate ) : '';
+			$can_compare    = $candidate_perm && '' === (string) wp_parse_url( $candidate_perm, PHP_URL_QUERY );
+			$candidate_norm = $can_compare ? self::normalize_internal_graph_url( $candidate_perm ) : '';
 
 			foreach ( $normalized_keys as $normalized ) {
+				$resolved = ( $candidate && ( ! $can_compare || $candidate_norm === $normalized ) ) ? $candidate : 0;
 				$results[ $candidate_href[ $normalized ] ] = $resolved;
 				if ( 0 === $resolved ) {
 					$fallback_eligible[ $normalized ] = true;
@@ -2101,7 +2116,9 @@ class Mcpwp_Graph_Builder {
 			$href        = $candidate_href[ $normalized ];
 			$absolute    = wp_http_validate_url( $href ) ? $href : home_url( $href );
 			$fallback_id = (int) url_to_postid( $absolute );
-			if ( $fallback_id ) {
+			// #1000: core resolves any post type (an attachment page, a
+			// non-covered CPT), which has no graph node. Keep only a covered type.
+			if ( $fallback_id && self::is_covered_post_type( (string) get_post_type( $fallback_id ) ) ) {
 				$results[ $href ] = $fallback_id;
 				self::$url_id_cache[ $normalized ] = $fallback_id;
 			}
