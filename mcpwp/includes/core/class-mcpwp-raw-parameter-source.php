@@ -10,7 +10,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 final class Mcpwp_Raw_Parameter_Source {
-	/** @var object Shared bytes and lossless key-path cache. */
+	/** @var object Shared source and lossless intent-occurrence cache. */
 	public $document;
 	/** @var string Source channel: query or body. */
 	public $channel;

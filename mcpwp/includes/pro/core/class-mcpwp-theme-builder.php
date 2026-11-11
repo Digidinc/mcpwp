@@ -735,6 +735,26 @@ class Mcpwp_Theme_Builder {
 	);
 
 	/**
+	 * Record keys exactly as PHP exposed them. This walks an already parsed
+	 * field/tree; it does not decode, split or normalize PHP parameter names.
+	 *
+	 * @param object $document Source evidence cache.
+	 * @param array  $parameters One PHP-parsed field or multipart bag.
+	 * @param array  $path Current key path.
+	 */
+	private static function record_php_intent_fields( $document, $parameters, $path = array() ) {
+		foreach ( $parameters as $key => $value ) {
+			$next = array_merge( $path, array( $key ) );
+			if ( self::is_dry_run_key( $key ) ) {
+				$document->keys[] = $next;
+				$document->values[] = is_array( $value ) ? array() : $value;
+			} elseif ( is_array( $value ) ) {
+				self::record_php_intent_fields( $document, $value, $next );
+			}
+		}
+	}
+
+	/**
 	 * Count raw intent keys by relevant container, before last-key-wins can
 	 * erase repeats. String contents are skipped; JSON keys are decoded so
 	 * escaped spellings count too. Shared documents are tokenized only once.
@@ -745,23 +765,19 @@ class Mcpwp_Theme_Builder {
 	 */
 	public static function raw_intent_evidence( $source ) {
 		$document = $source->document;
+		if ( 'multipart' === $document->format ) {
+			// Preserve format uncertainty in replay identity as well. PHP may
+			// have erased every earlier intent key, not just its value.
+			return array( 'counts' => array(), 'values' => array(), 'occurrences' => array( 'unsupported_multipart' => array() ) );
+		}
 		if ( null === $document->keys ) {
 			$document->keys = array();
 			if ( 'form' === $document->format ) {
-				$separators = ini_get( 'arg_separator.input' );
-				$fields = preg_split( '/[' . preg_quote( $separators ? $separators : '&', '/' ) . ']/', $document->raw );
-				foreach ( $fields as $field ) {
-					$key = urldecode( explode( '=', $field, 2 )[0] );
-					preg_match_all( '/[^\[\]]+/', $key, $segments, PREG_OFFSET_CAPTURE );
-					foreach ( $segments[0] as $index => $match ) {
-						list( $segment, $offset ) = $match;
-						if ( self::is_dry_run_key( $segment ) ) {
-							$document->keys[] = array_column( array_slice( $segments[0], 0, $index + 1 ), 0 );
-							$parts = explode( '=', $field, 2 );
-							$document->values[] = false !== strpos( substr( $key, $offset + strlen( $segment ) ), '[' ) ? array() : urldecode( $parts[1] ?? '' );
-							break;
-						}
-					}
+				// Parse each field independently: PHP owns bracket/NUL/dot/
+				// space handling, while separate fields retain every repeat.
+				foreach ( explode( '&', $document->raw ) as $field ) {
+					parse_str( $field, $parameters );
+					self::record_php_intent_fields( $document, $parameters );
 				}
 			} else {
 				// Validation only: the decoded map is NEVER used for keys.
@@ -902,13 +918,16 @@ class Mcpwp_Theme_Builder {
 	 * requesting preview wins, independently of source or key order.
 	 *
 	 * @param array[] $bags Raw query, form, JSON and tool argument bags.
-	 * @return bool Whether to preview without writing.
+	 * @return bool|WP_Error Whether to preview, or an unsupported-format refusal.
 	 */
 	private function is_create_dry_run( $bags ) {
 		$values = array();
 		$sources = array();
 		foreach ( self::intent_parameter_bags( $bags ) as $bag ) {
 			if ( $bag instanceof Mcpwp_Raw_Parameter_Source ) {
+				if ( 'multipart' === $bag->document->format ) {
+					return new WP_Error( 'invalid_params', __( 'multipart/form-data is not supported for theme template creation. Send application/json or application/x-www-form-urlencoded.', 'mcpwp' ), array( 'status' => 400 ) );
+				}
 				$sources[] = $bag;
 				continue;
 			}
@@ -954,6 +973,10 @@ class Mcpwp_Theme_Builder {
 		}
 
 		$dry_run = $this->is_create_dry_run( null === $raw_parameter_bags ? array( $data ) : $raw_parameter_bags );
+		if ( is_wp_error( $dry_run ) ) {
+			return $dry_run;
+		}
+
 		$title   = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '';
 		$type    = ! empty( $data['type'] ) ? sanitize_text_field( $data['type'] ) : '';
 		$scope   = ! empty( $data['scope'] ) ? sanitize_text_field( $data['scope'] ) : 'entire_site';
