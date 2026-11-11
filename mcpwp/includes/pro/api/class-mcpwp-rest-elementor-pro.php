@@ -26,8 +26,17 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 */
 	private $custom_code_cpt = 'elementor_snippet';
 
-	protected function success_response( $data, $status = 200 ) {
-		return parent::success_response( is_array( $data ) ? Mcpwp_Custom_Code_Conditions::annotate_response( $data ) : $data, $status );
+	/** Quarantine reporting belongs only to authorized Custom Code responses. */
+	private function custom_code_success_response( $data, $status = 200 ) {
+		if ( is_array( $data ) && $this->custom_code_admin_reporting_allowed() ) {
+			$data = Mcpwp_Custom_Code_Conditions::annotate_response( $data );
+		}
+		return parent::success_response( $data, $status );
+	}
+
+	private function custom_code_admin_reporting_allowed() {
+		$record = $this->get_current_api_key_record();
+		return is_array( $record ) && $this->key_has_scope( $record, 'admin' );
 	}
 
 	/**
@@ -482,7 +491,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'list_elementor_custom_code', $request, array( 'count' => count( $snippets ) ) );
 
-		return $this->success_response(
+		return $this->custom_code_success_response(
 			array(
 				'snippets'  => $snippets,
 				'total'     => (int) $query->found_posts,
@@ -507,7 +516,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( ! empty( $prepared['dry_run'] ) ) {
-			return $this->success_response(
+			return $this->custom_code_success_response(
 				array(
 					'dry_run'  => true,
 					'valid'    => true,
@@ -517,6 +526,18 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			);
 		}
 
+		$lock = Mcpwp_Activator::acquire_custom_code_cache_lock();
+		if ( is_wp_error( $lock ) ) {
+			return $lock;
+		}
+		try {
+			return $this->create_custom_code_prepared( $request, $prepared );
+		} finally {
+			Mcpwp_Activator::release_custom_code_cache_lock( $lock );
+		}
+	}
+
+	private function create_custom_code_prepared( $request, $prepared ) {
 		$post_id = wp_insert_post(
 			array(
 				'post_type'     => $this->custom_code_cpt,
@@ -564,7 +585,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'create_elementor_custom_code', $request, $this->redact_custom_code_payload( $data ) );
 
-		return $this->success_response( $data, 201 );
+		return $this->custom_code_success_response( $data, 201 );
 	}
 
 	/**
@@ -586,7 +607,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'get_elementor_custom_code', $request, array( 'id' => (int) $post->ID ) );
 
-		return $this->success_response( $data );
+		return $this->custom_code_success_response( $data );
 	}
 
 	/**
@@ -634,7 +655,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				$effective['conditions'] = $this->get_custom_code_conditions( $post->ID );
 			}
 
-			return $this->success_response(
+			return $this->custom_code_success_response(
 				array(
 					'dry_run' => true,
 					'valid'   => true,
@@ -645,6 +666,21 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			);
 		}
 
+		$lock = Mcpwp_Activator::acquire_custom_code_cache_lock();
+		if ( is_wp_error( $lock ) ) {
+			return $lock;
+		}
+		try {
+			wp_cache_delete( (int) $post->ID, 'posts' );
+			wp_cache_delete( (int) $post->ID, 'post_meta' );
+			$post = $this->get_custom_code_post( $post->ID );
+			return is_wp_error( $post ) ? $post : $this->update_custom_code_prepared( $request, $post, $prepared );
+		} finally {
+			Mcpwp_Activator::release_custom_code_cache_lock( $lock );
+		}
+	}
+
+	private function update_custom_code_prepared( $request, $post, $prepared ) {
 		$post_update = array(
 			'ID'            => (int) $post->ID,
 			// wp_update_post() fetches the full existing post row and merges
@@ -700,7 +736,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'update_elementor_custom_code', $request, $this->redact_custom_code_payload( $data ) );
 
-		return $this->success_response( $data );
+		return $this->custom_code_success_response( $data );
 	}
 
 	/**
@@ -778,7 +814,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'sanitize_elementor_custom_code', $request, $result );
 
-		return $this->success_response( $result );
+		return $this->custom_code_success_response( $result );
 	}
 
 	/**
@@ -789,6 +825,18 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	private function set_custom_code_status( $request, $status ) {
+		$lock = Mcpwp_Activator::acquire_custom_code_cache_lock();
+		if ( is_wp_error( $lock ) ) {
+			return $lock;
+		}
+		try {
+			return $this->set_custom_code_status_locked( $request, $status );
+		} finally {
+			Mcpwp_Activator::release_custom_code_cache_lock( $lock );
+		}
+	}
+
+	private function set_custom_code_status_locked( $request, $status ) {
 		$id   = absint( $request->get_param( 'id' ) );
 		$post = get_post( $id );
 
@@ -843,7 +891,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'set_elementor_custom_code_status', $request, $data );
 
-		return $this->success_response( $data );
+		return $this->custom_code_success_response( $data );
 	}
 
 	/**
@@ -2004,6 +2052,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		if ( $include_code ) {
 			$data['code'] = $code['content'];
+		}
+
+		if ( $this->custom_code_admin_reporting_allowed() && is_wp_error( Mcpwp_Custom_Code_Conditions::convert( Mcpwp_Custom_Code_Conditions::raw_conditions( $post->ID ) ) ) ) {
+			$data['quarantined'] = true;
+			$data['quarantine_reason'] = 'conditions_not_convertible';
 		}
 
 		return $data;

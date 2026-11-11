@@ -394,15 +394,23 @@ class Mcpwp_Theme_Builder {
 		// let Elementor Pro own the option entirely, as #975 already does for
 		// deletes via Conditions_Manager::purge_post_from_cache().
 		require_once dirname( __DIR__, 2 ) . '/class-mcpwp-activator.php';
-		$repaired = Mcpwp_Activator::ensure_custom_code_conditions_repaired();
-		if ( is_wp_error( $repaired ) ) {
-			return $repaired;
+		$lock = Mcpwp_Activator::acquire_custom_code_cache_lock();
+		if ( is_wp_error( $lock ) ) {
+			return $lock;
 		}
-		$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-		$conditions_manager->save_conditions( $template_id, $formatted_conditions );
+		try {
+			$repaired = Mcpwp_Activator::ensure_custom_code_conditions_repaired();
+			if ( is_wp_error( $repaired ) ) {
+				return $repaired;
+			}
+			$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
+			$conditions_manager->save_conditions( $template_id, $formatted_conditions );
 
-		// Clear cache.
-		$conditions_manager->get_cache()->regenerate();
+			// Clear cache.
+			$conditions_manager->get_cache()->regenerate();
+		} finally {
+			Mcpwp_Activator::release_custom_code_cache_lock( $lock );
+		}
 
 		// Always the same shape, warnings or not. A response that changes
 		// structure depending on whether anything went wrong is the same trap
@@ -1181,6 +1189,15 @@ class Mcpwp_Theme_Builder {
 	 *              Elementor Pro's Theme Builder is not available.
 	 */
 	public function cleanup_after_template_delete( $template_id ) {
+		require_once dirname( __DIR__, 2 ) . '/class-mcpwp-activator.php';
+		return Mcpwp_Activator::with_custom_code_cache_lock(
+			function () use ( $template_id ) {
+				return $this->cleanup_after_template_delete_locked( $template_id );
+			}
+		);
+	}
+
+	private function cleanup_after_template_delete_locked( $template_id ) {
 		if ( ! $this->is_available() || ! $this->template_is_in_conditions_cache( $template_id ) ) {
 			return false;
 		}

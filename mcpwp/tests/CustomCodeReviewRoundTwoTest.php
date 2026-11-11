@@ -25,12 +25,20 @@ final class CustomCodeReviewRoundTwoTest extends TestCase {
 		update_post_meta( $id, '_elementor_location', 'elementor_head' );
 	}
 
+	private function admin_controller() {
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$record = new ReflectionProperty( Mcpwp_REST_Elementor_Pro::class, 'current_api_key_record' );
+		$record->setAccessible( true );
+		$record->setValue( $controller, array( 'scopes' => array( 'admin' ), 'role' => 'admin' ) );
+		return $controller;
+	}
+
 	private function create( $dry_run, $conditions = null ) {
 		$args = array( 'title' => 'Valid snippet', 'code' => '<div>Marker</div>', 'status' => 'publish', 'dry_run' => $dry_run );
 		if ( null !== $conditions ) {
 			$args['conditions'] = $conditions;
 		}
-		return ( new Mcpwp_REST_Elementor_Pro( new stdClass() ) )->create_custom_code( new WP_REST_Request( 'POST', '/', $args ) );
+		return $this->admin_controller()->create_custom_code( new WP_REST_Request( 'POST', '/', $args ) );
 	}
 
 	/**
@@ -43,7 +51,7 @@ final class CustomCodeReviewRoundTwoTest extends TestCase {
 		$raw = array( 'include/general', array( 'type' => 'exclude', 'name' => 'singular', 'sub_name' => 'page', 'sub_id' => '5 ' ) );
 		$this->seed( 15, $raw );
 		update_option( 'elementor_pro_theme_builder_conditions', array( 'elementor_head' => array( 15 => $raw ) ) );
-		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$controller = $this->admin_controller();
 		$request = new WP_REST_Request( 'POST', '/', array( 'id' => 15, 'location' => 'head', 'priority' => 1 ) );
 		$response = 'enable' === $operation ? $controller->enable_custom_code( $request ) : $controller->update_custom_code( $request );
 		$this->assertInstanceOf( WP_REST_Response::class, $response );

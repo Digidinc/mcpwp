@@ -953,6 +953,60 @@ class Mcpwp_Activator {
 		return Mcpwp_Custom_Code_Conditions::convert( $conditions );
 	}
 
+	private static $custom_code_cache_lock_token = null;
+	private static $custom_code_cache_lock_depth = 0;
+
+	/** Serialize cache read/modify/write sequences, waiting for active writers. */
+	public static function acquire_custom_code_cache_lock( $timeout = 20.0 ) {
+		if ( self::$custom_code_cache_lock_depth > 0 ) {
+			++self::$custom_code_cache_lock_depth;
+			return self::$custom_code_cache_lock_token;
+		}
+		$deadline = microtime( true ) + max( 0.0, (float) $timeout );
+		do {
+			$token = self::acquire_migration_lock( 'mcpwp_custom_code_cache_write_lock', 90 );
+			if ( false !== $token ) {
+				self::$custom_code_cache_lock_token = $token;
+				self::$custom_code_cache_lock_depth = 1;
+				// A waiting request may already have cached the old option or
+				// autoload bag. Reload it after the database mutex is ours.
+				wp_cache_delete( 'elementor_pro_theme_builder_conditions', 'options' );
+				wp_cache_delete( 'alloptions', 'options' );
+				wp_cache_delete( 'notoptions', 'options' );
+				return $token;
+			}
+			if ( microtime( true ) >= $deadline ) {
+				break;
+			}
+			usleep( 10000 );
+		} while ( true );
+		return new WP_Error( 'conditions_cache_busy', __( 'The conditions cache is busy. Retry this request shortly.', 'mcpwp' ), array( 'status' => 503 ) );
+	}
+
+	public static function release_custom_code_cache_lock( $token ) {
+		if ( self::$custom_code_cache_lock_depth < 1 || $token !== self::$custom_code_cache_lock_token ) {
+			return;
+		}
+		if ( --self::$custom_code_cache_lock_depth > 0 ) {
+			return;
+		}
+		self::release_migration_lock( 'mcpwp_custom_code_cache_write_lock', $token );
+		self::$custom_code_cache_lock_token = null;
+	}
+
+	/** Run a shared cache mutation only after claiming its database mutex. */
+	public static function with_custom_code_cache_lock( callable $callback ) {
+		$token = self::acquire_custom_code_cache_lock();
+		if ( is_wp_error( $token ) ) {
+			return $token;
+		}
+		try {
+			return $callback();
+		} finally {
+			self::release_custom_code_cache_lock( $token );
+		}
+	}
+
 	/**
 	 * Repair legacy condition maps in bounded, checkpointed batches.
 	 *
@@ -1097,6 +1151,14 @@ class Mcpwp_Activator {
 
 	/** @return true */
 	private static function repair_custom_code_conditions_cache_entry( $post_id ) {
+		return self::with_custom_code_cache_lock(
+			static function () use ( $post_id ) {
+				return self::repair_custom_code_conditions_cache_entry_locked( $post_id );
+			}
+		);
+	}
+
+	private static function repair_custom_code_conditions_cache_entry_locked( $post_id ) {
 		$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
 		if ( ! is_array( $cache ) ) {
 			return true;

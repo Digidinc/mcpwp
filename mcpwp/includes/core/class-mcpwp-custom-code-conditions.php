@@ -15,6 +15,10 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Mcpwp_Custom_Code_Conditions {
 	const QUARANTINE_OPTION = 'mcpwp_custom_code_conditions_quarantined';
+	const REPORT_OPTION     = 'mcpwp_custom_code_conditions_report';
+	const REPORT_MARKER     = 'mcpwp_custom_code_conditions_report_marker';
+	const FINGERPRINT_META  = '_mcpwp_conditions_quarantine_fingerprint';
+	const REPORT_PREVIEW    = 20;
 
 	private static $request_skipped = array();
 	private static $cache_bypass    = false;
@@ -27,6 +31,11 @@ class Mcpwp_Custom_Code_Conditions {
 		add_action( 'admin_init', array( __CLASS__, 'refresh_admin_report' ) );
 		add_action( 'admin_notices', array( __CLASS__, 'render_admin_notice' ) );
 		add_filter( 'site_status_tests', array( __CLASS__, 'register_site_health_test' ) );
+		add_action( 'added_post_meta', array( __CLASS__, 'invalidate_report_on_meta' ), 10, 4 );
+		add_action( 'updated_post_meta', array( __CLASS__, 'invalidate_report_on_meta' ), 10, 4 );
+		add_action( 'deleted_post_meta', array( __CLASS__, 'invalidate_report_on_meta' ), 10, 4 );
+		add_action( 'save_post', array( __CLASS__, 'invalidate_report_on_post' ), 10, 3 );
+		add_action( 'before_delete_post', array( __CLASS__, 'invalidate_report_on_post' ), 10, 2 );
 	}
 
 	/**
@@ -141,30 +150,54 @@ class Mcpwp_Custom_Code_Conditions {
 	public static function quarantine( $post_id, array $raw, $persist = true ) {
 		self::mark_skipped( $post_id );
 		if ( ! $persist ) {
-			return;
+			return true;
 		}
-		$all = get_option( self::QUARANTINE_OPTION, array() );
-		$all = is_array( $all ) ? $all : array();
+		return self::with_cache_write_lock(
+			static function () use ( $post_id, $raw ) {
+				return self::quarantine_locked( $post_id, $raw );
+			}
+		);
+	}
+
+	private static function quarantine_locked( $post_id, array $raw ) {
 		$fingerprint = hash( 'sha256', wp_json_encode( $raw ) );
-		$new = ! isset( $all[ (int) $post_id ] ) || $all[ (int) $post_id ] !== $fingerprint;
-		if ( $new ) {
-			$all[ (int) $post_id ] = $fingerprint;
+		$new = $fingerprint !== (string) get_post_meta( $post_id, self::FINGERPRINT_META, true );
+		$all = self::quarantine_ids();
+		if ( ! in_array( (int) $post_id, $all, true ) ) {
+			$all[] = (int) $post_id;
+			sort( $all );
 			update_option( self::QUARANTINE_OPTION, $all, false );
 		}
-		self::evict_persisted_cache_entry( $post_id );
+		if ( $new ) {
+			update_post_meta( $post_id, self::FINGERPRINT_META, $fingerprint );
+		}
+		$result = self::evict_persisted_cache_entry( $post_id );
+		if ( is_wp_error( $result ) ) {
+			return $result;
+		}
 		if ( $new ) {
 			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
 			error_log( 'MCPWP Custom Code conditions skipped for snippet ' . (int) $post_id . '.' );
 		}
+		return true;
 	}
 
 	public static function clear_quarantine( $post_id ) {
-		$all = get_option( self::QUARANTINE_OPTION, array() );
-		if ( is_array( $all ) && isset( $all[ (int) $post_id ] ) ) {
-			unset( $all[ (int) $post_id ] );
+		return self::with_cache_write_lock(
+			static function () use ( $post_id ) {
+				return self::clear_quarantine_locked( $post_id );
+			}
+		);
+	}
+
+	private static function clear_quarantine_locked( $post_id ) {
+		$all = array_values( array_diff( self::quarantine_ids(), array( (int) $post_id ) ) );
+		if ( $all !== self::quarantine_ids() ) {
 			update_option( self::QUARANTINE_OPTION, $all, false );
 		}
+		delete_post_meta( $post_id, self::FINGERPRINT_META );
 		unset( self::$request_skipped[ (int) $post_id ] );
+		return true;
 	}
 
 	/** @return int[] Current unsafe IDs, excluding repaired historical receipts. */
@@ -175,13 +208,10 @@ class Mcpwp_Custom_Code_Conditions {
 				$ids[] = (int) $id;
 			}
 		}
-		$all = get_option( self::QUARANTINE_OPTION, array() );
-		if ( is_array( $all ) ) {
-			foreach ( array_keys( $all ) as $id ) {
+		foreach ( self::quarantine_ids() as $id ) {
 				if ( is_wp_error( self::convert( self::raw_conditions( $id ) ) ) ) {
 					$ids[] = (int) $id;
 				}
-			}
 		}
 		$ids = array_values( array_unique( array_map( 'intval', $ids ) ) );
 		sort( $ids );
@@ -189,7 +219,7 @@ class Mcpwp_Custom_Code_Conditions {
 	}
 
 	public static function annotate_response( array $data ) {
-		$ids = self::skipped_ids();
+		$ids = self::report_ids();
 		if ( ! empty( $ids ) ) {
 			$data['skipped_custom_code_snippet_ids'] = $ids;
 		}
@@ -204,26 +234,30 @@ class Mcpwp_Custom_Code_Conditions {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
-		foreach ( self::skipped_ids() as $post_id ) {
-			self::quarantine( $post_id, self::raw_conditions( $post_id ) );
-		}
-		$all = get_option( self::QUARANTINE_OPTION, array() );
-		if ( ! is_array( $all ) ) {
+		$marker = self::report_marker();
+		$report = get_option( self::REPORT_OPTION, array() );
+		if ( is_array( $report ) && isset( $report['marker'], $report['ids'] ) && (string) $report['marker'] === $marker && is_array( $report['ids'] ) ) {
 			return;
 		}
-		foreach ( array_keys( $all ) as $post_id ) {
-			$post = get_post( (int) $post_id );
-			if ( ! $post || ! self::is_snippet( $post_id ) || ! is_wp_error( self::convert( self::raw_conditions( $post_id ) ) ) ) {
-				self::clear_quarantine( $post_id );
-			}
+		$ids = self::skipped_ids();
+		$result = self::quarantine_many( $ids );
+		if ( is_wp_error( $result ) ) {
+			return $result;
 		}
+		// Keep the marker sampled before the scan. A concurrent snippet change
+		// then leaves this report stale and forces the next admin refresh.
+		update_option( self::REPORT_OPTION, array( 'marker' => $marker, 'ids' => self::quarantine_ids() ), false );
 	}
 
 	public static function render_admin_notice() {
-		if ( ! current_user_can( 'manage_options' ) || empty( self::skipped_ids() ) ) {
+		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
-		echo '<div class="notice notice-warning"><p>' . esc_html( 'MCPWP skipped Custom Code conditions for snippet IDs: ' . implode( ', ', self::skipped_ids() ) . '.' ) . '</p></div>';
+		$ids = self::report_ids();
+		if ( empty( $ids ) ) {
+			return;
+		}
+		echo '<div class="notice notice-warning"><p>' . esc_html( self::report_summary( $ids ) ) . '</p></div>';
 	}
 
 	public static function register_site_health_test( $tests ) {
@@ -232,15 +266,171 @@ class Mcpwp_Custom_Code_Conditions {
 	}
 
 	public static function site_health_test() {
-		$ids = self::skipped_ids();
+		$ids = self::report_ids();
 		return array(
 			'label' => empty( $ids ) ? __( 'Custom Code conditions are compatible', 'mcpwp' ) : __( 'Some Custom Code conditions were skipped', 'mcpwp' ),
 			'status' => empty( $ids ) ? 'good' : 'recommended',
 			'badge' => array( 'label' => 'MCPWP', 'color' => 'blue' ),
-			'description' => empty( $ids ) ? '<p>OK</p>' : '<p>' . esc_html( implode( ', ', $ids ) ) . '</p>',
+			'description' => empty( $ids ) ? '<p>OK</p>' : '<p>' . esc_html( self::report_summary( $ids ) ) . '</p>',
 			'actions' => '',
 			'test' => 'mcpwp_custom_code_conditions',
 		);
+	}
+
+	/**
+	 * Full cached ID list for an authorized API response. A cold or stale
+	 * report is calculated without writing so a normal API read stays pure.
+	 *
+	 * @return int[]
+	 */
+	public static function report_ids() {
+		$report = get_option( self::REPORT_OPTION, array() );
+		if ( is_array( $report ) && isset( $report['marker'], $report['ids'] ) && (string) $report['marker'] === self::report_marker() && is_array( $report['ids'] ) ) {
+			return array_values( array_unique( array_map( 'intval', $report['ids'] ) ) );
+		}
+		return self::skipped_ids();
+	}
+
+	/** @return int[] Compact durable list; accepts the old fingerprint map. */
+	private static function quarantine_ids() {
+		$stored = get_option( self::QUARANTINE_OPTION, array() );
+		if ( ! is_array( $stored ) ) {
+			return array();
+		}
+		if ( empty( $stored ) ) {
+			return array();
+		}
+		// New storage is a compact value list. Earlier releases used
+		// `{ post_id => fingerprint }`; distinguish them without array_is_list
+		// so PHP 7.4 remains supported.
+		$is_list = array_keys( $stored ) === range( 0, count( $stored ) - 1 );
+		$ids = $is_list ? array_values( $stored ) : array_keys( $stored );
+		$ids = array_map( 'intval', $ids );
+		$ids = array_values( array_filter( array_unique( $ids ) ) );
+		sort( $ids );
+		return $ids;
+	}
+
+	/** Persist many unsafe IDs with one list write and one cache write. */
+	private static function quarantine_many( array $ids ) {
+		return self::with_cache_write_lock(
+			static function () use ( $ids ) {
+				return self::quarantine_many_locked( $ids );
+			}
+		);
+	}
+
+	private static function quarantine_many_locked( array $ids ) {
+		$ids = array_values( array_unique( array_map( 'intval', $ids ) ) );
+		sort( $ids );
+		if ( $ids !== get_option( self::QUARANTINE_OPTION, array() ) ) {
+			update_option( self::QUARANTINE_OPTION, $ids, false );
+		}
+
+		$cache = self::persisted_cache_without_locked( $ids );
+		if ( null !== $cache ) {
+			self::$cache_bypass = true;
+			try {
+				update_option( 'elementor_pro_theme_builder_conditions', $cache, false );
+			} finally {
+				self::$cache_bypass = false;
+			}
+		}
+
+		foreach ( $ids as $post_id ) {
+			$raw = self::raw_conditions( $post_id );
+			$fingerprint = hash( 'sha256', wp_json_encode( $raw ) );
+			if ( $fingerprint === (string) get_post_meta( $post_id, self::FINGERPRINT_META, true ) ) {
+				continue;
+			}
+			update_post_meta( $post_id, self::FINGERPRINT_META, $fingerprint );
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP Custom Code conditions skipped for snippet ' . $post_id . '.' );
+		}
+		return true;
+	}
+
+	/** @return array|null Changed persisted cache, or null when no change. */
+	private static function persisted_cache_without( array $ids ) {
+		return self::with_cache_write_lock(
+			static function () use ( $ids ) {
+				return self::persisted_cache_without_locked( $ids );
+			}
+		);
+	}
+
+	/** @return array|null Changed persisted cache, or null when no change. */
+	private static function persisted_cache_without_locked( array $ids ) {
+		self::$cache_bypass = true;
+		try {
+			$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
+		} finally {
+			self::$cache_bypass = false;
+		}
+		if ( ! is_array( $cache ) ) {
+			return null;
+		}
+		$changed = false;
+		foreach ( $cache as $location => $templates ) {
+			if ( ! is_array( $templates ) ) {
+				continue;
+			}
+			foreach ( $ids as $post_id ) {
+				if ( array_key_exists( $post_id, $cache[ $location ] ) ) {
+					unset( $cache[ $location ][ $post_id ] );
+					$changed = true;
+				}
+			}
+		}
+		return $changed ? $cache : null;
+	}
+
+	/**
+	 * Service writers share the document/cache mutex with REST and Theme
+	 * Builder writers. Isolated service tests intentionally run without the
+	 * activator, where there is no shared cache writer to serialize against.
+	 */
+	private static function with_cache_write_lock( callable $callback ) {
+		if ( ! class_exists( 'Mcpwp_Activator' ) || ! method_exists( 'Mcpwp_Activator', 'acquire_custom_code_cache_lock' ) ) {
+			return call_user_func( $callback );
+		}
+		$token = Mcpwp_Activator::acquire_custom_code_cache_lock();
+		if ( is_wp_error( $token ) ) {
+			return $token;
+		}
+		try {
+			return call_user_func( $callback );
+		} finally {
+			Mcpwp_Activator::release_custom_code_cache_lock( $token );
+		}
+	}
+
+	/** Invalidate only when the underlying snippet set may have changed. */
+	public static function invalidate_report_on_meta( $meta_id, $post_id, $meta_key ) {
+		if ( '_elementor_conditions' === $meta_key && self::is_snippet( $post_id ) ) {
+			self::bump_report_marker();
+		}
+	}
+
+	public static function invalidate_report_on_post( $post_id, $post = null ) {
+		$post = $post ? $post : get_post( $post_id );
+		if ( $post && 'elementor_snippet' === $post->post_type ) {
+			self::bump_report_marker();
+		}
+	}
+
+	private static function report_marker() {
+		return (string) get_option( self::REPORT_MARKER, '' );
+	}
+
+	private static function bump_report_marker() {
+		update_option( self::REPORT_MARKER, wp_generate_uuid4(), false );
+	}
+
+	private static function report_summary( array $ids ) {
+		$preview = array_slice( $ids, 0, self::REPORT_PREVIEW );
+		$tail = count( $ids ) > self::REPORT_PREVIEW ? ' …' : '';
+		return sprintf( 'MCPWP skipped Custom Code conditions for %d snippet(s): %s%s.', count( $ids ), implode( ', ', $preview ), $tail );
 	}
 
 	private static function invalid_snippet_ids() {
@@ -301,11 +491,19 @@ class Mcpwp_Custom_Code_Conditions {
 	}
 
 	private static function evict_persisted_cache_entry( $post_id ) {
+		return self::with_cache_write_lock(
+			static function () use ( $post_id ) {
+				return self::evict_persisted_cache_entry_locked( $post_id );
+			}
+		);
+	}
+
+	private static function evict_persisted_cache_entry_locked( $post_id ) {
 		self::$cache_bypass = true;
 		try {
 			$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
 			if ( ! is_array( $cache ) ) {
-				return;
+				return true;
 			}
 			foreach ( $cache as $location => $templates ) {
 				if ( is_array( $templates ) ) {
@@ -316,6 +514,7 @@ class Mcpwp_Custom_Code_Conditions {
 		} finally {
 			self::$cache_bypass = false;
 		}
+		return true;
 	}
 
 	private static function invalid() {

@@ -106,6 +106,7 @@ final class StagedStatusValueAuditTest extends TestCase {
 	 * value as admin-requiring).
 	 */
 	private const AUDITED = array(
+		'class-mcpwp-activator.php' => 'The status literal is HTTP metadata for a bounded cache-lock timeout; stored options contain schema and mutex bookkeeping.',
 		'core/class-mcpwp-custom-code-conditions.php' => 'The status field is a Site Health result; stored options contain condition cache entries and skipped snippet IDs.',
 		'pro/api/class-mcpwp-rest-elementor-pro.php' => 'The option write restores condition strings in the Elementor cache; HTTP status metadata is not stored there.',
 		// ── The actual finding this fix closes ──────────────────────────
