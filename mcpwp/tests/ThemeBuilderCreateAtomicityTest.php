@@ -345,4 +345,145 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			'assign_to_location() must not run until the template post is already published — otherwise Elementor Pro\'s own conditions-cache regenerate() (which queries only public statuses) silently drops it, and no later publish call ever corrects that cache.'
 		);
 	}
+	public static function dry_run_paths(): array {
+		return array(
+			'core with content'    => array( false, true ),
+			'core without content' => array( false, false ),
+			'REST with content'    => array( true, true ),
+			'REST without content' => array( true, false ),
+		);
+	}
+
+	/**
+	 * #1078: the REST adapter used by MCP dropped dry_run, even though the
+	 * core already honoured it. Exercise the real adapter and writer together.
+	 *
+	 * @dataProvider dry_run_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_dry_run_never_enters_the_write_path( bool $via_rest, bool $with_content ): void {
+		$this->install_elementor( false );
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
+
+		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );
+		update_option( 'elementor_pro_theme_builder_conditions', array( 'header' => array( 99 => array( 'include/general' ) ) ) );
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+		$options_before = $GLOBALS['mcpwp_test_options'];
+		$insert_calls   = 0;
+		add_filter( 'wp_insert_post_data', function ( $data ) use ( &$insert_calls ) {
+			++$insert_calls;
+			return $data;
+		} );
+
+		$args = $this->create_args( array( 'dry_run' => true, 'scope' => 'specific_post_type', 'post_type' => 'page' ) );
+		if ( ! $with_content ) {
+			unset( $args['elementor_data'] );
+		}
+		$builder = new Mcpwp_Theme_Builder();
+		if ( $via_rest ) {
+			$controller = new Mcpwp_REST_Theme_Builder( $builder );
+			$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $args );
+			$response   = $controller->create_theme_template( $request );
+			$this->assertInstanceOf( WP_REST_Response::class, $response );
+			$result = $response->get_data();
+		} else {
+			$result = $builder->create_theme_template( $args );
+		}
+
+		$this->assertSame( 0, $insert_calls, 'A dry run must never insert or publish a post, even temporarily.' );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_meta'] );
+		$this->assertSame( $options_before, $GLOBALS['mcpwp_test_options'], 'No conditions index or other option may change.' );
+		$this->assertEmpty( $GLOBALS['mcpwp_test_wpdb_rows'], 'A preview must not log a creation.' );
+		$this->assertSame( 0, $GLOBALS['mcpwp_theme_test_save_calls'] );
+		$this->assertSame( 0, $GLOBALS['mcpwp_theme_test_cache_regenerate_calls'] ?? 0 );
+		$this->assertTrue( $result['dry_run'] );
+		$this->assertTrue( $result['valid'] );
+		$this->assertArrayNotHasKey( 'id', $result );
+		$this->assertArrayNotHasKey( 'assigned', $result );
+		$this->assertArrayHasKey( 'would_create', $result );
+		$this->assertSame( 'publish', $result['would_create']['post_status'] );
+		$this->assertSame( 'elementor_library', $result['would_create']['post_type'] );
+		$this->assertSame( 'Test Template', $result['would_create']['post_title'] );
+		$this->assertSame( 'specific_post_type', $result['scope'] );
+		$this->assertSame( 'page', $result['post_type'] );
+		$this->assertSame( $with_content ? 1 : 0, $result['element_count'] );
+	}
+
+	public static function write_flags(): array {
+		return array(
+			'omitted'      => array( null ),
+			'false'        => array( false ),
+			'string false' => array( 'false' ),
+		);
+	}
+
+	/**
+	 * @dataProvider write_flags
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_rest_without_dry_run_still_creates_publishes_and_logs( $flag ): void {
+		$this->install_elementor( false );
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
+		update_option( 'mcpwp_settings', array( 'enable_logging' => true ) );
+		$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+
+		$args = $this->create_args();
+		if ( null !== $flag ) {
+			$args['dry_run'] = $flag;
+		}
+		$controller = new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() );
+		$response   = $controller->create_theme_template( new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $args ) );
+		$result     = $response->get_data();
+
+		$this->assertSame( 'publish', $result['status'] );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertNotEmpty( $GLOBALS['_mcpwp_test_meta'][ $result['id'] ] );
+		$this->assertSame( 1, $GLOBALS['mcpwp_theme_test_save_calls'] );
+		global $wpdb;
+		$this->assertSame( 'create_theme_template', $GLOBALS['mcpwp_test_wpdb_rows'][ $wpdb->prefix . 'mcpwp_activity_log' ][0]['action'] );
+	}
+
+	/**
+	 * Use the real MCP dispatcher and bridge the test REST server stub to the
+	 * real callback, so the regression also covers the public tool mapping.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_mcp_dry_run_reaches_the_preview_without_creating_a_template(): void {
+		$this->install_elementor( false );
+		define( 'MCPWP_TESTS', true );
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
+		$controller = new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() );
+		$dispatches = 0;
+		add_filter( 'rest_dispatch_request', function ( $result, $request ) use ( $controller, &$dispatches ) {
+			if ( '/mcpwp/v1/theme-builder/templates' === $request->get_route() ) {
+				++$dispatches;
+				return $controller->create_theme_template( $request );
+			}
+			return $result;
+		}, 10, 2 );
+		$args = $this->create_args( array( 'dry_run' => true, 'scope' => 'entire_site', 'elementor_data' => $this->minimal_elements() ) );
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array(
+			'jsonrpc' => '2.0',
+			'id'      => 1078,
+			'method'  => 'tools/call',
+			'params'  => array( 'name' => 'wp_create_theme_template', 'arguments' => $args ),
+		) );
+		$data = ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
+
+		$this->assertFalse( $data['result']['isError'], wp_json_encode( $data ) );
+		$this->assertSame( 1, $dispatches );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'], 'MCP dry_run must not create or publish a template.' );
+		$preview = json_decode( $data['result']['content'][0]['text'], true );
+		$this->assertTrue( $preview['dry_run'] );
+		$this->assertSame( 'publish', $preview['would_create']['post_status'] );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_meta'] );
+		$this->assertSame( array(), get_option( 'elementor_pro_theme_builder_conditions', array() ) );
+		$this->assertSame( 0, $GLOBALS['mcpwp_theme_test_save_calls'] );
+	}
+
 }

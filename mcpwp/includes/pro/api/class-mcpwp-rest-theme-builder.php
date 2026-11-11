@@ -347,12 +347,18 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 			'scope'          => $request->get_param( 'scope' ),
 			'post_type'      => $request->get_param( 'post_type' ),
 			'post_ids'       => $request->get_param( 'post_ids' ),
+			'dry_run'        => rest_sanitize_boolean( $request->get_param( 'dry_run' ) ),
 		);
 
 		$result = $this->theme_builder->create_theme_template( $data );
 
 		if ( is_wp_error( $result ) ) {
 			return $this->error_response_from_wp_error( $result );
+		}
+
+		// A preview must not record a creation or write an activity row.
+		if ( ! empty( $result['dry_run'] ) ) {
+			return $this->success_response( $result );
 		}
 
 		$this->log_activity( 'create_theme_template', $request, array(

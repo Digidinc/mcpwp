@@ -722,6 +722,7 @@ class Mcpwp_Theme_Builder {
 	 *     @type string $type           Template type: header, footer, single, archive (required).
 	 *     @type array  $elementor_data Elementor JSON data (optional).
 	 *     @type string $scope          Display scope: entire_site, singular, archive, front_page, 404 (default: entire_site).
+	 *     @type bool   $dry_run        Validate and preview without writing (default: false).
 	 * }
 	 * @return array|WP_Error Created template with conditions.
 	 */
@@ -751,12 +752,20 @@ class Mcpwp_Theme_Builder {
 		// Dry run: validate params without creating anything.
 		if ( $dry_run ) {
 			$result = array(
-				'dry_run'  => true,
-				'valid'    => true,
-				'title'    => $title,
-				'type'     => $type,
-				'scope'    => $scope,
-				'message'  => __( 'Validation passed — no template created.', 'mcpwp' ),
+				'dry_run'       => true,
+				'valid'         => true,
+				'title'         => $title,
+				'type'          => $type,
+				'scope'         => $scope,
+				'post_type'     => ! empty( $data['post_type'] ) ? sanitize_text_field( $data['post_type'] ) : 'post',
+				'post_ids'      => ! empty( $data['post_ids'] ) ? array_map( 'absint', (array) $data['post_ids'] ) : array(),
+				'element_count' => 0,
+				'would_create'  => array(
+					'post_title'  => $title,
+					'post_type'   => 'elementor_library',
+					'post_status' => 'publish',
+				),
+				'message'       => __( 'Would create and publish the template, then attempt assignment to the requested display scope. No template, metadata or conditions were saved.', 'mcpwp' ),
 			);
 			if ( ! empty( $data['elementor_data'] ) ) {
 				$elements = $data['elementor_data'];
