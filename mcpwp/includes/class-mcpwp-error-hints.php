@@ -129,7 +129,7 @@ class Mcpwp_Error_Hints {
 		return array(
 			// Auth errors.
 			'missing_api_key'     => array(
-				'hint'  => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Setup, or call_api_key if you have admin access.',
+				'hint'  => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Setup, or call wp_create_api_key if you have admin access.',
 				'guide' => '',
 			),
 			'invalid_api_key'     => array(

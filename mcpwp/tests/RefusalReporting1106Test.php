@@ -489,8 +489,21 @@ final class RefusalReporting1106Test extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $verdict );
 		$this->assertSame( 'missing_api_key', $verdict->get_error_code() );
 		$hint = $verdict->get_error_data()['hint'];
-		$this->assertStringContainsString( 'MCPWP > Setup', $hint );
-		$this->assertStringNotContainsString( 'MCPWP > Settings', $hint );
+		$this->assertSame( self::MISSING_KEY_HINT, $hint );
+	}
+
+	const MISSING_KEY_HINT = 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Setup, or call wp_create_api_key if you have admin access.';
+
+	public function test_the_late_hint_table_says_the_full_missing_key_hint(): void {
+		$this->assertSame( self::MISSING_KEY_HINT, Mcpwp_Error_Hints::get_hint_for_code( 'missing_api_key' )['hint'] );
+
+		$enhanced = Mcpwp_Error_Hints::enhance_error( new WP_Error( 'missing_api_key', 'API key is required.', array( 'status' => 401 ) ) );
+		$this->assertSame( self::MISSING_KEY_HINT, $enhanced->get_error_data()['hint'] );
+
+		$this->assertSame(
+			'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Setup to generate an API key.',
+			Mcpwp_Error_Hints::get_hint_for_code( 'api_not_configured' )['hint']
+		);
 	}
 
 	public function test_an_invalid_oauth_shaped_token_carries_the_hint(): void {
