@@ -298,6 +298,16 @@ if ( $mcpwp_fs_instance && method_exists( $mcpwp_fs_instance, 'add_action' ) ) {
  * Cleanup on uninstall.
  */
 function mcpwp_fs_uninstall_cleanup() {
+	// Another installed copy (e.g. a Free `mcpwp/` while `mcpwp-premium/` is
+	// deleted) shares these tables and options — leave them alone (#995).
+	if ( ! class_exists( 'Mcpwp_Uninstaller' ) ) {
+		require_once __DIR__ . '/class-mcpwp-uninstaller.php';
+	}
+	if ( ! method_exists( 'Mcpwp_Uninstaller', 'other_copy_present' )
+		|| Mcpwp_Uninstaller::other_copy_present( plugin_basename( dirname( __DIR__ ) . '/mcpwp.php' ), dirname( __DIR__ ) ) ) {
+		return;
+	}
+
 	if ( is_multisite() ) {
 		// W3: number => 0 — every site in the network, not the default-limited page.
 		$sites = get_sites( array( 'fields' => 'ids', 'number' => 0 ) );

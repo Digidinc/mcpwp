@@ -192,7 +192,7 @@ final class LegacyUninstallerTest extends TestCase
         $fresh   = new Mcpwp_Legacy_Uninstall_Test_Auth();
         $request = new WP_REST_Request('GET', '/mcpwp/v1/site-info', array(), array('X-API-Key' => $key));
         $this->assertInstanceOf(WP_Error::class, $fresh->verify_api_key($request));
-        foreach (array('spai_api_keys', 'spai_api_key', 'mcpwp_migrated_from_spai', 'spai_pro_license', 'spai_trial_started') as $option) {
+        foreach (array('spai_api_keys', 'spai_api_key', 'spai_pro_license', 'spai_trial_started') as $option) {
             $this->assertContains($option, Mcpwp_Uninstaller::LEGACY_OPTIONS);
         }
     }
@@ -206,24 +206,114 @@ final class LegacyUninstallerTest extends TestCase
         $this->assertArrayNotHasKey('mcpwp_integrations', $GLOBALS['mcpwp_test_options']);
     }
 
-    public function test_another_installed_copy_is_detected_by_text_domain_and_self_is_ignored(): void
+    private function header(string $name, string $text_domain): array
+    {
+        return array('Name' => $name, 'TextDomain' => $text_domain);
+    }
+
+    public function test_another_installed_copy_is_identified_by_name_and_text_domain_and_self_is_ignored(): void
     {
         $plugins = array(
-            'mcpwp/mcpwp.php'     => array('TextDomain' => 'mcpwp'),
-            'akismet/akismet.php' => array('TextDomain' => 'akismet'),
+            'mcpwp/mcpwp.php'     => $this->header('MCPWP', 'mcpwp'),
+            'akismet/akismet.php' => $this->header('Akismet', 'akismet'),
         );
         $this->assertFalse(Mcpwp_Uninstaller::another_copy_installed($plugins, 'mcpwp/mcpwp.php'));
 
-        $plugins['mcpwp-old/mcpwp.php'] = array('TextDomain' => 'mcpwp');
+        $plugins['mcpwp-old/mcpwp.php'] = $this->header('MCPWP', 'mcpwp');
         $this->assertTrue(Mcpwp_Uninstaller::another_copy_installed($plugins, 'mcpwp/mcpwp.php'));
         $this->assertTrue(Mcpwp_Uninstaller::another_copy_installed($plugins, 'mcpwp-old/mcpwp.php'));
     }
 
-    public function test_uninstall_php_guards_the_class_load_and_skips_when_another_copy_exists(): void
+    public function test_a_premium_copy_counts_but_lookalikes_and_addons_do_not(): void
+    {
+        $self = 'mcpwp-premium/mcpwp.php';
+        $this->assertTrue(Mcpwp_Uninstaller::another_copy_installed(array('mcpwp/mcpwp.php' => $this->header('MCPWP', 'mcpwp')), $self));
+        $this->assertTrue(Mcpwp_Uninstaller::another_copy_installed(array('x/mcpwp.php' => $this->header('MCPWP Premium', 'mcpwp')), 'mcpwp/mcpwp.php'));
+        // Same text domain, different plugin: must not suppress cleanup.
+        $this->assertFalse(Mcpwp_Uninstaller::another_copy_installed(array('other/other.php' => $this->header('Other Plugin', 'mcpwp')), $self));
+        $this->assertFalse(Mcpwp_Uninstaller::another_copy_installed(array('forms/forms.php' => $this->header('MCPWP Addon for Forms', 'mcpwp')), $self));
+        // Right name, wrong text domain.
+        $this->assertFalse(Mcpwp_Uninstaller::another_copy_installed(array('x/x.php' => $this->header('MCPWP', 'something-else')), $self));
+    }
+
+    public function test_a_copy_loaded_from_elsewhere_such_as_mu_plugins_is_detected(): void
+    {
+        $this->assertFalse(Mcpwp_Uninstaller::loaded_from_elsewhere('', '/wp/plugins/mcpwp'));
+        $this->assertFalse(Mcpwp_Uninstaller::loaded_from_elsewhere('/wp/plugins/mcpwp/', '/wp/plugins/mcpwp'));
+        $this->assertTrue(Mcpwp_Uninstaller::loaded_from_elsewhere('/wp/mu-plugins/mcpwp/', '/wp/plugins/mcpwp'));
+        $this->assertTrue(Mcpwp_Uninstaller::loaded_from_elsewhere('/wp/plugins/mcpwp-legacy/', '/wp/plugins/mcpwp'));
+    }
+
+    public function test_the_migration_flag_is_kept_so_a_reinstall_cannot_resurrect_deleted_data(): void
+    {
+        // Mcpwp_Migrate::run() re-runs when the flag is missing and spai_settings
+        // exists, copying the leftover spai_* options and tables back in.
+        $this->assertNotContains('mcpwp_migrated_from_spai', Mcpwp_Uninstaller::LEGACY_OPTIONS);
+        update_option('mcpwp_migrated_from_spai', '1');
+        update_option('spai_settings', array('a' => 1));
+
+        Mcpwp_Uninstaller::drop_legacy_data_for_current_site();
+
+        $this->assertSame('1', get_option('mcpwp_migrated_from_spai'));
+        // The key and licence bridges stay closed without the flag's help.
+        foreach (array('spai_api_keys', 'spai_api_key', 'spai_pro_license', 'spai_trial_started') as $option) {
+            $this->assertContains($option, Mcpwp_Uninstaller::LEGACY_OPTIONS);
+        }
+    }
+
+    public function test_uninstall_php_fails_safe_for_an_older_active_copy_and_checks_other_copies_first(): void
     {
         $src = file_get_contents(dirname(__DIR__, 2) . '/uninstall.php');
         $this->assertStringContainsString("! class_exists( 'Mcpwp_Uninstaller' )", $src);
-        $this->assertStringContainsString('another_copy_installed', $src);
-        $this->assertLessThan(strpos($src, 'drop_graph_data()'), strpos($src, 'another_copy_installed'));
+        $this->assertStringContainsString("method_exists( 'Mcpwp_Uninstaller', 'other_copy_present' )", $src);
+        $this->assertStringContainsString('other_copy_present(', $src);
+        $this->assertLessThan(strpos($src, 'drop_graph_data()'), strpos($src, 'other_copy_present('));
+    }
+
+    /**
+     * The Freemius cleanup carries the same guard (deleting mcpwp-premium/
+     * while a Free mcpwp/ stays must not wipe the shared data). The guard needs
+     * no Freemius account; the function text is lifted from the source.
+     *
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function test_freemius_cleanup_skips_everything_when_another_copy_is_installed(): void
+    {
+        $src = file_get_contents(dirname(__DIR__, 2) . '/includes/freemius-init.php');
+        $this->assertSame(1, preg_match('/\nfunction mcpwp_fs_uninstall_cleanup\(\) \{.*\z/s', $src, $m));
+        if (! function_exists('plugin_basename')) {
+            function plugin_basename($file)
+            {
+                return 'mcpwp-premium/mcpwp.php'; // The copy running the cleanup.
+            }
+        }
+        if (! function_exists('get_plugins')) {
+            function get_plugins()
+            {
+                return $GLOBALS['mcpwp_test_installed_plugins'];
+            }
+        }
+        eval($m[0]); // phpcs:ignore Squiz.PHP.Eval.Discouraged -- test lifts the function body from source.
+
+        update_option('mcpwp_api_key', 'keep-me');
+        $GLOBALS['wpdb']->queries = array();
+
+        // Free mcpwp/ stays while mcpwp-premium/ is deleted.
+        $GLOBALS['mcpwp_test_installed_plugins'] = array(
+            'mcpwp/mcpwp.php'         => array('Name' => 'MCPWP', 'TextDomain' => 'mcpwp'),
+            'mcpwp-premium/mcpwp.php' => array('Name' => 'MCPWP Premium', 'TextDomain' => 'mcpwp'),
+        );
+        mcpwp_fs_uninstall_cleanup();
+        $this->assertSame(array(), $GLOBALS['wpdb']->queries, 'Nothing may be dropped while another copy is installed.');
+        $this->assertSame('keep-me', get_option('mcpwp_api_key'));
+
+        // Only copy: cleanup runs.
+        $GLOBALS['mcpwp_test_installed_plugins'] = array(
+            'mcpwp-premium/mcpwp.php' => array('Name' => 'MCPWP Premium', 'TextDomain' => 'mcpwp'),
+        );
+        mcpwp_fs_uninstall_cleanup();
+        $this->assertNotEmpty($GLOBALS['wpdb']->queries);
+        $this->assertFalse(get_option('mcpwp_api_key', false));
     }
 }

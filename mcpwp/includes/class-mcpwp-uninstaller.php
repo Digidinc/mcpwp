@@ -239,9 +239,12 @@ class Mcpwp_Uninstaller {
 		// names only — never a spai_% pattern.
 		'spai_api_keys',
 		'spai_api_key',
-		// Cleared so a reinstall is a clean slate rather than a 2.8.x cutover
-		// that re-runs the migration and re-opens the licence bridge.
-		'mcpwp_migrated_from_spai',
+		// NOT 'mcpwp_migrated_from_spai': it is kept on purpose. Mcpwp_Migrate::run()
+		// re-runs whenever that flag is missing and spai_settings exists, and
+		// would copy the leftover spai_* options and tables (webhooks with
+		// their secrets, provider keys, site memory) back in — resurrecting
+		// data the owner deleted. With the key and licence stores above gone,
+		// keeping the flag leaves both bridges closed.
 	);
 
 	/** @var array<string> Transients cleared with the older data (#995). */
@@ -308,14 +311,16 @@ class Mcpwp_Uninstaller {
 	}
 
 	/**
-	 * Whether another installed plugin is a copy of MCPWP (#995 review).
+	 * Whether the given plugins list holds another copy of MCPWP (#995).
 	 *
 	 * Tables and options are keyed by the fixed `mcpwp_` names, not by plugin
-	 * directory, so deleting one copy (say `mcpwp-old/`) while another copy is
-	 * installed — active or not — would wipe the data the other one owns.
-	 * A copy is recognised by the `mcpwp` Text Domain header, the same
-	 * identity every build ships. Compared by basename, so the plugin being
-	 * uninstalled does not count as its own other copy.
+	 * directory, so deleting one copy (`mcpwp-old/`, or `mcpwp-premium/` while
+	 * a Free `mcpwp/` stays) while another is installed — active or not —
+	 * would wipe the data the other owns. A copy is identified like
+	 * Mcpwp_Duplicate_Copy does: Plugin Name `MCPWP` or `MCPWP Premium` AND
+	 * the `mcpwp` Text Domain, so an add-on or an unrelated plugin that merely
+	 * reuses the text domain does not suppress cleanup. Compared by basename,
+	 * so the plugin being uninstalled never counts as its own other copy.
 	 *
 	 * @param array<string,array<string,mixed>> $plugins     get_plugins() output (basename => headers).
 	 * @param string                            $uninstalled Basename being uninstalled.
@@ -325,10 +330,52 @@ class Mcpwp_Uninstaller {
 			if ( (string) $basename === (string) $uninstalled || ! is_array( $headers ) ) {
 				continue;
 			}
-			if ( isset( $headers['TextDomain'] ) && 'mcpwp' === $headers['TextDomain'] ) {
+			$name = isset( $headers['Name'] ) ? trim( (string) $headers['Name'] ) : '';
+			$td   = isset( $headers['TextDomain'] ) ? (string) $headers['TextDomain'] : '';
+			if ( 'mcpwp' === $td && preg_match( '/^MCPWP(\s+Premium)?$/i', $name ) ) {
 				return true;
 			}
 		}
 		return false;
+	}
+
+	/**
+	 * Whether a copy of MCPWP other than the one in $self_dir is loaded in this
+	 * request — e.g. one in mu-plugins, which get_plugins() never lists.
+	 *
+	 * @param string $loaded_dir MCPWP_PLUGIN_DIR, or '' when no copy is loaded.
+	 * @param string $self_dir   Directory of the copy being uninstalled.
+	 */
+	public static function loaded_from_elsewhere( $loaded_dir, $self_dir ) {
+		if ( '' === (string) $loaded_dir ) {
+			return false;
+		}
+		$norm = static function ( $dir ) {
+			$real = function_exists( 'realpath' ) ? realpath( (string) $dir ) : false;
+			$dir  = false !== $real ? $real : (string) $dir;
+			return rtrim( str_replace( '\\', '/', $dir ), '/' );
+		};
+		return $norm( $loaded_dir ) !== $norm( $self_dir );
+	}
+
+	/**
+	 * Whether any other copy of MCPWP exists, so this copy must leave the
+	 * shared tables and options alone. Used by uninstall.php and by the
+	 * Freemius cleanup.
+	 *
+	 * @param string $self_basename Basename of the copy being uninstalled.
+	 * @param string $self_dir      Its directory.
+	 */
+	public static function other_copy_present( $self_basename, $self_dir ) {
+		if ( defined( 'MCPWP_PLUGIN_DIR' ) && self::loaded_from_elsewhere( MCPWP_PLUGIN_DIR, $self_dir ) ) {
+			return true;
+		}
+		if ( ! function_exists( 'get_plugins' ) && defined( 'ABSPATH' ) ) {
+			require_once ABSPATH . 'wp-admin/includes/plugin.php';
+		}
+		if ( ! function_exists( 'get_plugins' ) ) {
+			return false;
+		}
+		return self::another_copy_installed( get_plugins(), $self_basename );
 	}
 }

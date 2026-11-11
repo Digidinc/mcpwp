@@ -35,17 +35,19 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 }
 
 if ( ! class_exists( 'Mcpwp_Uninstaller' ) ) {
-	// Already loaded when another copy of the plugin is active in this
-	// request — declaring it twice would be a fatal.
+	// Not loaded when no other copy is active in this request.
 	require_once __DIR__ . '/includes/class-mcpwp-uninstaller.php';
+} elseif ( ! method_exists( 'Mcpwp_Uninstaller', 'other_copy_present' ) ) {
+	// An OLDER copy of the plugin is active and its class (without the
+	// copy guard) is the one in memory. Fail safe: another copy is live and
+	// shares these tables, so clean up nothing.
+	return;
 }
 
-// Another installed copy of MCPWP (e.g. `mcpwp-old/`) shares these tables and
-// options; deleting this copy must not wipe the other's data.
-if ( ! function_exists( 'get_plugins' ) ) {
-	require_once ABSPATH . 'wp-admin/includes/plugin.php';
-}
-if ( Mcpwp_Uninstaller::another_copy_installed( get_plugins(), defined( 'WP_UNINSTALL_PLUGIN' ) ? WP_UNINSTALL_PLUGIN : '' ) ) {
+// Another copy of MCPWP (e.g. `mcpwp-old/`, or one loaded from mu-plugins)
+// shares these tables and options; deleting this copy must not wipe the
+// other's data.
+if ( Mcpwp_Uninstaller::other_copy_present( defined( 'WP_UNINSTALL_PLUGIN' ) ? WP_UNINSTALL_PLUGIN : '', __DIR__ ) ) {
 	return;
 }
 
