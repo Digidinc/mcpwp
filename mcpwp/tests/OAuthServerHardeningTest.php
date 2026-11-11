@@ -272,8 +272,8 @@ final class OAuthServerHardeningTest extends TestCase {
 
 		$legit = $this->register( '192.0.2.50', 99, $now + 1 );
 
-		$this->assertIsArray( $legit, 'The site-wide count does not lock out a caller who holds nothing.' );
-		$this->assertCount( $before, Mcpwp_OAuth_Clients::all(), 'It displaced one of the flood, the count did not grow.' );
+		$this->assertIsArray( $legit, 'Three addresses cannot fill the site limit.' );
+		$this->assertCount( $before + 1, Mcpwp_OAuth_Clients::all() );
 		$this->assertNotNull( Mcpwp_OAuth_Clients::find( $legit['client_id'] ) );
 	}
 
@@ -285,21 +285,104 @@ final class OAuthServerHardeningTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $refused );
 		$this->assertSame( 429, $refused->get_error_data()['status'] );
 		$this->assertLessThanOrEqual( HOUR_IN_SECONDS, $refused->get_error_data()['retry_after'], 'Documented expiry window: one hour.' );
+		$this->assertSame( HOUR_IN_SECONDS - 10, $refused->get_error_data()['retry_after'], 'Equal to when the oldest pending registration expires.' );
 
 		$after = $now + HOUR_IN_SECONDS + 5;
 		$this->assertIsArray( $this->register( '198.51.100.1', 101, $after ), 'The registrations expired and stopped counting.' );
 		$this->assertCount( 1 + 2, Mcpwp_OAuth_Clients::all(), 'Only the new one and the two seeded authorized clients remain.' );
 	}
 
-	public function test_a_newcomer_who_is_itself_the_heaviest_holder_is_refused_at_the_site_limit(): void {
-		$now = time();
-		for ( $i = 0; $i < 50; $i++ ) {
-			$this->assertIsArray( $this->register( '198.51.100.' . ( $i + 1 ), $i, $now ) );
+	/** A quiet address's registration survives a flood from many distinct addresses, and every 201 stays valid. */
+	public function test_a_quiet_client_and_every_issued_id_survive_a_flood_from_many_addresses(): void {
+		$now   = time();
+		$quiet = $this->register( '192.0.2.250', 1, $now );
+		$this->assertIsArray( $quiet );
+		$issued = array( $quiet['client_id'] );
+		$refused = 0;
+		for ( $i = 0; $i < 250; $i++ ) {
+			$r = $this->register( '198.51.' . intdiv( $i, 200 ) . '.' . ( $i % 200 + 1 ), 10 + $i, $now + 1 + intdiv( $i, 1 ) );
+			if ( is_wp_error( $r ) ) {
+				$this->assertSame( 429, $r->get_error_data()['status'] );
+				++$refused;
+				continue;
+			}
+			$issued[] = $r['client_id'];
 		}
-		$refused = $this->register( '198.51.100.1', 77, $now + 1 );
+		$this->assertGreaterThan( 0, $refused, 'The flood was bounded.' );
+		foreach ( $issued as $id ) {
+			$this->assertNotNull( Mcpwp_OAuth_Clients::find( $id ), 'Every id handed out with a 201 still exists.' );
+		}
+	}
+
+	public function test_an_administrators_clients_survive_a_flood_and_count_against_no_limit(): void {
+		$now   = time();
+		$admin = array();
+		for ( $i = 0; $i < 15; $i++ ) {
+			$r = $this->register( '203.0.113.200', 500 + $i, $now, true );
+			$this->assertIsArray( $r );
+			$admin[] = $r['client_id'];
+		}
+		for ( $i = 0; $i < 300; $i++ ) {
+			$this->register( '198.51.' . intdiv( $i, 200 ) . '.' . ( $i % 200 + 1 ), 600 + $i, $now + 1 + intdiv( $i, 2 ) );
+		}
+		foreach ( $admin as $id ) {
+			$this->assertNotNull( Mcpwp_OAuth_Clients::find( $id ) );
+		}
+		// And a purge an hour and a bit later keeps them (kept until used or deleted).
+		$this->assertIsArray( $this->register( '192.0.2.9', 900, $now + HOUR_IN_SECONDS + 100 ) );
+		foreach ( $admin as $id ) {
+			$this->assertNotNull( Mcpwp_OAuth_Clients::find( $id ), 'Not purged for age.' );
+		}
+	}
+
+	public function test_the_site_limit_refuses_and_displaces_nobody(): void {
+		$now = time();
+		$ids = array();
+		for ( $i = 0; $i < Mcpwp_OAuth_Clients::SITE_PENDING_LIMIT; $i++ ) {
+			$r = $this->register( '198.51.' . intdiv( $i, 200 ) . '.' . ( $i % 200 + 1 ), $i, $now + 2 * $i );
+			$this->assertIsArray( $r );
+			$ids[] = $r['client_id'];
+		}
+		$refused = $this->register( '198.51.100.1', 77, $now + 250 );
 		$this->assertInstanceOf( WP_Error::class, $refused );
 		$this->assertSame( 429, $refused->get_error_data()['status'] );
-		$this->assertCount( 50 + 2, Mcpwp_OAuth_Clients::all() );
+		$this->assertSame( HOUR_IN_SECONDS - 250, $refused->get_error_data()['retry_after'] );
+		foreach ( $ids as $id ) {
+			$this->assertNotNull( Mcpwp_OAuth_Clients::find( $id ) );
+		}
+	}
+
+	public function test_the_per_minute_ceiling_bounds_registrations_whatever_the_addresses(): void {
+		$now = time();
+		$ok  = 0;
+		for ( $i = 0; $i < 80; $i++ ) {
+			$r = $this->register( '198.51.' . intdiv( $i, 200 ) . '.' . ( $i % 200 + 1 ), $i, $now );
+			if ( is_array( $r ) ) {
+				++$ok;
+				continue;
+			}
+			$this->assertSame( 429, $r->get_error_data()['status'] );
+			$this->assertLessThanOrEqual( 60, $r->get_error_data()['retry_after'] );
+		}
+		$this->assertSame( Mcpwp_OAuth_Clients::SITE_REGISTRATIONS_PER_MINUTE, $ok );
+		$this->assertIsArray( $this->register( '192.0.2.77', 999, $now + 61 ), 'The next minute is open again.' );
+	}
+
+	/** Thousands of registrations from distinct addresses leave a bounded number of rows and a bounded option. */
+	public function test_many_registrations_leave_bounded_storage(): void {
+		$now = time();
+		for ( $i = 0; $i < 2000; $i++ ) {
+			$this->register( '10.' . intdiv( $i, 65000 ) . '.' . intdiv( $i % 65000, 250 ) . '.' . ( $i % 250 + 1 ), $i, $now + intdiv( $i, 2 ) );
+		}
+		$rows = 0;
+		foreach ( array_keys( $GLOBALS['mcpwp_test_transients'] ) as $name ) {
+			if ( 0 === strpos( $name, 'mcpwp_oauth_dcr_' ) ) {
+				++$rows;
+			}
+		}
+		$this->assertLessThanOrEqual( Mcpwp_OAuth_Clients::SITE_PENDING_LIMIT + 5, $rows );
+		$this->assertLessThanOrEqual( Mcpwp_OAuth_Clients::SITE_PENDING_LIMIT + 2, count( Mcpwp_OAuth_Clients::all() ) );
+		$this->assertLessThan( 60000, strlen( serialize( get_option( Mcpwp_OAuth_Clients::OPTION ) ) ) );
 	}
 
 	public function test_a_refused_registration_never_takes_the_lock_nor_counts(): void {
@@ -523,12 +606,19 @@ final class OAuthServerHardeningTest extends TestCase {
 
 	// ── 6. Authorization code replay ──────────────────────────────────────
 
+	/** Move a redeemed code's marker past the double-submit grace window. */
+	private function age_redeemed_marker( string $code ): void {
+		$key = Mcpwp_REST_OAuth::REDEEMED_CODE_PREFIX . hash( 'sha256', $code );
+		$GLOBALS['mcpwp_test_transients'][ $key ]['value']['redeemed_at'] -= 30;
+	}
+
 	public function test_replaying_a_redeemed_code_revokes_the_tokens_it_issued(): void {
 		$code  = $this->seed_code();
 		$first = $this->redeem( $code );
 		$this->assertSame( 200, $first->get_status() );
 		$data = $first->get_data();
 		$this->assertTrue( $this->works( $data['access_token'] ) );
+		$this->age_redeemed_marker( $code );
 
 		$replay = $this->redeem( $code );
 
@@ -539,11 +629,23 @@ final class OAuthServerHardeningTest extends TestCase {
 		$this->assertSame( 400, $refreshed->get_status(), 'And so is its refresh token.' );
 	}
 
+	public function test_a_parallel_double_submit_loses_without_disconnecting_the_winner(): void {
+		$code = $this->seed_code();
+		$data = $this->redeem( $code )->get_data();
+
+		$loser = $this->redeem( $code ); // immediately: inside the grace window
+
+		$this->assertSame( 'invalid_grant', $loser->get_data()['error'] );
+		$this->assertTrue( $this->works( $data['access_token'] ), 'The winner keeps its tokens.' );
+		$this->assertSame( 200, $this->refresh( $data['refresh_token'] )->get_status() );
+	}
+
 	public function test_a_replay_also_kills_the_tokens_after_they_were_refreshed(): void {
 		$code    = $this->seed_code();
 		$data    = $this->redeem( $code )->get_data();
 		$rotated = $this->refresh( $data['refresh_token'] )->get_data();
 		$this->assertTrue( $this->works( $rotated['access_token'] ) );
+		$this->age_redeemed_marker( $code );
 
 		$this->redeem( $code );
 
@@ -554,11 +656,43 @@ final class OAuthServerHardeningTest extends TestCase {
 	public function test_a_replay_by_another_client_revokes_nothing(): void {
 		$code = $this->seed_code();
 		$data = $this->redeem( $code )->get_data();
+		$this->age_redeemed_marker( $code );
 
 		$replay = $this->redeem( $code, self::OTHER );
 
 		$this->assertSame( 'invalid_grant', $replay->get_data()['error'] );
 		$this->assertTrue( $this->works( $data['access_token'] ), 'Presenting someone else\'s code under another client id is just an invalid code.' );
+	}
+
+	public function test_a_replay_that_does_not_authenticate_as_the_client_revokes_nothing(): void {
+		$code = $this->seed_code();
+		$data = $this->redeem( $code )->get_data();
+		$this->age_redeemed_marker( $code );
+
+		$wrong_redirect = $this->redeem( $code, self::CLIENT, array( 'redirect_uri' => 'https://elsewhere.example/cb' ) );
+		$this->assertSame( 'invalid_grant', $wrong_redirect->get_data()['error'] );
+		$unknown = $this->redeem( $code, 'mcpwpc_00000000000000000000000000000000' );
+		$this->assertSame( 'invalid_grant', $unknown->get_data()['error'] );
+		$this->assertTrue( $this->works( $data['access_token'] ), 'A wrong redirect URI or an unregistered client id cannot disconnect the app.' );
+	}
+
+	public function test_a_replay_with_a_wrong_client_secret_revokes_nothing_but_the_right_one_does(): void {
+		$settings                             = get_option( 'mcpwp_settings', array() );
+		$settings['oauth_client_secret_hash'] = wp_hash_password( 'cc_secret' );
+		update_option( 'mcpwp_settings', $settings );
+
+		$code = $this->seed_code( 'test_client' );
+		$first = $this->redeem( $code, 'test_client', array( 'client_secret' => 'cc_secret' ) );
+		$this->assertSame( 200, $first->get_status() );
+		$data = $first->get_data();
+		$this->age_redeemed_marker( $code );
+
+		$wrong = $this->redeem( $code, 'test_client', array( 'client_secret' => 'not-the-secret' ) );
+		$this->assertSame( 400, $wrong->get_status() );
+		$this->assertTrue( $this->works( $data['access_token'] ), 'A wrong secret revokes nothing.' );
+
+		$this->redeem( $code, 'test_client', array( 'client_secret' => 'cc_secret' ) );
+		$this->assertFalse( $this->works( $data['access_token'] ), 'The client itself, authenticated, does.' );
 	}
 
 	public function test_an_unknown_code_revokes_nothing(): void {

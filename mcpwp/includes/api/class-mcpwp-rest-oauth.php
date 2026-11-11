@@ -78,6 +78,13 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 */
 	const REDEEMED_CODE_PREFIX = 'mcpwp_oauth_codeused_';
 
+	/**
+	 * Seconds after a redemption during which a second presentation of the
+	 * same code (a client double-submitting its callback) is refused without
+	 * revoking the winner's tokens.
+	 */
+	const REPLAY_GRACE_SECONDS = 10;
+
 	/** How long a redeemed-code marker is kept (1 day; the code itself lives 60 s). */
 	const REDEEMED_CODE_TTL = 86400;
 
@@ -571,7 +578,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			// presented again means a copy exists.  Revoke what the first
 			// redemption issued (the whole refresh family), then refuse like
 			// any other dead code.
-			$this->revoke_tokens_of_redeemed_code( $code, $client_id );
+			$this->revoke_tokens_of_redeemed_code( $code, $client_id, $redirect_uri, $client_secret );
 			return $this->oauth_error_response( 'invalid_grant', 'Authorization code is invalid or has expired.', 400 );
 		}
 
@@ -663,8 +670,10 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		set_transient(
 			self::REDEEMED_CODE_PREFIX . hash( 'sha256', $code ),
 			array(
-				'family_id' => $family_id,
-				'client_id' => $client_id,
+				'family_id'    => $family_id,
+				'client_id'    => $client_id,
+				'redirect_uri' => $redirect_uri,
+				'redeemed_at'  => time(),
 			),
 			self::REDEEMED_CODE_TTL
 		);
@@ -686,20 +695,42 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
 	/**
 	 * A redeemed authorization code was presented again: revoke the token
-	 * family its first redemption created (RFC 6749 §4.1.2).  Only the client
-	 * the code was redeemed for may trigger it — a different client id is just
-	 * an invalid code.  Nothing here changes the answer, which is always
-	 * invalid_grant.
+	 * family its first redemption created (RFC 6749 §4.1.2).
 	 *
-	 * @param string $code      The presented code.
-	 * @param string $client_id The presenting client.
+	 * Nothing is revoked unless the presenter authenticates as the client the
+	 * code was redeemed for: the exact client id and redirect URI, and — when
+	 * a client secret is sent — a correct secret.  Someone who merely saw a
+	 * used code (a log, a Referer) and knows the public client id therefore
+	 * cannot disconnect the app with a wrong secret or redirect URI.  And
+	 * nothing is revoked within REPLAY_GRACE_SECONDS of the redemption: a
+	 * client that submits its callback twice in parallel gets invalid_grant
+	 * for the loser without losing the winner's tokens.  The answer is
+	 * invalid_grant either way.
+	 *
+	 * @param string $code          The presented code.
+	 * @param string $client_id     The presenting client.
+	 * @param string $redirect_uri  The presented redirect URI.
+	 * @param string $client_secret The presented client secret ('' for a public client).
 	 */
-	private function revoke_tokens_of_redeemed_code( $code, $client_id ) {
+	private function revoke_tokens_of_redeemed_code( $code, $client_id, $redirect_uri, $client_secret ) {
 		$marker = get_transient( self::REDEEMED_CODE_PREFIX . hash( 'sha256', (string) $code ) );
 		if ( ! is_array( $marker ) || empty( $marker['family_id'] ) || empty( $marker['client_id'] ) ) {
 			return;
 		}
 		if ( ! hash_equals( (string) $marker['client_id'], (string) $client_id ) ) {
+			return;
+		}
+		if ( ! isset( $marker['redirect_uri'] ) || ! hash_equals( (string) $marker['redirect_uri'], (string) $redirect_uri ) ) {
+			return;
+		}
+		if ( '' !== (string) $client_secret ) {
+			if ( ! $this->verify_oauth_client_credentials( $client_id, (string) $client_secret ) ) {
+				return;
+			}
+		} elseif ( null === $this->resolve_client( $client_id ) ) {
+			return;
+		}
+		if ( time() - (int) ( $marker['redeemed_at'] ?? 0 ) < self::REPLAY_GRACE_SECONDS ) {
 			return;
 		}
 		Mcpwp_OAuth_Revocation::revoke_family( (string) $marker['family_id'] );

@@ -338,28 +338,28 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 
 	/**
 	 * The site cap counts LIVE pending registrations (never authorized, under an
-	 * hour old), not a day's worth of attempts: 50 from 50 addresses fill it, a
-	 * 51st does not exceed it (it displaces one of the fair-share holders), and
-	 * once they expire they stop counting.
+	 * hour old), not a day's worth of attempts.  At the limit a newcomer is
+	 * refused (nothing is displaced) with the time the oldest one expires; once
+	 * they expire they stop counting.
 	 */
-	public function test_site_pending_limit_holds_at_fifty_and_expiry_frees_it(): void {
-		for ( $i = 0; $i < 50; $i++ ) {
-			// A different address and host each time: every per-requester
-			// bucket is fresh, so only the site limit can act on number 51.
-			$this->assertIsArray( $this->register( array( 'redirect_uris' => array( 'https://app' . $i . '.example/cb' ) ), '198.51.100.' . $i ) );
+	public function test_site_pending_limit_refuses_at_one_hundred_and_expiry_frees_it(): void {
+		$now = time();
+		for ( $i = 0; $i < Mcpwp_OAuth_Clients::SITE_PENDING_LIMIT; $i++ ) {
+			// A different address and host each time (2 s apart, under the
+			// per-minute ceiling): only the site limit can act on number 101.
+			$this->assertIsArray( Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://app' . $i . '.example/cb' ) ), '198.51.' . intdiv( $i, 250 ) . '.' . ( $i % 250 ), $now + 2 * $i ) );
 		}
-		$this->assertCount( 50, Mcpwp_OAuth_Clients::all() );
+		$ids = array_keys( Mcpwp_OAuth_Clients::all() );
+		$this->assertCount( 100, $ids );
 
-		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( 'https://app-new.example/cb' ) ), '203.0.113.200' ) );
-		$this->assertCount( 50, Mcpwp_OAuth_Clients::all(), 'Never more than the limit pending at once.' );
+		$over = Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://app-new.example/cb' ) ), '203.0.113.200', $now + 250 );
+		$this->assert_error( $over, 'temporarily_unavailable' );
+		$this->assertSame( 429, $over->get_error_data()['status'] );
+		$this->assertSame( $now + HOUR_IN_SECONDS - ( $now + 250 ), $over->get_error_data()['retry_after'], 'Honest Retry-After: when the oldest pending one expires.' );
+		$this->assertSame( $ids, array_keys( Mcpwp_OAuth_Clients::all() ), 'Nothing was displaced.' );
 
-		// Expiry: registrations older than the unused-client age stop counting.
-		$clients = Mcpwp_OAuth_Clients::all();
-		foreach ( $clients as $id => $record ) {
-			$clients[ $id ]['created_at'] = time() - Mcpwp_OAuth_Clients::UNUSED_CLIENT_MAX_AGE - 5;
-		}
-		update_option( Mcpwp_OAuth_Clients::OPTION, $clients, false );
-		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( 'https://app-later.example/cb' ) ), '203.0.113.201' ) );
+		$later = $now + HOUR_IN_SECONDS + 400;
+		$this->assertIsArray( Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://app-later.example/cb' ) ), '203.0.113.201', $later ) );
 		$this->assertCount( 1, Mcpwp_OAuth_Clients::all(), 'The expired ones are purged.' );
 	}
 
@@ -393,22 +393,23 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		update_option( Mcpwp_OAuth_Clients::OPTION, $clients, false );
 	}
 
-	/** Round 2: at the cap, the oldest NEVER-authorized client is evicted. */
-	public function test_cap_of_500_evicts_the_oldest_never_authorized_client(): void {
-		$this->seed_clients( 1, time() - 20 * MINUTE_IN_SECONDS, 0 );   // oldest never-authorized (inside the 1 h purge window) → evicted
+	/** At the 500 cap nothing that has not expired is displaced: the newcomer is refused. */
+	public function test_cap_of_500_never_displaces_a_live_registration(): void {
+		$this->seed_clients( 1, time() - 20 * MINUTE_IN_SECONDS, 0 );
 		$oldest = array_keys( Mcpwp_OAuth_Clients::all() )[0];
-		$this->seed_clients( 1, time() - 5 * DAY_IN_SECONDS, time() ); // older still, but AUTHORIZED → kept
-		$authorized = array_keys( Mcpwp_OAuth_Clients::all() )[1];
-		$this->seed_clients( 498, time() - 10 * MINUTE_IN_SECONDS, 0 );
+		$clients = Mcpwp_OAuth_Clients::all();
+		foreach ( $clients as $id => $record ) {
+			$clients[ $id ]['registered_by_admin'] = true;
+		}
+		update_option( Mcpwp_OAuth_Clients::OPTION, $clients, false );
+		$this->seed_clients( 499, time() - 10 * MINUTE_IN_SECONDS, time() ); // authorized
 
 		$result = $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) );
 
-		$this->assertIsArray( $result );
-		$clients = Mcpwp_OAuth_Clients::all();
-		$this->assertCount( 500, $clients );
-		$this->assertArrayNotHasKey( $oldest, $clients, 'The oldest never-authorized client makes room.' );
-		$this->assertArrayHasKey( $authorized, $clients, 'An authorized client is never evicted.' );
-		$this->assertArrayHasKey( $result['client_id'], $clients );
+		$this->assert_error( $result, 'temporarily_unavailable' );
+		$this->assertSame( 429, $result->get_error_data()['status'] );
+		$this->assertCount( 500, Mcpwp_OAuth_Clients::all() );
+		$this->assertArrayHasKey( $oldest, Mcpwp_OAuth_Clients::all() );
 	}
 
 	public function test_cap_refuses_only_when_all_500_have_been_authorized(): void {

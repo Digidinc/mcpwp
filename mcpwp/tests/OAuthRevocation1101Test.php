@@ -743,7 +743,7 @@ final class OAuthRevocation1101Test extends TestCase {
 		} finally {
 			unset( $GLOBALS['mcpwp_test_transient_write_fails'] );
 		}
-		$this->assertSame( array( true ), $under, 'The bucket is written while the lock is held.' );
+		$this->assertSame( array( true, true ), $under, 'Both buckets (hourly and per-minute) are written while the lock is held.' );
 	}
 
 	public function test_a_parallel_registration_from_one_address_cannot_read_a_stale_count(): void {

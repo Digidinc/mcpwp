@@ -14,15 +14,17 @@
  *  - The registration endpoint is unauthenticated by design, so everything it
  *    can write is bounded: at most 5 redirect URIs of at most 2,000 characters
  *    each, a 100-character plain-text name, 10 registrations per (IP, redirect
- *    hosts) per hour, and a count of LIVE pending registrations — clients
- *    never used to complete an authorization, for at most one hour — of 20
- *    per address and 50 per site.  A pending client expires after one hour
- *    and stops counting, so a flood can lock out nobody for longer than that;
- *    at the site cap a newcomer displaces the oldest pending client of the
- *    address holding the most, and an authenticated administrator is never
- *    held back by it.  The store is capped at 500 clients, enforced by
- *    evicting the oldest never-authorized client (refusing only when all 500
- *    have been authorized).
+ *    hosts) per hour, a count of LIVE pending registrations (never used to
+ *    complete an authorization, for at most one hour) of 20 per address and
+ *    100 per site, and a site-wide ceiling of 60 registrations per minute.  A
+ *    pending client expires after one hour and stops counting; nothing is ever
+ *    evicted before that, so every client_id handed out stays valid until its
+ *    expiry.  A cap that is hit answers 429 with a Retry-After equal to the
+ *    moment the oldest pending registration expires.  A client registered by
+ *    an authenticated administrator, or one that completed an authorization,
+ *    never counts and never expires.  The store is capped at 500 clients,
+ *    enforced by evicting the oldest never-authorized, non-administrator
+ *    client that has outlived the expiry window (refusing when none has).
  *  - Every read-modify-write of the store runs under a lock row, and a
  *    registration is verified in storage before its id is returned; a lost
  *    race is a 503 "retry", never a later invalid_client.
@@ -92,23 +94,30 @@ class Mcpwp_OAuth_Clients {
 	const REGISTRATIONS_PER_WINDOW = 10;
 
 	/**
-	 * Live pending registrations (never authorized, younger than
-	 * UNUSED_CLIENT_MAX_AGE) one address (IPv4, or an IPv6 /64) may hold at
-	 * once, across all redirect hosts.  The hourly (address, hosts) bucket
-	 * alone let one address mint a fresh bucket per redirect host.  Counted
-	 * from the store, not from a daily counter: a registration that expired or
-	 * was authorized frees its slot, so the limit can never outlive the
-	 * registrations it counts.
+	 * Live pending registrations (never authorized, not registered by an
+	 * administrator, younger than UNUSED_CLIENT_MAX_AGE) one address (IPv4, or
+	 * an IPv6 /64) may hold at once, across all redirect hosts.  Counted from
+	 * the store, so a registration that expired or was authorized frees its
+	 * slot and the limit can never outlive the registrations it counts.
 	 */
 	const ADDRESS_PENDING_LIMIT = 20;
 
 	/**
-	 * Live pending registrations the whole site may hold at once.  At the
-	 * limit a newcomer from an address holding fewer pending registrations
-	 * than the heaviest holder displaces that holder's oldest one (fair
-	 * share); a newcomer who is itself the heaviest holder is refused.
+	 * Live pending registrations the whole site may hold at once.  Above what
+	 * three addresses can hold (3 x 20), so a small flood does not shut out a
+	 * caller from a fresh address.  Nothing is displaced at the limit: a
+	 * newcomer is refused with a 429 until the oldest pending one expires.
 	 */
-	const SITE_PENDING_LIMIT = 50;
+	const SITE_PENDING_LIMIT = 100;
+
+	/**
+	 * Registrations per minute the whole site accepts from non-administrator
+	 * callers, whatever the number of addresses: the bound on storage writes.
+	 */
+	const SITE_REGISTRATIONS_PER_MINUTE = 60;
+
+	/** Transient holding the per-minute site counter. */
+	const MINUTE_BUCKET = 'mcpwp_oauth_dcr_site_minute';
 
 	/** Lock row guarding every read-modify-write of the store. */
 	const LOCK_OPTION = 'mcpwp_oauth_clients_lock';
@@ -494,10 +503,12 @@ class Mcpwp_OAuth_Clients {
 	 *     refused requests cannot starve in-limit ones into a 503) and never
 	 *     writes anything;
 	 *  3. under the store lock: the same checks again on a fresh read (the
-	 *     authoritative ones), the 1-hour purge, the fair-share displacement
-	 *     at the site limit, LRU eviction of a never-authorized client at the
-	 *     500 cap, the write, and a re-read that proves the new client landed;
-	 *     only then is the (address, hosts) hourly bucket counted.
+	 *     authoritative ones), the 1-hour purge, the 500 cap (refused, never
+	 *     displacing a registration that has not expired), the write, and a
+	 *     re-read that proves the new client landed; only then are the hourly
+	 *     and per-minute buckets counted.  A request that passed the lock-free
+	 *     pre-check and fails the re-check did take the lock; it counts
+	 *     nothing.
 	 *
 	 * The limits are keyed on the address the caller passes — handle_register()
 	 * passes the plugin's trusted resolution (REMOTE_ADDR unless
@@ -541,6 +552,10 @@ class Mcpwp_OAuth_Clients {
 			'authorized_at'        => 0,
 			'registration_ip_hash' => self::hash_ip( self::rate_limit_address( $ip ) ),
 		);
+		if ( $privileged ) {
+			// Kept until used or deleted; counts against no limit.
+			$record['registered_by_admin'] = true;
+		}
 
 		$token = self::acquire_lock( $now, self::LOCK_OPTION, self::REGISTER_LOCK_ATTEMPTS );
 		if ( false === $token ) {
@@ -573,10 +588,6 @@ class Mcpwp_OAuth_Clients {
 		if ( is_wp_error( $plan ) ) {
 			return $plan;
 		}
-		if ( null !== $plan['evict'] ) {
-			unset( $clients[ $plan['evict'] ] );
-		}
-
 		// At the cap, evict the oldest never-authorized client to make room.
 		// An authorized client is never evicted: someone is using it.
 		while ( count( $clients ) >= self::MAX_CLIENTS ) {
@@ -620,81 +631,78 @@ class Mcpwp_OAuth_Clients {
 	 * Decide a registration against the limits; change nothing.
 	 *
 	 * The pending registrations are the clients in $clients that were never
-	 * authorized (the caller has already purged the expired ones).  Returns
-	 * the hourly-bucket state to count after a verified write, and the id of
-	 * the pending client a newcomer displaces at the site limit (or null).
+	 * authorized and were not registered by an administrator (the caller has
+	 * already purged the expired ones).  Returns the bucket state to count
+	 * after a verified write.
 	 *
 	 * @param array    $clients    Live client records (purge_stale() applied).
 	 * @param string   $ip         Caller IP.
 	 * @param string[] $hosts      Redirect hosts.
 	 * @param int      $now        Current time.
 	 * @param bool     $privileged Authenticated administrator: no limits.
-	 * @return array|WP_Error array( 'state' => array, 'evict' => string|null ), or the 429.
+	 * @return array|WP_Error array( 'state' => array ), or the 429.
 	 */
 	private static function plan_registration( array $clients, $ip, array $hosts, $now, $privileged ) {
 		if ( $privileged ) {
-			return array(
-				'state' => array(),
-				'evict' => null,
-			);
+			return array( 'state' => array() );
 		}
 
 		$address = self::hash_ip( self::rate_limit_address( $ip ) );
 
-		// Pending registrations per address: id => created_at, oldest first.
-		$by_address = array();
-		$total      = 0;
-		foreach ( $clients as $client_id => $record ) {
-			if ( self::has_been_authorized( $record ) ) {
+		$mine   = 0;
+		$total  = 0;
+		$oldest = PHP_INT_MAX;
+		$mine_oldest = PHP_INT_MAX;
+		foreach ( $clients as $record ) {
+			if ( self::is_exempt_from_limits( $record ) ) {
 				continue;
 			}
-			$holder                              = isset( $record['registration_ip_hash'] ) && is_string( $record['registration_ip_hash'] ) ? $record['registration_ip_hash'] : '';
-			$by_address[ $holder ][ $client_id ] = (int) ( $record['created_at'] ?? 0 );
+			$created = (int) ( $record['created_at'] ?? 0 );
 			++$total;
-		}
-		foreach ( $by_address as $holder => $pending ) {
-			asort( $pending );
-			$by_address[ $holder ] = $pending;
+			$oldest = min( $oldest, $created );
+			if ( isset( $record['registration_ip_hash'] ) && $address === $record['registration_ip_hash'] ) {
+				++$mine;
+				$mine_oldest = min( $mine_oldest, $created );
+			}
 		}
 
-		$mine = isset( $by_address[ $address ] ) ? $by_address[ $address ] : array();
-		if ( count( $mine ) >= self::ADDRESS_PENDING_LIMIT ) {
-			return self::limit_error( (int) reset( $mine ) + self::UNUSED_CLIENT_MAX_AGE - $now );
+		if ( $mine >= self::ADDRESS_PENDING_LIMIT ) {
+			return self::limit_error( $mine_oldest + self::UNUSED_CLIENT_MAX_AGE - $now );
+		}
+		if ( $total >= self::SITE_PENDING_LIMIT ) {
+			return self::limit_error( $oldest + self::UNUSED_CLIENT_MAX_AGE - $now );
+		}
+
+		$minute = get_transient( self::MINUTE_BUCKET );
+		if ( ! is_array( $minute ) || ! isset( $minute['count'], $minute['reset'] ) || (int) $minute['reset'] <= $now ) {
+			$minute = array(
+				'count' => 0,
+				'reset' => $now + 60,
+			);
+		}
+		if ( (int) $minute['count'] >= self::SITE_REGISTRATIONS_PER_MINUTE ) {
+			return self::limit_error( (int) $minute['reset'] - $now );
 		}
 
 		$state = self::check_registration_slot( $ip, $hosts, $now );
 		if ( is_wp_error( $state ) ) {
 			return $state;
 		}
+		$state['minute'] = array( self::MINUTE_BUCKET, $minute );
 
-		$evict = null;
-		if ( $total >= self::SITE_PENDING_LIMIT ) {
-			// Fair share: the heaviest holder (ties: the one whose oldest
-			// registration is oldest) gives up its oldest pending client to a
-			// newcomer who holds fewer.  A newcomer who is the heaviest
-			// holder gets nothing — one address cannot displace others.
-			$heaviest = null;
-			$count    = 0;
-			$oldest   = PHP_INT_MAX;
-			foreach ( $by_address as $holder => $pending ) {
-				$first = (int) reset( $pending );
-				if ( count( $pending ) > $count || ( count( $pending ) === $count && $first < $oldest ) ) {
-					$heaviest = $holder;
-					$count    = count( $pending );
-					$oldest   = $first;
-				}
-			}
-			if ( null === $heaviest || $count <= count( $mine ) ) {
-				$all_oldest = $total > 0 ? min( array_map( 'min', $by_address ) ) : $now;
-				return self::limit_error( (int) $all_oldest + self::UNUSED_CLIENT_MAX_AGE - $now );
-			}
-			$evict = (string) array_key_first( $by_address[ $heaviest ] );
-		}
+		return array( 'state' => $state );
+	}
 
-		return array(
-			'state' => $state,
-			'evict' => $evict,
-		);
+	/**
+	 * Whether a client counts against no registration limit and is never
+	 * purged for age: it completed an authorization, or an authenticated
+	 * administrator registered it.
+	 *
+	 * @param mixed $record Client record.
+	 * @return bool
+	 */
+	public static function is_exempt_from_limits( $record ) {
+		return self::has_been_authorized( $record ) || ( is_array( $record ) && ! empty( $record['registered_by_admin'] ) );
 	}
 
 	/**
@@ -721,10 +729,13 @@ class Mcpwp_OAuth_Clients {
 	 * @return string|null
 	 */
 	private static function oldest_never_authorized( array $clients ) {
-		$victim = null;
+		$evictable_before = time() - self::UNUSED_CLIENT_MAX_AGE;
+		$victim           = null;
 		$oldest = PHP_INT_MAX;
 		foreach ( $clients as $client_id => $record ) {
-			if ( self::has_been_authorized( $record ) ) {
+			// Only a client that has outlived its expiry window may be
+			// evicted: a registration is valid until then.
+			if ( self::is_exempt_from_limits( $record ) || (int) $record['created_at'] >= $evictable_before ) {
 				continue;
 			}
 			if ( (int) $record['created_at'] < $oldest ) {
@@ -737,7 +748,7 @@ class Mcpwp_OAuth_Clients {
 
 	/**
 	 * Drop clients never authorized and older than UNUSED_CLIENT_MAX_AGE
-	 * (24 hours).
+	 * (1 hour) — except a client an administrator registered.
 	 *
 	 * @param array $clients Records keyed by id.
 	 * @param int   $now     Current time.
@@ -746,7 +757,7 @@ class Mcpwp_OAuth_Clients {
 	public static function purge_stale( array $clients, $now ) {
 		$cutoff = (int) $now - self::UNUSED_CLIENT_MAX_AGE;
 		foreach ( $clients as $client_id => $record ) {
-			if ( ! self::has_been_authorized( $record ) && (int) $record['created_at'] < $cutoff ) {
+			if ( ! self::is_exempt_from_limits( $record ) && (int) $record['created_at'] < $cutoff ) {
 				unset( $clients[ $client_id ] );
 			}
 		}
