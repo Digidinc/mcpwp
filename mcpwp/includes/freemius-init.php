@@ -304,7 +304,7 @@ function mcpwp_fs_uninstall_cleanup() {
 		require_once __DIR__ . '/class-mcpwp-uninstaller.php';
 	}
 	if ( ! method_exists( 'Mcpwp_Uninstaller', 'other_copy_present' )
-		|| Mcpwp_Uninstaller::other_copy_present( plugin_basename( dirname( __DIR__ ) . '/mcpwp.php' ), dirname( __DIR__ ) ) ) {
+		|| Mcpwp_Uninstaller::other_copy_present( plugin_basename( dirname( __DIR__ ) . '/mcpwp.php' ), dirname( __DIR__ ), MCPWP_PLUGIN_DIR ) ) {
 		return;
 	}
 

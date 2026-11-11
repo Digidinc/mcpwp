@@ -294,6 +294,9 @@ final class LegacyUninstallerTest extends TestCase
                 return $GLOBALS['mcpwp_test_installed_plugins'];
             }
         }
+        if (! defined('MCPWP_PLUGIN_DIR')) {
+            define('MCPWP_PLUGIN_DIR', dirname(__DIR__)); // This copy, as mcpwp.php defines it.
+        }
         eval($m[0]); // phpcs:ignore Squiz.PHP.Eval.Discouraged -- test lifts the function body from source.
 
         update_option('mcpwp_api_key', 'keep-me');

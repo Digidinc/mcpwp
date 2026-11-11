@@ -365,9 +365,11 @@ class Mcpwp_Uninstaller {
 	 *
 	 * @param string $self_basename Basename of the copy being uninstalled.
 	 * @param string $self_dir      Its directory.
+	 * @param string $loaded_dir    Directory of the copy loaded in this request ('' when none) —
+	 *                              the caller reads MCPWP_PLUGIN_DIR; this class never branches on it.
 	 */
-	public static function other_copy_present( $self_basename, $self_dir ) {
-		if ( defined( 'MCPWP_PLUGIN_DIR' ) && self::loaded_from_elsewhere( MCPWP_PLUGIN_DIR, $self_dir ) ) {
+	public static function other_copy_present( $self_basename, $self_dir, $loaded_dir = '' ) {
+		if ( self::loaded_from_elsewhere( $loaded_dir, $self_dir ) ) {
 			return true;
 		}
 		if ( ! function_exists( 'get_plugins' ) && defined( 'ABSPATH' ) ) {

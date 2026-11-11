@@ -47,7 +47,10 @@ if ( ! class_exists( 'Mcpwp_Uninstaller' ) ) {
 // Another copy of MCPWP (e.g. `mcpwp-old/`, or one loaded from mu-plugins)
 // shares these tables and options; deleting this copy must not wipe the
 // other's data.
-if ( Mcpwp_Uninstaller::other_copy_present( defined( 'WP_UNINSTALL_PLUGIN' ) ? WP_UNINSTALL_PLUGIN : '', __DIR__ ) ) {
+// A copy loaded from mu-plugins never shows up in get_plugins(); it does
+// define MCPWP_PLUGIN_DIR, which is then not this folder.
+$mcpwp_loaded_dir = defined( 'MCPWP_PLUGIN_DIR' ) ? MCPWP_PLUGIN_DIR : '';
+if ( Mcpwp_Uninstaller::other_copy_present( defined( 'WP_UNINSTALL_PLUGIN' ) ? WP_UNINSTALL_PLUGIN : '', __DIR__, $mcpwp_loaded_dir ) ) {
 	return;
 }
 
