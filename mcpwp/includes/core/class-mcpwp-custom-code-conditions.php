@@ -256,6 +256,10 @@ class Mcpwp_Custom_Code_Conditions {
 		if ( ! empty( $ids ) ) {
 			$data['skipped_custom_code_snippet_ids'] = $ids;
 		}
+		$failed = self::cache_repair_failure_ids();
+		if ( ! empty( $failed ) ) {
+			$data['custom_code_cache_repair_failed_ids'] = $failed;
+		}
 		return $data;
 	}
 
@@ -267,6 +271,12 @@ class Mcpwp_Custom_Code_Conditions {
 		if ( ! current_user_can( 'manage_options' ) ) {
 			return;
 		}
+		require_once dirname( __DIR__ ) . '/class-mcpwp-activator.php';
+		if ( Mcpwp_Activator::custom_code_cache_maintenance_due() ) {
+			$failed = get_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() );
+			$rescan = get_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION ) && empty( $failed );
+			Mcpwp_Activator::repair_custom_code_conditions( 0.25, $rescan );
+		}
 		$marker = self::report_marker();
 		$report = get_option( self::REPORT_OPTION, array() );
 		if ( self::report_is_fresh( $report, $marker ) ) {
@@ -274,8 +284,6 @@ class Mcpwp_Custom_Code_Conditions {
 		}
 		$ids = self::skipped_ids();
 		self::quarantine_many( $ids );
-		// Keep the marker sampled before the scan. A concurrent snippet change
-		// then leaves this report stale and forces the next admin refresh.
 		update_option( self::REPORT_OPTION, array( 'marker' => $marker, 'ids' => self::quarantine_ids(), 'expires_at' => time() + self::REPORT_TTL ), false );
 	}
 
@@ -284,10 +292,15 @@ class Mcpwp_Custom_Code_Conditions {
 			return;
 		}
 		$ids = self::report_ids();
-		if ( empty( $ids ) ) {
+		$failed = self::cache_repair_failure_ids();
+		if ( empty( $ids ) && empty( $failed ) ) {
 			return;
 		}
-		echo '<div class="notice notice-warning"><p>' . esc_html( self::report_summary( $ids ) ) . '</p></div>';
+		$summary = empty( $ids ) ? '' : self::report_summary( $ids );
+		if ( ! empty( $failed ) ) {
+			$summary .= ' ' . self::cache_repair_failure_summary( $failed );
+		}
+		echo '<div class="notice notice-warning"><p>' . esc_html( trim( $summary ) ) . '</p></div>';
 	}
 
 	public static function register_site_health_test( $tests ) {
@@ -297,11 +310,17 @@ class Mcpwp_Custom_Code_Conditions {
 
 	public static function site_health_test() {
 		$ids = self::report_ids();
+		$failed = self::cache_repair_failure_ids();
+		$healthy = empty( $ids ) && empty( $failed );
+		$summary = empty( $ids ) ? '' : self::report_summary( $ids );
+		if ( ! empty( $failed ) ) {
+			$summary .= ' ' . self::cache_repair_failure_summary( $failed );
+		}
 		return array(
-			'label' => empty( $ids ) ? __( 'Custom Code conditions are compatible', 'mcpwp' ) : __( 'Some Custom Code conditions were skipped', 'mcpwp' ),
-			'status' => empty( $ids ) ? 'good' : 'recommended',
+			'label' => $healthy ? __( 'Custom Code conditions are compatible', 'mcpwp' ) : __( 'Some Custom Code display entries need attention', 'mcpwp' ),
+			'status' => $healthy ? 'good' : 'recommended',
 			'badge' => array( 'label' => 'MCPWP', 'color' => 'blue' ),
-			'description' => empty( $ids ) ? '<p>OK</p>' : '<p>' . esc_html( self::report_summary( $ids ) ) . '</p>',
+			'description' => $healthy ? '<p>OK</p>' : '<p>' . esc_html( trim( $summary ) ) . '</p>',
 			'actions' => '',
 			'test' => 'mcpwp_custom_code_conditions',
 		);
@@ -415,6 +434,14 @@ class Mcpwp_Custom_Code_Conditions {
 
 	private static function bump_report_marker() {
 		update_option( self::REPORT_MARKER, wp_generate_uuid4(), false );
+	}
+
+	private static function cache_repair_failure_ids() {
+		return array_values( array_unique( array_map( 'intval', (array) get_option( 'mcpwp_custom_code_cache_repair_failed_ids', array() ) ) ) );
+	}
+
+	private static function cache_repair_failure_summary( array $ids ) {
+		return sprintf( 'Display-cache repair is pending for %d snippet(s): %s%s.', count( $ids ), implode( ', ', array_slice( $ids, 0, self::REPORT_PREVIEW ) ), count( $ids ) > self::REPORT_PREVIEW ? ' …' : '' );
 	}
 
 	private static function report_summary( array $ids ) {

@@ -870,6 +870,9 @@ class Mcpwp_Activator {
 	const CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION = 'mcpwp_custom_code_conditions_repair_cursor';
 	const CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_OPTION   = 'mcpwp_custom_code_conditions_repair_lock';
 	const CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_TTL      = 30;
+	const CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION = 'mcpwp_custom_code_cache_backfill_v1_done';
+	const CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION = 'mcpwp_custom_code_cache_backfill_state';
+	const CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION = 'mcpwp_custom_code_cache_repair_failed_ids';
 
 	/**
 	 * Durable scan position for repair_custom_code_locations(): the highest
@@ -959,8 +962,18 @@ class Mcpwp_Activator {
 	 * @param float|null $time_budget Per-request budget, used by tests.
 	 * @return true|WP_Error
 	 */
-	public static function repair_custom_code_conditions( ?float $time_budget = null ) {
-		if ( get_option( 'mcpwp_custom_code_conditions_repaired' ) ) {
+	public static function repair_custom_code_conditions( ?float $time_budget = null, $rescan = false ) {
+		$done = get_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION );
+		if ( $done && ! $rescan ) {
+			$start = microtime( true );
+			$budget = null !== $time_budget ? $time_budget : self::migration_time_budget();
+			$failed = get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() );
+			foreach ( array_slice( (array) $failed, 0, self::CUSTOM_CODE_REPAIR_BATCH_SIZE ) as $post_id ) {
+				self::repair_one_custom_code_conditions( (int) $post_id );
+				if ( microtime( true ) - $start >= $budget ) {
+					break;
+				}
+			}
 			return true;
 		}
 
@@ -968,12 +981,26 @@ class Mcpwp_Activator {
 		if ( false === $lock_token ) {
 			return true;
 		}
-
 		try {
+			if ( $done && $rescan ) {
+				delete_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION );
+				delete_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION );
+			}
 			return self::run_custom_code_conditions_repair_batches( $time_budget );
 		} finally {
 			self::release_migration_lock( self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_OPTION, $lock_token );
 		}
+	}
+
+	/** Cheap maintenance gate; cache backfill never runs on an API write. */
+	public static function custom_code_cache_maintenance_due() {
+		if ( ! get_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION ) || get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() ) ) {
+			return true;
+		}
+		$state = get_option( self::CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION, array() );
+		return ! is_array( $state ) || ! isset( $state['marker'], $state['completed_at'] )
+			|| (string) $state['marker'] !== (string) get_option( Mcpwp_Custom_Code_Conditions::REPORT_MARKER, '' )
+			|| (int) $state['completed_at'] + Mcpwp_Custom_Code_Conditions::REPORT_TTL <= time();
 	}
 
 	/**
@@ -1015,12 +1042,19 @@ class Mcpwp_Activator {
 				return self::finish_custom_code_conditions_repair();
 			}
 
+			if ( function_exists( '_prime_post_caches' ) ) {
+				_prime_post_caches( array_map( 'intval', $snippet_ids ), false, true );
+			}
 			foreach ( $snippet_ids as $post_id ) {
 				$result = self::repair_one_custom_code_conditions( (int) $post_id );
 				if ( is_wp_error( $result ) ) {
 					return $result;
 				}
 				$cursor = (int) $post_id;
+				if ( $budget > 0 && microtime( true ) - $start >= $budget ) {
+					update_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION, $cursor, false );
+					return true;
+				}
 			}
 			update_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION, $cursor, false );
 
@@ -1044,6 +1078,11 @@ class Mcpwp_Activator {
 		}
 		delete_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION );
 		update_option( 'mcpwp_custom_code_conditions_repaired', 1, false );
+		update_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION, 1, false );
+		update_option( self::CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION, array(
+			'marker' => (string) get_option( Mcpwp_Custom_Code_Conditions::REPORT_MARKER, '' ),
+			'completed_at' => time(),
+		), false );
 		return true;
 	}
 
@@ -1078,6 +1117,7 @@ class Mcpwp_Activator {
 		$strings = self::coerce_custom_code_conditions_to_strings( $raw );
 		if ( is_wp_error( $strings ) ) {
 			Mcpwp_Custom_Code_Conditions::quarantine( $post_id, $raw );
+			self::record_custom_code_cache_repair_result( $post_id, true );
 			return true;
 		}
 		if ( $raw !== $strings ) {
@@ -1097,21 +1137,37 @@ class Mcpwp_Activator {
 
 	/** @return true */
 	private static function repair_custom_code_conditions_cache_entry( $post_id ) {
+		if ( 'publish' !== get_post_status( $post_id ) ) {
+			self::record_custom_code_cache_repair_result( $post_id, true );
+			return true;
+		}
 		require_once __DIR__ . '/core/class-mcpwp-encryption.php';
 		require_once __DIR__ . '/core/class-mcpwp-custom-code-cache-entry.php';
-		$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
-		if ( is_array( $cache ) ) {
-			foreach ( $cache as $location => $entries ) {
-				if ( isset( $entries[ $post_id ] ) ) {
-					$strings = self::coerce_custom_code_conditions_to_strings( Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id ) );
-					if ( ! is_wp_error( $strings ) ) {
-						Mcpwp_Custom_Code_Cache_Entry::sync( $post_id, $location, $strings );
-					}
-					break;
-				}
-			}
+		$strings = self::coerce_custom_code_conditions_to_strings( Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id ) );
+		if ( is_wp_error( $strings ) ) {
+			return true;
 		}
+		$location = get_post_meta( $post_id, '_elementor_location', true );
+		$location = is_string( $location ) && '' !== $location ? $location : 'elementor_head';
+		$result = Mcpwp_Custom_Code_Cache_Entry::sync( $post_id, $location, $strings );
+		self::record_custom_code_cache_repair_result( $post_id, $result );
 		return true;
+	}
+
+	/** Retain failed IDs for a later bounded admin retry without aborting peers. */
+	private static function record_custom_code_cache_repair_result( $post_id, $result ) {
+		$failed = array_values( array_unique( array_map( 'intval', (array) get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() ) ) ) );
+		if ( is_wp_error( $result ) ) {
+			if ( ! in_array( (int) $post_id, $failed, true ) ) {
+				$failed[] = (int) $post_id;
+				sort( $failed );
+				update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, $failed, false );
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				error_log( 'MCPWP Custom Code cache repair failed for snippet ' . (int) $post_id . ': ' . $result->get_error_code() );
+			}
+		} elseif ( in_array( (int) $post_id, $failed, true ) ) {
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array_values( array_diff( $failed, array( (int) $post_id ) ) ), false );
+		}
 	}
 
 	/** @return bool|WP_Error */
