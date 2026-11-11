@@ -3,6 +3,16 @@
  * Request fixtures own their globals, request caches and created records (#1114).
  * Capture before setUp changes anything; restore from tearDown even on failure.
  */
+final class Mcpwp_Test_Request_Fixture_Globals {
+	const NAMES = array(
+		'mcpwp_test_options', 'mcpwp_test_options_autoload', 'mcpwp_test_transients',
+		'mcpwp_test_filters', 'mcpwp_test_current_user', 'mcpwp_test_is_admin',
+		'mcpwp_test_dispatched_routes', 'mcpwp_test_dispatched_requests', '_mcpwp_test_registered_routes',
+		'_mcpwp_test_posts', '_mcpwp_test_meta', 'mcpwp_test_rest_response_override',
+		'wp_version', 'mcpwp_test_theme_headers',
+	);
+}
+
 trait Mcpwp_Test_Request_Fixture_State {
 	private $fixture_globals = array();
 	private $fixture_statics = array();
@@ -10,13 +20,7 @@ trait Mcpwp_Test_Request_Fixture_State {
 	private $fixture_transient_names = array();
 
 	private function capture_request_fixture_state(): void {
-		foreach ( array(
-			'mcpwp_test_options', 'mcpwp_test_options_autoload', 'mcpwp_test_transients',
-			'mcpwp_test_filters', 'mcpwp_test_current_user', 'mcpwp_test_is_admin',
-			'mcpwp_test_dispatched_routes', '_mcpwp_test_registered_routes',
-			'_mcpwp_test_posts', '_mcpwp_test_meta', 'mcpwp_test_rest_response_override',
-			'wp_version', 'mcpwp_test_theme_headers',
-		) as $name ) {
+		foreach ( Mcpwp_Test_Request_Fixture_Globals::NAMES as $name ) {
 			$this->fixture_globals[ $name ] = array( array_key_exists( $name, $GLOBALS ), $GLOBALS[ $name ] ?? null );
 		}
 		// Authentication enters guardrail context; integration resolution and

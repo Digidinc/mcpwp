@@ -33,6 +33,7 @@ final class McpProtocolVersionTest extends TestCase {
 
 	protected function setUp(): void {
 		$this->capture_request_fixture_state();
+		$GLOBALS['mcpwp_test_dispatched_requests'] = array();
 		$GLOBALS['mcpwp_test_options']           = array();
 		// Protocol shaping is under test across the whole catalog, not the
 		// `core` default profile (#1064).

@@ -49,6 +49,7 @@ final class RestElementorDraftLeakTest extends TestCase {
 
 	protected function setUp(): void {
 		$this->capture_request_fixture_state();
+		$GLOBALS['mcpwp_test_dispatched_requests'] = array();
 		$GLOBALS['mcpwp_test_options']            = array();
 		$GLOBALS['mcpwp_test_transients']         = array();
 		$GLOBALS['mcpwp_test_current_user']       = 0;
