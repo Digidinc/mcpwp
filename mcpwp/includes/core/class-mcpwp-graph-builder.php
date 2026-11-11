@@ -104,6 +104,16 @@ class Mcpwp_Graph_Builder {
 	 */
 	const URL_TO_POSTID_FALLBACK_CAP = 25;
 
+	/**
+	 * Version of the link-resolution rules, folded into content_hash() so a
+	 * change to how an href maps to a post makes the next backfill or
+	 * reconcile re-resolve every post once, instead of leaving the edges the
+	 * old rules wrote in place (a post with an unchanged hash is skipped).
+	 * Bump it whenever resolve_hrefs_for_post() changes what it resolves.
+	 * 2: #1000 single-segment permalink check, covered-type fallback.
+	 */
+	const LINK_RESOLVER_VERSION = 2;
+
 	/** Max distinct anchor texts stored per links_to edge. */
 	const MAX_EDGE_ANCHORS = 5;
 
@@ -169,6 +179,16 @@ class Mcpwp_Graph_Builder {
 	 * @var array<string,int>
 	 */
 	private static $url_id_cache = array();
+
+	/**
+	 * Per-run memo of a post's own permalink path (post ID => normalized,
+	 * query-less path, '' when it has no pretty permalink to compare).
+	 * Same lifetime as $url_id_cache. #1000: one get_permalink() per
+	 * candidate post per run, not per link.
+	 *
+	 * @var array<int,string>
+	 */
+	private static $permalink_path_cache = array();
 
 	/** Whether a DB error has already been logged this request (log once). */
 	private static $logged_db_error_this_request = false;
@@ -240,6 +260,7 @@ class Mcpwp_Graph_Builder {
 		self::$request_marked          = array();
 		self::$in_mcpwp_request        = false;
 		self::$url_id_cache            = array();
+		self::$permalink_path_cache = array();
 		self::$logged_db_error_this_request = false;
 	}
 
@@ -682,6 +703,7 @@ class Mcpwp_Graph_Builder {
 
 		$start = microtime( true );
 		self::$url_id_cache = array();
+		self::$permalink_path_cache = array();
 
 		while ( ( microtime( true ) - $start ) < self::WORKER_TIME_BUDGET ) {
 			$batch = self::pop_queue_batch( self::WORKER_POP_BATCH );
@@ -806,6 +828,7 @@ class Mcpwp_Graph_Builder {
 
 			if ( self::$in_mcpwp_request && $rebuilt_so_far < self::REQUEST_REBUILD_LIMIT ) {
 				self::$url_id_cache = array();
+				self::$permalink_path_cache = array();
 				$batch = array_slice( array_keys( $marks ), 0, self::REQUEST_REBUILD_LIMIT - $rebuilt_so_far );
 				foreach ( $batch as $node_key ) {
 					if ( ( microtime( true ) - $start ) > self::REQUEST_REBUILD_BUDGET ) {
@@ -1205,6 +1228,7 @@ class Mcpwp_Graph_Builder {
 			$page_template,
 			(string) $post->menu_order,
 			implode( ',', $term_ids ),
+			'resolver:' . self::LINK_RESOLVER_VERSION,
 		);
 
 		// \x1f (unit separator) delimits fields so no concatenation of two
@@ -1879,7 +1903,10 @@ class Mcpwp_Graph_Builder {
 		$simple_slugs     = array(); // slug => [normalized, ...]                 (single path segment)
 		$nested_paths     = array(); // normalized => {path, last_slug}          (2+ path segments)
 		$candidate_href   = array(); // normalized => one representative raw href
+		$compare_path     = array(); // normalized => lowercased path, no query/page suffix (#1000)
 		$fallback_eligible = array(); // normalized => true — only genuine ambiguity/no-match, never an exclusion
+		$fallback_nested   = array(); // normalized => true — nested paths; first in line for the capped fallback (#1000)
+		$fallback_low      = array(); // normalized => true — a lone slug match whose permalink differs (#1000); spends the budget last
 
 		foreach ( $hrefs as $href ) {
 			$href = trim( (string) $href );
@@ -1957,6 +1984,12 @@ class Mcpwp_Graph_Builder {
 				continue;
 			}
 
+			// #1000: what a candidate's own permalink is compared with is the
+			// href's PATH. A ?query, a #fragment or a /page/N/ suffix is not
+			// part of any post's permalink, so comparing the whole
+			// normalized key would send every such link to the fallback.
+			$compare_path[ $normalized ] = '/' . strtolower( $path );
+
 			if ( 1 === count( $segments ) ) {
 				$simple_slugs[ $last_slug ][] = $normalized;
 			} else {
@@ -2014,6 +2047,24 @@ class Mcpwp_Graph_Builder {
 			$results[ $candidate_href[ $normalized ] ] = $resolved;
 		}
 
+		// #1000: every candidate whose permalink is about to be compared,
+		// primed in one batch (posts, their meta and terms) so
+		// get_permalink() does not cost a query or three per candidate.
+		$permalink_ids = array();
+		foreach ( $simple_slugs as $slug => $normalized_keys ) {
+			$only = array_values( array_filter( $by_slug[ $slug ] ?? array(), array( __CLASS__, 'is_covered_post_type_row' ) ) );
+			if ( 1 === count( $only ) ) {
+				$permalink_ids[] = (int) $only[0]['ID'];
+			}
+		}
+		foreach ( $nested_paths as $info ) {
+			$only = array_values( array_filter( $by_slug[ $info['last_slug'] ] ?? array(), array( __CLASS__, 'is_covered_post_type_row' ) ) );
+			if ( 1 === count( $only ) ) {
+				$permalink_ids[] = (int) $only[0]['ID'];
+			}
+		}
+		self::prime_permalink_candidates( $permalink_ids );
+
 		// Single-segment paths: resolve ONLY when exactly one covered-type
 		// row shares that slug. More than one -> genuinely ambiguous ->
 		// fallback; that is precisely BLOCK-2's bug when left unresolved.
@@ -2026,20 +2077,25 @@ class Mcpwp_Graph_Builder {
 			// (/%year%/%monthnum%/%postname%/), /news/ shares a slug with a
 			// post whose URL is /2026/09/news/. Apply the same check the
 			// nested-path branch uses, per href: the candidate's own
-			// permalink must equal the href's normalized URL.
+			// permalink path must equal the href's path.
 			//
 			// A post WordPress gives no pretty URL (a draft, pending or
 			// scheduled post carries a plain ?p=ID permalink) has nothing
-			// to compare, so it keeps the slug match it always had.
-			$candidate_perm = $candidate ? get_permalink( $candidate ) : '';
-			$can_compare    = $candidate_perm && '' === (string) wp_parse_url( $candidate_perm, PHP_URL_QUERY );
-			$candidate_norm = $can_compare ? self::normalize_internal_graph_url( $candidate_perm ) : '';
+			// to compare and keeps the slug match it always had.
+			$candidate_path = $candidate ? self::permalink_path_for( $candidate ) : '';
 
 			foreach ( $normalized_keys as $normalized ) {
-				$resolved = ( $candidate && ( ! $can_compare || $candidate_norm === $normalized ) ) ? $candidate : 0;
+				$resolved = ( $candidate && ( '' === $candidate_path || $candidate_path === $compare_path[ $normalized ] ) ) ? $candidate : 0;
 				$results[ $candidate_href[ $normalized ] ] = $resolved;
 				if ( 0 === $resolved ) {
-					$fallback_eligible[ $normalized ] = true;
+					// A lone candidate whose permalink differs is a slug
+					// coincidence, not genuine ambiguity: it queues behind
+					// the nested and ambiguous links for the fallback.
+					if ( $candidate ) {
+						$fallback_low[ $normalized ] = true;
+					} else {
+						$fallback_eligible[ $normalized ] = true;
+					}
 				} else {
 					self::$url_id_cache[ $normalized ] = $resolved;
 				}
@@ -2087,15 +2143,15 @@ class Mcpwp_Graph_Builder {
 				// let url_to_postid() have the real say, same as any other
 				// ambiguous case.
 				$candidate_id   = (int) $other_matches[0]['ID'];
-				$candidate_perm = get_permalink( $candidate_id );
-				if ( $candidate_perm && self::normalize_internal_graph_url( $candidate_perm ) === $normalized ) {
+				$candidate_path = self::permalink_path_for( $candidate_id );
+				if ( '' !== $candidate_path && $candidate_path === $compare_path[ $normalized ] ) {
 					$resolved = $candidate_id;
 				}
 			}
 
 			$results[ $candidate_href[ $normalized ] ] = $resolved;
 			if ( 0 === $resolved ) {
-				$fallback_eligible[ $normalized ] = true;
+				$fallback_nested[ $normalized ] = true;
 			} else {
 				self::$url_id_cache[ $normalized ] = $resolved;
 			}
@@ -2107,7 +2163,7 @@ class Mcpwp_Graph_Builder {
 		// classified as a rewrite base/search (those were resolved to 0,
 		// cached, and never marked fallback_eligible above).
 		$fallback_used = 0;
-		foreach ( $fallback_eligible as $normalized => $true ) {
+		foreach ( $fallback_nested + $fallback_eligible + $fallback_low as $normalized => $true ) {
 			if ( $fallback_used >= self::URL_TO_POSTID_FALLBACK_CAP ) {
 				break;
 			}
@@ -2125,6 +2181,45 @@ class Mcpwp_Graph_Builder {
 		}
 
 		return $results;
+	}
+
+	/**
+	 * Prime the post, meta and term caches for a set of resolver candidates
+	 * in one batch, so the get_permalink() calls that follow hit the cache.
+	 *
+	 * @param array<int> $ids Post IDs.
+	 * @return void
+	 */
+	private static function prime_permalink_candidates( array $ids ) {
+		$ids = array_values( array_unique( array_filter( array_map( 'intval', $ids ) ) ) );
+		if ( empty( $ids ) || ! function_exists( '_prime_post_caches' ) ) {
+			return;
+		}
+		_prime_post_caches( $ids, true, false );
+	}
+
+	/**
+	 * A post's own permalink as a comparable path (lowercased, no trailing
+	 * slash, no query), memoised per run. '' means WordPress gave it no
+	 * pretty permalink (a plain ?p=ID one), so there is nothing to compare.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return string
+	 */
+	private static function permalink_path_for( $post_id ) {
+		$post_id = (int) $post_id;
+		if ( isset( self::$permalink_path_cache[ $post_id ] ) ) {
+			return self::$permalink_path_cache[ $post_id ];
+		}
+
+		$permalink = get_permalink( $post_id );
+		$path      = '';
+		if ( $permalink && '' === (string) wp_parse_url( $permalink, PHP_URL_QUERY ) ) {
+			$path = self::normalize_internal_graph_url( $permalink );
+		}
+
+		self::$permalink_path_cache[ $post_id ] = $path;
+		return $path;
 	}
 
 	/**
@@ -2718,6 +2813,7 @@ class Mcpwp_Graph_Builder {
 
 		$start  = microtime( true );
 		self::$url_id_cache = array();
+		self::$permalink_path_cache = array();
 		$cursor = (int) get_option( self::BACKFILL_CURSOR_OPTION, 0 );
 
 		$ids = self::fetch_backfill_batch_ids( self::covered_post_types(), $cursor, self::BACKFILL_BATCH_SIZE );
