@@ -207,7 +207,7 @@ final class CustomCodeConditionsIsolationServiceTest extends TestCase {
 		$small = $measure( 50 );
 		$large = $measure( 500 );
 		$this->assertLessThanOrEqual( $small + 5, $large, 'Normal cache reads must use bounded batches, not one query per entry.' );
-		$this->assertLessThanOrEqual( 6, $small );
+		$this->assertLessThanOrEqual( 10, $small, 'Cold reads include the bounded fingerprint/revision checks needed to persist the derived view.' );
 	}
 
 	public function test_same_request_meta_changes_replace_conditions_and_location(): void {

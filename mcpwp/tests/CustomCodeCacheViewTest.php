@@ -79,6 +79,55 @@ final class CustomCodeCacheViewTest extends TestCase {
 		$this->assertSame( false, $GLOBALS['mcpwp_test_options_autoload'][ Mcpwp_Custom_Code_Cache_View::OPTION ] );
 		$this->assertTrue( Mcpwp_Custom_Code_Cache_View::read( $base )['hit'] );
 		$query = implode( "\n", $this->queries );
-		$this->assertStringContainsString( 'OCTET_LENGTH(v.option_value) <= 1048576', $query );
+		$this->assertStringContainsString( 'OCTET_LENGTH(v.option_value) <= 4194304', $query );
+	}
+
+	public function test_large_repeated_projection_is_compacted_and_round_trips(): void {
+		$base  = array();
+		$cache = array( 'elementor_head' => array() );
+		for ( $id = 1; $id <= 5043; ++$id ) {
+			$cache['elementor_head'][ $id ] = array_fill( 0, 5, 'include/singular/page/999999' );
+		}
+		$fp = Mcpwp_Custom_Code_Cache_View::fingerprint();
+		$this->assertTrue( Mcpwp_Custom_Code_Cache_View::store( $base, $cache, array(), array(), $fp ) );
+		$stored = $GLOBALS['mcpwp_test_options'][ Mcpwp_Custom_Code_Cache_View::OPTION ];
+		$this->assertSame( 'deflate', $stored['mcpwp_encoding'] ?? null );
+		$this->assertGreaterThan( Mcpwp_Custom_Code_Cache_View::COMPRESSION_THRESHOLD, $stored['bytes'] ?? 0 );
+		$this->assertTrue( Mcpwp_Custom_Code_Cache_View::read( $base )['hit'] );
+		$this->assertSame( $cache, Mcpwp_Custom_Code_Cache_View::read_last_good()['cache'] );
+	}
+
+	public function test_last_good_snapshot_survives_a_generation_change_for_failure_fallback_only(): void {
+		$base = array();
+		$fp   = Mcpwp_Custom_Code_Cache_View::fingerprint();
+		$this->assertTrue( Mcpwp_Custom_Code_Cache_View::store( $base, array( 'elementor_head' => array( 9 => array( 'include/general' ) ) ), array(), array(), $fp ) );
+		Mcpwp_Custom_Code_Cache_View::invalidate();
+		$this->assertFalse( Mcpwp_Custom_Code_Cache_View::read( $base )['hit'] );
+		$this->assertTrue( Mcpwp_Custom_Code_Cache_View::read_last_good()['hit'] );
+	}
+
+	public function test_malformed_compressed_snapshot_is_bounded_and_refused(): void {
+		$GLOBALS['mcpwp_test_options'][ Mcpwp_Custom_Code_Cache_View::OPTION ] = array(
+			'mcpwp_encoding' => 'deflate',
+			'bytes'           => Mcpwp_Custom_Code_Cache_View::MAX_UNCOMPRESSED_BYTES + 1,
+			'payload'         => base64_encode( 'not-deflate' ),
+		);
+		$this->assertFalse( Mcpwp_Custom_Code_Cache_View::read_last_good()['hit'] );
+	}
+
+	public function test_capacity_issue_is_visible_and_cleared_by_a_successful_store(): void {
+		$cache = array( 'elementor_head' => array() );
+		for ( $id = 1; $id <= 2000; ++$id ) {
+			$cache['elementor_head'][ $id ] = array( str_repeat( 'x', 9000 ) );
+		}
+		$fp = Mcpwp_Custom_Code_Cache_View::fingerprint();
+		$this->assertFalse( Mcpwp_Custom_Code_Cache_View::store( array(), $cache, array(), array(), $fp ) );
+		$this->assertSame( 'snapshot_too_large', Mcpwp_Custom_Code_Cache_View::last_store_failure() );
+		$this->assertTrue( Mcpwp_Custom_Code_Cache_View::capacity_issue() );
+		$issued = $GLOBALS['mcpwp_test_transients'][ Mcpwp_Custom_Code_Cache_View::CAPACITY_TRANSIENT ];
+		$this->assertFalse( Mcpwp_Custom_Code_Cache_View::store( array(), $cache, array(), array(), $fp ) );
+		$this->assertSame( $issued, $GLOBALS['mcpwp_test_transients'][ Mcpwp_Custom_Code_Cache_View::CAPACITY_TRANSIENT ] );
+		$this->assertTrue( Mcpwp_Custom_Code_Cache_View::store( array(), array(), array(), array(), $fp ) );
+		$this->assertFalse( Mcpwp_Custom_Code_Cache_View::capacity_issue() );
 	}
 }

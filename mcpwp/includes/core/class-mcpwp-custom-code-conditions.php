@@ -46,6 +46,8 @@ class Mcpwp_Custom_Code_Conditions {
 	private static $safe_meta_ids = array();
 	private static $oversized_meta_ids = null;
 	private static $pre_view_read = null;
+	private static $view_errors = array();
+	private static $view_failed = false;
 
 	public static function register_hooks() {
 		// This is Elementor Pro's own rebuild query. Excluding unsafe IDs here
@@ -258,12 +260,27 @@ class Mcpwp_Custom_Code_Conditions {
 	 * Per-entry cache rows may still provide safe document entries separately.
 	 */
 	public static function filter_oversized_legacy_cache_option( $pre_option, $option, $default ) {
+		try {
+			return self::read_legacy_cache_option( $pre_option, $option, $default );
+		} catch ( \Throwable $exception ) {
+			self::report_view_error( $exception );
+			// An unmeasured legacy blob must not reach native unserialization.
+			return self::recover_conditions_cache( array() );
+		}
+	}
+
+	private static function read_legacy_cache_option( $pre_option, $option, $default ) {
 		if ( false !== $pre_option ) {
 			return $pre_option;
 		}
 		if ( ! self::$view_refreshing ) {
 			if ( null === self::$pre_view_read ) {
-				self::$pre_view_read = Mcpwp_Custom_Code_Cache_View::read();
+				try {
+					self::$pre_view_read = Mcpwp_Custom_Code_Cache_View::read();
+				} catch ( \Throwable $exception ) {
+					self::report_view_error( $exception );
+					self::$pre_view_read = array( 'hit' => false );
+				}
 			}
 			if ( ! empty( self::$pre_view_read['hit'] ) ) {
 				self::$active_view = self::$pre_view_read['cache'];
@@ -348,6 +365,15 @@ class Mcpwp_Custom_Code_Conditions {
 
 	/** Do not print a cached document after its live conditions have changed. */
 	public static function filter_changed_view_source( $check, $post_id, $meta_key, $single, $meta_type ) {
+		try {
+			return self::validate_printed_source( $check, $post_id, $meta_key, $single, $meta_type );
+		} catch ( \Throwable $exception ) {
+			self::report_view_error( $exception );
+			return self::printing_custom_code() ? array( '' ) : $check;
+		}
+	}
+
+	private static function validate_printed_source( $check, $post_id, $meta_key, $single, $meta_type ) {
 		if ( null !== $check || 'post' !== $meta_type || '_elementor_code' !== $meta_key || null === self::$active_view || self::$raw_read_depth > 0 ) {
 			return $check;
 		}
@@ -360,8 +386,11 @@ class Mcpwp_Custom_Code_Conditions {
 				break;
 			}
 		}
-		if ( null === $expected || ! self::printing_custom_code() ) {
+		if ( ! self::printing_custom_code() ) {
 			return $check;
+		}
+		if ( null === $expected ) {
+			return self::$view_failed ? array( '' ) : $check;
 		}
 		$meta = wp_cache_get( $post_id, 'post_meta' );
 		if ( is_array( $meta ) ) {
@@ -512,6 +541,21 @@ class Mcpwp_Custom_Code_Conditions {
 
 	/** Remove unsafe cache entries when Pro reads the persisted cache. */
 	public static function filter_conditions_cache( $cache ) {
+		if ( self::$cache_bypass ) {
+			return $cache;
+		}
+		if ( self::$view_failed && null !== self::$active_view ) {
+			return self::$active_view;
+		}
+		try {
+			return self::build_conditions_cache( $cache );
+		} catch ( \Throwable $exception ) {
+			self::report_view_error( $exception );
+			return self::recover_conditions_cache( $cache );
+		}
+	}
+
+	private static function build_conditions_cache( $cache ) {
 		if ( self::$cache_bypass || ! is_array( $cache ) ) {
 			return $cache;
 		}
@@ -532,6 +576,9 @@ class Mcpwp_Custom_Code_Conditions {
 		} else {
 			self::$view_input = $cache;
 		}
+		$base = $cache;
+		$generation = self::$view_refreshing ? null : Mcpwp_Custom_Code_Cache_View::generation();
+		$fingerprint = self::$view_refreshing ? null : Mcpwp_Custom_Code_Cache_View::fingerprint();
 		$overlay = self::cache_entry_overlay();
 		$replaced = array_fill_keys( array_merge( array_keys( $overlay['entries'] ), $overlay['invalid_ids'] ), true );
 		$ids = array_keys( $replaced );
@@ -593,7 +640,78 @@ class Mcpwp_Custom_Code_Conditions {
 		}
 		self::$active_view = $cache;
 		self::$filtered_views[ $base_hash ] = $cache;
+		if ( ! self::$view_refreshing ) {
+			// Recreate a missing acceleration row on the first cold request.
+			// Only this derived cache is written; source metadata stays untouched.
+			try {
+				Mcpwp_Custom_Code_Cache_View::store( $base, $cache, array_map( 'intval', array_keys( self::$request_invalid_entries ) ), array_map( 'intval', array_keys( self::$request_skipped ) ), $fingerprint, $generation );
+			} catch ( \Throwable $exception ) {
+				self::report_view_error( $exception );
+			}
+		}
 		return $cache;
+	}
+
+	/** Keep a provider/database fault from escaping into Pro's option read. */
+	private static function recover_conditions_cache( $raw ) {
+		self::$view_failed = true;
+		try {
+			$last = Mcpwp_Custom_Code_Cache_View::read_last_good();
+			if ( ! empty( $last['hit'] ) ) {
+				return self::$active_view = $last['cache'];
+			}
+		} catch ( \Throwable $exception ) {
+			self::report_view_error( $exception );
+		}
+		// A failed batch must not discard healthy neighbours or trust an
+		// unvalidated snippet. Retry independently, isolating each refusal.
+		$safe = is_array( $raw ) ? $raw : array();
+		foreach ( $safe as $location => &$entries ) {
+			if ( ! is_array( $entries ) ) {
+				unset( $safe[ $location ] );
+				continue;
+			}
+			foreach ( $entries as $id => &$conditions ) {
+				try {
+					if ( self::is_snippet( $id ) ) {
+						$result = self::inspect( $id );
+						if ( is_wp_error( $result ) ) {
+							unset( $entries[ $id ] );
+							self::mark_skipped( $id );
+						} else {
+							$conditions = $result['conditions'];
+						}
+					}
+				} catch ( \Throwable $exception ) {
+					unset( $entries[ $id ] );
+					self::mark_skipped( $id );
+					self::report_view_error( $exception );
+				}
+			}
+			unset( $conditions );
+		}
+		unset( $entries );
+		return self::$active_view = $safe;
+	}
+
+	private static function report_view_error( \Throwable $exception ) {
+		$cause = hash( 'sha256', get_class( $exception ) . ':' . $exception->getMessage() );
+		if ( isset( self::$view_errors[ $cause ] ) ) {
+			return;
+		}
+		self::$view_errors[ $cause ] = true;
+		// Bound repeated identical faults across requests as well as callbacks.
+		$key = 'mcpwp_custom_code_view_error_' . substr( $cause, 0, 16 );
+		try {
+			if ( get_transient( $key ) ) {
+				return;
+			}
+			set_transient( $key, 1, self::REPORT_TTL );
+		} catch ( \Throwable $ignored ) {
+			// Logging must not depend on the failing cache/database provider.
+		}
+		// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+		error_log( 'MCPWP Custom Code cache view read failed: ' . $exception->getMessage() );
 	}
 
 	public static function default_conditions_cache( $default ) {
@@ -603,6 +721,7 @@ class Mcpwp_Custom_Code_Conditions {
 	/** Source mutations invalidate request memo; persistent snapshots remain fingerprint-gated. */
 	public static function mark_view_dirty() {
 		self::$pre_view_read = null;
+		self::$view_failed = false;
 		$invalidated = Mcpwp_Custom_Code_Cache_View::invalidate();
 		self::$active_view = null;
 		self::$view_dirty = true;
@@ -611,9 +730,9 @@ class Mcpwp_Custom_Code_Conditions {
 	}
 
 	/**
-	 * Refresh an acceleration snapshot once after writes, before REST output.
-	 * A read only request never schedules this work. Concurrent source changes
-	 * make store() decline the snapshot; readers still use the safe batch path.
+	 * Refresh the derived snapshot after source writes, before REST output.
+	 * Cold readers may also populate it without changing source metadata.
+	 * Concurrent source changes make store() decline the snapshot.
 	 */
 	public static function refresh_pending_view( $response = null ) {
 		if ( ! self::$view_dirty || self::$view_refreshing ) {
@@ -661,8 +780,7 @@ class Mcpwp_Custom_Code_Conditions {
 		} catch ( \Throwable $exception ) {
 			// A cache miss retains the validated batch read, so snapshot failures
 			// cannot turn a successful per-entry write into a missing document.
-			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-			error_log( 'MCPWP Custom Code cache view refresh failed: ' . $exception->getMessage() );
+			self::report_view_error( $exception );
 		} finally {
 			self::$view_refreshing = false;
 			self::$view_dirty = false;
@@ -751,6 +869,16 @@ class Mcpwp_Custom_Code_Conditions {
 	}
 
 	public static function annotate_response( array $data, $allow_scan = true ) {
+		try {
+			return self::annotate_available_report( $data, $allow_scan );
+		} catch ( \Throwable $exception ) {
+			self::report_view_error( $exception );
+			$data['custom_code_conditions_report_unavailable'] = true;
+			return $data;
+		}
+	}
+
+	private static function annotate_available_report( array $data, $allow_scan ) {
 		$ids = $allow_scan ? self::report_ids() : self::cached_report_ids();
 		if ( ! empty( $ids ) ) {
 			$data['skipped_custom_code_snippet_ids'] = $ids;
@@ -797,7 +925,8 @@ class Mcpwp_Custom_Code_Conditions {
 		}
 		$ids = self::report_ids();
 		$failed = self::cache_repair_failure_ids();
-		if ( empty( $ids ) && empty( $failed ) && ! self::$legacy_cache_too_large ) {
+		$capacity_issue = Mcpwp_Custom_Code_Cache_View::capacity_issue();
+		if ( empty( $ids ) && empty( $failed ) && ! self::$legacy_cache_too_large && ! $capacity_issue ) {
 			return;
 		}
 		$summary = empty( $ids ) ? '' : self::report_summary( $ids );
@@ -806,6 +935,9 @@ class Mcpwp_Custom_Code_Conditions {
 		}
 		if ( self::$legacy_cache_too_large ) {
 			$summary .= ' Legacy Elementor conditions cache is over the safe size bound and was not loaded.';
+		}
+		if ( $capacity_issue ) {
+			$summary .= ' The Custom Code conditions view exceeds its safe storage capacity; validated fallback reads are active.';
 		}
 		echo '<div class="notice notice-warning"><p>' . esc_html( trim( $summary ) ) . '</p></div>';
 	}
@@ -818,13 +950,17 @@ class Mcpwp_Custom_Code_Conditions {
 	public static function site_health_test() {
 		$ids = self::report_ids();
 		$failed = self::cache_repair_failure_ids();
-		$healthy = empty( $ids ) && empty( $failed ) && ! self::$legacy_cache_too_large;
+		$capacity_issue = Mcpwp_Custom_Code_Cache_View::capacity_issue();
+		$healthy = empty( $ids ) && empty( $failed ) && ! self::$legacy_cache_too_large && ! $capacity_issue;
 		$summary = empty( $ids ) ? '' : self::report_summary( $ids );
 		if ( ! empty( $failed ) ) {
 			$summary .= ' ' . self::cache_repair_failure_summary( $failed );
 		}
 		if ( self::$legacy_cache_too_large ) {
 			$summary .= ' Legacy Elementor conditions cache is over the safe size bound and was not loaded.';
+		}
+		if ( $capacity_issue ) {
+			$summary .= ' The Custom Code conditions view exceeds its safe storage capacity; validated fallback reads are active.';
 		}
 		return array(
 			'label' => $healthy ? __( 'Custom Code conditions are compatible', 'mcpwp' ) : __( 'Some Custom Code display entries need attention', 'mcpwp' ),

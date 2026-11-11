@@ -36,7 +36,10 @@ final class CustomCodeInvalidEntryRepairTest extends TestCase {
 		$this->assertSame( 'recommended', $health['status'] );
 		$this->assertStringContainsString( 'repair failed', $health['description'] );
 		$this->assertStringContainsString( '7', $health['description'] );
-		$this->assertSame( $before, $GLOBALS['mcpwp_test_options'], 'A cache/read-scope read must not persist diagnostics.' );
+		$after = $GLOBALS['mcpwp_test_options'];
+		unset( $after[ Mcpwp_Custom_Code_Cache_View::OPTION ] );
+		$this->assertSame( $before, $after, 'A cold read may store the derived view, but must not persist repair/report receipts.' );
+		$this->assertSame( 'broken row', $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Custom_Code_Cache_Entry::row_name( 7 ) ], 'Reading must not repair the source entry.' );
 		Mcpwp_Custom_Code_Conditions::refresh_admin_report();
 		$this->assertSame( array( 'include/general' ), Mcpwp_Custom_Code_Cache_Entry::entry( 7 )['conditions'] ?? null );
 		$this->assertSame( array(), get_option( Mcpwp_Activator::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() ) );
