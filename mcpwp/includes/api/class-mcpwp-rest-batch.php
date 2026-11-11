@@ -232,6 +232,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 
 			$spend = Mcpwp_Spend_Budget::report();
 		} finally {
+			$this->forget_raw_parameter_sources( $request );
 			Mcpwp_Spend_Budget::close( $spend_token );
 		}
 
@@ -512,6 +513,14 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 			$sources = Mcpwp_Theme_Builder::intent_parameter_bags( $sources );
 		}
 		foreach ( $sources as $bag ) {
+			if ( $bag instanceof Mcpwp_Raw_Parameter_Source ) {
+				if ( class_exists( 'Mcpwp_Theme_Builder' ) ) {
+					foreach ( Mcpwp_Theme_Builder::INTENT_PARAMETER_PATHS as $path ) {
+						$raw_bags[] = $bag->at( array_merge( $path, array( 'operations', $index, 'body' ) ) );
+					}
+				}
+				continue;
+			}
 			if ( isset( $bag['operations'][ $index ]['body'] ) && is_array( $bag['operations'][ $index ]['body'] ) ) {
 				$raw_bags[] = $bag['operations'][ $index ]['body'];
 			}

@@ -854,6 +854,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		try {
 			return $this->handle_mcp_messages( $request );
 		} finally {
+			$this->forget_raw_parameter_sources( $request );
 			Mcpwp_Spend_Budget::close( $spend_token );
 		}
 	}
@@ -923,7 +924,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// request in it is answered with the refusal, notifications are not.
 			$price    = 0;
 			$tool_map = $this->get_all_tool_map();
-			foreach ( $body as $single_request ) {
+			foreach ( $body as $message_index => $single_request ) {
 				// A batched tools/call wrapped in mcpwp_call (#907) prices as
 				// the INNER tool it names — the same rewrite process_single_request
 				// applies before dispatch — so wrapping an expensive call in
@@ -939,7 +940,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 						$priced_request['params'] = $resolved['params'];
 					}
 				}
-				$price += $this->message_spend_price( $priced_request, $tool_map, $request );
+				$price += $this->with_raw_body_path( $request, array( $message_index ), function () use ( $priced_request, $tool_map, $request ) {
+					return $this->message_spend_price( $priced_request, $tool_map, $request );
+				} );
 			}
 			$whole = Mcpwp_Spend_Budget::refuse_whole( $price );
 			if ( is_wp_error( $whole ) ) {
@@ -959,8 +962,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			}
 
 			$responses = array();
-			foreach ( $body as $single_request ) {
-				$response = $this->process_single_request( $single_request, $request );
+			foreach ( $body as $message_index => $single_request ) {
+				$response = $this->with_raw_body_path( $request, array( $message_index ), function () use ( $single_request, $request ) {
+					return $this->process_single_request( $single_request, $request );
+				} );
 				// Notifications return null, don't include in response
 				if ( $response !== null ) {
 					$responses[] = $this->attach_result_meta( $response );
@@ -5888,6 +5893,24 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		if ( is_object( $request ) && in_array( $tool_name, array( 'wp_create_theme_template', 'wp_batch' ), true ) && class_exists( 'Mcpwp_Theme_Builder' ) ) {
 			$evidence = array();
 			foreach ( Mcpwp_Theme_Builder::intent_parameter_bags( $this->raw_parameter_bags( $request ) ) as $bag ) {
+				if ( $bag instanceof Mcpwp_Raw_Parameter_Source ) {
+					$raw_sources = array( $bag );
+					if ( 'wp_batch' === $tool_name && isset( $canonical['operations'] ) && is_array( $canonical['operations'] ) ) {
+						foreach ( $canonical['operations'] as $index => $operation ) {
+							foreach ( Mcpwp_Theme_Builder::INTENT_PARAMETER_PATHS as $path ) {
+								$raw_sources[] = $bag->at( array_merge( $path, array( 'operations', $index, 'body' ) ) );
+							}
+						}
+					}
+					$documents = Mcpwp_Theme_Builder::raw_intent_documents( $raw_sources );
+					foreach ( $documents as $document ) {
+						$occurrences = $documents[ $document ];
+						if ( ! empty( $occurrences ) ) {
+							$evidence[] = array( 'raw_intent' => array_values( $occurrences ) );
+						}
+					}
+					continue;
+				}
 				$sources = array( $bag );
 				// wp_batch pins the WHOLE batch. Template calls inspect only
 				// their own top-level sources, never another operation's flags.

@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once dirname( __DIR__ ) . '/core/class-mcpwp-raw-parameter-source.php';
+
 /**
  * Base REST API controller.
  */
@@ -20,6 +22,10 @@ abstract class Mcpwp_REST_API {
 
 	/** @var SplObjectStorage|null Unmerged source bags on live internal requests. */
 	private static $raw_parameter_context;
+	/** @var SplObjectStorage|null Original wire sources, captured once per request. */
+	private static $raw_parameter_sources;
+	/** @var SplObjectStorage|null Current JSON-RPC message's body path. */
+	private static $raw_body_paths;
 
 	/**
 	 * Preserve source evidence without merging values or interpreting intent.
@@ -38,8 +44,68 @@ abstract class Mcpwp_REST_API {
 				continue;
 			}
 			$bags[] = $bag;
+			if ( 'get_json_params' === $method && self::$raw_body_paths instanceof SplObjectStorage && self::$raw_body_paths->contains( $request ) ) {
+				$selected = $bag;
+				foreach ( self::$raw_body_paths[ $request ] as $segment ) {
+					$selected = is_array( $selected ) && array_key_exists( $segment, $selected ) ? $selected[ $segment ] : null;
+				}
+				if ( is_array( $selected ) ) {
+					$bags[] = $selected;
+				}
+			}
+		}
+		if ( ! self::$raw_parameter_sources instanceof SplObjectStorage ) {
+			self::$raw_parameter_sources = new SplObjectStorage();
+		}
+		if ( ! self::$raw_parameter_sources->contains( $request ) ) {
+			$sources = array();
+			// Internal requests inherit the original query; never re-read the
+			// ambient HTTP query as if it belonged to a nested dispatch.
+			if ( ! self::$raw_parameter_context instanceof SplObjectStorage || ! self::$raw_parameter_context->contains( $request ) ) {
+				$query = isset( $_SERVER['QUERY_STRING'] ) ? (string) $_SERVER['QUERY_STRING'] : '';
+				if ( '' !== $query ) {
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'form', $query, 'query' );
+				}
+			}
+			$body = $request->get_body();
+			$type = strtolower( (string) $request->get_header( 'Content-Type' ) );
+			if ( '' !== $body && ( false !== strpos( $type, 'json' ) || false !== strpos( $type, 'application/x-www-form-urlencoded' ) ) ) {
+				$sources[] = new Mcpwp_Raw_Parameter_Source( false !== strpos( $type, 'json' ) ? 'json' : 'form', $body, 'body' );
+			}
+			self::$raw_parameter_sources[ $request ] = $sources;
+		}
+		foreach ( self::$raw_parameter_sources[ $request ] as $source ) {
+			if ( 'body' === $source->channel && 'json' === $source->document->format && self::$raw_body_paths instanceof SplObjectStorage && self::$raw_body_paths->contains( $request ) ) {
+				$source = $source->at( self::$raw_body_paths[ $request ] );
+			}
+			$bags[] = $source;
 		}
 		return $bags;
+	}
+
+	/** Scope only the raw body, not the request-wide query, to one message. */
+	protected function with_raw_body_path( $request, $path, $callback ) {
+		if ( ! self::$raw_body_paths instanceof SplObjectStorage ) {
+			self::$raw_body_paths = new SplObjectStorage();
+		}
+		$previous = self::$raw_body_paths->contains( $request ) ? self::$raw_body_paths[ $request ] : null;
+		self::$raw_body_paths[ $request ] = $path;
+		try {
+			return call_user_func( $callback );
+		} finally {
+			if ( null === $previous ) {
+				self::$raw_body_paths->detach( $request );
+			} else {
+				self::$raw_body_paths[ $request ] = $previous;
+			}
+		}
+	}
+
+	/** Forget a root request's source cache without removing inherited bags. */
+	protected function forget_raw_parameter_sources( $request ) {
+		if ( self::$raw_parameter_sources instanceof SplObjectStorage ) {
+			self::$raw_parameter_sources->detach( $request );
+		}
 	}
 
 	/**
@@ -59,6 +125,7 @@ abstract class Mcpwp_REST_API {
 
 	/** @param WP_REST_Request $request Completed internal request. */
 	protected function forget_raw_parameter_bags( $request ) {
+		$this->forget_raw_parameter_sources( $request );
 		if ( self::$raw_parameter_context instanceof SplObjectStorage ) {
 			self::$raw_parameter_context->detach( $request );
 		}

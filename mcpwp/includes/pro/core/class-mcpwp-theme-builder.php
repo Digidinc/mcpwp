@@ -726,6 +726,147 @@ class Mcpwp_Theme_Builder {
 		return in_array( $key, array( 'dryrun', 'preview' ), true );
 	}
 
+	/** Parameter containers shared by parsed bags and lossless wire scans. */
+	const INTENT_PARAMETER_PATHS = array(
+		array(), array( 'params' ), array( '_meta' ), array( 'params', '_meta' ),
+		array( 'arguments' ), array( 'params', 'arguments' ),
+		array( 'arguments', 'arguments' ), array( 'params', 'arguments', 'arguments' ),
+		array( 'arguments', '_meta' ), array( 'params', 'arguments', '_meta' ),
+	);
+
+	/**
+	 * Count raw intent keys by relevant container, before last-key-wins can
+	 * erase repeats. String contents are skipped; JSON keys are decoded so
+	 * escaped spellings count too. Shared documents are tokenized only once.
+	 * An unreadable source is ambiguous and therefore fails closed.
+	 *
+	 * @param Mcpwp_Raw_Parameter_Source $source Scoped original bytes.
+	 * @return array Raw values and per-container occurrence counts.
+	 */
+	public static function raw_intent_evidence( $source ) {
+		$document = $source->document;
+		if ( null === $document->keys ) {
+			$document->keys = array();
+			if ( 'form' === $document->format ) {
+				$separators = ini_get( 'arg_separator.input' );
+				$fields = preg_split( '/[' . preg_quote( $separators ? $separators : '&', '/' ) . ']/', $document->raw );
+				foreach ( $fields as $field ) {
+					$key = urldecode( explode( '=', $field, 2 )[0] );
+					preg_match_all( '/[^\[\]]+/', $key, $segments, PREG_OFFSET_CAPTURE );
+					foreach ( $segments[0] as $index => $match ) {
+						list( $segment, $offset ) = $match;
+						if ( self::is_dry_run_key( $segment ) ) {
+							$document->keys[] = array_column( array_slice( $segments[0], 0, $index + 1 ), 0 );
+							$parts = explode( '=', $field, 2 );
+							$document->values[] = false !== strpos( substr( $key, $offset + strlen( $segment ) ), '[' ) ? array() : urldecode( $parts[1] ?? '' );
+							break;
+						}
+					}
+				}
+			} else {
+				// Validation only: the decoded map is NEVER used for keys.
+				json_decode( $document->raw, true );
+				if ( JSON_ERROR_NONE !== json_last_error() ) {
+					$document->keys = false;
+				} else {
+					$stack = array();
+					$raw = $document->raw;
+					$length = strlen( $raw );
+					for ( $i = 0; $i < $length; ++$i ) {
+						$char = $raw[ $i ];
+						$top = count( $stack ) - 1;
+						if ( '"' === $char ) {
+							$start = $i++;
+							while ( $i < $length && '"' !== $raw[ $i ] ) {
+								$i += '\\' === $raw[ $i ] ? 2 : 1;
+							}
+							$next = $i + 1;
+							while ( $next < $length && false !== strpos( " \t\r\n", $raw[ $next ] ) ) {
+								++$next;
+							}
+							if ( $top >= 0 && 'object' === $stack[ $top ]['type'] && $next < $length && ':' === $raw[ $next ] ) {
+								$key = json_decode( substr( $raw, $start, $i - $start + 1 ), true );
+								$stack[ $top ]['key'] = $key;
+								if ( self::is_dry_run_key( $key ) ) {
+									$document->keys[] = array_merge( $stack[ $top ]['path'], array( $key ) );
+									$begin = $next + 1;
+									while ( $begin < $length && false !== strpos( " \t\r\n", $raw[ $begin ] ) ) {
+										++$begin;
+									}
+									if ( '{' === $raw[ $begin ] || '[' === $raw[ $begin ] ) {
+										// Containers cannot be canonical false; no need
+										// to decode/copy their potentially large content.
+										$document->values[] = array();
+									} else {
+										$end = $begin;
+										if ( '"' === $raw[ $begin ] ) {
+											++$end;
+											while ( '"' !== $raw[ $end ] ) {
+												$end += '\\' === $raw[ $end ] ? 2 : 1;
+											}
+											++$end;
+										} else {
+											while ( $end < $length && false === strpos( " \t\r\n,}]", $raw[ $end ] ) ) {
+												++$end;
+											}
+										}
+										$document->values[] = json_decode( substr( $raw, $begin, $end - $begin ), true );
+									}
+								}
+							}
+						} elseif ( '{' === $char || '[' === $char ) {
+							$path = $top < 0 ? array() : array_merge( $stack[ $top ]['path'], array( 'object' === $stack[ $top ]['type'] ? $stack[ $top ]['key'] : $stack[ $top ]['index'] ) );
+							$stack[] = array( 'type' => '{' === $char ? 'object' : 'array', 'path' => $path, 'key' => null, 'index' => 0 );
+						} elseif ( '}' === $char || ']' === $char ) {
+							array_pop( $stack );
+						} elseif ( ',' === $char && $top >= 0 ) {
+							++$stack[ $top ]['index'];
+							$stack[ $top ]['key'] = null;
+						}
+					}
+				}
+			}
+		}
+		if ( false === $document->keys ) {
+			return array( 'counts' => array( 'unreadable_source' => 2 ), 'values' => array(), 'occurrences' => array( 'unreadable_source' => array() ) );
+		}
+		$counts = array();
+		$values = array();
+		$occurrences = array();
+		$prefix = array_map( 'strval', $source->path );
+		foreach ( $document->keys as $index => $path ) {
+			$container = array_map( 'strval', array_slice( $path, 0, -1 ) );
+			if ( array_slice( $container, 0, count( $prefix ) ) !== $prefix || ! in_array( array_slice( $container, count( $prefix ) ), self::INTENT_PARAMETER_PATHS, true ) ) {
+				continue;
+			}
+			$scope = wp_json_encode( $container );
+			$counts[ $scope ] = ( $counts[ $scope ] ?? 0 ) + 1;
+			$values[] = $document->values[ $index ];
+			$occurrences[ $index ] = $document->values[ $index ];
+		}
+		return array( 'counts' => $counts, 'values' => $values, 'occurrences' => $occurrences );
+	}
+
+	/**
+	 * Union selected occurrences per original source, deduplicating forwarded
+	 * views of the same bytes. Query and body remain separate documents;
+	 * sibling operations/messages were excluded by each view's path.
+	 *
+	 * @param Mcpwp_Raw_Parameter_Source[] $sources Scoped raw sources.
+	 * @return SplObjectStorage Document => unique occurrence/value map.
+	 */
+	public static function raw_intent_documents( $sources ) {
+		$documents = new SplObjectStorage();
+		foreach ( $sources as $source ) {
+			$raw = self::raw_intent_evidence( $source );
+			$found = $documents->contains( $source->document ) ? $documents[ $source->document ] : array();
+			$found += $raw['occurrences'];
+			ksort( $found );
+			$documents[ $source->document ] = $found;
+		}
+		return $documents;
+	}
+
 	/**
 	 * Open only the known tool/wrapper argument paths in each unmerged bag.
 	 * A source need not repeat the tool name supplied by another source.
@@ -737,14 +878,11 @@ class Mcpwp_Theme_Builder {
 	 */
 	public static function intent_parameter_bags( $bags ) {
 		$all = $bags;
-		$paths = array(
-			array( 'arguments' ),
-			array( 'params', 'arguments' ),
-			array( 'arguments', 'arguments' ),
-			array( 'params', 'arguments', 'arguments' ),
-		);
 		foreach ( $bags as $bag ) {
-			foreach ( $paths as $path ) {
+			foreach ( self::INTENT_PARAMETER_PATHS as $path ) {
+				if ( empty( $path ) ) {
+					continue;
+				}
 				$value = $bag;
 				foreach ( $path as $segment ) {
 					$value = is_array( $value ) && array_key_exists( $segment, $value ) ? $value[ $segment ] : null;
@@ -767,18 +905,33 @@ class Mcpwp_Theme_Builder {
 	 * @return bool Whether to preview without writing.
 	 */
 	private function is_create_dry_run( $bags ) {
+		$values = array();
+		$sources = array();
 		foreach ( self::intent_parameter_bags( $bags ) as $bag ) {
+			if ( $bag instanceof Mcpwp_Raw_Parameter_Source ) {
+				$sources[] = $bag;
+				continue;
+			}
 			foreach ( $bag as $key => $value ) {
-				if ( ! self::is_dry_run_key( $key ) || false === $value ) {
-					continue;
+				if ( self::is_dry_run_key( $key ) ) {
+					$values[] = $value;
 				}
-				if ( is_string( $value ) && in_array( strtolower( trim( $value ) ), array( 'false', '0' ), true ) ) {
-					continue;
-				}
-				return true;
 			}
 		}
-
+		$documents = self::raw_intent_documents( $sources );
+		foreach ( $documents as $document ) {
+			$occurrences = $documents[ $document ];
+			if ( count( $occurrences ) > 1 ) {
+				return true;
+			}
+			$values = array_merge( $values, array_values( $occurrences ) );
+		}
+		foreach ( $values as $value ) {
+			if ( false === $value || ( is_string( $value ) && in_array( strtolower( trim( $value ) ), array( 'false', '0' ), true ) ) ) {
+				continue;
+			}
+			return true;
+		}
 		return false;
 	}
 
