@@ -3012,42 +3012,34 @@ class Mcpwp_Content_Guardrails {
 	);
 
 	/**
-	 * Key-name SUBSTRINGS that mark a settings value as likely copy, even
+	 * Key-name SEGMENTS (the last `_`-separated word) that mark a settings value as likely copy, even
 	 * when the exact key isn't in ELEMENTOR_TEXT_ALLOWLIST_KEYS (#957
 	 * adversarial review round 6 WARN-1: "the allowlist ... misses stock
 	 * widget copy keys ... a pure allowlist will keep missing keys. Make
-	 * it a hybrid"). Case-insensitive substring match, deliberately, not a
-	 * segment/exact match — real widgets compound these into many
-	 * different names (title_text_a, sub_heading, item_text,
-	 * footer_additional_info, …) that a fixed list can never fully
-	 * enumerate. ELEMENTOR_TEXT_EXCLUSION_TERMS is checked FIRST and wins
-	 * over this — see is_elementor_copy_key().
+	 * it a hybrid"). Matched on the key's trailing `_`-separated segment
+	 * (#996), not as a substring, so style keys such as text_transform or
+	 * label_block no longer count as copy. See is_elementor_copy_key().
 	 *
 	 * @var string[]
 	 */
 	const ELEMENTOR_TEXT_COPY_PATTERN_TERMS = array(
 		'text', 'title', 'heading', 'label', 'content', 'description', 'caption',
-		'info', 'headline', 'button', 'item_',
+		'info', 'headline', 'button', 'tagline', 'subtitle',
 	);
 
 	/**
-	 * Key-name substrings that mark a settings value as NON-copy metadata
-	 * — checked before, and taking priority over, both
-	 * ELEMENTOR_TEXT_ALLOWLIST_KEYS and ELEMENTOR_TEXT_COPY_PATTERN_TERMS
-	 * (#957 adversarial review round 6 WARN-1). Deliberately a substring
-	 * match, same known trade-off as round 4's denylist: a key that
-	 * happens to CONTAIN one of these as running text (e.g. "guide" inside
-	 * a hypothetical "guide_text") would be wrongly excluded — accepted,
-	 * this is the reviewer's own specified shape, and no real Elementor
-	 * widget key observed so far collides with it.
+	 * Key-name segments that mark a settings value as NON-copy metadata
+	 * (#957 adversarial review round 6 WARN-1). Compared against the key's
+	 * trailing `_`-separated segment (#996), so "video_title" is no longer
+	 * excluded for containing "id", while "title_color" still is.
 	 *
 	 * @var string[]
 	 */
 	const ELEMENTOR_TEXT_EXCLUSION_TERMS = array(
 		'url', 'link', 'href', 'src', 'image', 'icon', 'color', 'typography',
 		'size', 'width', 'height', 'margin', 'padding', 'border', 'background',
-		'animation', 'css', 'class', '_id', 'id', 'align', 'position', 'style',
-		'type', 'view', 'tag', '__dynamic__', '__globals__',
+		'animation', 'css', 'class', 'id', 'align', 'position', 'style',
+		'type', 'view', 'tag',
 	);
 
 	/**
@@ -3087,23 +3079,35 @@ class Mcpwp_Content_Guardrails {
 		}
 		$lower = strtolower( $key );
 
-		foreach ( self::ELEMENTOR_TEXT_EXCLUSION_TERMS as $term ) {
-			if ( false !== strpos( $lower, $term ) ) {
-				return false;
-			}
+		// A dynamic-tag / global-style binding container is never copy.
+		if ( in_array( $lower, self::ELEMENTOR_TEXT_SKIP_CONTAINER_KEYS, true ) ) {
+			return false;
 		}
 
+		// Exact allowlist entries are copy (title_text_a, button_text, ...).
 		if ( in_array( $lower, self::ELEMENTOR_TEXT_ALLOWLIST_KEYS, true ) ) {
 			return true;
 		}
 
-		foreach ( self::ELEMENTOR_TEXT_COPY_PATTERN_TERMS as $term ) {
-			if ( false !== strpos( $lower, $term ) ) {
-				return true;
-			}
+		// Match on `_`-separated segments, not substrings (#996): "text_transform"
+		// is not copy because of "text", and "video_title" is not style because
+		// "video" contains "id". The LAST segment is the head noun that says what
+		// the control holds ("image_caption" is a caption, "title_color" a
+		// color); a trailing variant marker (title_text_a, item_2) is dropped.
+		$segments = array_values( array_filter( explode( '_', $lower ), 'strlen' ) );
+		while ( count( $segments ) > 1 && preg_match( '/^[a-z]?\d*$/', end( $segments ) ) ) {
+			array_pop( $segments );
+		}
+		if ( empty( $segments ) ) {
+			return false;
+		}
+		$head = end( $segments );
+
+		if ( in_array( $head, self::ELEMENTOR_TEXT_EXCLUSION_TERMS, true ) ) {
+			return false;
 		}
 
-		return false;
+		return in_array( $head, self::ELEMENTOR_TEXT_COPY_PATTERN_TERMS, true );
 	}
 
 	/**

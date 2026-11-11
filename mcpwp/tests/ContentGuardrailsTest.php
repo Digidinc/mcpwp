@@ -1637,6 +1637,72 @@ final class ContentGuardrailsTest extends TestCase {
 		$this->assertSame( 'open', $duplicate_edit_issue_after[0]['status'], 'a clean post_content check must not resolve an Elementor-raised issue' );
 	}
 
+	public function test_a_post_content_flag_does_not_take_over_an_elementor_raised_issue(): void {
+		// #996: the issue is keyed (post, category, code), so a later
+		// post_content flag used to overwrite the stored representation,
+		// and a following clean post_content edit then resolved an issue
+		// whose Elementor duplicate was still live.
+		Mcpwp_Content_Guardrails::update_settings( array( 'min_word_count' => 0, 'duplicate_threshold' => 0.6, 'daily_publish_cap' => 1000 ) );
+
+		$this->seed_published( 7201, 'page', 'Sibling Page', $this->words( 40, 'dup_' ) );
+		$this->seed_published( 7202, 'page', 'Target Page', '' );
+		$GLOBALS['_mcpwp_test_meta'][7202]['_elementor_data'] = wp_json_encode( array( array(
+			'elType' => 'widget', 'settings' => array( 'title' => 'v0' ),
+		) ) );
+
+		Mcpwp_Content_Guardrails::enter_context();
+
+		update_post_meta( 7202, '_elementor_data', wp_json_encode( array( array(
+			'elType' => 'widget', 'settings' => array( 'title' => $this->words( 40, 'dup_' ) ),
+		) ) ) );
+		wp_update_post( array( 'ID' => 7202, 'post_content' => $this->words( 39, 'dup_' ) ) );
+		wp_update_post( array( 'ID' => 7202, 'post_content' => $this->words( 20, 'cleanedit_' ) ) );
+
+		$issues = Mcpwp_SEO_Audit_Store::list_issues( array( 'post_id' => 7202, 'reveal_non_public' => true ) );
+		$dup = array_values( array_filter( $issues['issues'], function ( $i ) { return 'duplicate_edit' === $i['code']; } ) );
+		$this->assertSame( 'open', $dup[0]['status'], 'the Elementor duplicate is still live, so the issue stays open' );
+
+		// Once Elementor is re-checked clean too, it resolves.
+		update_post_meta( 7202, '_elementor_data', wp_json_encode( array( array(
+			'elType' => 'widget', 'settings' => array( 'title' => $this->words( 40, 'fresh_' ) ),
+		) ) ) );
+		$issues = Mcpwp_SEO_Audit_Store::list_issues( array( 'post_id' => 7202, 'reveal_non_public' => true ) );
+		$dup = array_values( array_filter( $issues['issues'], function ( $i ) { return 'duplicate_edit' === $i['code']; } ) );
+		$this->assertSame( 'resolved', $dup[0]['status'] );
+	}
+
+	/**
+	 * @dataProvider copy_key_provider
+	 */
+	public function test_copy_key_matches_by_segment( string $key, bool $expected ): void {
+		$rm = new ReflectionMethod( 'Mcpwp_Content_Guardrails', 'is_elementor_copy_key' );
+		$rm->setAccessible( true );
+		$this->assertSame( $expected, $rm->invoke( null, $key ), $key );
+	}
+
+	public function copy_key_provider(): array {
+		return array(
+			'style: text_transform'  => array( 'text_transform', false ),
+			'style: title_display'   => array( 'title_display', false ),
+			'style: label_block'     => array( 'label_block', false ),
+			'style: content_layout'  => array( 'content_layout', false ),
+			'style: title_color'     => array( 'title_color', false ),
+			'style: title_typography_font_size' => array( 'title_typography_font_size', false ),
+			'copy: video_title'      => array( 'video_title', true ),
+			'copy: tagline'          => array( 'tagline', true ),
+			'copy: image_caption'    => array( 'image_caption', true ),
+			'copy: link_text'        => array( 'link_text', true ),
+			'copy: button_text'      => array( 'button_text', true ),
+			'copy: title_text_a'     => array( 'title_text_a', true ),
+			'copy: sub_heading'      => array( 'sub_heading', true ),
+			'copy: footer_additional_info' => array( 'footer_additional_info', true ),
+			'not copy: button_link'  => array( 'button_link', false ),
+			'not copy: heading_tag'  => array( 'heading_tag', false ),
+			'not copy: _id'          => array( '_id', false ),
+			'not copy: __dynamic__'  => array( '__dynamic__', false ),
+		);
+	}
+
 	public function test_guardrail_issues_expire_after_30_days(): void {
 		Mcpwp_SEO_Audit_Store::upsert_issue( array(
 			'post_id'  => 7011,
