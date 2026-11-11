@@ -24,6 +24,8 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/helpers/trait-mcpwp-request-fixture-state.php';
+
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-elementor.php';
 
 /**
@@ -37,6 +39,8 @@ require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-elementor.php'
  */
 final class RestElementorDraftLeakTest extends TestCase {
 
+	use Mcpwp_Test_Request_Fixture_State;
+
 	private const PUBLISHED_ID = 301;
 	private const DRAFT_ID     = 302;
 	// Deliberately absent from $GLOBALS['_mcpwp_test_posts'] — the
@@ -44,6 +48,7 @@ final class RestElementorDraftLeakTest extends TestCase {
 	private const MISSING_ID   = 399;
 
 	protected function setUp(): void {
+		$this->capture_request_fixture_state();
 		$GLOBALS['mcpwp_test_options']            = array();
 		$GLOBALS['mcpwp_test_transients']         = array();
 		$GLOBALS['mcpwp_test_current_user']       = 0;
@@ -73,6 +78,10 @@ final class RestElementorDraftLeakTest extends TestCase {
 		);
 	}
 
+	protected function tearDown(): void {
+		$this->restore_request_fixture_state();
+	}
+
 	/**
 	 * @return array{0:Mcpwp_REST_Elementor,1:WP_REST_Request}
 	 */
@@ -81,9 +90,11 @@ final class RestElementorDraftLeakTest extends TestCase {
 		// #1041: a custom-role key must be granted at least one real category
 		// or creation is refused. Derive it from the route under test.
 		$route_category = Mcpwp_REST_API::get_category_for_route( $route );
-		$created         = $controller->create_scoped_api_key( 'test key', $scopes, 'custom', array( '' !== $route_category ? $route_category : 'elementor' ) );
+		$created         = $this->fixture_api_key( $controller, 'test key', $scopes, 'custom', array( '' !== $route_category ? $route_category : 'elementor' ) );
 		$request    = new WP_REST_Request( 'GET', $route, $params, array( 'X-API-Key' => $created['key'] ) );
-		$this->verdict = $controller->verify_api_key( $request );
+		$this->verdict = $this->fixture_request( static function () use ( $controller, $request ) {
+			return $controller->verify_api_key( $request );
+		} );
 		return array( $controller, $request );
 	}
 
@@ -96,7 +107,9 @@ final class RestElementorDraftLeakTest extends TestCase {
 	 * draft itself, before any handler), otherwise the handler's answer.
 	 */
 	private function dispatch( $controller, string $method, $request ) {
-		return true === $this->verdict ? $controller->$method( $request ) : $this->verdict;
+		return $this->fixture_request( function () use ( $controller, $method, $request ) {
+			return true === $this->verdict ? $controller->$method( $request ) : $this->verdict;
+		} );
 	}
 
 	/** The gate's response: a status-parity 404 not_found. */

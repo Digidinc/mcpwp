@@ -22,12 +22,17 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/helpers/trait-mcpwp-request-fixture-state.php';
+
 final class McpProtocolVersionTest extends TestCase {
+
+	use Mcpwp_Test_Request_Fixture_State;
 
 	const OLD_VERSIONS        = array( '2024-11-05', '2025-03-26' );
 	const STRUCTURED_VERSIONS = array( '2025-06-18', '2025-11-25' );
 
 	protected function setUp(): void {
+		$this->capture_request_fixture_state();
 		$GLOBALS['mcpwp_test_options']           = array();
 		// Protocol shaping is under test across the whole catalog, not the
 		// `core` default profile (#1064).
@@ -51,22 +56,12 @@ final class McpProtocolVersionTest extends TestCase {
 		unset( $GLOBALS['mcpwp_test_rest_response_override'] );
 		Mcpwp_REST_MCP::reset_verdict_memo();
 		// Core always defines it; get_site_info() reads it.
-		$this->previous_wp_version = isset( $GLOBALS['wp_version'] ) ? $GLOBALS['wp_version'] : null;
 		$GLOBALS['wp_version']     = '6.9';
 		unset( $GLOBALS['mcpwp_test_theme_headers'] );
 	}
 
-	/** @var string|null */
-	private $previous_wp_version;
-
 	protected function tearDown(): void {
-		$GLOBALS['wp_version'] = $this->previous_wp_version;
-		unset( $GLOBALS['mcpwp_test_theme_headers'] );
-		$GLOBALS['mcpwp_test_filters'] = array();
-		Mcpwp_Integration::clear_cache();
-		delete_transient( 'mcpwp_capabilities_cache' );
-		unset( $GLOBALS['mcpwp_test_rest_response_override'] );
-		$GLOBALS['_mcpwp_test_posts'] = array();
+		$this->restore_request_fixture_state();
 	}
 
 	// ---------------------------------------------------------------
@@ -87,7 +82,9 @@ final class McpProtocolVersionTest extends TestCase {
 	private function post_raw( array $body, $version = null ) {
 		$headers = null === $version ? array() : array( 'MCP-Protocol-Version' => $version );
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), $headers, $body );
-		return ( new Mcpwp_REST_MCP() )->handle_mcp( $request );
+		return $this->fixture_request( static function () use ( $request ) {
+			return ( new Mcpwp_REST_MCP() )->handle_mcp( $request );
+		} );
 	}
 
 	private function initialize( $requested, $include = true ): array {
