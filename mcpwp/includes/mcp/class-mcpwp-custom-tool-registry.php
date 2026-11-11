@@ -190,7 +190,6 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 			'name'        => $name,
 			'description' => sanitize_text_field( $entry['description'] ),
 			'method'      => $method,
-			'method_declared' => isset( $entry['method'] ) && in_array( strtoupper( (string) $entry['method'] ), array( 'GET', 'POST', 'PUT', 'PATCH', 'DELETE' ), true ),
 			// `meta` is reserved (#1064 review round 2): remapped to `custom`,
 			// logged once — see Mcpwp_Integration::remap_reserved_category().
 			'category'    => isset( $entry['category'] ) && is_string( $entry['category'] )
@@ -334,16 +333,6 @@ class Mcpwp_Custom_Tool_Registry extends Mcpwp_MCP_Tool_Registry {
 			$tools[] = $this->define_tool( $reg['name'], $reg['description'], $reg['input_props'] );
 		}
 		return $tools;
-	}
-
-	/** Callback side effects cannot be inferred from a default GET method. */
-	protected function is_read_only_tool( $name ) {
-		$registrations = $this->get_registrations();
-		$registration = $registrations[ $name ] ?? array();
-		if ( isset( $registration['callback'] ) || ! empty( $registration['destructive'] ) || empty( $registration['method_declared'] ) ) {
-			return false;
-		}
-		return parent::is_read_only_tool( $name );
 	}
 
 	/**

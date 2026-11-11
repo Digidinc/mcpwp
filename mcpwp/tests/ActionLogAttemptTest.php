@@ -101,7 +101,7 @@ final class ActionLogAttemptTest extends TestCase {
 		$this->assertSame( '[redacted]', json_decode( $args, true )['note'] );
 	}
 
-	public function test_a_throwing_callback_logs_its_persisted_mutation_as_failed(): void {
+	public function test_non_woocommerce_callback_keeps_main_logging_behavior(): void {
 		add_filter( 'mcpwp_register_tools', static function ( $tools ) {
 			$tools[] = array( 'name' => 'digid_throw', 'description' => 'Write then throw.', 'method' => 'POST', 'callback' => static function () {
 				update_option( 'audit_exception_mutation', 1 );
@@ -116,9 +116,7 @@ final class ActionLogAttemptTest extends TestCase {
 		}
 		$this->assertSame( 1, get_option( 'audit_exception_mutation' ) );
 		$rows = $this->rows();
-		$this->assertCount( 1, $rows );
-		$this->assertSame( 0, $rows[0]['success'] );
-		$this->assertSame( 'execution_error', $rows[0]['error_code'] );
+		$this->assertCount( 0, $rows );
 	}
 
 	/** @dataProvider refusal_provider */
@@ -153,13 +151,11 @@ final class ActionLogAttemptTest extends TestCase {
 		$this->assertTrue( $second['result']['_meta']['replayed'] );
 		$this->assertCount( 1, $GLOBALS['mcpwp_test_dispatched_routes'] );
 		$rows = $this->rows();
-		$this->assertCount( 2, $rows );
-		$this->assertSame( 'replayed', $rows[1]['error_code'] );
-		$this->assertSame( 0, $rows[1]['rollback_supported'] );
+		$this->assertCount( 1, $rows, 'The generic log retains main behavior: replay adds no write.' );
 	}
 
 	/** @dataProvider uncertain_provider */
-	public function test_uncertain_custom_tools_are_audited( string $mode ): void {
+	public function test_non_woocommerce_custom_tools_keep_main_logging_boundary( string $mode ): void {
 		add_filter( 'mcpwp_register_tools', static function ( $tools ) use ( $mode ) {
 			$tool = array( 'name' => 'digid_uncertain', 'description' => 'Uncertain side effects.', 'destructive' => true );
 			if ( 'callback' === $mode ) { $tool['callback'] = static function () { return array( 'id' => 88 ); }; }
@@ -168,7 +164,7 @@ final class ActionLogAttemptTest extends TestCase {
 			return $tools;
 		} );
 		$this->call( 'digid_uncertain', array() );
-		$this->assertCount( 1, $this->rows() );
+		$this->assertCount( 0, $this->rows() );
 	}
 	public static function uncertain_provider(): array { return array( array( 'callback' ), array( 'destructive-rest' ), array( 'implicit-rest' ) ); }
 
@@ -192,7 +188,7 @@ final class ActionLogAttemptTest extends TestCase {
 		add_filter( 'rest_dispatch_request', static function ( $pre, $request ) {
 			return Mcpwp_WooCommerce_Audit::rest_dispatch( $pre, null, $request );
 		}, 10, 2 );
-		add_filter( 'rest_dispatch_request', array( 'Mcpwp_Action_Log', 'capture_rest_attempt' ), 20, 4 );
+		add_filter( 'rest_dispatch_request', array( 'Mcpwp_WooCommerce_Audit', 'capture_dispatch' ), 20, 4 );
 		$this->call( 'wc_update_product', array( 'id' => 41, 'name' => 'Changed' ) );
 		$this->assertCount( 1, $this->rows() );
 		$this->assertSame( '41', $this->rows()[0]['resource_id'] );
@@ -255,18 +251,18 @@ final class ActionLogAttemptTest extends TestCase {
 	public function test_insert_failure_is_visible_in_site_health(): void {
 		$GLOBALS['mcpwp_test_wpdb_insert_fail']['wp_mcpwp_action_log'] = true;
 		$this->call( 'wc_update_order', array( 'id' => 11, 'status' => 'completed' ) );
-		$this->assertSame( 'critical', Mcpwp_Action_Log::site_health_test()['status'] );
+		$this->assertSame( 'critical', Mcpwp_WooCommerce_Audit::site_health_test()['status'] );
 		$this->assertNotEmpty( get_option( 'mcpwp_action_log_last_failure' ) );
 		unset( $GLOBALS['mcpwp_test_wpdb_insert_fail'] );
 		$this->call( 'wc_update_order', array( 'id' => 11, 'status' => 'completed' ) );
-		$this->assertSame( 'good', Mcpwp_Action_Log::site_health_test()['status'] );
+		$this->assertSame( 'good', Mcpwp_WooCommerce_Audit::site_health_test()['status'] );
 	}
 
 	public function test_argument_json_is_capped_and_remains_valid(): void {
-		$log = Mcpwp_Action_Log::begin( 'digid_large', array( 'payload' => str_repeat( 'growth ', 100000 ) ) );
-		Mcpwp_Action_Log::complete( $log, 1, true );
+		$log = Mcpwp_WooCommerce_Audit::new_attempt( 'wc_update_product', array( 'id' => 41, 'note' => str_repeat( 'growth ', 100000 ) ), 'verified-key' );
+		Mcpwp_WooCommerce_Audit::execute( $log, static function () { return new WP_REST_Response( array( 'id' => 41 ), 200 ); }, 'rest' );
 		$args = $this->rows()[0]['arguments'];
 		$this->assertLessThanOrEqual( 65536, strlen( $args ) );
-		$this->assertSame( 'too_large', json_decode( $args, true )['withheld'] );
+		$this->assertSame( '[redacted]', json_decode( $args, true )['note'] );
 	}
 }

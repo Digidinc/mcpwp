@@ -62,103 +62,15 @@ class Mcpwp_Action_Log {
 		'wp_patch_elementor',
 	);
 
+	private static $write_prefixes = array(
+		'wp_create_', 'wp_update_', 'wp_delete_', 'wp_set_',
+		'wp_add_', 'wp_remove_', 'wp_replace_', 'wp_edit_',
+		'wp_bulk_', 'wp_patch_', 'wp_flush_', 'wp_trigger_',
+		'wp_apply_', 'wp_assign_', 'wp_setup_', 'wp_configure_',
+		'wp_import_', 'wp_regenerate_', 'wp_revoke_',
+	);
+
 	private static $pending = array();
-
-	const ARGUMENTS_MAX_BYTES = 65536;
-
-	/** Active attempts are scoped to this PHP request, never to client headers. */
-	private static $attempts = array();
-
-	/**
-	 * One receipt for every outcome, including refusals, replays and exceptions.
-	 * Snapshots are deferred until an authorized handler is about to execute.
-	 */
-	public static function with_attempt( $tool_name, array $arguments, $api_key_id, $category, array $annotations, callable $callback, $format = 'mcp', $request = null ) {
-		if ( ! empty( $annotations['readOnlyHint'] ) ) {
-			return $callback();
-		}
-		self::$attempts[] = array(
-			'tool_name' => $tool_name, 'arguments' => $arguments, 'api_key_id' => $api_key_id,
-			'category' => $category, 'annotations' => $annotations, 'log_id' => null,
-			'format' => $format, 'request' => $request,
-		);
-		$start = microtime( true );
-		$success = false;
-		$code = 'execution_error';
-		$data = array();
-		try {
-			$response = $callback();
-			if ( 'mcp' === $format ) {
-				$body = isset( $response['result'] ) ? $response['result'] : array();
-				$success = ! isset( $response['error'] ) && empty( $body['isError'] );
-				$code = $success ? '' : ( $body['structuredContent']['error']['code'] ?? ( $response['error']['data']['code'] ?? 'tool_error' ) );
-				if ( ! empty( $body['_meta']['replayed'] ) ) {
-					$code = 'replayed';
-				}
-				$data = isset( $body['structuredContent'] ) ? $body['structuredContent'] : json_decode( $body['content'][0]['text'] ?? '', true );
-			} elseif ( is_wp_error( $response ) ) {
-				$code = $response->get_error_code();
-			} else {
-				$data = $response->get_data();
-				$success = $response->get_status() < 400;
-				$code = $success ? '' : ( $data['code'] ?? 'execution_error' );
-			}
-			return $response;
-		} finally {
-			$attempt = array_pop( self::$attempts );
-			$log_id = $attempt['log_id'];
-			if ( null === $log_id ) {
-				$log_id = self::begin( $attempt['tool_name'], $attempt['arguments'], $attempt['api_key_id'], $attempt['category'], $attempt['annotations'], false );
-			}
-			self::complete( $log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), $success, (string) $code, is_array( $data ) ? $data : array() );
-		}
-	}
-
-	/** Begin snapshots only after the normal permission/argument gates pass. */
-	public static function capture_attempt( array $arguments ) {
-		$index = count( self::$attempts ) - 1;
-		if ( $index < 0 || null !== self::$attempts[ $index ]['log_id'] ) {
-			return;
-		}
-		$attempt = self::$attempts[ $index ];
-		self::$attempts[ $index ]['arguments'] = $arguments;
-		self::$attempts[ $index ]['log_id'] = self::begin( $attempt['tool_name'], $arguments, $attempt['api_key_id'], $attempt['category'], $attempt['annotations'] );
-	}
-
-	/** Legacy non-WooCommerce snapshot boundary. WC ownership lives in its context. */
-	public static function capture_rest_attempt( $response, $request, $route, $handler ) {
-		$attempt = end( self::$attempts );
-		if ( null === $response && $attempt && 'mcp' === $attempt['format'] && null === $attempt['log_id'] && null === Mcpwp_WooCommerce_Audit::route_definition( $request ) ) {
-			self::capture_attempt( $attempt['arguments'] );
-		}
-		return $response;
-	}
-
-	/** Sole persistence API called by the WooCommerce context finalizer. */
-	public static function record_woocommerce_attempt( $context ) {
-		return self::insert(
-			self::generate_id(), $context->tool, 'woocommerce', $context->api_key_id,
-			Mcpwp_WooCommerce_Audit::redact_arguments( $context->arguments ),
-			null, null, 'other', $context->resource_id, '', '',
-			$context->duration_ms, $context->success ? 1 : 0, $context->error_code, 0, false
-		);
-	}
-
-	public static function register_site_health( $tests ) {
-		$tests['direct']['mcpwp_action_log'] = array( 'label' => __( 'MCPWP action log', 'mcpwp' ), 'test' => array( __CLASS__, 'site_health_test' ) );
-		return $tests;
-	}
-
-	public static function site_health_test() {
-		$failed = get_option( 'mcpwp_action_log_last_failure', false );
-		return array(
-			'label' => $failed ? __( 'MCPWP could not write an action-log receipt', 'mcpwp' ) : __( 'MCPWP action-log writes are healthy', 'mcpwp' ),
-			'status' => $failed ? 'critical' : 'good',
-			'badge' => array( 'label' => 'MCPWP', 'color' => 'blue' ),
-			'description' => '<p>' . esc_html__( 'A failed audit insert leaves a gap even when the site mutation succeeded. Restore database access; a later successful insert clears this alert but does not recover missing receipts.', 'mcpwp' ) . '</p>',
-			'actions' => '', 'test' => 'mcpwp_action_log',
-		);
-	}
 
 	// ---- Public API ----
 
@@ -169,11 +81,10 @@ class Mcpwp_Action_Log {
 	 * @param array  $arguments  Tool arguments.
 	 * @param string $api_key_id API key identifier.
 	 * @param string $category   Tool category.
-	 * @param array  $annotations Owning registry annotations. Missing hints are conservatively treated as writes.
 	 * @return string|null log_id or null.
 	 */
-	public static function begin( $tool_name, $arguments, $api_key_id = '', $category = '', $annotations = array(), $capture = true ) {
-		if ( ! empty( $annotations['readOnlyHint'] ) ) {
+	public static function begin( $tool_name, $arguments, $api_key_id = '', $category = '' ) {
+		if ( ! self::is_write_tool( $tool_name ) ) {
 			return null;
 		}
 
@@ -188,11 +99,10 @@ class Mcpwp_Action_Log {
 		// everyone) — see resolve_resource_post_type()'s own docblock.
 		$resource_post_type = self::resolve_resource_post_type( $resource );
 
-		$before_cap  = self::cap_snapshot( $capture ? self::snapshot( $resource ) : null );
+		$before_cap  = self::cap_snapshot( self::snapshot( $resource ) );
 		$log_id      = self::generate_id();
 
 		self::$pending[ $log_id ] = array(
-			'executed'            => $capture,
 			'resource'            => $resource,
 			'resource_post_type'  => $resource_post_type,
 			'before_snap'         => $before_cap['value'],
@@ -213,10 +123,9 @@ class Mcpwp_Action_Log {
 	 * @param int         $duration_ms Execution duration.
 	 * @param bool        $success     Whether the tool succeeded.
 	 * @param string      $error_code  Error code or '' on success.
-	 * @param array       $result     Successful handler response, used for newly created resource IDs.
 	 * @return void
 	 */
-	public static function complete( $log_id, $duration_ms, $success, $error_code = '', $result = array() ) {
+	public static function complete( $log_id, $duration_ms, $success, $error_code = '' ) {
 		if ( null === $log_id || ! isset( self::$pending[ $log_id ] ) ) {
 			return;
 		}
@@ -226,22 +135,9 @@ class Mcpwp_Action_Log {
 		$tool_name = $pending['tool_name'];
 		$arguments = $pending['arguments'];
 
-		// Creates have no target ID before dispatch. Archetype apply returns the
-		// affected product separately from the archetype that supplied its data.
-		if ( $success && empty( $resource['id'] ) ) {
-			$created = isset( $result['data'] ) && is_array( $result['data'] ) ? $result['data'] : $result;
-			if ( 'wc_apply_product_archetype' === $tool_name ) {
-				$created = isset( $created['product'] ) ? $created['product'] : array();
-			}
-			if ( isset( $created['id'] ) && is_scalar( $created['id'] ) ) {
-				$resource['id'] = (string) $created['id'];
-				$pending['resource_post_type'] = self::resolve_resource_post_type( $resource );
-			}
-		}
-
-		$after_cap          = $success && $pending['executed'] ? self::cap_snapshot( self::snapshot( $resource ) ) : array( 'value' => null, 'skipped' => false );
+		$after_cap          = $success ? self::cap_snapshot( self::snapshot( $resource ) ) : array( 'value' => null, 'skipped' => false );
 		$snapshot_skipped   = ( $pending['before_snap_skipped'] || $after_cap['skipped'] ) ? 'too_large' : '';
-		$rollback_supported = $success && $pending['executed'] && self::is_rollback_supported( $tool_name, $resource );
+		$rollback_supported = $success && self::is_rollback_supported( $tool_name, $resource );
 
 		self::insert(
 			$log_id,
@@ -747,6 +643,15 @@ class Mcpwp_Action_Log {
 
 	// ---- Private helpers ----
 
+	private static function is_write_tool( $tool_name ) {
+		foreach ( self::$write_prefixes as $prefix ) {
+			if ( 0 === strpos( $tool_name, $prefix ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	private static function is_rollback_supported( $tool_name, $resource ) {
 		if ( 'post' === $resource['type'] && in_array( $tool_name, self::$post_write_tools, true ) ) {
 			return true;
@@ -786,13 +691,7 @@ class Mcpwp_Action_Log {
 			return array( 'type' => 'option', 'id' => class_exists( 'Mcpwp_Option_Access' ) ? Mcpwp_Option_Access::sanitize_option_name( $key ) : sanitize_key( (string) $key ) );
 		}
 
-		// Preserve IDs for integration/custom writes too, without claiming their
-		// objects can be restored by WordPress post snapshots (e.g. HPOS orders).
-		$id = isset( $arguments['id'] ) ? $arguments['id'] : '';
-		if ( 'wc_apply_product_archetype' === $tool_name ) {
-			$id = isset( $arguments['product_id'] ) ? $arguments['product_id'] : '';
-		}
-		return array( 'type' => 'other', 'id' => is_scalar( $id ) ? (string) $id : '' );
+		return array( 'type' => 'other', 'id' => '' );
 	}
 
 	/**
@@ -1043,47 +942,33 @@ class Mcpwp_Action_Log {
 		// ids and sha256 hashes, which the value-shape heuristic would
 		// otherwise blank out).
 		if ( $redact && class_exists( 'Mcpwp_Option_Access' ) && method_exists( 'Mcpwp_Option_Access', 'redact_for_log' ) ) {
-			$safe_args = Mcpwp_Option_Access::redact_for_log( $safe_args, array_merge( Mcpwp_Option_Access::log_redaction_keys(), array( 'note', 'notes', 'content', 'description', 'short_description', 'message', 'email', 'billing', 'shipping', 'customer_note', 'address', 'phone', 'first_name', 'last_name', 'title', 'name', 'excerpt', 'body', 'comment', 'review' ) ) );
-		}
-
-		if ( $redact && ! class_exists( 'Mcpwp_Option_Access' ) ) {
-			$safe_args = array( 'withheld' => 'redactor_unavailable' );
-		}
-		$encoded_args = wp_json_encode( $safe_args );
-		if ( false === $encoded_args || strlen( $encoded_args ) > self::ARGUMENTS_MAX_BYTES ) {
-			$encoded_args = wp_json_encode( array( 'withheld' => false === $encoded_args ? 'encoding_failed' : 'too_large' ) );
+			$safe_args = Mcpwp_Option_Access::redact_for_log( $safe_args, Mcpwp_Option_Access::log_redaction_keys() );
 		}
 
 		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
-		$written = $wpdb->insert(
+		return $wpdb->insert(
 			$wpdb->prefix . self::TABLE,
 			array(
-				'log_id'             => Mcpwp_WooCommerce_Audit::bound( $log_id, 44 ),
+				'log_id'             => (string) $log_id,
 				'timestamp'          => current_time( 'mysql', true ),
-				'tool_name'          => Mcpwp_WooCommerce_Audit::bound( $tool_name, 100 ),
-				'category'           => Mcpwp_WooCommerce_Audit::bound( $category, 50 ),
-				'api_key_id'         => Mcpwp_WooCommerce_Audit::bound( $api_key_id, 100 ),
-				'arguments'          => $encoded_args,
+				'tool_name'          => (string) $tool_name,
+				'category'           => (string) $category,
+				'api_key_id'         => (string) $api_key_id,
+				'arguments'          => wp_json_encode( $safe_args ) ? wp_json_encode( $safe_args ) : '',
 				'before_snap'        => $before_snap,
 				'after_snap'         => $after_snap,
-				'resource_type'      => Mcpwp_WooCommerce_Audit::bound( $resource_type, 50 ),
-				'resource_id'        => Mcpwp_WooCommerce_Audit::bound( $resource_id, 255 ),
-				'resource_post_type' => Mcpwp_WooCommerce_Audit::bound( $resource_post_type, 40 ),
-				'snapshot_skipped'   => Mcpwp_WooCommerce_Audit::bound( $snapshot_skipped, 20 ),
+				'resource_type'      => (string) $resource_type,
+				'resource_id'        => (string) $resource_id,
+				'resource_post_type' => (string) $resource_post_type,
+				'snapshot_skipped'   => (string) $snapshot_skipped,
 				'duration_ms'        => (int) $duration_ms,
 				'success'            => (int) $success,
-				'error_code'         => Mcpwp_WooCommerce_Audit::bound( $error_code, 50 ),
+				'error_code'         => (string) $error_code,
 				'rollback_supported' => (int) $rollback_supported,
 				'rolled_back'        => 0,
 			),
 			array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%d', '%d' )
 		);
-		if ( false === $written || null === $written ) {
-			update_option( 'mcpwp_action_log_last_failure', current_time( 'mysql', true ), false );
-		} else {
-			delete_option( 'mcpwp_action_log_last_failure' );
-		}
-		return $written;
 	}
 
 	/**

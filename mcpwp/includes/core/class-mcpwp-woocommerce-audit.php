@@ -18,6 +18,75 @@ class Mcpwp_WooCommerce_Audit {
 	private static $budgets;
 	private static $active_contexts = array();
 
+	/** WooCommerce-only persistence: the generic action log remains identical to main. */
+	private static function persist( $context ) {
+		global $wpdb;
+		$row = array(
+			'log_id' => 'act_' . str_replace( '-', '', wp_generate_uuid4() ),
+			'timestamp' => current_time( 'mysql', true ),
+			'tool_name' => $context->tool, 'category' => 'woocommerce',
+			'api_key_id' => $context->api_key_id,
+			'arguments' => wp_json_encode( self::redact_arguments( $context->arguments ) ),
+			'before_snap' => null, 'after_snap' => null, 'resource_type' => 'other',
+			'resource_id' => $context->resource_id, 'resource_post_type' => '', 'snapshot_skipped' => '',
+			'duration_ms' => $context->duration_ms, 'success' => $context->success ? 1 : 0,
+			'error_code' => $context->error_code, 'rollback_supported' => 0, 'rolled_back' => 0,
+		);
+		foreach ( array( 'log_id' => 44, 'tool_name' => 100, 'category' => 50, 'api_key_id' => 100, 'resource_type' => 50, 'resource_id' => 255, 'resource_post_type' => 40, 'snapshot_skipped' => 20, 'error_code' => 50 ) as $field => $limit ) {
+			$row[ $field ] = self::bound( $row[ $field ], $limit );
+		}
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery
+		$written = $wpdb->insert( $wpdb->prefix . Mcpwp_Action_Log::TABLE, $row, array( '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%d', '%s', '%d', '%d' ) );
+		if ( false === $written || null === $written ) {
+			update_option( 'mcpwp_action_log_last_failure', current_time( 'mysql', true ), false );
+		} else {
+			delete_option( 'mcpwp_action_log_last_failure' );
+		}
+		return $written;
+	}
+
+	public static function register_site_health( $tests ) {
+		$tests['direct']['mcpwp_action_log'] = array( 'label' => __( 'MCPWP WooCommerce action log', 'mcpwp' ), 'test' => array( __CLASS__, 'site_health_test' ) );
+		return $tests;
+	}
+
+	public static function site_health_test() {
+		$failed = get_option( 'mcpwp_action_log_last_failure', false );
+		$unknown = get_option( 'mcpwp_woocommerce_audit_unknown_actor', false );
+		return array(
+			'label' => $failed || $unknown ? __( 'MCPWP WooCommerce audit needs attention', 'mcpwp' ) : __( 'MCPWP WooCommerce audit is healthy', 'mcpwp' ),
+			'status' => $failed || $unknown ? 'critical' : 'good',
+			'badge' => array( 'label' => 'MCPWP', 'color' => 'blue' ),
+			'description' => '<p>' . esc_html__( 'A failed insert leaves a missing receipt. An unknown actor means an executed write lacks verified attribution. Investigate and clear the unknown-actor diagnostic after resolving its cause; a successful insert clears only the insertion diagnostic.', 'mcpwp' ) . '</p>',
+			'actions' => '', 'test' => 'mcpwp_action_log',
+		);
+	}
+
+	/** Rate/admission refusals never fan out into persistent child receipts. */
+	private static function admission_error( $error ) {
+		if ( ! is_wp_error( $error ) ) {
+			return false;
+		}
+		$data = $error->get_error_data();
+		$status = is_array( $data ) ? (int) ( $data['status'] ?? 0 ) : 0;
+		return in_array( $status, array( 413, 429 ), true ) || in_array( $error->get_error_code(), array( 'batch_exceeds_limit', 'rate_limit_exceeded', 'batch_too_large', 'woocommerce_audit_limit' ), true );
+	}
+
+	/** Runs after permission/spend checks, with the route parameters core merged. */
+	public static function capture_dispatch( $result, $request, $route, $handler ) {
+		$context = self::context_for( $request );
+		if ( $context && 'write' === $context->kind && null === $result ) {
+			$context->arguments = $request->get_params();
+			$context->executed = true;
+			$permission = $handler['permission_callback'] ?? null;
+			$controller = is_array( $permission ) ? $permission[0] : null;
+			if ( is_object( $controller ) && method_exists( $controller, 'get_audit_key_id' ) && '' !== $controller->get_audit_key_id() ) {
+				$context->api_key_id = $controller->get_audit_key_id();
+			}
+		}
+		return $result;
+	}
+
 	/** The declared write surface, including REST-only archetype updates. */
 	public static function catalog() {
 		return array(
@@ -51,8 +120,8 @@ class Mcpwp_WooCommerce_Audit {
 	public static function route_definition( $request ) {
 		$route = self::normalize_route( $request->get_route() );
 		foreach ( self::catalog() as $name => $row ) {
-			$pattern = str_replace( '\\{id\\}', '[0-9]+', preg_quote( $row[0], '#' ) );
-			if ( in_array( strtoupper( $request->get_method() ), $row[1], true ) && preg_match( '#^' . $pattern . '$#D', $route ) ) {
+			$pattern = str_replace( '\\{id\\}', '[0-9]+', preg_quote( $row[0], '@' ) );
+			if ( in_array( strtoupper( $request->get_method() ), $row[1], true ) && preg_match( '@^' . $pattern . '$@i', $route ) ) {
 				return self::tool_definition( $name );
 			}
 		}
@@ -65,11 +134,11 @@ class Mcpwp_WooCommerce_Audit {
 			return true;
 		}
 		$route = self::normalize_route( $request->get_route() );
-		if ( '/mcp' === $route ) {
+		if ( preg_match( '@^/mcp$@i', $route ) ) {
 			$body = $request->get_json_params();
 			return ! is_array( $body ) || ! isset( $body[0] ) || count( $body ) <= self::MAX_ROWS;
 		}
-		if ( '/batch' === $route ) {
+		if ( preg_match( '@^/batch$@i', $route ) ) {
 			$operations = $request->get_param( 'operations' );
 			return is_array( $operations ) && count( $operations ) <= self::MAX_ROWS;
 		}
@@ -117,7 +186,7 @@ class Mcpwp_WooCommerce_Audit {
 			'kind' => 'write', 'tool' => $tool, 'definition' => $definition, 'arguments' => $arguments,
 			'api_key_id' => (string) $actor, 'route' => $definition['route'],
 			'budget' => $budget, 'admitted' => true, 'running' => false, 'finished' => false,
-			'result' => array(), 'observed' => null, 'success' => false,
+			'executed' => false, 'admission_refused' => false, 'result' => array(), 'observed' => null, 'success' => false,
 			'error_code' => 'execution_error', 'resource_id' => '', 'replayed' => false,
 		);
 	}
@@ -140,7 +209,7 @@ class Mcpwp_WooCommerce_Audit {
 
 	private static function outcome( $response, $format ) {
 		if ( is_wp_error( $response ) ) {
-			return array( false, $response->get_error_code(), array() );
+			return array( false, $response->get_error_code(), array(), self::admission_error( $response ) );
 		}
 		if ( 'mcp' === $format ) {
 			$body = $response['result'] ?? array();
@@ -151,12 +220,19 @@ class Mcpwp_WooCommerce_Audit {
 				$code = 'replayed';
 			}
 			$data = $body['structuredContent'] ?? json_decode( $body['content'][0]['text'] ?? '', true );
-			return array( $success, $code, is_array( $data ) ? $data : array() );
+			if ( ! empty( $data['approval_required'] ) ) {
+				$success = false;
+				$code = 'deferred';
+			}
+			return array( $success, $code, is_array( $data ) ? $data : array(), in_array( $code, array( 'batch_exceeds_limit', 'rate_limit_exceeded', 'batch_too_large', 'woocommerce_audit_limit' ), true ) );
 		}
 		$response = rest_ensure_response( $response );
 		$data = $response->get_data();
 		$success = $response->get_status() < 400;
-		return array( $success, $success ? '' : ( $data['code'] ?? 'execution_error' ), is_array( $data ) ? $data : array() );
+		if ( ! empty( $data['approval_required'] ) ) {
+			return array( false, 'deferred', $data, false );
+		}
+		return array( $success, $success ? '' : ( $data['code'] ?? 'execution_error' ), is_array( $data ) ? $data : array(), in_array( $response->get_status(), array( 413, 429 ), true ) );
 	}
 
 	/** The sole WooCommerce completion/writing chokepoint. */
@@ -175,10 +251,13 @@ class Mcpwp_WooCommerce_Audit {
 		$start = microtime( true );
 		try {
 			$response = $callback();
-			list( $context->success, $context->error_code, $data ) = self::outcome( $response, $format );
+			$outcome = self::outcome( $response, $format );
+			list( $context->success, $context->error_code, $data ) = $outcome;
+			$context->admission_refused = $context->admission_refused || ! empty( $outcome[3] );
 			$context->result = $data;
 			if ( is_array( $context->observed ) ) {
 				$context->result = $context->observed[2];
+				$context->admission_refused = $context->admission_refused || ! empty( $context->observed[3] );
 				if ( ! $context->observed[0] ) {
 					$context->success = false;
 					$context->error_code = $context->observed[1];
@@ -209,10 +288,15 @@ class Mcpwp_WooCommerce_Audit {
 			// WooCommerce identifiers are numeric; invalid requested IDs must
 			// not smuggle free text or credentials into public row metadata.
 			$context->resource_id = is_scalar( $id ) && ctype_digit( (string) $id ) ? self::bound( $id, 255 ) : '';
-			if ( '' !== $context->api_key_id ) {
-				Mcpwp_Action_Log::record_woocommerce_attempt( $context );
+			$ran = $context->executed || $context->success || 'deferred' === $context->error_code;
+			if ( '' === $context->api_key_id && $ran ) {
+				$context->api_key_id = 'unknown-actor';
+				update_option( 'mcpwp_woocommerce_audit_unknown_actor', current_time( 'mysql', true ), false );
+			}
+			if ( '' !== $context->api_key_id && ( ! $context->admission_refused || $context->executed ) ) {
+				self::persist( $context );
 			} else {
-				$context->budget->count--; // Unverified denials never spend receipt capacity.
+				$context->budget->count--; // Pre-admission/unverified denials write no rows.
 			}
 		}
 	}
@@ -248,7 +332,7 @@ class Mcpwp_WooCommerce_Audit {
 	/** Keep a root quota around admitted entry-point handlers, including callbacks. */
 	public static function scope_dispatch( $result, $request, $route, $handler ) {
 		$path = self::normalize_route( $request->get_route() );
-		if ( null !== $result || ! is_callable( $handler['callback'] ?? null ) || ( ! in_array( $path, array( '/mcp', '/batch', '/webmcp/call' ), true ) && ! self::route_definition( $request ) ) ) {
+		if ( null !== $result || ! is_callable( $handler['callback'] ?? null ) || ( ! preg_match( '@^/(?:mcp|batch|webmcp/call)$@i', $path ) && ! self::route_definition( $request ) ) ) {
 			return $result;
 		}
 		$scope = (object) array( 'budget' => self::request_budget( $request ) );
@@ -340,7 +424,12 @@ class Mcpwp_WooCommerce_Audit {
 		if ( ! $is_batch ) {
 			return $response;
 		}
-		list( $success, $code, $data ) = self::outcome( $response, $format );
+		$outcome = self::outcome( $response, $format );
+		list( $success, $code, $data ) = $outcome;
+		if ( ! empty( $outcome[3] ) ) {
+			$batch->finished = true;
+			return $response;
+		}
 		if ( $is_batch ) {
 			foreach ( self::children( $params ) as $index => $child ) {
 				if ( $batch && isset( $batch->children[ $index ] ) ) {
@@ -393,13 +482,17 @@ class Mcpwp_WooCommerce_Audit {
 	/** Authentication only updates bound attempts; unbound denials share admission. */
 	public static function auth_result( $request, $verdict, $actor ) {
 		$context = self::context_for( $request );
+		$refused = self::admission_error( $verdict );
 		if ( $context ) {
+			if ( $refused ) {
+				$context->admission_refused = true;
+			}
 			if ( '' !== $actor ) {
 				$context->api_key_id = $actor;
 			}
 			return;
 		}
-		if ( ! is_wp_error( $verdict ) || '' === $actor || ! self::admitted( $request ) ) {
+		if ( $refused || ! is_wp_error( $verdict ) || '' === $actor || ! self::admitted( $request ) ) {
 			return;
 		}
 		if ( null === self::$auth_requests ) {
@@ -417,9 +510,9 @@ class Mcpwp_WooCommerce_Audit {
 			return;
 		}
 		$route = self::normalize_route( $request->get_route() );
-		if ( '/batch' === $route ) {
+		if ( preg_match( '@^/batch$@i', $route ) ) {
 			$calls = array( array( 'params' => array( 'name' => 'wp_batch', 'arguments' => array( 'operations' => $request->get_param( 'operations' ) ) ) ) );
-		} elseif ( '/mcp' === $route ) {
+		} elseif ( preg_match( '@^/mcp$@i', $route ) ) {
 			$body = $request->get_json_params();
 			$calls = isset( $body['method'] ) ? array( $body ) : ( is_array( $body ) ? $body : array() );
 		} else {

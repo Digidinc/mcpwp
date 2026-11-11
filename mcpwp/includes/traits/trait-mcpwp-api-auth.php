@@ -1225,6 +1225,7 @@ trait Mcpwp_Api_Auth {
 		// The open apply_filters() bypass was removed: any code that added a filter
 		// returning true could silently skip API-key auth for all requests.
 		if ( $this->is_trusted_admin_ajax_request() ) {
+			$this->mcpwp_audit_key_id = 'wp-user:' . get_current_user_id();
 			// A user-run principal (the logged-in administrator): the route's
 			// capability and the post-type rule still apply (#1100).
 			$capability_check = $this->check_gate_entry( $request );
@@ -1256,6 +1257,7 @@ trait Mcpwp_Api_Auth {
 		// path — DestructiveGateOnlyDeletesTest pins the invariant.
 		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::applying_as_admin() > 0 && function_exists( 'user_can' ) && user_can( Mcpwp_Destructive_Gate::applying_as_admin(), 'activate_plugins' ) ) {
 			wp_set_current_user( Mcpwp_Destructive_Gate::applying_as_admin() );
+			$this->mcpwp_audit_key_id = 'wp-user:' . get_current_user_id();
 			$capability_check = $this->check_gate_entry( $request );
 			return is_wp_error( $capability_check ) ? $capability_check : $this->check_generic_post_type_access( $request );
 		}

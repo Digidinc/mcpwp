@@ -89,10 +89,9 @@ final class WooCommerceActionLogTest extends TestCase {
 	public function test_annotations_override_a_write_shaped_name(): void {
 		$rows = $this->call_tool( 'wp_parse_blocks', array( 'content' => '<p>Test</p>' ) );
 		$this->assertSame( array(), $rows );
-		$this->assertNull( Mcpwp_Action_Log::begin( 'wp_update_post', array( 'id' => 41 ), '', '', array( 'readOnlyHint' => true ) ) );
 	}
 
-	public function test_non_prefixed_custom_write_is_logged(): void {
+	public function test_non_woocommerce_custom_write_keeps_main_prefix_boundary(): void {
 		add_filter( 'mcpwp_register_tools', static function ( $tools ) {
 			$tools[] = array(
 				'name' => 'digid_save_record', 'description' => 'Save a record.',
@@ -101,7 +100,6 @@ final class WooCommerceActionLogTest extends TestCase {
 			return $tools;
 		} );
 		$rows = $this->call_tool( 'digid_save_record', array() );
-		$this->assertCount( 1, $rows );
-		$this->assertSame( '73', $rows[0]['resource_id'] );
+		$this->assertCount( 0, $rows );
 	}
 }
