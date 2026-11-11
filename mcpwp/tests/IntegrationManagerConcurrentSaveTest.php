@@ -46,6 +46,7 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
 
     protected function tearDown(): void
     {
+        remove_filter('sanitize_option_' . self::OPTION, array(Mcpwp_Integration_Manager::class, 'reject_raw_option_write'));
         $this->resetState();
     }
 
@@ -103,6 +104,7 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
             $value = $GLOBALS['mcpwp_test_options'][ self::OPTION ] ?? array();
         }
 
+        if (is_array($value)) { unset($value[Mcpwp_Integration_Manager::GENERATIONS_KEY]); }
         return is_array($value) ? $value : array();
     }
 
@@ -138,6 +140,116 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
                 $once();
             }
         };
+    }
+
+    public function test_legacy_import_cannot_replace_a_concurrent_configure(): void
+    {
+        require_once dirname(__DIR__) . '/includes/class-mcpwp-migrate.php';
+        update_option('spai_settings', array());
+        update_option('spai_integrations', array('openai' => $this->record('legacy-fixture')));
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $fired = false;
+        $configure = function () use ($manager, &$fired): void {
+            if (!$fired) {
+                $fired = true;
+                $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'new-fixture')));
+            }
+        };
+        $GLOBALS['mcpwp_test_option_store_hook'] = function ($name, $value) use ($configure) {
+            if (self::OPTION === $name) { $configure(); }
+            return $value;
+        };
+        $GLOBALS['mcpwp_test_wpdb_before_insert'] = function ($name) use ($configure): void {
+            if (self::OPTION === $name) { $configure(); }
+        };
+        $this->assertTrue(Mcpwp_Migrate::run());
+        $this->assertTrue($fired);
+        $config = $manager->get_provider_config('figma');
+        $this->assertTrue(is_array($config) && 'new-fixture' === ($config['access_token'] ?? null), 'concurrent configure wins over legacy import');
+        $this->assertArrayNotHasKey('openai', $this->records());
+    }
+
+    public function test_raw_backup_replacement_cannot_replay_a_live_oauth_version(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'old-fixture')));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $backup = $this->records();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'new-fixture')));
+        Mcpwp_Integration_Manager::register_option_guard();
+        $blocked = false;
+        try {
+            update_option(self::OPTION, $backup);
+        } catch (RuntimeException $error) {
+            $blocked = true;
+        }
+        $this->assertTrue($blocked, 'raw option restoration is refused; use the CAS restore API');
+        $this->assertFalse($manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot), 'backup replacement must not make an old snapshot eligible');
+    }
+
+    public function test_explicit_restore_mints_an_incarnation_and_advances_the_live_counter(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'old-fixture')));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $backup = $this->records();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'new-fixture')));
+        $live = $manager->get_provider_snapshot('figma');
+        $this->assertTrue($manager->restore_provider_records($backup));
+        $restored = $manager->get_provider_snapshot('figma');
+        $this->assertGreaterThan($live['generation'], $restored['generation']);
+        $this->assertNotSame($snapshot['record_id'], $restored['record_id']);
+        $this->assertFalse($manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot));
+        $this->assertTrue('old-fixture' === $manager->get_provider_config('figma')['access_token']);
+    }
+
+    public function test_restore_after_removal_keeps_the_live_high_water_counter(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'old-fixture')));
+        $backup = $this->records();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'new-fixture')));
+        $live = $manager->get_provider_snapshot('figma');
+        $this->assertSame(Mcpwp_Integration_Manager::WRITE_STORED, $manager->remove_provider_record('figma'));
+        $backup[Mcpwp_Integration_Manager::GENERATIONS_KEY] = array('figma' => PHP_INT_MAX);
+        $this->assertTrue($manager->restore_provider_records($backup));
+        $restored = $manager->get_provider_snapshot('figma');
+        $this->assertSame($live['generation'] + 2, $restored['generation'], 'removal and restore both advance the live counter; backup map is ignored');
+        $this->assertNotSame($live['record_id'], $restored['record_id']);
+    }
+
+    public function test_raw_option_add_cannot_recreate_a_saved_snapshot(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'old-fixture')));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $backup = $this->records();
+        unset($GLOBALS['mcpwp_test_wpdb_options'][self::OPTION], $GLOBALS['mcpwp_test_options'][self::OPTION]);
+        Mcpwp_Integration_Manager::register_option_guard();
+        $blocked = false;
+        try {
+            add_option(self::OPTION, $backup);
+        } catch (RuntimeException $error) {
+            $blocked = true;
+        }
+        $this->assertTrue($blocked);
+        $this->assertFalse($manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot));
+    }
+
+    public function test_action_log_provider_restore_uses_the_versioned_restore_api(): void
+    {
+        require_once dirname(__DIR__) . '/includes/core/class-mcpwp-action-log.php';
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'old-fixture')));
+        $backup = $this->records();
+        $snapshot = $manager->get_provider_snapshot('figma');
+        Mcpwp_Integration_Manager::register_option_guard();
+        $apply = new ReflectionMethod(Mcpwp_Action_Log::class, 'apply_snapshot');
+        $apply->setAccessible(true);
+        $this->assertTrue($apply->invoke(null, 'option', array('option_key' => self::OPTION, 'value' => $backup)));
+        $after = $manager->get_provider_snapshot('figma');
+        $this->assertSame($snapshot['generation'] + 1, $after['generation']);
+        $this->assertNotSame($snapshot['record_id'], $after['record_id']);
     }
 
     /** @dataProvider versionConflictCases */
@@ -181,7 +293,7 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
                 $expected = 'recreate' === $mutation ? 'recreated-fixture' : ('status' === $mutation ? 'initial-fixture' : 'rotated-fixture');
                 $this->assertTrue($expected === $after['config']['access_token'], 'late credentials never land');
                 if ('recreate' === $mutation) {
-                    $this->assertSame($snapshot['generation'], $after['generation'], 'counter restart cannot cause ABA');
+                    $this->assertGreaterThan($snapshot['generation'], $after['generation'], 'deletion retains a counter high-water mark');
                     $this->assertNotSame($snapshot['record_id'], $after['record_id']);
                 }
             }

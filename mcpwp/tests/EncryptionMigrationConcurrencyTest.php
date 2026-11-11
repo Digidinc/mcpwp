@@ -243,6 +243,22 @@ final class EncryptionMigrationConcurrencyTest extends TestCase
         $GLOBALS['mcpwp_test_wpdb_before_insert'] = $hook;
     }
 
+    public function test_ciphertext_migration_invalidates_an_outstanding_provider_version(): void
+    {
+        $blob = $this->authSaltBlob(wp_json_encode(array('access_token' => 'legacy-fixture')));
+        $record = $this->record($blob) + array('multi_field' => true, 'generation' => 7, 'record_id' => 'original-incarnation');
+        update_option(Mcpwp_Integration_Manager::OPTION_NAME, array('figma' => $record));
+        $expected = array('generation' => 7, 'record_id' => 'original-incarnation');
+        Mcpwp_Encryption_Migration::run();
+        $after = $this->integrations()['figma'];
+        $this->assertStringStartsWith('v2:', $after['key_encrypted']);
+        $this->assertSame(8, $after['generation'], 'ciphertext mutation advances the provider generation');
+        $this->assertSame($record['record_id'], $after['record_id']);
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertFalse($manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $expected));
+        $this->assertSame('generation_conflict', $manager->get_last_save_error());
+    }
+
     public function test_a_provider_saved_during_the_run_is_not_reverted(): void
     {
         $this->seedIntegrations(array('openai' => $this->authSaltBlob('sk-legacy')));

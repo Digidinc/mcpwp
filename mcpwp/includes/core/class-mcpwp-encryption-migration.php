@@ -304,7 +304,12 @@ class Mcpwp_Encryption_Migration {
 			if ( isset( $latest[ $provider ] ) && is_array( $latest[ $provider ] )
 				&& isset( $latest[ $provider ]['key_encrypted'] )
 				&& $latest[ $provider ]['key_encrypted'] === $data[ $provider ]['key_encrypted'] ) {
-				$latest[ $provider ]['key_encrypted'] = $new_data[ $provider ]['key_encrypted'];
+				$current = $latest[ $provider ];
+				$next    = $current;
+				$next['key_encrypted'] = $new_data[ $provider ]['key_encrypted'];
+				$floor = $latest[ Mcpwp_Integration_Manager::GENERATIONS_KEY ][ $provider ] ?? 0;
+				$latest[ $provider ] = Mcpwp_Integration_Manager::advance_record_version( $current, $next, $floor );
+				$latest[ Mcpwp_Integration_Manager::GENERATIONS_KEY ][ $provider ] = $latest[ $provider ]['generation'];
 				$to_verify[ $provider ]               = $digest;
 			}
 		}

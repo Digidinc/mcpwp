@@ -118,6 +118,7 @@ final class IntegrationWriteFailureSurfacedTest extends TestCase
             $value = $GLOBALS['mcpwp_test_options'][ self::OPTION ] ?? array();
         }
 
+        if (is_array($value)) { unset($value[Mcpwp_Integration_Manager::GENERATIONS_KEY]); }
         return is_array($value) ? $value : array();
     }
 

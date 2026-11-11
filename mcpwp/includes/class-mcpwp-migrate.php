@@ -261,7 +261,20 @@ class Mcpwp_Migrate {
 				continue;
 			}
 
-			update_option( $new_key, $legacy_value );
+			if ( 'mcpwp_integrations' === $new_key ) {
+				// A fresh configure may have created the row since the absence
+				// check. A plain INSERT never replaces that winning writer.
+				if ( ! Mcpwp_Encryption::insert_option_row_if_absent( $new_key, maybe_serialize( $legacy_value ), 'yes' ) ) {
+					$row = Mcpwp_Encryption::read_option_row( $new_key );
+					if ( Mcpwp_Encryption::ROW_PRESENT !== $row['state'] ) {
+						throw new RuntimeException( 'Provider legacy import could not be stored; migration will retry.' );
+					}
+					$log['skipped_existing'][] = $new_key;
+					continue;
+				}
+			} else {
+				update_option( $new_key, $legacy_value );
+			}
 			$log['copied'][] = $legacy_key . ' → ' . $new_key;
 		}
 

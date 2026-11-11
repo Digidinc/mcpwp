@@ -875,6 +875,8 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
 
 function update_option($name, $value, $autoload = null)
 {
+    // WordPress sanitizes option values before update_option()/add_option().
+    $value = apply_filters('sanitize_option_' . $name, $value, $name, $value);
     // Test-only: mimic WordPress's sanitize_option() — a hook may alter the
     // value before storage, or refuse it (null = refused, nothing stored).
     if (isset($GLOBALS['mcpwp_test_option_store_hook']) && is_callable($GLOBALS['mcpwp_test_option_store_hook'])) {
@@ -900,6 +902,7 @@ function update_option($name, $value, $autoload = null)
 
 function add_option($name, $value = '', $deprecated = '', $autoload = 'yes')
 {
+    $value = apply_filters('sanitize_option_' . $name, $value, $name, $value);
     // NOT an atomic primitive, and not one in WordPress either: core's
     // add_option() is a cached read-then-write over INSERT ... ON DUPLICATE
     // KEY UPDATE. Claims go through Mcpwp_Idempotency_Claim / $wpdb->insert.

@@ -31,6 +31,9 @@ class Mcpwp_Integration_Manager {
 	 */
 	const OPTION_NAME = 'mcpwp_integrations';
 
+	/** Live high-water counters, retained when a provider is removed. */
+	const GENERATIONS_KEY = '_mcpwp_generations';
+
 	/**
 	 * How many times a provider write reads the records again after another
 	 * writer changed them between its read and its write (#845).
@@ -333,6 +336,66 @@ class Mcpwp_Integration_Manager {
 			self::$instance = new self();
 		}
 		return self::$instance;
+	}
+
+	/** Register the guard for WordPress option imports and WP-CLI option writes. */
+	public static function register_option_guard() {
+		add_filter( 'sanitize_option_' . self::OPTION_NAME, array( __CLASS__, 'reject_raw_option_write' ) );
+	}
+
+	/** Raw replacement can replay version metadata; restore through CAS instead. */
+	public static function reject_raw_option_write( $value ) {
+		throw new RuntimeException( 'Provider records require Mcpwp_Integration_Manager::restore_provider_records(); raw option replacement is not supported.' );
+	}
+
+	/**
+	 * Assign a version for any provider mutation, including ciphertext migration.
+	 * Backup versions are a floor only; their incarnation is never trusted.
+	 */
+	public static function advance_record_version( $current, array $next, $floor = 0, $restore = false ) {
+		$generation = is_array( $current ) && isset( $current['generation'] ) ? (int) $current['generation'] : 0;
+		$generation = max( $generation, (int) $floor, $restore && isset( $next['generation'] ) ? (int) $next['generation'] : 0 );
+		$record_id  = is_array( $current ) && isset( $current['record_id'] ) ? $current['record_id'] : '';
+		$next['generation'] = $generation + 1;
+		$next['record_id']  = ! $restore && '' !== $record_id ? $record_id : bin2hex( random_bytes( 16 ) );
+		return $next;
+	}
+
+	/**
+	 * Restore encrypted records atomically. Live counters survive deletion and
+	 * override backup metadata; every restored provider gets a fresh incarnation.
+	 * Internal restore API only: no generic option endpoint may write this state.
+	 *
+	 * @param array $backup Encrypted provider records from a trusted backup.
+	 * @return bool Whether the restored records committed.
+	 */
+	public function restore_provider_records( array $backup ) {
+		unset( $backup[ self::GENERATIONS_KEY ] );
+		foreach ( $backup as $provider => $record ) {
+			if ( ! is_array( $record ) || ! isset( $record['key_encrypted'] ) || ! is_string( $record['key_encrypted'] ) ) {
+				$this->last_save_error = 'invalid_config';
+				return false;
+			}
+		}
+		$outcome = $this->write_records(
+			static function ( array $records ) use ( $backup ) {
+				$counters = isset( $records[ self::GENERATIONS_KEY ] ) && is_array( $records[ self::GENERATIONS_KEY ] ) ? $records[ self::GENERATIONS_KEY ] : array();
+				$restored = array();
+				foreach ( $records as $provider => $record ) {
+					if ( self::GENERATIONS_KEY !== $provider && is_array( $record ) && ! isset( $backup[ $provider ] ) ) {
+						$counters[ $provider ] = max( (int) ( $counters[ $provider ] ?? 0 ), (int) ( $record['generation'] ?? 0 ) ) + 1;
+					}
+				}
+				foreach ( $backup as $provider => $record ) {
+					$restored[ $provider ] = self::advance_record_version( $records[ $provider ] ?? null, $record, $counters[ $provider ] ?? 0, true );
+					$counters[ $provider ] = $restored[ $provider ]['generation'];
+				}
+				$restored[ self::GENERATIONS_KEY ] = $counters;
+				return $restored;
+			}
+		);
+		$this->last_save_error = self::WRITE_STORED === $outcome ? '' : 'integration_write_failed';
+		return self::WRITE_STORED === $outcome;
 	}
 
 	/**
@@ -646,6 +709,7 @@ class Mcpwp_Integration_Manager {
 		$conflict = false;
 		$outcome = $this->write_records(
 			function ( array $records ) use ( $provider, $change, $expected, &$conflict ) {
+				$counters   = isset( $records[ self::GENERATIONS_KEY ] ) && is_array( $records[ self::GENERATIONS_KEY ] ) ? $records[ self::GENERATIONS_KEY ] : array();
 				$current    = isset( $records[ $provider ] ) ? $records[ $provider ] : null;
 				$generation = is_array( $current ) && isset( $current['generation'] ) ? (int) $current['generation'] : 0;
 				$record_id  = is_array( $current ) && isset( $current['record_id'] ) ? $current['record_id'] : '';
@@ -666,11 +730,13 @@ class Mcpwp_Integration_Manager {
 						return null;
 					}
 					unset( $records[ $provider ] );
+					$counters[ $provider ] = max( $generation, (int) ( $counters[ $provider ] ?? 0 ) ) + 1;
 				} else {
-					$next['generation'] = $generation + 1;
-					$next['record_id']  = '' !== $record_id ? $record_id : bin2hex( random_bytes( 16 ) );
+					$next = self::advance_record_version( $current, $next, $counters[ $provider ] ?? 0 );
+					$counters[ $provider ] = $next['generation'];
 					$records[ $provider ] = $next;
 				}
+				$records[ self::GENERATIONS_KEY ] = $counters;
 				return $records;
 			}
 		);
