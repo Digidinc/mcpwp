@@ -178,6 +178,26 @@ Response:
 }
 ```
 
+#### A refused call is a tool result, not an HTTP error (#936)
+
+A `tools/call` the key's scope does not cover — and the same call wrapped in
+`mcpwp_call` — comes back as an ordinary `200` JSON-RPC response carrying a tool
+result with `isError: true`, so the model can read why. Programmatic clients read
+`result.structuredContent.error`: `code` is `insufficient_scope`, `status` is
+`403`, and `required_scope`, `granted_scopes`, `message` and `hint` say what is
+missing. In a JSON-RPC batch each call is judged on its own: the allowed calls
+run and the refused one reports its error. REST routes keep their HTTP `403`.
+
+For an action that needs admin scope, a key whose role is not Admin (editor,
+author, designer, custom) is told that it needs an Admin-role key with the admin
+scope, created by the site owner under MCPWP -> Setup; those roles are capped at
+read and write and can never hold admin scope. Where the action is also outside
+the key's tool categories, the category is named too.
+
+`tools/list`, `mcpwp_find_tools` and `/introspect` list only the tools the
+caller can call: the key's role and categories, the scope the call needs, and for
+a principal that acts as a WordPress user, the capability the route requires.
+
 ### 4. Ping
 
 ```json

@@ -192,14 +192,18 @@ final class StagingScopeTest extends TestCase {
 			)
 		);
 
-		$result = $this->auth->verify_api_key( $mcp_request );
+		// The envelope admits the message; the call is refused per call as
+		// an isError tool result (#936), with the scope named.
+		$controller = new Mcpwp_REST_MCP();
+		$this->assertTrue( $controller->verify_api_key( $mcp_request ) );
+		$error = $controller->handle_mcp( $mcp_request )->get_data()['result'];
 
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
-		$this->assertSame( 403, $result->get_error_data()['status'] );
+		$this->assertTrue( $error['isError'] );
+		$this->assertSame( 'insufficient_scope', $error['structuredContent']['error']['code'] );
+		$this->assertSame( 403, $error['structuredContent']['error']['status'] );
 
 		// The error must name the staging tool's required scope.
-		$this->assertSame( 'admin', $result->get_error_data()['required_scope'] );
+		$this->assertSame( 'admin', $error['structuredContent']['error']['required_scope'] );
 	}
 
 	/**
@@ -225,9 +229,11 @@ final class StagingScopeTest extends TestCase {
 			)
 		);
 
-		$result = $this->auth->verify_api_key( $mcp_request );
+		$controller = new Mcpwp_REST_MCP();
+		$this->assertTrue( $controller->verify_api_key( $mcp_request ) );
+		$error = $controller->handle_mcp( $mcp_request )->get_data()['result'];
 
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+		$this->assertTrue( $error['isError'] );
+		$this->assertSame( 'insufficient_scope', $error['structuredContent']['error']['code'] );
 	}
 }

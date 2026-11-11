@@ -269,9 +269,11 @@ final class ToolsCallSubRequestAuthTest extends TestCase {
 			)
 		);
 
-		$auth = $this->authenticate_outer_request( $request );
+		$this->assertTrue( $controller->check_permission( $request ), 'The envelope admits the message; the call itself is refused.' );
+		$data = $controller->handle_mcp( $request )->get_data();
 
-		$this->assertInstanceOf( WP_Error::class, $auth, 'A read-only key must not be able to call a write tool through tools/call.' );
-		$this->assertSame( 'insufficient_scope', $auth->get_error_code() );
+		$this->assertTrue( $data['result']['isError'], 'A read-only key must not be able to call a write tool through tools/call.' );
+		$this->assertSame( 'insufficient_scope', $data['result']['structuredContent']['error']['code'] );
+		$this->assertEmpty( $GLOBALS['mcpwp_test_dispatched_routes'], 'The refused call never dispatched.' );
 	}
 }

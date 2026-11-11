@@ -133,7 +133,7 @@ class Mcpwp_Error_Hints {
 				'guide' => '',
 			),
 			'invalid_api_key'     => array(
-				'hint'  => 'The provided API key is not valid. Check for typos or whitespace. Keys start with "mcpwp_". Generate a new key in WP Admin > MCPWP > Settings.',
+				'hint'  => 'The key is not valid: it may be mistyped, revoked, or a retired first-activation key. Create a new key under MCPWP -> Setup.',
 				'guide' => '',
 			),
 			'api_not_configured'  => array(
