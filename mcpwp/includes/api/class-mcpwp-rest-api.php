@@ -18,6 +18,53 @@ abstract class Mcpwp_REST_API {
 	use Mcpwp_Sanitization;
 	use Mcpwp_Logging;
 
+	/** @var SplObjectStorage|null Unmerged source bags on live internal requests. */
+	private static $raw_parameter_context;
+
+	/**
+	 * Preserve source evidence without merging values or interpreting intent.
+	 * No envelope or value is interpreted here. Batch operation bodies are
+	 * carried separately by index so siblings keep their own evidence.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return array[] Raw parameter bags, including inherited outer sources.
+	 */
+	protected function raw_parameter_bags( $request ) {
+		$bags = self::$raw_parameter_context instanceof SplObjectStorage && self::$raw_parameter_context->contains( $request )
+			? self::$raw_parameter_context[ $request ] : array();
+		foreach ( array( 'get_query_params', 'get_body_params', 'get_json_params', 'get_url_params' ) as $method ) {
+			$bag = $request->$method();
+			if ( ! is_array( $bag ) ) {
+				continue;
+			}
+			$bags[] = $bag;
+		}
+		return $bags;
+	}
+
+	/**
+	 * Carry raw sources on the request object, never in a client parameter.
+	 * Call forget_raw_parameter_bags() in the dispatch's finally block.
+	 *
+	 * @param WP_REST_Request $source Outer request.
+	 * @param WP_REST_Request $target Internal request.
+	 * @param array[]         $extra  Additional raw argument/operation bags.
+	 */
+	protected function forward_raw_parameter_bags( $source, $target, $extra = array() ) {
+		if ( ! self::$raw_parameter_context instanceof SplObjectStorage ) {
+			self::$raw_parameter_context = new SplObjectStorage();
+		}
+		self::$raw_parameter_context[ $target ] = array_merge( $this->raw_parameter_bags( $source ), $extra );
+	}
+
+	/** @param WP_REST_Request $request Completed internal request. */
+	protected function forget_raw_parameter_bags( $request ) {
+		if ( self::$raw_parameter_context instanceof SplObjectStorage ) {
+			self::$raw_parameter_context->detach( $request );
+		}
+	}
+
+
 	/**
 	 * REST namespace.
 	 *

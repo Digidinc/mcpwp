@@ -344,7 +344,7 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 		// fail-closed parser, shared by REST, MCP and batch callers.
 		$data = $request->get_params();
 
-		$result = $this->theme_builder->create_theme_template( $data );
+		$result = $this->theme_builder->create_theme_template( $data, $this->raw_parameter_bags( $request ) );
 
 		if ( is_wp_error( $result ) ) {
 			return $this->error_response_from_wp_error( $result );

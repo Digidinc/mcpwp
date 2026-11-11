@@ -503,11 +503,14 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 	 * Real route handlers behind the test REST server's dispatch hook. The
 	 * same adapter receives a direct request or one forwarded by MCP/batch.
 	 */
-	private function dispatch_template_args( string $door, array $args ) {
+	private function dispatch_template_args( string $door, array $args, array $query = array(), array $body = array() ) {
 		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
 		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
 		$controller = new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() );
 		add_filter( 'rest_dispatch_request', function ( $result, $request ) use ( $controller ) {
+			if ( null !== $result ) {
+				return $result;
+			}
 			if ( '/mcpwp/v1/theme-builder/templates' === $request->get_route() ) {
 				return $controller->create_theme_template( $request );
 			}
@@ -519,16 +522,20 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 
 		$args += array( 'title' => 'Alias preview', 'type' => 'single', 'scope' => 'entire_site' );
 		if ( 'core' === $door ) {
-			return ( new Mcpwp_Theme_Builder() )->create_theme_template( $args );
+			return ( new Mcpwp_Theme_Builder() )->create_theme_template( $args, array( $query, $body, $args ) );
 		}
 		if ( 'REST' === $door ) {
-			return $controller->create_theme_template( new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $args ) );
+			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $body, array( 'Content-Type' => 'application/json' ), $args );
+			$request->set_query_params( $query );
+			return $controller->create_theme_template( $request );
 		}
 		if ( in_array( $door, array( 'batch', 'wp_batch' ), true ) ) {
 			$args = array( 'operations' => array( array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => $args ) ) );
 		}
 		if ( 'batch' === $door ) {
-			return ( new Mcpwp_REST_Batch() )->handle_batch( new WP_REST_Request( 'POST', '/mcpwp/v1/batch', $args ) );
+			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/batch', $body, array( 'Content-Type' => 'application/json' ), $args );
+			$request->set_query_params( $query );
+			return ( new Mcpwp_REST_Batch() )->handle_batch( $request );
 		}
 		$params = array( 'name' => 'wp_create_theme_template', 'arguments' => $args );
 		if ( 'mcpwp_call' === $door ) {
@@ -536,9 +543,16 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		} elseif ( 'wp_batch' === $door ) {
 			$params['name'] = 'wp_batch';
 		}
-		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array(
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', $body, array( 'Content-Type' => 'application/json' ), array(
 			'jsonrpc' => '2.0', 'id' => 1078, 'method' => 'tools/call', 'params' => $params,
 		) );
+		$request->set_query_params( $query );
+		if ( 'WebMCP' === $door ) {
+			require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-webmcp.php';
+			$web = new WP_REST_Request( 'POST', '/mcpwp/v1/webmcp/call', $body, array( 'Content-Type' => 'application/json' ), $params );
+			$web->set_query_params( $query );
+			return ( new Mcpwp_REST_WebMCP() )->handle_call( $web );
+		}
 		return ( new Mcpwp_REST_MCP() )->handle_mcp( $request );
 	}
 
@@ -626,6 +640,279 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$this->assertSame( 'publish', $data['status'] );
 		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 		$this->assertNotEmpty( $GLOBALS['_mcpwp_test_meta'][ $data['id'] ] );
+	}
+
+	public static function raw_source_matrix_paths(): array {
+		$cases = array();
+		foreach ( array( 'REST', 'MCP', 'mcpwp_call', 'batch', 'wp_batch', 'WebMCP', 'core' ) as $door ) {
+			foreach ( array( 'dry_run', 'dryRun', 'dry-run', 'DRY_RUN', 'dryrun', 'dry run', 'dry.run', 'preview' ) as $alias ) {
+				$cases[ "$door $alias" ] = array( $door, $alias );
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * Cross every value with raw query/form/JSON/tool bags and conflicting
+	 * alias orders. Reset operation state per cell, rather than letting a
+	 * successful or refused call hide what the next cell actually did.
+	 *
+	 * @dataProvider raw_source_matrix_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_raw_sources_have_one_order_independent_preview_decision( string $door, string $alias ): void {
+		define( 'MCPWP_TESTS', true );
+		$values = array(
+			'00' => array( '00', true ), '0.0' => array( '0.0', true ),
+			'-0' => array( '-0', true ), '0e0' => array( '0e0', true ),
+			'spaced false' => array( ' false ', false ), 'upper false' => array( 'FALSE', false ),
+			'integer zero' => array( 0, true ), 'integer one' => array( 1, true ),
+			'null' => array( null, true ), 'array' => array( array(), true ),
+			'object' => array( new stdClass(), true ), 'empty' => array( '', true ),
+			'false' => array( false, false ), 'string zero' => array( '0', false ),
+		);
+		$other = 'dryRun' === $alias ? 'dry-run' : 'dryRun';
+		foreach ( $values as $label => $case ) {
+			list( $value, $preview ) = $case;
+			$canonical = 'dry_run' === $alias ? $other : 'dry_run';
+			$pairings = array(
+				'argument' => array( array( $alias => $value ), array(), array() ),
+				'canonical first' => array( array( $canonical => '0', $alias => $value ), array(), array() ),
+				'canonical last' => array( array( $alias => $value, $canonical => '0' ), array(), array() ),
+				'alias first' => array( array( $alias => $value, $other => '0' ), array(), array() ),
+				'alias last' => array( array( $other => '0', $alias => $value ), array(), array() ),
+				'query argument fragment' => array( array( 'dry_run' => '0' ), array( 'params' => array( 'arguments' => array( $alias => $value ) ) ), array() ),
+				'form argument fragment' => array( array( 'dry_run' => '0' ), array(), array( 'params' => array( 'arguments' => array( $alias => $value ) ) ) ),
+				'query wrapper fragment' => array( array( 'dry_run' => '0' ), array( 'arguments' => array( 'arguments' => array( $alias => $value ) ) ), array() ),
+				'form wrapper fragment' => array( array( 'dry_run' => '0' ), array(), array( 'arguments' => array( 'arguments' => array( $alias => $value ) ) ) ),
+				'query to JSON' => array( array( 'dry_run' => '0' ), array( $alias => $value ), array() ),
+				'JSON to query' => array( array( $alias => $value ), array( 'dry_run' => '0' ), array() ),
+				'form to JSON' => array( array( 'dry_run' => '0' ), array(), array( $alias => $value ) ),
+				'JSON to form' => array( array( $alias => $value ), array(), array( 'dry_run' => '0' ) ),
+				'query to form' => array( array( 'dry_run' => '0' ), array( $alias => $value ), array( 'dry_run' => '0' ) ),
+				'form to query' => array( array( 'dry_run' => '0' ), array( 'dry_run' => '0' ), array( $alias => $value ) ),
+			);
+			foreach ( $pairings as $pair => $bags ) {
+				$this->install_elementor( false );
+				$GLOBALS['_mcpwp_test_posts'] = array();
+				$GLOBALS['_mcpwp_test_meta'] = array();
+				$GLOBALS['mcpwp_test_filters'] = array();
+				$GLOBALS['mcpwp_test_options'] = array();
+				$GLOBALS['mcpwp_test_transients'] = array();
+				$GLOBALS['mcpwp_theme_test_cache_regenerate_calls'] = 0;
+				$conditions = array( 'single' => array( 99 => array( 'include/general' ) ) );
+				update_option( 'elementor_pro_theme_builder_conditions', $conditions );
+				$writes = 0;
+				add_filter( 'wp_insert_post_data', function ( $data ) use ( &$writes ) {
+					++$writes;
+					return $data;
+				} );
+				$response = $this->dispatch_template_args( $door, $bags[0], $bags[1], $bags[2] );
+				$cell = "$door $alias $label $pair";
+				if ( 'WebMCP' === $door ) {
+					// The existing WebMCP allowlist refuses this tool. Keep it
+					// refused while checking every raw intent spelling/value.
+					$this->assertInstanceOf( WP_Error::class, $response, $cell );
+					$this->assertSame( 'webmcp_tool_not_allowed', $response->get_error_code(), $cell );
+					$this->assertSame( 0, $writes, $cell );
+					continue;
+				}
+				$data = $response instanceof WP_REST_Response ? $response->get_data() : $response;
+				$this->assertIsArray( $data, $cell );
+				if ( isset( $data['result'] ) ) {
+					$this->assertFalse( $data['result']['isError'], wp_json_encode( $data ) . $cell );
+					$data = json_decode( $data['result']['content'][0]['text'], true );
+				}
+				if ( isset( $data['results'] ) ) {
+					$this->assertSame( 0, $data['failed'], $cell );
+					$data = $data['results'][0]['data'];
+				}
+				if ( $preview ) {
+					$this->assertSame( 0, $writes, $cell );
+					$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'], $cell );
+					$this->assertEmpty( $GLOBALS['_mcpwp_test_meta'], $cell );
+					$this->assertSame( $conditions, get_option( 'elementor_pro_theme_builder_conditions' ), $cell );
+					$this->assertSame( 0, $GLOBALS['mcpwp_theme_test_save_calls'], $cell );
+					$this->assertSame( 0, $GLOBALS['mcpwp_theme_test_cache_regenerate_calls'], $cell );
+					$this->assertTrue( $data['dry_run'], $cell );
+				} else {
+					$this->assertSame( 'publish', $data['status'], $cell );
+					$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'], $cell );
+				}
+			}
+		}
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_raw_source_changes_cannot_replay_a_published_result(): void {
+		$this->install_elementor( false );
+		define( 'MCPWP_TESTS', true );
+		$GLOBALS['mcpwp_test_options'] = array();
+		$GLOBALS['mcpwp_test_transients'] = array();
+		$GLOBALS['mcpwp_test_current_user'] = 2;
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$this->dispatch_template_args( 'REST', array( 'dry_run' => true ) );
+		$key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'preview replay', array( 'admin' ) );
+		$call = function ( array $query, int $id ) use ( $key ) {
+			$controller = new Mcpwp_REST_MCP();
+			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => $key['key'] ), array(
+				'jsonrpc' => '2.0', 'id' => $id, 'method' => 'tools/call',
+				'params' => array( 'name' => 'wp_create_theme_template',
+					'arguments' => array( 'title' => 'Pinned', 'type' => 'single' ),
+					'_meta' => array( 'request_id' => 'raw-intent-1078' ),
+				),
+			) );
+			$request->set_query_params( $query );
+			$this->assertTrue( $controller->verify_api_key( $request ) );
+			return $controller->handle_mcp( $request )->get_data();
+		};
+		$published = $call( array(), 1 );
+		$this->assertFalse( $published['result']['isError'], wp_json_encode( $published ) );
+		$preview = $call( array( 'dry_run' => 'true' ), 2 );
+		$this->assertTrue( $preview['result']['isError'], 'Changed raw intent must not replay a published response.' );
+		$this->assertSame( 'idempotency_conflict', $preview['result']['structuredContent']['error']['code'] );
+		$retry = $call( array(), 3 );
+		$this->assertTrue( $retry['result']['_meta']['replayed'], 'Transport message ids must not change the fingerprint.' );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	public static function batch_sibling_paths(): array {
+		return array( array( false, false ), array( false, true ), array( true, false ), array( true, true ) );
+	}
+
+	/**
+	 * @dataProvider batch_sibling_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_raw_bags_do_not_leak_between_operations_or_requests( bool $via_mcp, bool $reverse ): void {
+		$this->install_elementor( false );
+		define( 'MCPWP_TESTS', true );
+		$this->dispatch_template_args( 'REST', array( 'dry_run' => true ) );
+		$operations = array(
+			array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => array( 'title' => 'Preview sibling', 'type' => 'single', 'dryRun' => '00' ) ),
+			array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => array( 'title' => 'Published sibling', 'type' => 'single', 'dry_run' => false ) ),
+		);
+		if ( $reverse ) {
+			$operations = array_reverse( $operations );
+		}
+		if ( $via_mcp ) {
+			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array(
+				'jsonrpc' => '2.0', 'id' => 1078, 'method' => 'tools/call',
+				'params' => array( 'name' => 'wp_batch', 'arguments' => array( 'operations' => $operations ) ),
+			) );
+			$result = ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
+			$this->assertFalse( $result['result']['isError'], wp_json_encode( $result ) );
+			$result = json_decode( $result['result']['content'][0]['text'], true );
+		} else {
+			$result = ( new Mcpwp_REST_Batch() )->handle_batch( new WP_REST_Request( 'POST', '/mcpwp/v1/batch', array( 'operations' => $operations ) ) )->get_data();
+		}
+		$this->assertTrue( $result['results'][ $reverse ? 1 : 0 ]['data']['dry_run'] );
+		$this->assertSame( 'publish', $result['results'][ $reverse ? 0 : 1 ]['data']['status'] );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
+		$context = new ReflectionProperty( Mcpwp_REST_API::class, 'raw_parameter_context' );
+		$context->setAccessible( true );
+		$this->assertCount( 0, $context->getValue(), 'Only live internal requests may retain raw bags.' );
+		$next = $this->dispatch_template_args( 'MCP', array( 'dry_run' => false ) )->get_data();
+		$this->assertFalse( $next['result']['isError'] );
+		$this->assertCount( 2, $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_raw_bag_context_is_removed_when_nested_dispatch_throws(): void {
+		$this->install_elementor( false );
+		define( 'MCPWP_TESTS', true );
+		$throw = function ( $result, $request ) {
+			if ( '/mcpwp/v1/theme-builder/templates' === $request->get_route() ) {
+				throw new RuntimeException( 'raw bag dispatch canary' );
+			}
+			return $result;
+		};
+		add_filter( 'rest_dispatch_request', $throw, 0, 2 );
+		try {
+			$this->dispatch_template_args( 'wp_batch', array( 'dry_run' => false ), array( 'dryRun' => '00' ) );
+			$this->fail( 'The nested dispatch must throw.' );
+		} catch ( RuntimeException $error ) {
+			$this->assertSame( 'raw bag dispatch canary', $error->getMessage() );
+		}
+		remove_filter( 'rest_dispatch_request', $throw, 0 );
+		$context = new ReflectionProperty( Mcpwp_REST_API::class, 'raw_parameter_context' );
+		$context->setAccessible( true );
+		$this->assertCount( 0, $context->getValue() );
+		$this->assertFalse( Mcpwp_REST_Batch::$is_batch_sub_request );
+		$next = $this->dispatch_template_args( 'REST', array( 'dry_run' => false ) );
+		$this->assertSame( 'publish', $next->get_data()['status'] );
+	}
+
+	/**
+	 * WebMCP cannot call the template tool, but its allowed dispatches must
+	 * still preserve the same raw evidence through their internal MCP hop.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_webmcp_carries_unmerged_bags_and_cleans_up(): void {
+		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-webmcp.php';
+		$GLOBALS['mcpwp_test_current_user'] = 1;
+		$captured = array();
+		$reader = new ReflectionMethod( Mcpwp_REST_API::class, 'raw_parameter_bags' );
+		$reader->setAccessible( true );
+		$controller = new Mcpwp_REST_WebMCP();
+		add_filter( 'rest_dispatch_request', function ( $result, $request ) use ( &$captured, $reader, $controller ) {
+			if ( '/mcpwp/v1/mcp' === $request->get_route() ) {
+				$captured = $reader->invoke( $controller, $request );
+				return new WP_REST_Response( array( 'jsonrpc' => '2.0', 'id' => 1, 'result' => array(
+					'isError' => false, 'content' => array( array( 'type' => 'text', 'text' => '{}' ) ),
+				) ) );
+			}
+			return $result;
+		}, 10, 2 );
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/webmcp/call', array(), array( 'Content-Type' => 'application/json' ), array(
+			'name' => 'wp_site_info', 'arguments' => array(), 'dry_run' => false,
+		) );
+		$request->set_query_params( array( 'dry_run' => 'true' ) );
+		$response = $controller->handle_call( $request );
+		$this->assertInstanceOf( WP_REST_Response::class, $response );
+		$this->assertContains( array( 'dry_run' => 'true' ), $captured );
+		$this->assertContains( array( 'name' => 'wp_site_info', 'arguments' => array(), 'dry_run' => false ), $captured );
+		$context = new ReflectionProperty( Mcpwp_REST_API::class, 'raw_parameter_context' );
+		$context->setAccessible( true );
+		$this->assertCount( 0, $context->getValue() );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_batch_preserves_shadowed_operation_bodies_from_tool_envelopes(): void {
+		$this->install_elementor( false );
+		define( 'MCPWP_TESTS', true );
+		$this->dispatch_template_args( 'REST', array( 'dry_run' => true ) );
+		$operations = array(
+			array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => array( 'title' => 'Shadowed preview', 'type' => 'single', 'dry_run' => false ) ),
+			array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => array( 'title' => 'Independent sibling', 'type' => 'single', 'dry_run' => false ) ),
+		);
+		$query_operations = $operations;
+		$query_operations[0]['body']['dry_run'] = '00';
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array(
+			'jsonrpc' => '2.0', 'id' => 1078, 'method' => 'tools/call',
+			'params' => array( 'name' => 'wp_batch', 'arguments' => array( 'operations' => $operations ) ),
+		) );
+		$request->set_query_params( array( 'params' => array( 'arguments' => array( 'operations' => $query_operations ) ) ) );
+		$data = ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
+		$this->assertFalse( $data['result']['isError'], wp_json_encode( $data ) );
+		$data = json_decode( $data['result']['content'][0]['text'], true );
+		$this->assertArrayHasKey( 'dry_run', $data['results'][0]['data'] );
+		$this->assertTrue( $data['results'][0]['data']['dry_run'] );
+		$this->assertSame( 'publish', $data['results'][1]['data']['status'] );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 	}
 
 }

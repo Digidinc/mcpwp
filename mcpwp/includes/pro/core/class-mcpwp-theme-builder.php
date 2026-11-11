@@ -715,29 +715,68 @@ class Mcpwp_Theme_Builder {
 	}
 
 	/**
-	 * Resolve all preview flags before any template write. Match MCP's
-	 * case/separator-insensitive key handling, plus the explicit preview
-	 * spelling. A present flag permits writes only when clearly false;
-	 * ambiguous values and conflicting aliases always keep the call a preview.
+	 * Recognize the union of preview intent spellings, including MCP's
+	 * case/separator variants. This only classifies keys, never values.
 	 *
-	 * @param array $data Template creation parameters.
+	 * @param string $key Parameter key.
+	 * @return bool Whether the key carries preview intent.
+	 */
+	public static function is_dry_run_key( $key ) {
+		$key = strtolower( (string) preg_replace( '/[^a-zA-Z0-9]/', '', (string) $key ) );
+		return in_array( $key, array( 'dryrun', 'preview' ), true );
+	}
+
+	/**
+	 * Open only the known tool/wrapper argument paths in each unmerged bag.
+	 * A source need not repeat the tool name supplied by another source.
+	 * Operation lists are NOT opened: batch forwards the selected body.
+	 * This preserves evidence; it makes no publish/preview decision.
+	 *
+	 * @param array[] $bags Raw source bags.
+	 * @return array[] Sources plus their raw tool argument bags.
+	 */
+	public static function intent_parameter_bags( $bags ) {
+		$all = $bags;
+		$paths = array(
+			array( 'arguments' ),
+			array( 'params', 'arguments' ),
+			array( 'arguments', 'arguments' ),
+			array( 'params', 'arguments', 'arguments' ),
+		);
+		foreach ( $bags as $bag ) {
+			foreach ( $paths as $path ) {
+				$value = $bag;
+				foreach ( $path as $segment ) {
+					$value = is_array( $value ) && array_key_exists( $segment, $value ) ? $value[ $segment ] : null;
+				}
+				if ( is_array( $value ) ) {
+					$all[] = $value;
+				}
+			}
+		}
+		return $all;
+	}
+
+	/**
+	 * The sole publish/preview decision, over ALL unmerged source bags.
+	 * Never coerce numbers or compare loosely: "00", "0.0", "-0", "0e0",
+	 * null, containers and numeric zero are not canonical false. Any source
+	 * requesting preview wins, independently of source or key order.
+	 *
+	 * @param array[] $bags Raw query, form, JSON and tool argument bags.
 	 * @return bool Whether to preview without writing.
 	 */
-	private function is_create_dry_run( $data ) {
-		foreach ( $data as $key => $value ) {
-			$key = strtolower( (string) preg_replace( '/[^a-zA-Z0-9]/', '', (string) $key ) );
-			if ( ! in_array( $key, array( 'dryrun', 'preview' ), true ) ) {
-				continue;
+	private function is_create_dry_run( $bags ) {
+		foreach ( self::intent_parameter_bags( $bags ) as $bag ) {
+			foreach ( $bag as $key => $value ) {
+				if ( ! self::is_dry_run_key( $key ) || false === $value ) {
+					continue;
+				}
+				if ( is_string( $value ) && in_array( strtolower( trim( $value ) ), array( 'false', '0' ), true ) ) {
+					continue;
+				}
+				return true;
 			}
-
-			if ( false === $value || 0 === $value || 0.0 === $value ) {
-				continue;
-			}
-			if ( is_string( $value ) && in_array( strtolower( trim( $value ) ), array( 'false', '0' ), true ) ) {
-				continue;
-			}
-
-			return true;
 		}
 
 		return false;
@@ -753,14 +792,15 @@ class Mcpwp_Theme_Builder {
 	 *     @type string $scope          Display scope: entire_site, singular, archive, front_page, 404 (default: entire_site).
 	 *     @type bool   $dry_run        Validate and preview without writing (default: false).
 	 * }
+	 * @param array[]|null $raw_parameter_bags Unmerged source bags, if dispatched via REST.
 	 * @return array|WP_Error Created template with conditions.
 	 */
-	public function create_theme_template( $data ) {
+	public function create_theme_template( $data, $raw_parameter_bags = null ) {
 		if ( ! $this->is_available() ) {
 			return new WP_Error( 'not_available', __( 'Elementor Pro Theme Builder is not available.', 'mcpwp' ) );
 		}
 
-		$dry_run = $this->is_create_dry_run( $data );
+		$dry_run = $this->is_create_dry_run( null === $raw_parameter_bags ? array( $data ) : $raw_parameter_bags );
 		$title   = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '';
 		$type    = ! empty( $data['type'] ) ? sanitize_text_field( $data['type'] ) : '';
 		$scope   = ! empty( $data['scope'] ) ? sanitize_text_field( $data['scope'] ) : 'entire_site';

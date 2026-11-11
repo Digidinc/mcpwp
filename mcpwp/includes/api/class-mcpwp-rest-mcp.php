@@ -939,7 +939,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 						$priced_request['params'] = $resolved['params'];
 					}
 				}
-				$price += $this->message_spend_price( $priced_request, $tool_map );
+				$price += $this->message_spend_price( $priced_request, $tool_map, $request );
 			}
 			$whole = Mcpwp_Spend_Budget::refuse_whole( $price );
 			if ( is_wp_error( $whole ) ) {
@@ -1390,7 +1390,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// carrying the caller's original spelling) is what actually reaches
 		// handle_tools_call() below, which re-derives and re-validates its
 		// own arguments independently, so this does not skip validation.
-		$args_hash = hash( 'sha256', $tool_name . '|' . wp_json_encode( self::canonicalize( $this->canonical_tool_arguments( $tool_name, $tool_map[ $tool_name ], $arguments ) ) ) );
+		$args_hash = $this->tool_arguments_hash( $tool_name, $tool_map[ $tool_name ], $arguments, $request );
 		$existing  = get_transient( $store_key );
 
 		if ( is_array( $existing ) && isset( $existing['state'] ) && 'done' === $existing['state'] ) {
@@ -4411,6 +4411,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		$tool_name = $raw_tool_name;
 		$arguments = isset( $params['arguments'] ) ? $params['arguments'] : array();
+		$raw_arguments = $arguments;
 
 		$this->log_mcp_activity(
 			'mcp_tool_call',
@@ -4804,8 +4805,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				Mcpwp_REST_Batch::$is_batch_sub_request = true;
 			}
 			try {
+				$this->forward_raw_parameter_bags( $request, $internal_request, is_array( $raw_arguments ) ? array( $raw_arguments ) : array() );
 				$response = rest_do_request( $internal_request );
 			} finally {
+				$this->forget_raw_parameter_bags( $internal_request );
 				if ( $batch_class_exists ) {
 					Mcpwp_REST_Batch::$is_batch_sub_request = $previous_sub_request;
 				}
@@ -5210,7 +5213,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param array $tool_map Merged tool map, built once for the whole batch.
 	 * @return int
 	 */
-	private function message_spend_price( $message, array $tool_map ) {
+	private function message_spend_price( $message, array $tool_map, $request = null ) {
 		if ( ! is_array( $message ) || ! isset( $message['method'] ) || ! is_string( $message['method'] ) ) {
 			return 0;
 		}
@@ -5229,7 +5232,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$tool_name = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
 		$arguments = isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array();
 
-		if ( '' === $tool_name || ! isset( $tool_map[ $tool_name ] ) || $this->has_stored_result( $params, $tool_map ) ) {
+		if ( '' === $tool_name || ! isset( $tool_map[ $tool_name ] ) || $this->has_stored_result( $params, $tool_map, $request ) ) {
 			return 0;
 		}
 
@@ -5258,7 +5261,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param array $tool_map Merged tool map.
 	 * @return bool
 	 */
-	private function has_stored_result( $params, $tool_map ) {
+	private function has_stored_result( $params, $tool_map, $request = null ) {
 		$request_id = isset( $params['_meta']['request_id'] ) ? $params['_meta']['request_id'] : null;
 		$tool_name  = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
 
@@ -5276,14 +5279,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// arguments to STORE a result, so a batched replay check agrees with
 		// the stored hash regardless of which near-miss spelling either call
 		// used (#911 review round 1, WARN-2's NIT).
-		$arguments = $this->canonical_tool_arguments( $tool_name, $tool_map[ $tool_name ], $arguments );
 		$existing  = get_transient( self::idempotency_key( $scope, $request_id ) );
 
 		return is_array( $existing )
 			&& isset( $existing['state'], $existing['args_hash'], $existing['response'] )
 			&& 'done' === $existing['state']
 			&& is_array( $existing['response'] )
-			&& hash( 'sha256', $tool_name . '|' . wp_json_encode( self::canonicalize( $arguments ) ) ) === $existing['args_hash'];
+			&& $this->tool_arguments_hash( $tool_name, $tool_map[ $tool_name ], $arguments, $request ) === $existing['args_hash'];
 	}
 
 	/**
@@ -5725,6 +5727,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $result; // No schema to validate against.
 		}
 
+		// Template intent must reach the core unchanged. Validate the other
+		// keys normally; never deduplicate or numerically compare these flags.
+		$raw_preview_flags = array();
+		if ( 'wp_create_theme_template' === $tool_name && class_exists( 'Mcpwp_Theme_Builder' ) ) {
+			foreach ( $arguments as $key => $value ) {
+				if ( Mcpwp_Theme_Builder::is_dry_run_key( $key ) ) {
+					$raw_preview_flags[ $key ] = $value;
+					unset( $arguments[ $key ] );
+				}
+			}
+		}
+
 		// Get properties as an array (may be stdClass if empty).
 		$properties = isset( $schema['properties'] ) ? (array) $schema['properties'] : array();
 		$required   = isset( $schema['required'] ) ? $schema['required'] : array();
@@ -5812,6 +5826,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$result['error'] = implode( ' ', $parts );
 		}
 
+		$result['arguments'] = array_merge( $arguments, $raw_preview_flags );
 		return $result;
 	}
 
@@ -5854,6 +5869,52 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 		$first = reset( $schema['examples'] );
 		return is_array( $first ) ? $first : null;
+	}
+
+	/**
+	 * Replay identity includes raw intent evidence, without deciding what it
+	 * means. Never replay a publish for different shadowed source flags.
+	 * Protocol ids/metadata are excluded, so an ordinary retry stays stable.
+	 *
+	 * @param string          $tool_name Tool name.
+	 * @param array           $mapping  Dispatch mapping.
+	 * @param array           $arguments Raw arguments.
+	 * @param WP_REST_Request $request  Outer request, when available.
+	 * @return string SHA-256 fingerprint.
+	 */
+	private function tool_arguments_hash( $tool_name, $mapping, $arguments, $request = null ) {
+		$canonical = $this->canonical_tool_arguments( $tool_name, $mapping, $arguments );
+		$payload   = $tool_name . '|' . wp_json_encode( self::canonicalize( $canonical ) );
+		if ( is_object( $request ) && in_array( $tool_name, array( 'wp_create_theme_template', 'wp_batch' ), true ) && class_exists( 'Mcpwp_Theme_Builder' ) ) {
+			$evidence = array();
+			foreach ( Mcpwp_Theme_Builder::intent_parameter_bags( $this->raw_parameter_bags( $request ) ) as $bag ) {
+				$sources = array( $bag );
+				// wp_batch pins the WHOLE batch. Template calls inspect only
+				// their own top-level sources, never another operation's flags.
+				if ( 'wp_batch' === $tool_name && isset( $bag['operations'] ) && is_array( $bag['operations'] ) ) {
+					foreach ( $bag['operations'] as $operation ) {
+						if ( isset( $operation['body'] ) && is_array( $operation['body'] ) ) {
+							$sources[] = $operation['body'];
+						}
+					}
+				}
+				foreach ( $sources as $source ) {
+					$flags = array();
+					foreach ( $source as $key => $value ) {
+						if ( Mcpwp_Theme_Builder::is_dry_run_key( $key ) ) {
+							$flags[ $key ] = $value;
+						}
+					}
+					if ( ! empty( $flags ) ) {
+						$evidence[] = $flags;
+					}
+				}
+			}
+			if ( ! empty( $evidence ) ) {
+				$payload .= '|' . wp_json_encode( self::canonicalize( $evidence ) );
+			}
+		}
+		return hash( 'sha256', $payload );
 	}
 
 	/**
