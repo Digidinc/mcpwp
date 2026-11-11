@@ -4708,7 +4708,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$audit_category = isset( $audit_all_cats[ $tool_name ] ) ? $audit_all_cats[ $tool_name ] : 'site';
 		$audit_key_id   = isset( $key_record['id'] ) ? (string) $key_record['id'] : '';
 		$audit_log_id   = class_exists( 'Mcpwp_Action_Log' )
-			? Mcpwp_Action_Log::begin( $tool_name, $dispatch['pre_path_arguments'], $audit_key_id, $audit_category )
+			? Mcpwp_Action_Log::begin( $tool_name, $dispatch['pre_path_arguments'], $audit_key_id, $audit_category, $this->get_registry_for_tool( $tool_name )->get_tool_annotations( $tool_name ) )
 			: null;
 
 		if ( $is_callback ) {
@@ -4889,7 +4889,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		// Return successful result.
 		if ( class_exists( 'Mcpwp_Action_Log' ) ) {
-			Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), true, '' );
+			Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), true, '', is_array( $data ) ? $data : array() );
 		}
 		$this->fire_tool_called( $tool_name, $start, '' );
 

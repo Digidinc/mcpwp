@@ -62,14 +62,6 @@ class Mcpwp_Action_Log {
 		'wp_patch_elementor',
 	);
 
-	private static $write_prefixes = array(
-		'wp_create_', 'wp_update_', 'wp_delete_', 'wp_set_',
-		'wp_add_', 'wp_remove_', 'wp_replace_', 'wp_edit_',
-		'wp_bulk_', 'wp_patch_', 'wp_flush_', 'wp_trigger_',
-		'wp_apply_', 'wp_assign_', 'wp_setup_', 'wp_configure_',
-		'wp_import_', 'wp_regenerate_', 'wp_revoke_',
-	);
-
 	private static $pending = array();
 
 	// ---- Public API ----
@@ -81,10 +73,11 @@ class Mcpwp_Action_Log {
 	 * @param array  $arguments  Tool arguments.
 	 * @param string $api_key_id API key identifier.
 	 * @param string $category   Tool category.
+	 * @param array  $annotations Owning registry annotations. Missing hints are conservatively treated as writes.
 	 * @return string|null log_id or null.
 	 */
-	public static function begin( $tool_name, $arguments, $api_key_id = '', $category = '' ) {
-		if ( ! self::is_write_tool( $tool_name ) ) {
+	public static function begin( $tool_name, $arguments, $api_key_id = '', $category = '', $annotations = array() ) {
+		if ( ! empty( $annotations['readOnlyHint'] ) ) {
 			return null;
 		}
 
@@ -123,9 +116,10 @@ class Mcpwp_Action_Log {
 	 * @param int         $duration_ms Execution duration.
 	 * @param bool        $success     Whether the tool succeeded.
 	 * @param string      $error_code  Error code or '' on success.
+	 * @param array       $result     Successful handler response, used for newly created resource IDs.
 	 * @return void
 	 */
-	public static function complete( $log_id, $duration_ms, $success, $error_code = '' ) {
+	public static function complete( $log_id, $duration_ms, $success, $error_code = '', $result = array() ) {
 		if ( null === $log_id || ! isset( self::$pending[ $log_id ] ) ) {
 			return;
 		}
@@ -134,6 +128,19 @@ class Mcpwp_Action_Log {
 		$resource  = $pending['resource'];
 		$tool_name = $pending['tool_name'];
 		$arguments = $pending['arguments'];
+
+		// Creates have no target ID before dispatch. Archetype apply returns the
+		// affected product separately from the archetype that supplied its data.
+		if ( $success && empty( $resource['id'] ) ) {
+			$created = isset( $result['data'] ) && is_array( $result['data'] ) ? $result['data'] : $result;
+			if ( 'wc_apply_product_archetype' === $tool_name ) {
+				$created = isset( $created['product'] ) ? $created['product'] : array();
+			}
+			if ( isset( $created['id'] ) && is_scalar( $created['id'] ) ) {
+				$resource['id'] = (string) $created['id'];
+				$pending['resource_post_type'] = self::resolve_resource_post_type( $resource );
+			}
+		}
 
 		$after_cap          = $success ? self::cap_snapshot( self::snapshot( $resource ) ) : array( 'value' => null, 'skipped' => false );
 		$snapshot_skipped   = ( $pending['before_snap_skipped'] || $after_cap['skipped'] ) ? 'too_large' : '';
@@ -643,15 +650,6 @@ class Mcpwp_Action_Log {
 
 	// ---- Private helpers ----
 
-	private static function is_write_tool( $tool_name ) {
-		foreach ( self::$write_prefixes as $prefix ) {
-			if ( 0 === strpos( $tool_name, $prefix ) ) {
-				return true;
-			}
-		}
-		return false;
-	}
-
 	private static function is_rollback_supported( $tool_name, $resource ) {
 		if ( 'post' === $resource['type'] && in_array( $tool_name, self::$post_write_tools, true ) ) {
 			return true;
@@ -691,7 +689,13 @@ class Mcpwp_Action_Log {
 			return array( 'type' => 'option', 'id' => class_exists( 'Mcpwp_Option_Access' ) ? Mcpwp_Option_Access::sanitize_option_name( $key ) : sanitize_key( (string) $key ) );
 		}
 
-		return array( 'type' => 'other', 'id' => '' );
+		// Preserve IDs for integration/custom writes too, without claiming their
+		// objects can be restored by WordPress post snapshots (e.g. HPOS orders).
+		$id = isset( $arguments['id'] ) ? $arguments['id'] : '';
+		if ( 'wc_apply_product_archetype' === $tool_name ) {
+			$id = isset( $arguments['product_id'] ) ? $arguments['product_id'] : '';
+		}
+		return array( 'type' => 'other', 'id' => is_scalar( $id ) ? (string) $id : '' );
 	}
 
 	/**
