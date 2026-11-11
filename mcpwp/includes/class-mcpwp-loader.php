@@ -175,6 +175,11 @@ class Mcpwp_Loader {
 		$this->add_action( 'rest_api_init', $this, 'register_rest_routes' );
 		$this->add_action( 'init', $ai_presence, 'register' );
 		$this->add_action( 'init', $indexnow, 'register' );
+		// Audit all WooCommerce REST doors, including internal batch dispatch.
+		$this->add_filter( 'rest_pre_dispatch', 'Mcpwp_Action_Log', 'audit_rest_dispatch', PHP_INT_MAX, 3 );
+		$this->add_filter( 'rest_dispatch_request', 'Mcpwp_Action_Log', 'capture_rest_attempt', PHP_INT_MAX, 4 );
+		$this->add_filter( 'rest_request_after_callbacks', 'Mcpwp_Action_Log', 'rest_context', 10, 3 );
+		$this->add_filter( 'site_status_tests', 'Mcpwp_Action_Log', 'register_site_health' );
 		// Attach rate-limit headers to both success and error responses.
 		$this->add_filter( 'rest_post_dispatch', $this, 'add_mcpwp_rate_limit_headers', 10, 3 );
 		// Ensure log cleanup cron is scheduled and executed.

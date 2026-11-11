@@ -1833,6 +1833,44 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return Mcpwp_Operation_Weights::tool_weight( $tool_name, $arguments );
 	}
 
+	/** Server-owned audit metadata, including Pro tools refused by the license gate. */
+	public function audit_tool_definition( $name ) {
+		$registry = $this->get_registry_for_tool( $name );
+		if ( isset( $this->pro_registry->get_tool_map()[ $name ] ) ) {
+			$registry = $this->pro_registry;
+		}
+		return array( 'category' => $registry->get_tool_category( $name ), 'annotations' => $registry->get_tool_annotations( $name ) );
+	}
+
+	/** Audit outside idempotency and validation so every attempt has an outcome. */
+	private function handle_audited_tool_call( $id, $params, $request ) {
+		$params = is_array( $params ) ? $params : array();
+		$target = $params;
+		if ( 'mcpwp_call' === ( $params['name'] ?? null ) && isset( $params['arguments'] ) && is_array( $params['arguments'] ) ) {
+			$target = $params['arguments'];
+		}
+		$name = isset( $target['name'] ) && is_string( $target['name'] ) ? $target['name'] : '';
+		$arguments = isset( $target['arguments'] ) && is_array( $target['arguments'] ) ? $target['arguments'] : array();
+		$definition = $this->audit_tool_definition( $name );
+		$record = $this->get_current_api_key_record();
+		$callback = function () use ( $id, $params, $request ) {
+			$resolved = $this->resolve_mcpwp_call( $params );
+			if ( null !== $resolved['error'] ) {
+				$this->fire_tool_called( 'mcpwp_call', microtime( true ), $this->analytics_code_for_client_code( $resolved['error']['code'] ) );
+				return $this->tool_error_result( $id, $resolved['error']['code'], $resolved['error']['message'], $resolved['error']['data'] );
+			}
+			$params = $resolved['params'];
+			return $this->conform_tool_call_result(
+				$this->handle_tools_call_idempotent( $id, $params, $request ),
+				isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '',
+				isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array()
+			);
+		};
+		return class_exists( 'Mcpwp_Action_Log' )
+			? Mcpwp_Action_Log::with_attempt( $name, $arguments, isset( $record['id'] ) ? (string) $record['id'] : '', $definition['category'], $definition['annotations'], $callback, 'mcp', $request )
+			: $callback();
+	}
+
 	/**
 	 * Process a single JSON-RPC request.
 	 *
@@ -1870,23 +1908,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->handle_tools_list( $id, $params );
 
 			case 'tools/call':
-				// mcpwp_call (#907) is rewritten to an ordinary tools/call on
-				// the tool it names — one rewrite point, before anything
-				// else sees `$params` — so every downstream gate (category,
-				// role, Pro, spend, idempotency) and conform_tool_call_result's
-				// outputSchema lookup runs against the INNER tool, exactly as
-				// a direct call to it would, never against "mcpwp_call".
-				$resolved = $this->resolve_mcpwp_call( is_array( $params ) ? $params : array() );
-				if ( null !== $resolved['error'] ) {
-					$this->fire_tool_called( 'mcpwp_call', microtime( true ), $this->analytics_code_for_client_code( $resolved['error']['code'] ) );
-					return $this->tool_error_result( $id, $resolved['error']['code'], $resolved['error']['message'], $resolved['error']['data'] );
-				}
-				$params = $resolved['params'];
-				return $this->conform_tool_call_result(
-					$this->handle_tools_call_idempotent( $id, $params, $request ),
-					is_array( $params ) && isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '',
-					is_array( $params ) && isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array()
-				);
+				return $this->handle_audited_tool_call( $id, $params, $request );
 
 			case 'resources/list':
 				return $this->handle_resources_list( $id );
@@ -4697,19 +4719,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			);
 		}
 
-		// Capture before-state for audit log (no-op for non-write tools).
-		// #1031: `pre_path_arguments`, not `arguments` — for any {id}-routed
-		// tool, `arguments` above has already had its id moved into the
-		// route string and unset() (resolve_tool_dispatch()), so
-		// Mcpwp_Action_Log::detect_resource() would otherwise always see an
-		// empty id and log resource_id as 0. See resolve_tool_dispatch()'s
-		// own docblock note on $pre_path_arguments.
-		$audit_all_cats = $this->get_all_tool_categories();
-		$audit_category = isset( $audit_all_cats[ $tool_name ] ) ? $audit_all_cats[ $tool_name ] : 'site';
-		$audit_key_id   = isset( $key_record['id'] ) ? (string) $key_record['id'] : '';
-		$audit_log_id   = class_exists( 'Mcpwp_Action_Log' )
-			? Mcpwp_Action_Log::begin( $tool_name, $dispatch['pre_path_arguments'], $audit_key_id, $audit_category, $this->get_registry_for_tool( $tool_name )->get_tool_annotations( $tool_name ) )
-			: null;
 
 		if ( $is_callback ) {
 			// Callback tools run in-process and skip the rest_do_request()
@@ -4738,13 +4747,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// where every routed operation is charged, so it is charged here.
 			$spend = Mcpwp_Spend_Budget::charge( Mcpwp_Operation_Weights::spend_weight( 'POST', 'callback:' . $tool_name, $arguments ) );
 			if ( is_wp_error( $spend ) ) {
-				if ( class_exists( 'Mcpwp_Action_Log' ) ) {
-					Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), false, Mcpwp_Spend_Budget::ERROR_CODE );
-				}
 				$this->fire_tool_called( $tool_name, $start, Mcpwp_Spend_Budget::ERROR_CODE );
 				return $this->spend_refusal_result( $id, $spend->get_error_message(), $spend->get_error_data() );
 			}
 
+			if ( class_exists( 'Mcpwp_Action_Log' ) ) {
+				Mcpwp_Action_Log::capture_attempt( $dispatch['pre_path_arguments'] );
+			}
 			$full_route = 'callback:' . $tool_name;
 			$response   = $this->normalize_custom_tool_callback_response(
 				call_user_func( $mapping['callback'], $arguments )
@@ -4842,9 +4851,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 			// Refused by the spend budget before the handler ran (#752 F9).
 			if ( Mcpwp_Spend_Budget::is_refusal_code( $error_code ) ) {
-				if ( class_exists( 'Mcpwp_Action_Log' ) ) {
-					Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), false, $error_code );
-				}
 				$this->fire_tool_called( $tool_name, $start, $error_code );
 				return $this->spend_refusal_result( $id, $error_message, isset( $data['data'] ) ? $data['data'] : array(), $error_code );
 			}
@@ -4875,9 +4881,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				}
 			}
 
-			if ( class_exists( 'Mcpwp_Action_Log' ) ) {
-				Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), false, 'execution_error' );
-			}
 			$this->fire_tool_called( $tool_name, $start, 'execution_error' );
 			return $this->tool_error_result(
 				$id,
@@ -4888,9 +4891,6 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		// Return successful result.
-		if ( class_exists( 'Mcpwp_Action_Log' ) ) {
-			Mcpwp_Action_Log::complete( $audit_log_id, (int) round( ( microtime( true ) - $start ) * 1000 ), true, '', is_array( $data ) ? $data : array() );
-		}
 		$this->fire_tool_called( $tool_name, $start, '' );
 
 		// A tool with a declared outputSchema, under a protocol version that

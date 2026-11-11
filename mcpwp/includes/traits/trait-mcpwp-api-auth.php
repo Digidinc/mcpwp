@@ -24,6 +24,9 @@ trait Mcpwp_Api_Auth {
 	 */
 	protected $current_api_key_record = null;
 
+	/** Verified identity for audit attribution only; never used to grant access. */
+	protected $mcpwp_audit_key_id = '';
+
 	/**
 	 * Request-scoped post-reference resolutions (#1030 round-5), keyed by
 	 * the request object itself so the permission check and the handler of
@@ -40,6 +43,11 @@ trait Mcpwp_Api_Auth {
 	 */
 	public function get_current_api_key_record() {
 		return $this->current_api_key_record;
+	}
+
+	/** Audit identity is independent of authorization state and never grants access. */
+	public function get_audit_key_id() {
+		return $this->mcpwp_audit_key_id;
 	}
 
 	/**
@@ -1010,11 +1018,18 @@ trait Mcpwp_Api_Auth {
 				// charging silently switch off (#802 round 4).
 				$this->current_api_key_record = self::$mcpwp_verdicts[ $memo_id ][2];
 				$this->mcpwp_metered          = self::$mcpwp_verdicts[ $memo_id ][3];
+				$this->mcpwp_audit_key_id = self::$mcpwp_verdicts[ $memo_id ][4] ?? '';
 				$this->maybe_enter_guardrails_context( self::$mcpwp_verdicts[ $memo_id ][1] );
+				if ( class_exists( 'Mcpwp_Action_Log' ) ) {
+					Mcpwp_Action_Log::record_refusal( $request, self::$mcpwp_verdicts[ $memo_id ][1], array( 'id' => $this->mcpwp_audit_key_id ) );
+				}
 				return self::$mcpwp_verdicts[ $memo_id ][1];
 			}
 
 			$verdict = $this->compute_api_key_verdict( $request );
+			if ( class_exists( 'Mcpwp_Action_Log' ) ) {
+				Mcpwp_Action_Log::record_refusal( $request, $verdict, array( 'id' => $this->mcpwp_audit_key_id ) );
+			}
 
 			// Holding the request keeps its object id from being reused for
 			// another request within this process. Bounded: a long-lived
@@ -1023,7 +1038,7 @@ trait Mcpwp_Api_Auth {
 				// Not array_shift(): it renumbers the object-id keys.
 				unset( self::$mcpwp_verdicts[ array_key_first( self::$mcpwp_verdicts ) ] );
 			}
-			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict, $this->current_api_key_record, $this->mcpwp_metered );
+			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict, $this->current_api_key_record, $this->mcpwp_metered, $this->mcpwp_audit_key_id );
 
 			$this->maybe_enter_guardrails_context( $verdict );
 			return $verdict;
@@ -1060,7 +1075,7 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Memoised verdicts, keyed by request object id.
 	 *
-	 * @var array<int, array{0:object,1:mixed}>
+	 * @var array<int, array{0:object,1:mixed,2:?array,3:?array,4:string}>
 	 */
 	private static $mcpwp_verdicts = array();
 
@@ -1161,6 +1176,9 @@ trait Mcpwp_Api_Auth {
 		// Remembered so a tool that turns out to carry N operations can be
 		// charged the other N-1 before it runs (charge_additional_slots).
 		$this->mcpwp_metered = array( $identifier, $http_method, $key_record );
+		if ( isset( $key_record['id'] ) ) {
+			$this->mcpwp_audit_key_id = (string) $key_record['id'];
+		}
 
 		if ( ! $this->is_diagnostic_request( $request ) ) {
 			return $this->check_rate_limit( $identifier, $http_method, $key_record, $weight );
@@ -1184,6 +1202,7 @@ trait Mcpwp_Api_Auth {
 	 * @return bool|WP_Error
 	 */
 	private function compute_api_key_verdict( $request ) {
+		$this->mcpwp_audit_key_id = '';
 		// A persistent process (WP-CLI, a rest_do_request() loop) reuses this
 		// instance across requests; a nested charge must never land on the
 		// previous request's bucket.
@@ -1497,6 +1516,7 @@ trait Mcpwp_Api_Auth {
 		}
 
 		$record = Mcpwp_WebMCP::principal_record( $user_id );
+		$this->mcpwp_audit_key_id = isset( $record['id'] ) ? (string) $record['id'] : '';
 
 		// Charged once, on the outer request — sub-requests were already
 		// counted there, same rule as API keys.
@@ -4318,6 +4338,7 @@ trait Mcpwp_Api_Auth {
 			$key_record['acts_as_user'] = $oauth_user_id;
 		}
 		$this->current_api_key_record = $key_record;
+		$this->mcpwp_audit_key_id = isset( $key_record['id'] ) ? (string) $key_record['id'] : '';
 		$required_scope               = $this->get_required_scope_for_request( $request );
 
 		if ( ! $this->key_has_scope( $key_record, $required_scope ) ) {
@@ -4493,6 +4514,7 @@ trait Mcpwp_Api_Auth {
 			'scopes' => $scopes,
 		);
 		$this->current_api_key_record = $key_record;
+		$this->mcpwp_audit_key_id = isset( $key_record['id'] ) ? (string) $key_record['id'] : '';
 
 		$required_scope = $this->get_required_scope_for_request( $request );
 		if ( ! $this->key_has_scope( $key_record, $required_scope ) ) {
