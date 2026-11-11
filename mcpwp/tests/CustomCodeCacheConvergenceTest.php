@@ -44,7 +44,7 @@ final class CustomCodeCacheConvergenceTest extends TestCase {
 	public function test_an_interleaved_rebuild_is_retried_until_the_expected_entry_is_persisted(): void {
 		$reads = 0;
 		$GLOBALS['mcpwp_test_wpdb_intercept'] = function ( $method, $query ) use ( &$reads ) {
-			if ( 'get_row' === $method && false !== strpos( $query, 'mcpwp_probe' ) && 'publish' === get_post_status( 1 ) ) {
+			if ( 'get_row' === $method && false !== strpos( $query, Mcpwp_Custom_Code_Cache_Entry::row_name( 1 ) ) && 'publish' === get_post_status( 1 ) ) {
 				if ( ++$reads === 2 ) { $this->drop_entry( 1 ); }
 			}
 			return MCPWP_TEST_WPDB_PASS;

@@ -1014,6 +1014,27 @@ class Mcpwp_Activator {
 		return false;
 	}
 
+	/** Schedule a corrupt cache row for bounded admin repair without a read-side write. */
+	public static function observe_custom_code_cache_entry_failure( $post_id ) {
+		$post_id = (int) $post_id;
+		if ( $post_id <= 0 ) {
+			return;
+		}
+		$states = self::custom_code_cache_failure_state();
+		if ( ! isset( $states[ $post_id ] ) ) {
+			$states[ $post_id ] = array( 'attempts' => 0, 'next_retry' => 0, 'parked' => false );
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, $states, false );
+		}
+		$failed = array_map( 'intval', (array) get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() ) );
+		if ( ! in_array( $post_id, $failed, true ) ) {
+			$failed[] = $post_id;
+			sort( $failed );
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, $failed, false );
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP Custom Code cache repair failed for snippet ' . $post_id . ': cache_entry_invalid' );
+		}
+	}
+
 	/** Reset a parked document when its source metadata changes. */
 	public static function reset_custom_code_cache_repair_failure( $post_id ) {
 		$post_id = (int) $post_id;

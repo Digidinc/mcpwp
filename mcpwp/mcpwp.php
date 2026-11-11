@@ -225,7 +225,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 
 	if ( ! get_option( 'mcpwp_custom_code_cache_lock_retired' ) ) {
 		delete_option( 'mcpwp_custom_code_cache_write_lock' );
-		update_option( 'mcpwp_custom_code_cache_lock_retired', 1, false );
+		update_option( 'mcpwp_custom_code_cache_lock_retired', 1, true );
 	}
 
 	// Load traits first

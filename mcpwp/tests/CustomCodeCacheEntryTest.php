@@ -15,7 +15,7 @@ final class CustomCodeCacheEntryTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
-		unset( $GLOBALS['mcpwp_test_wpdb_before_insert'], $GLOBALS['mcpwp_test_wpdb_before_update'], $GLOBALS['mcpwp_test_wpdb_read_fails'] );
+		unset( $GLOBALS['mcpwp_test_wpdb_before_insert'], $GLOBALS['mcpwp_test_wpdb_before_update'], $GLOBALS['mcpwp_test_wpdb_read_fails'], $GLOBALS['mcpwp_test_wpdb_intercept'] );
 	}
 
 	private function raw_entry( $id, $location = 'elementor_head', array $conditions = array( 'include/general' ) ) {
@@ -74,6 +74,19 @@ final class CustomCodeCacheEntryTest extends TestCase {
 		$this->assertSame( 'conditions_too_large', $result->get_error_code() );
 	}
 
+	public function test_serialized_list_boundary_leaves_room_for_the_entry_envelope(): void {
+		$fits = array( str_repeat( 'x', 16350 ) );
+		$this->assertLessThanOrEqual( Mcpwp_Custom_Code_Cache_Entry::MAX_CONDITIONS_BYTES, strlen( maybe_serialize( $fits ) ) );
+		$this->assertTrue( Mcpwp_Custom_Code_Cache_Entry::sync( 101, 'elementor_head', $fits ) );
+		$this->assertLessThanOrEqual(
+			Mcpwp_Custom_Code_Cache_Entry::MAX_ENTRY_BYTES,
+			strlen( $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Custom_Code_Cache_Entry::row_name( 101 ) ] )
+		);
+
+		$too_large = array( str_repeat( 'x', 16384 ) );
+		$this->assertSame( 'conditions_too_large', Mcpwp_Custom_Code_Cache_Entry::sync( 102, 'elementor_head', $too_large )->get_error_code() );
+	}
+
 	public function test_remove_deletes_only_the_target_private_row(): void {
 		$this->raw_entry( 11 );
 		$this->raw_entry( 22, 'elementor_body_end' );
@@ -82,16 +95,39 @@ final class CustomCodeCacheEntryTest extends TestCase {
 		$this->assertSame( 'elementor_body_end', Mcpwp_Custom_Code_Cache_Entry::entry( 22 )['location'] );
 	}
 
-	public function test_entries_are_numeric_keyset_paginated_for_large_overlays(): void {
+	public function test_entries_use_one_bounded_query_for_a_large_overlay(): void {
 		for ( $id = 1; $id <= 1200; ++$id ) {
 			$this->raw_entry( $id );
 		}
-		$first = Mcpwp_Custom_Code_Cache_Entry::entries( 0, 500 );
-		$this->assertCount( 500, $first );
-		$this->assertSame( 1, array_key_first( $first ) );
-		$this->assertSame( 500, array_key_last( $first ) );
-		$second = Mcpwp_Custom_Code_Cache_Entry::entries( 500, 500 );
-		$this->assertSame( 501, array_key_first( $second ) );
-		$this->assertSame( 1000, array_key_last( $second ) );
+		$reads = 0;
+		$GLOBALS['mcpwp_test_wpdb_intercept'] = static function ( $method, $query ) use ( &$reads ) {
+			if ( 'get_results' === $method ) {
+				++$reads;
+			}
+			return MCPWP_TEST_WPDB_PASS;
+		};
+		$entries = Mcpwp_Custom_Code_Cache_Entry::entries();
+		$this->assertCount( 1200, $entries['entries'] );
+		$this->assertSame( 1, array_key_first( $entries['entries'] ) );
+		$this->assertSame( 1200, array_key_last( $entries['entries'] ) );
+		$this->assertSame( array(), $entries['invalid_ids'] );
+		$this->assertSame( 1, $reads, 'A normal compatibility view reads all entry rows in one bounded query.' );
+	}
+
+	public function test_storage_initialization_flag_is_not_a_corrupt_document_row(): void {
+		$this->raw_entry( 11 );
+		update_option( Mcpwp_Custom_Code_Conditions::STORAGE_INITIALIZED_OPTION, 1, false );
+		$result = Mcpwp_Custom_Code_Cache_Entry::entries();
+		$this->assertSame( array(11), array_keys( $result['entries'] ) );
+		$this->assertSame( array(), $result['invalid_ids'] );
+	}
+
+	public function test_oversize_or_malformed_private_rows_are_reported_without_loading_payloads(): void {
+		$this->raw_entry( 11 );
+		$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Custom_Code_Cache_Entry::row_name( 12 ) ] = str_repeat( 'x', Mcpwp_Custom_Code_Cache_Entry::MAX_ENTRY_BYTES + 1 );
+		$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Custom_Code_Cache_Entry::row_name( 13 ) ] = maybe_serialize( array( 'id' => 13, 'location' => '' ) );
+		$entries = Mcpwp_Custom_Code_Cache_Entry::entries();
+		$this->assertArrayHasKey( 11, $entries['entries'] );
+		$this->assertSame( array( 12, 13 ), $entries['invalid_ids'] );
 	}
 }

@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/class-mcpwp-custom-code-cache-view.php';
+
 /**
  * Keeps an unconvertible snippet out of Elementor Pro's cache without
  * changing its stored metadata during a read.
@@ -34,15 +36,28 @@ class Mcpwp_Custom_Code_Conditions {
 	private static $meta_cache_guard = false;
 	private static $legacy_cache_too_large = false;
 	private static $entry_overlay    = null;
+	private static $request_invalid_entries = array();
+	private static $filtered_views = array();
+	private static $view_dirty = false;
+	private static $view_refreshing = false;
+	private static $view_input = null;
+	private static $active_view = null;
+	private static $pro_rebuild_candidate = false;
+	private static $safe_meta_ids = array();
 
 	public static function register_hooks() {
 		// This is Elementor Pro's own rebuild query. Excluding unsafe IDs here
 		// means Pro never calls explode() on their raw legacy arrays.
 		add_filter( 'elementor/theme/conditions/cache/regenerate/query_args', array( __CLASS__, 'filter_regenerate_query' ) );
 		add_filter( 'option_elementor_pro_theme_builder_conditions', array( __CLASS__, 'filter_conditions_cache' ) );
+		add_filter( 'default_option_elementor_pro_theme_builder_conditions', array( __CLASS__, 'default_conditions_cache' ) );
+		add_action( 'update_option_elementor_pro_theme_builder_conditions', array( __CLASS__, 'mark_view_dirty' ) );
+		add_filter( 'rest_post_dispatch', array( __CLASS__, 'refresh_pending_view' ), PHP_INT_MAX - 20 );
+		add_action( 'shutdown', array( __CLASS__, 'refresh_pending_view' ), 1 );
 		add_filter( 'pre_option_elementor_pro_theme_builder_conditions', array( __CLASS__, 'filter_oversized_legacy_cache_option' ), 1, 3 );
 		add_filter( 'update_post_metadata_cache', array( __CLASS__, 'filter_oversized_meta_cache_prime' ), 1, 2 );
 		add_filter( 'get_post_metadata', array( __CLASS__, 'filter_oversized_snippet_meta' ), 1, 5 );
+		add_filter( 'get_post_metadata', array( __CLASS__, 'filter_changed_view_source' ), 2, 5 );
 		add_filter( 'get_post_metadata', array( __CLASS__, 'filter_pro_rebuild_conditions_meta' ), 10, 5 );
 		add_action( 'admin_init', array( __CLASS__, 'refresh_admin_report' ) );
 		add_action( 'admin_notices', array( __CLASS__, 'render_admin_notice' ) );
@@ -77,7 +92,7 @@ class Mcpwp_Custom_Code_Conditions {
 		}
 		if ( $ok ) {
 			wp_cache_delete( 'alloptions', 'options' );
-			update_option( self::STORAGE_INITIALIZED_OPTION, 1, false );
+			update_option( self::STORAGE_INITIALIZED_OPTION, 1, true );
 		}
 	}
 
@@ -95,6 +110,14 @@ class Mcpwp_Custom_Code_Conditions {
 		$out = array();
 		$bytes = 0;
 		foreach ( $conditions as $condition ) {
+			if ( is_string( $condition ) && strlen( $condition ) <= self::MAX_SERIALIZED_BYTES && preg_match( '~^(include|exclude)/[A-Za-z0-9_-]+(?:/[A-Za-z0-9_-]+){0,2}$~D', $condition ) ) {
+				$bytes += strlen( $condition );
+				if ( $bytes > self::MAX_SERIALIZED_BYTES ) {
+					return self::too_large();
+				}
+				$out[] = $condition;
+				continue;
+			}
 			if ( is_string( $condition ) ) {
 				if ( strlen( $condition ) > self::MAX_SERIALIZED_BYTES ) {
 					return self::too_large();
@@ -170,6 +193,10 @@ class Mcpwp_Custom_Code_Conditions {
 		} finally {
 			--self::$raw_read_depth;
 		}
+		if ( null === $length && ( '' === $value || null === $value ) ) {
+			// Absent legacy meta follows Elementor Pro's own default condition.
+			return self::$inspection[ $post_id ] = array( 'raw' => array(), 'conditions' => array(), 'missing' => true );
+		}
 		if ( ! is_array( $value ) ) {
 			return self::$inspection[ $post_id ] = self::invalid( $post_id );
 		}
@@ -200,6 +227,7 @@ class Mcpwp_Custom_Code_Conditions {
 
 	/** Add unsafe snippets to Pro's own regeneration query exclusion list. */
 	public static function filter_regenerate_query( $args ) {
+		self::$pro_rebuild_candidate = true;
 		if ( ! is_array( $args ) ) {
 			return $args;
 		}
@@ -242,7 +270,7 @@ class Mcpwp_Custom_Code_Conditions {
 	 * @return mixed
 	 */
 	public static function filter_pro_rebuild_conditions_meta( $check, $post_id, $meta_key, $single, $meta_type ) {
-		if ( null !== $check || 'post' !== $meta_type || '_elementor_conditions' !== $meta_key || self::$raw_read_depth > 0 || ! self::is_snippet( $post_id ) || ! self::in_elementor_cache_regeneration() ) {
+		if ( null !== $check || 'post' !== $meta_type || '_elementor_conditions' !== $meta_key || self::$raw_read_depth > 0 || ! self::$pro_rebuild_candidate || ! self::is_snippet( $post_id ) || ! self::in_elementor_cache_regeneration() ) {
 			return $check;
 		}
 		$inspection = self::inspect( $post_id );
@@ -262,7 +290,16 @@ class Mcpwp_Custom_Code_Conditions {
 	 * conditions key, which would otherwise hydrate the entire 6MB row.
 	 */
 	public static function filter_oversized_snippet_meta( $check, $post_id, $meta_key, $single, $meta_type ) {
-		if ( null !== $check || 'post' !== $meta_type || self::$raw_read_depth > 0 || ! self::is_snippet( $post_id ) ) {
+		if ( null !== $check || 'post' !== $meta_type || self::$raw_read_depth > 0 ) {
+			return $check;
+		}
+		if ( isset( self::$safe_meta_ids[ (int) $post_id ] ) ) {
+			return $check;
+		}
+		if ( array_key_exists( (int) $post_id, self::$condition_lengths ) && ( null === self::$condition_lengths[ (int) $post_id ] || self::$condition_lengths[ (int) $post_id ] <= self::MAX_SERIALIZED_BYTES ) ) {
+			return $check;
+		}
+		if ( ! self::is_snippet( $post_id ) ) {
 			return $check;
 		}
 		$length = self::condition_meta_length( $post_id );
@@ -279,6 +316,61 @@ class Mcpwp_Custom_Code_Conditions {
 		return $single ? array( '' ) : array();
 	}
 
+	/** Do not print a cached document after its live conditions have changed. */
+	public static function filter_changed_view_source( $check, $post_id, $meta_key, $single, $meta_type ) {
+		if ( null !== $check || 'post' !== $meta_type || '_elementor_code' !== $meta_key || null === self::$active_view || self::$raw_read_depth > 0 ) {
+			return $check;
+		}
+		$expected = null;
+		$expected_location = null;
+		foreach ( self::$active_view as $location => $entries ) {
+			if ( is_array( $entries ) && isset( $entries[ $post_id ] ) ) {
+				$expected = $entries[ $post_id ];
+				$expected_location = $location;
+				break;
+			}
+		}
+		if ( null === $expected || ! self::printing_custom_code() ) {
+			return $check;
+		}
+		$meta = wp_cache_get( $post_id, 'post_meta' );
+		if ( is_array( $meta ) ) {
+			$raw = isset( $meta['_elementor_conditions'][0] ) ? maybe_unserialize( $meta['_elementor_conditions'][0] ) : array();
+		} else {
+			// A document printed outside Pro's normal primed query still uses
+			// the bounded reader before any metadata value is hydrated.
+			$length = self::condition_meta_length( $post_id );
+			if ( null !== $length && $length > self::MAX_SERIALIZED_BYTES ) {
+				return array( '' );
+			}
+			++self::$raw_read_depth;
+			try {
+				$raw = get_post_meta( $post_id, '_elementor_conditions', true );
+			} finally {
+				--self::$raw_read_depth;
+			}
+		}
+		$location = is_array( $meta ) ? ( $meta['_elementor_location'][0] ?? '' ) : get_post_meta( $post_id, '_elementor_location', true );
+		if ( ! is_string( $location ) || $location !== $expected_location ) {
+			return array( '' );
+		}
+		// Empty conditions are Elementor Pro's own default.
+		if ( empty( $raw ) ) {
+			return $check;
+		}
+		$current = is_array( $raw ) ? self::convert( $raw ) : null;
+		return $current === $expected ? $check : array( '' );
+	}
+
+	private static function printing_custom_code() {
+		foreach ( debug_backtrace( DEBUG_BACKTRACE_IGNORE_ARGS, 12 ) as $frame ) {
+			if ( ( $frame['class'] ?? '' ) === 'ElementorPro\\Modules\\CustomCode\\Document' && ( $frame['function'] ?? '' ) === 'print_content' ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	/**
 	 * WP_Query primes every postmeta row before get_post_metadata filters run.
 	 * Replace only known-oversize snippet caches with a non-empty deny view.
@@ -287,14 +379,58 @@ class Mcpwp_Custom_Code_Conditions {
 		if ( self::$meta_cache_guard || ! function_exists( 'wp_cache_set' ) ) {
 			return $check;
 		}
+		$post_ids = array_values( array_unique( array_filter( array_map( 'absint', (array) $post_ids ) ) ) );
+		$unknown = array();
 		$unsafe = array();
-		foreach ( (array) $post_ids as $post_id ) {
-			if ( self::is_snippet( $post_id ) ) {
-				$length = self::condition_meta_length( $post_id );
-				if ( null !== $length && $length > self::MAX_SERIALIZED_BYTES ) {
-					$unsafe[] = (int) $post_id;
-					self::$inspection[ (int) $post_id ] = self::too_large( $post_id );
-					self::mark_skipped( $post_id );
+		foreach ( $post_ids as $post_id ) {
+			if ( isset( self::$safe_meta_ids[ $post_id ] ) ) {
+				continue;
+			}
+			if ( array_key_exists( $post_id, self::$condition_lengths ) ) {
+				if ( self::$condition_lengths[ $post_id ] > self::MAX_SERIALIZED_BYTES ) {
+					$unsafe[] = $post_id;
+				} else {
+					self::$safe_meta_ids[ $post_id ] = true;
+				}
+			} else {
+				$unknown[] = $post_id;
+			}
+		}
+		if ( count( $unknown ) <= 32 ) {
+			foreach ( $unknown as $index => $post_id ) {
+				$post = wp_cache_get( $post_id, 'posts' );
+				if ( is_object( $post ) && isset( $post->post_type ) && 'elementor_snippet' !== $post->post_type ) {
+					self::$safe_meta_ids[ $post_id ] = true;
+					unset( $unknown[ $index ] );
+				}
+			}
+			$unknown = array_values( $unknown );
+		}
+		if ( ! empty( $unknown ) ) {
+			global $wpdb;
+			$placeholders = implode( ',', array_fill( 0, count( $unknown ), '%d' ) );
+			$wpdb->last_error = '';
+			// Only unsafe IDs cross the DB/PHP boundary; normal pages do not
+			// allocate one result row per healthy document just for a size check.
+			$rows = $wpdb->get_results( $wpdb->prepare(
+				"SELECT post_id, OCTET_LENGTH(meta_value) AS bytes FROM {$wpdb->postmeta} INNER JOIN {$wpdb->posts} p ON p.ID = post_id WHERE p.post_type = 'elementor_snippet' AND meta_key = %s AND OCTET_LENGTH(meta_value) > %d AND post_id IN ($placeholders)",
+				array_merge( array( '_elementor_conditions', self::MAX_SERIALIZED_BYTES ), $unknown )
+			), ARRAY_A );
+			if ( ! is_array( $rows ) || '' !== $wpdb->last_error ) {
+				// Do not hydrate unmeasured values when the size probe failed.
+				foreach ( $unknown as $post_id ) {
+					if ( self::is_snippet( $post_id ) ) {
+						$unsafe[] = $post_id;
+					}
+				}
+			} else {
+				foreach ( $rows as $row ) {
+					$id = (int) $row['post_id'];
+					self::$condition_lengths[ $id ] = (int) $row['bytes'];
+					$unsafe[] = $id;
+				}
+				foreach ( array_diff( $unknown, $unsafe ) as $post_id ) {
+					self::$safe_meta_ids[ $post_id ] = true;
 				}
 			}
 		}
@@ -304,10 +440,13 @@ class Mcpwp_Custom_Code_Conditions {
 		self::$meta_cache_guard = true;
 		try {
 			foreach ( $unsafe as $post_id ) {
-				wp_cache_set( $post_id, array(
-					'_elementor_conditions' => array( maybe_serialize( array( 'exclude/general' ) ) ),
-					'_elementor_code'       => array( '' ),
-				), 'post_meta' );
+				self::$inspection[ $post_id ] = self::too_large( $post_id );
+				self::mark_skipped( $post_id );
+				wp_cache_set( $post_id, array( '_elementor_conditions' => array( maybe_serialize( array( 'exclude/general' ) ) ), '_elementor_code' => array( '' ) ), 'post_meta' );
+			}
+			$safe = array_values( array_diff( $post_ids, $unsafe ) );
+			if ( ! empty( $safe ) && function_exists( 'update_meta_cache' ) ) {
+				update_meta_cache( 'post', $safe );
 			}
 		} finally {
 			self::$meta_cache_guard = false;
@@ -320,65 +459,157 @@ class Mcpwp_Custom_Code_Conditions {
 		if ( self::$cache_bypass || ! is_array( $cache ) ) {
 			return $cache;
 		}
-		// Prime post rows only. Conditions meta is inspected through a bounded
-		// single-row read, so an old oversized blob never fills post-meta cache.
-		$ids = array();
+		$base_hash = hash( 'sha256', maybe_serialize( $cache ) );
+		if ( ! self::$view_refreshing ) {
+			if ( isset( self::$filtered_views[ $base_hash ] ) ) {
+				return self::$filtered_views[ $base_hash ];
+			}
+			$snapshot = Mcpwp_Custom_Code_Cache_View::read( $cache );
+			if ( ! empty( $snapshot['hit'] ) ) {
+				self::$request_invalid_entries = array_fill_keys( $snapshot['invalid_ids'], true );
+				foreach ( $snapshot['skipped_ids'] as $post_id ) {
+					self::mark_skipped( $post_id );
+				}
+				self::$active_view = $snapshot['cache'];
+				return self::$filtered_views[ $base_hash ] = $snapshot['cache'];
+			}
+		} else {
+			self::$view_input = $cache;
+		}
+		$overlay = self::cache_entry_overlay();
+		$replaced = array_fill_keys( array_merge( array_keys( $overlay['entries'] ), $overlay['invalid_ids'] ), true );
+		$ids = array_keys( $replaced );
 		foreach ( $cache as $templates ) {
 			if ( is_array( $templates ) ) {
 				$ids = array_merge( $ids, array_keys( $templates ) );
 			}
 		}
-		$ids = array_values( array_unique( array_filter( array_map( 'absint', $ids ) ) ) );
-		if ( ! empty( $ids ) && function_exists( '_prime_post_caches' ) ) {
-			_prime_post_caches( $ids, false, false );
-		}
-		foreach ( $cache as $location => $templates ) {
+		unset( $templates );
+		$inspection = self::inspect_many( $ids );
+		// Mutate each bucket once. Copying it for every overlaid ID makes a
+		// large cache quadratic even when all database reads are batched.
+		foreach ( $cache as $location => &$templates ) {
 			if ( ! is_array( $templates ) ) {
 				continue;
 			}
-			foreach ( $templates as $post_id => $conditions ) {
-				if ( ! self::is_snippet( $post_id ) ) {
-					continue;
-				}
-				$inspection = self::inspect( $post_id );
-				$converted = is_wp_error( $inspection ) ? $inspection : $inspection['conditions'];
-				if ( is_wp_error( $converted ) ) {
-					unset( $cache[ $location ][ $post_id ] );
-					self::mark_skipped( $post_id );
-				} else {
-					$cache[ $location ][ $post_id ] = $converted;
-				}
-			}
-		}
-		foreach ( self::cache_entry_overlay() as $post_id => $entry ) {
-			foreach ( $cache as $location => $templates ) {
-				if ( is_array( $templates ) && array_key_exists( $post_id, $cache[ $location ] ) ) {
-					unset( $cache[ $location ][ $post_id ] );
-					if ( empty( $cache[ $location ] ) ) {
-						unset( $cache[ $location ] );
+			$removed = false;
+			foreach ( $templates as $post_id => &$conditions ) {
+				$result = $inspection[ (int) $post_id ] ?? null;
+				if ( isset( $replaced[ $post_id ] ) || is_wp_error( $result ) ) {
+					unset( $templates[ $post_id ] );
+					$removed = true;
+					if ( is_wp_error( $result ) ) {
+						self::mark_skipped( $post_id );
 					}
+				} elseif ( is_array( $result ) && empty( $result['missing'] ) ) {
+					$conditions = $result['conditions'];
 				}
 			}
-			if ( empty( $entry['deleted'] ) && self::is_snippet( $post_id ) ) {
-				$inspection = self::inspect( $post_id );
-				if ( is_wp_error( $inspection ) ) {
+			unset( $conditions );
+			if ( $removed && empty( $templates ) ) {
+				unset( $cache[ $location ] );
+			}
+		}
+		unset( $templates );
+		foreach ( $overlay['invalid_ids'] as $post_id ) {
+			self::mark_entry_storage_invalid( $post_id );
+		}
+		foreach ( $overlay['entries'] as $post_id => $entry ) {
+			if ( ! empty( $entry['deleted'] ) ) {
+				continue;
+			}
+			if ( self::is_snippet( $post_id ) ) {
+				$result = $inspection[ (int) $post_id ] ?? null;
+				if ( is_wp_error( $result ) ) {
 					self::mark_skipped( $post_id );
 					continue;
 				}
-				$entry['conditions'] = $inspection['conditions'];
-				$stored_location = get_post_meta( $post_id, '_elementor_location', true );
-				if ( is_string( $stored_location ) && '' !== $stored_location ) {
-					$entry['location'] = $stored_location;
+				if ( ! is_array( $result ) || ! empty( $result['missing'] ) ) {
+					continue;
+				}
+				$entry['conditions'] = $result['conditions'];
+				$location = get_post_meta( $post_id, '_elementor_location', true );
+				if ( is_string( $location ) && '' !== $location ) {
+					$entry['location'] = $location;
 				}
 			}
-			if ( empty( $entry['deleted'] ) ) {
-				if ( ! isset( $cache[ $entry['location'] ] ) || ! is_array( $cache[ $entry['location'] ] ) ) {
-					$cache[ $entry['location'] ] = array();
-				}
-				$cache[ $entry['location'] ][ $post_id ] = $entry['conditions'];
-			}
+			$cache[ $entry['location'] ][ $post_id ] = $entry['conditions'];
 		}
+		self::$active_view = $cache;
+		self::$filtered_views[ $base_hash ] = $cache;
 		return $cache;
+	}
+
+	public static function default_conditions_cache( $default ) {
+		return self::filter_conditions_cache( array() );
+	}
+
+	/** Source mutations invalidate request memo; persistent snapshots remain fingerprint-gated. */
+	public static function mark_view_dirty() {
+		$invalidated = Mcpwp_Custom_Code_Cache_View::invalidate();
+		self::$active_view = null;
+		self::$view_dirty = true;
+		self::$filtered_views = array();
+		return $invalidated;
+	}
+
+	/**
+	 * Refresh an acceleration snapshot once after writes, before REST output.
+	 * A read only request never schedules this work. Concurrent source changes
+	 * make store() decline the snapshot; readers still use the safe batch path.
+	 */
+	public static function refresh_pending_view( $response = null ) {
+		if ( ! self::$view_dirty || self::$view_refreshing ) {
+			return $response;
+		}
+		self::$view_refreshing = true;
+		try {
+			// These tiny bootstrap booleans are read on every request. Promote
+			// older non-autoloaded copies once during an authorized write.
+			global $wpdb;
+			$changed = $wpdb->query( $wpdb->prepare(
+				"UPDATE {$wpdb->options} SET autoload = 'yes' WHERE option_name IN (%s,%s) AND autoload NOT IN ('yes','on','auto','auto-on')",
+				self::STORAGE_INITIALIZED_OPTION, 'mcpwp_custom_code_cache_lock_retired'
+			) );
+			if ( $changed ) {
+				wp_cache_delete( 'alloptions', 'options' );
+			}
+			$generation = Mcpwp_Custom_Code_Cache_View::generation();
+			$fingerprint = Mcpwp_Custom_Code_Cache_View::fingerprint();
+			if ( null === $fingerprint ) {
+				return $response;
+			}
+			self::$inspection = array();
+			self::$condition_lengths = array();
+			self::$safe_meta_ids = array();
+			self::$entry_overlay = null;
+			self::$request_skipped = array();
+			self::$request_invalid_entries = array();
+			self::$filtered_views = array();
+			self::$view_input = null;
+			$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
+			if ( null === self::$view_input ) {
+				$cache = self::filter_conditions_cache( is_array( $cache ) ? $cache : array() );
+			}
+			Mcpwp_Custom_Code_Cache_View::store(
+				self::$view_input ?? array(),
+				is_array( $cache ) ? $cache : array(),
+				array_map( 'intval', array_keys( self::$request_invalid_entries ) ),
+				array_map( 'intval', array_keys( self::$request_skipped ) ),
+				$fingerprint,
+				$generation
+			);
+		} catch ( \Throwable $exception ) {
+			// A cache miss retains the validated batch read, so snapshot failures
+			// cannot turn a successful per-entry write into a missing document.
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP Custom Code cache view refresh failed: ' . $exception->getMessage() );
+		} finally {
+			self::$view_refreshing = false;
+			self::$view_dirty = false;
+			self::$filtered_views = array();
+		}
+		return $response;
 	}
 
 	/**
@@ -396,6 +627,12 @@ class Mcpwp_Custom_Code_Conditions {
 	/** Record a bounded inspection refusal without constructing its raw blob. */
 	public static function quarantine_inspection( $post_id, WP_Error $error, $persist = true ) {
 		return self::quarantine( $post_id, $error, $persist );
+	}
+
+	/** Invalid per-entry storage is reported without loading its option value. */
+	public static function mark_entry_storage_invalid( $post_id ) {
+		self::$request_invalid_entries[ (int) $post_id ] = true;
+		return true;
 	}
 
 	private static function quarantine_locked( $post_id, $raw ) {
@@ -459,7 +696,7 @@ class Mcpwp_Custom_Code_Conditions {
 		if ( ! empty( $ids ) ) {
 			$data['skipped_custom_code_snippet_ids'] = $ids;
 		}
-		$failed = self::cache_repair_failure_ids();
+		$failed = array_values( array_unique( array_merge( self::cache_repair_failure_ids(), array_map( 'intval', array_keys( self::$request_invalid_entries ) ) ) ) );
 		if ( ! empty( $failed ) ) {
 			$data['custom_code_cache_repair_failed_ids'] = $failed;
 		}
@@ -475,7 +712,12 @@ class Mcpwp_Custom_Code_Conditions {
 			return;
 		}
 		require_once dirname( __DIR__ ) . '/class-mcpwp-activator.php';
+		$overlay = self::cache_entry_overlay();
+		foreach ( $overlay['invalid_ids'] as $post_id ) {
+			Mcpwp_Activator::observe_custom_code_cache_entry_failure( (int) $post_id );
+		}
 		if ( Mcpwp_Activator::custom_code_cache_maintenance_due() ) {
+			self::mark_view_dirty();
 			$rescan = Mcpwp_Activator::custom_code_cache_full_rescan_due();
 			Mcpwp_Activator::repair_custom_code_conditions( 0.25, $rescan );
 		}
@@ -484,6 +726,7 @@ class Mcpwp_Custom_Code_Conditions {
 		if ( self::report_is_fresh( $report, $marker ) ) {
 			return;
 		}
+		self::mark_view_dirty();
 		$ids = self::skipped_ids();
 		self::quarantine_many( $ids );
 		update_option( self::REPORT_OPTION, array( 'marker' => $marker, 'ids' => self::quarantine_ids(), 'expires_at' => time() + self::REPORT_TTL ), false );
@@ -601,56 +844,114 @@ class Mcpwp_Custom_Code_Conditions {
 
 	/** Invalidate only when the underlying snippet set may have changed. */
 	public static function invalidate_report_on_meta( $meta_id, $post_id, $meta_key ) {
-		if ( '_elementor_conditions' === $meta_key && self::is_snippet( $post_id ) ) {
+		if ( in_array( $meta_key, array( '_elementor_conditions', '_elementor_location' ), true ) && self::is_snippet( $post_id ) ) {
 			unset( self::$inspection[ (int) $post_id ] );
-			unset( self::$condition_lengths[ (int) $post_id ] );
+			unset( self::$condition_lengths[ (int) $post_id ], self::$safe_meta_ids[ (int) $post_id ] );
 			if ( class_exists( 'Mcpwp_Activator' ) && method_exists( 'Mcpwp_Activator', 'reset_custom_code_cache_repair_failure' ) ) {
 				Mcpwp_Activator::reset_custom_code_cache_repair_failure( $post_id );
 			}
 			self::bump_report_marker();
-		} elseif ( '_elementor_conditions' === $meta_key && self::is_library_document( $post_id ) ) {
+			self::mark_view_dirty();
+		} elseif ( in_array( $meta_key, array( '_elementor_conditions', '_elementor_location', '_elementor_template_type' ), true ) && self::is_library_document( $post_id ) ) {
 			// Native Elementor editor writes the legacy global cache itself.
 			// Remove a stale MCPWP per-entry override so the editor's new view
 			// immediately wins; do not write a tombstone that would hide it.
 			self::delete_entry_override( $post_id );
 			self::invalidate_cache_view();
+			self::mark_view_dirty();
 		}
 	}
 
 	/** Cache-entry CAS writers call this after changing one document row. */
 	public static function invalidate_cache_view( $post_id = 0 ) {
+		self::$filtered_views = array();
 		if ( $post_id > 0 ) {
 			unset( self::$inspection[ (int) $post_id ] );
-			unset( self::$condition_lengths[ (int) $post_id ] );
+			unset( self::$condition_lengths[ (int) $post_id ], self::$safe_meta_ids[ (int) $post_id ] );
 		}
 		self::$entry_overlay = null;
 	}
 
-	/** @return array<int,array> Bounded per-document cache rows for Pro's view. */
+	/**
+	 * Inspect Custom Code rows with one post prime and one bounded meta query.
+	 * Missing conditions are deliberately absent from the map: Elementor's own
+	 * default semantics then remain in force rather than being quarantined.
+	 *
+	 * @param int[] $post_ids IDs appearing in the legacy cache option.
+	 * @return array<int,array{raw:array,conditions:string[]}|WP_Error>
+	 */
+	private static function inspect_many( array $post_ids ) {
+		$post_ids = array_values( array_unique( array_filter( array_map( 'absint', $post_ids ) ) ) );
+		if ( empty( $post_ids ) ) {
+			return array();
+		}
+		if ( function_exists( '_prime_post_caches' ) ) {
+			_prime_post_caches( $post_ids, false, false );
+		}
+		$snippet_ids = array();
+		$out = array();
+		foreach ( $post_ids as $post_id ) {
+			if ( self::is_snippet( $post_id ) ) {
+				if ( isset( self::$inspection[ $post_id ] ) ) {
+					$out[ $post_id ] = self::$inspection[ $post_id ];
+				} else {
+					$snippet_ids[] = $post_id;
+				}
+			}
+		}
+		if ( empty( $snippet_ids ) ) {
+			return $out;
+		}
+		if ( self::$view_refreshing ) {
+			foreach ( $snippet_ids as $post_id ) {
+				wp_cache_delete( $post_id, 'post_meta' );
+			}
+		}
+		$lengths = self::condition_lengths_many( $snippet_ids );
+		$safe = array();
+		foreach ( $snippet_ids as $post_id ) {
+			if ( isset( $lengths[ $post_id ] ) && $lengths[ $post_id ] > self::MAX_SERIALIZED_BYTES ) {
+				$out[ $post_id ] = self::$inspection[ $post_id ] = self::too_large( $post_id );
+			} else {
+				$safe[] = $post_id;
+			}
+		}
+		if ( ! empty( $safe ) && function_exists( 'update_meta_cache' ) ) {
+			self::$meta_cache_guard = true;
+			try {
+				update_meta_cache( 'post', $safe );
+			} finally {
+				self::$meta_cache_guard = false;
+			}
+		}
+		foreach ( $safe as $post_id ) {
+			$out[ $post_id ] = self::inspect( $post_id );
+		}
+		return $out;
+	}
+
+	/** @return array{entries:array<int,array>,invalid_ids:int[]} */
 	private static function cache_entry_overlay() {
 		if ( null !== self::$entry_overlay ) {
 			return self::$entry_overlay;
 		}
 		if ( ! class_exists( 'Mcpwp_Custom_Code_Cache_Entry' ) || ! method_exists( 'Mcpwp_Custom_Code_Cache_Entry', 'entries' ) ) {
-			return self::$entry_overlay = array();
+			return self::$entry_overlay = array( 'entries' => array(), 'invalid_ids' => array() );
 		}
-		$after = 0;
-		$all = array();
-		do {
-			$page = Mcpwp_Custom_Code_Cache_Entry::entries( $after, 500 );
-			foreach ( $page as $post_id => $entry ) {
-				$all[(int) $post_id] = $entry;
-				$after = (int) $post_id;
-			}
-		} while ( 500 === count( $page ) );
-		return self::$entry_overlay = $all;
+		$rows = Mcpwp_Custom_Code_Cache_Entry::entries();
+		self::$request_invalid_entries = array_fill_keys( isset( $rows['invalid_ids'] ) ? $rows['invalid_ids'] : array(), true );
+		return self::$entry_overlay = is_array( $rows ) && isset( $rows['entries'], $rows['invalid_ids'] )
+			? $rows : array( 'entries' => array(), 'invalid_ids' => array() );
 	}
 
 	public static function invalidate_report_on_post( $post_id, $post = null ) {
 		$post = $post ? $post : get_post( $post_id );
+		if ( $post && in_array( $post->post_type, array( 'elementor_snippet', 'elementor_library' ), true ) ) {
+			self::mark_view_dirty();
+		}
 		if ( $post && 'elementor_snippet' === $post->post_type ) {
 			unset( self::$inspection[ (int) $post_id ] );
-			unset( self::$condition_lengths[ (int) $post_id ] );
+			unset( self::$condition_lengths[ (int) $post_id ], self::$safe_meta_ids[ (int) $post_id ] );
 			self::bump_report_marker();
 		}
 	}
@@ -690,7 +991,8 @@ class Mcpwp_Custom_Code_Conditions {
 	}
 
 	private static function cache_repair_failure_ids() {
-		return array_values( array_unique( array_map( 'intval', (array) get_option( 'mcpwp_custom_code_cache_repair_failed_ids', array() ) ) ) );
+		$overlay = self::cache_entry_overlay();
+		return array_values( array_unique( array_merge( array_map( 'intval', (array) get_option( 'mcpwp_custom_code_cache_repair_failed_ids', array() ) ), $overlay['invalid_ids'] ) ) );
 	}
 
 	private static function cache_repair_failure_summary( array $ids ) {
@@ -752,6 +1054,50 @@ class Mcpwp_Custom_Code_Conditions {
 		return self::$condition_lengths[ $post_id ] = ( '' === $wpdb->last_error && null !== $length ? (int) $length : null );
 	}
 
+	/** @param int[] $post_ids @return array<int,int> */
+	private static function condition_lengths_many( array $post_ids ) {
+		$post_ids = array_values( array_unique( array_filter( array_map( 'absint', $post_ids ) ) ) );
+		if ( empty( $post_ids ) ) {
+			return array();
+		}
+		$unknown = array();
+		$out = array();
+		foreach ( $post_ids as $post_id ) {
+			if ( array_key_exists( $post_id, self::$condition_lengths ) ) {
+				if ( null !== self::$condition_lengths[ $post_id ] ) {
+					$out[ $post_id ] = self::$condition_lengths[ $post_id ];
+				}
+			} else {
+				$unknown[] = $post_id;
+			}
+		}
+		if ( empty( $unknown ) ) {
+			return $out;
+		}
+		global $wpdb;
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'get_results' ) || ! method_exists( $wpdb, 'prepare' ) || empty( $wpdb->postmeta ) ) {
+			return $out;
+		}
+		$placeholders = implode( ',', array_fill( 0, count( $unknown ), '%d' ) );
+		$wpdb->last_error = '';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- bulk size probe before metadata cache hydration.
+		$rows = $wpdb->get_results( $wpdb->prepare( "SELECT post_id, OCTET_LENGTH(meta_value) AS bytes FROM {$wpdb->postmeta} WHERE meta_key = %s AND post_id IN ($placeholders)", array_merge( array( '_elementor_conditions' ), $unknown ) ), ARRAY_A );
+		if ( ! is_array( $rows ) || '' !== $wpdb->last_error ) {
+			return $out;
+		}
+		foreach ( $unknown as $post_id ) {
+			self::$condition_lengths[ $post_id ] = null;
+		}
+		foreach ( $rows as $row ) {
+			$post_id = isset( $row['post_id'] ) ? (int) $row['post_id'] : 0;
+			if ( $post_id > 0 && isset( $row['bytes'] ) ) {
+				self::$condition_lengths[ $post_id ] = (int) $row['bytes'];
+				$out[ $post_id ] = self::$condition_lengths[ $post_id ];
+			}
+		}
+		return $out;
+	}
+
 	private static function legacy_cache_option_length() {
 		global $wpdb;
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'get_var' ) || empty( $wpdb->options ) ) {
@@ -768,7 +1114,7 @@ class Mcpwp_Custom_Code_Conditions {
 	}
 
 	private static function too_large( $post_id = 0 ) {
-		return new WP_Error( 'conditions_too_large', __( 'Custom Code conditions exceed the supported cache bound.', 'mcpwp' ), array( 'status' => 413, 'resource_id' => (int) $post_id, 'reason' => 'conditions_too_large' ) );
+		return new WP_Error( 'conditions_too_large', __( 'Custom Code supports at most 200 conditions, 16,384 bytes for the serialized condition list and 17,408 bytes for the serialized cache entry, including overhead.', 'mcpwp' ), array( 'status' => 413, 'resource_id' => (int) $post_id, 'reason' => 'conditions_too_large' ) );
 	}
 
 	private static function invalid( $post_id = 0 ) {

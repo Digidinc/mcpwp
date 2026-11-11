@@ -976,7 +976,8 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
 					'request_skipped' => array(), 'cache_bypass' => false,
 					'raw_read_depth' => 0, 'inspection' => array(),
 					'condition_lengths' => array(), 'meta_cache_guard' => false,
-					'legacy_cache_too_large' => false, 'entry_overlay' => null,
+					'legacy_cache_too_large' => false, 'entry_overlay' => null, 'request_invalid_entries' => array(), 'filtered_views' => array(), 'view_dirty' => false, 'view_refreshing' => false, 'view_input' => null, 'active_view' => null, 'pro_rebuild_candidate' => false, 'safe_meta_ids' => array(),
+					'request_invalid_entries' => array(),
 				) as $name => $value) {
 					$property = new ReflectionProperty('Mcpwp_Custom_Code_Conditions', $name);
 					$property->setAccessible(true);
@@ -1242,6 +1243,12 @@ $GLOBALS['mcpwp_test_actions'] = array();
 
 function add_filter($tag, $callback, $priority = 10, $accepted_args = 1)
 {
+    foreach ((array)($GLOBALS['mcpwp_test_filters'][$tag][(int)$priority] ?? array()) as $index => $item) {
+        if ($item['callback'] === $callback) {
+            $GLOBALS['mcpwp_test_filters'][$tag][(int)$priority][$index]['accepted_args'] = (int)$accepted_args;
+            return true;
+        }
+    }
     $GLOBALS['mcpwp_test_filters'][ $tag ][ (int) $priority ][] = array(
         'callback'      => $callback,
         'accepted_args' => (int) $accepted_args,
@@ -2617,7 +2624,27 @@ if (! isset($GLOBALS['wpdb'])) {
                     return $answer;
                 }
             }
-            if (preg_match('/^SELECT option_name, option_value FROM \S*options WHERE option_name LIKE /', trim((string) $query))) {
+            if (0 === strpos(trim((string)$query), 'SELECT post_id') && false !== strpos($query, 'postmeta') && preg_match('/post_id IN \(([0-9, ]+)\)/', $query, $meta_ids)) {
+                $this->queries[] = (string)$query;
+                preg_match("/meta_key = '([^']+)'/", $query, $key_filter);
+                preg_match('/OCTET_LENGTH\(meta_value\) <= (\d+)/', $query, $meta_bound);
+                $rows = array();
+                foreach (array_map('intval', explode(',', $meta_ids[1])) as $post_id) {
+                    foreach ((array)($GLOBALS['_mcpwp_test_meta'][$post_id] ?? array()) as $key => $value) {
+                        if (isset($key_filter[1]) && $key !== $key_filter[1]) { continue; }
+                        $raw = maybe_serialize($value);
+                        $bytes = strlen((string)$raw);
+                        if (preg_match('/OCTET_LENGTH\(meta_value\) > (\d+)/', $query, $minimum) && ($bytes <= (int)$minimum[1] || ($GLOBALS['_mcpwp_test_posts'][$post_id]->post_type ?? '') !== 'elementor_snippet')) { continue; }
+                        $row = array('post_id'=>$post_id, 'meta_key'=>$key, 'bytes'=>$bytes, 'meta_value'=>isset($meta_bound[1]) && '_elementor_conditions' === $key && $bytes > (int)$meta_bound[1] ? null : $raw);
+                        $rows[] = ARRAY_A === $output ? $row : (object)$row;
+                    }
+                }
+                $this->last_error = '';
+                return $rows;
+            }
+            if (preg_match('/^SELECT option_name, (?:option_value|CASE WHEN OCTET_LENGTH\(option_value\))/', trim((string) $query)) && false !== strpos($query, 'WHERE option_name LIKE ')) {
+                $this->queries[] = (string) $query;
+                preg_match('/OCTET_LENGTH\(option_value\) <= (\d+)/', $query, $bound);
                 preg_match('/AS UNSIGNED\) > (\d+)/', $query, $after);
                 preg_match('/LIMIT (\d+)$/', $query, $page);
                 $prefix = 'mcpwp_custom_code_cache_entry_';
@@ -2627,11 +2654,28 @@ if (! isset($GLOBALS['wpdb'])) {
                 $rows = array();
                 foreach ($all as $name => $raw) {
                     if (0 === strpos($name, $prefix) && (int) substr($name, strlen($prefix)) > (int) ($after[1] ?? 0)) {
-                        $rows[(int) substr($name, strlen($prefix))] = array('option_name'=>$name, 'option_value'=>$raw);
+                        $bytes = strlen((string) $raw);
+                        $rows[$name] = array('option_name'=>$name, 'option_value'=>isset($bound[1]) && $bytes > (int) $bound[1] ? null : $raw, 'entry_bytes'=>$bytes);
                     }
                 }
                 ksort($rows);
-                return array_slice(array_values($rows), 0, (int) ($page[1] ?? 500));
+                return isset($page[1]) ? array_slice(array_values($rows), 0, (int) $page[1]) : array_values($rows);
+            }
+            if (preg_match("/^SELECT post_id, OCTET_LENGTH\\(meta_value\\) AS bytes(?:, (?:meta_value|CASE WHEN OCTET_LENGTH\\(meta_value\\) <= \\d+ THEN meta_value ELSE NULL END AS meta_value))? FROM \\S*postmeta WHERE meta_key = '([^']*)' AND post_id IN \\(([^)]*)\\)$/", trim((string) $query), $m)) {
+                $key = str_replace("\\'", "'", $m[1]);
+                preg_match('/OCTET_LENGTH\(meta_value\) <= (\d+)/', $query, $bound);
+				$include_value = false !== strpos($query, 'meta_value FROM') || false !== strpos($query, 'ELSE NULL END AS meta_value');
+                $rows = array();
+                foreach (array_filter(array_map('intval', explode(',', $m[2]))) as $post_id) {
+                    if (! array_key_exists($key, $GLOBALS['_mcpwp_test_meta'][ $post_id ] ?? array())) {
+                        continue;
+                    }
+                    $raw = maybe_serialize($GLOBALS['_mcpwp_test_meta'][ $post_id ][ $key ]);
+					$row = array('post_id'=>(string)$post_id, 'bytes'=>(string)strlen($raw));
+					if ($include_value) { $row['meta_value'] = isset($bound[1]) && strlen($raw) > (int)$bound[1] ? null : $raw; }
+					$rows[] = $row;
+                }
+                return $rows;
             }
             // #1030 round-5: Mcpwp_Api_Auth::fetch_post_ref_rows() — the
             // declared post-reference guard's one direct lookup. Answered
@@ -2737,6 +2781,66 @@ if (! isset($GLOBALS['wpdb'])) {
                 if (MCPWP_TEST_WPDB_PASS !== $answer) {
                     return $answer;
                 }
+            }
+            if (false !== strpos($query, 'AS snapshot_bytes') && false !== strpos($query, 'LEFT JOIN')) {
+                $name = 'mcpwp_custom_code_conditions_view_v1';
+                $raw = $GLOBALS['mcpwp_test_wpdb_options'][$name] ?? (isset($GLOBALS['mcpwp_test_options'][$name]) ? maybe_serialize($GLOBALS['mcpwp_test_options'][$name]) : null);
+                if (null===$raw) { return null; }
+                $gen = $GLOBALS['mcpwp_test_options']['mcpwp_custom_code_conditions_view_generation'] ?? '';
+                $row=array('option_value'=>strlen($raw)<=1048576?$raw:null,'snapshot_bytes'=>strlen($raw),'generation'=>strlen((string)$gen)<=64?(string)$gen:null);
+                return ARRAY_A===$output?$row:(object)$row;
+            }
+            if (preg_match("/^SELECT CASE WHEN OCTET_LENGTH\\(option_value\\) <= 64 THEN option_value ELSE NULL END AS generation FROM \\S*options WHERE option_name = '([^']+)' LIMIT 1$/",trim((string)$query),$m)) {
+                $raw=$GLOBALS['mcpwp_test_wpdb_options'][$m[1]] ?? ($GLOBALS['mcpwp_test_options'][$m[1]] ?? null);
+                $this->last_error='';
+                if (null===$raw) { return null; }
+                $row=array('generation'=>strlen((string)$raw)<=64 ? (string)$raw : null);
+                return ARRAY_A===$output ? $row : (object)$row;
+            }
+            if (false !== strpos($query, ') AS mcpwp_custom_code_view_rows')) {
+                $accumulator = str_repeat("\0", 16);
+                $count = 0;
+                foreach ((array)($GLOBALS['_mcpwp_test_meta'] ?? array()) as $id => $meta) {
+                    $post = $GLOBALS['_mcpwp_test_posts'][$id] ?? null;
+                    if (!$post || !in_array($post->post_type ?? '', array('elementor_snippet','elementor_library'), true)) { continue; }
+                    foreach ($meta as $key => $value) {
+                        if (!in_array($key, array('_elementor_conditions','_elementor_location','_elementor_template_type'), true)) { continue; }
+                        $raw = (string)maybe_serialize($value);
+                        $bounded = strlen($raw)>16384 ? 'oversize:'.strlen($raw) : $raw;
+                        $digest = hash('sha256','meta|'.$id.'|'.$post->post_type.'|'.($post->post_status ?? '').'|'.$key.'|'.$bounded,true);
+                        $accumulator = $accumulator ^ substr($digest,0,16); ++$count;
+                    }
+                }
+                $all = array();
+                foreach ((array)($GLOBALS['mcpwp_test_options'] ?? array()) as $name=>$value) { $all[$name]=maybe_serialize($value); }
+                foreach ((array)($GLOBALS['mcpwp_test_wpdb_options'] ?? array()) as $name=>$value) { $all[$name]=$value; }
+                foreach ($all as $name=>$raw) {
+                    if (0!==strpos($name,'mcpwp_custom_code_cache_entry_')) { continue; }
+                    $bounded = strlen((string)$raw)>17408 ? 'oversize:'.strlen((string)$raw) : $raw;
+                    $accumulator = $accumulator ^ substr(hash('sha256','entry|'.$name.'|'.$bounded,true),0,16); ++$count;
+                }
+                $hex = bin2hex($accumulator);
+                $row = array('row_count'=>(string)$count,'xor_a'=>substr($hex,0,16),'xor_b'=>substr($hex,16,16));
+                $this->last_error='';
+                return ARRAY_A===$output ? $row : (object)$row;
+            }
+            if (preg_match("/^SELECT CASE WHEN OCTET_LENGTH\\(option_value\\) <= (\\d+) THEN option_value ELSE NULL END AS option_value, OCTET_LENGTH\\(option_value\\) AS snapshot_bytes FROM \\S*options WHERE option_name = '([^']+)' LIMIT 1$/",trim((string)$query),$m)) {
+                $raw=$GLOBALS['mcpwp_test_wpdb_options'][$m[2]] ?? (array_key_exists($m[2],$GLOBALS['mcpwp_test_options'] ?? array()) ? maybe_serialize($GLOBALS['mcpwp_test_options'][$m[2]]) : null);
+                $this->last_error='';
+                if (null===$raw) { return null; }
+                $row=array('option_value'=>strlen((string)$raw)<=(int)$m[1] ? $raw : null,'snapshot_bytes'=>strlen((string)$raw));
+                return ARRAY_A===$output ? $row : (object)$row;
+            }
+            if (preg_match("/^SELECT CASE WHEN OCTET_LENGTH\\(option_value\\) <= (\\d+) THEN option_value ELSE NULL END AS option_value, OCTET_LENGTH\\(option_value\\) AS entry_bytes, SHA2\\(option_value, 256\\) AS option_hash FROM \\S*options WHERE option_name = '([^']+)' LIMIT 1$/", trim((string) $query), $m)) {
+                $this->last_error = '';
+                $fails = $GLOBALS['mcpwp_test_wpdb_read_fails'] ?? false;
+                if (is_callable($fails)) { $fails = $fails($m[2]); }
+                if (true === $fails) { $this->last_error = 'WordPress database error: Lost connection'; return null; }
+                if ('silent' === $fails) { return null; }
+                $raw = $GLOBALS['mcpwp_test_wpdb_options'][$m[2]] ?? (array_key_exists($m[2], $GLOBALS['mcpwp_test_options'] ?? array()) ? maybe_serialize($GLOBALS['mcpwp_test_options'][$m[2]]) : null);
+                if (null === $raw) { return null; }
+                $row = array('option_value'=>strlen((string)$raw) <= (int)$m[1] ? $raw : null, 'entry_bytes'=>strlen((string)$raw), 'option_hash'=>hash('sha256',(string)$raw));
+                return ARRAY_A === $output ? $row : (object)$row;
             }
             // Site graph (#943 S1): the hash-skip check that decides whether
             // rebuild_post_node() has anything to do.
@@ -3446,6 +3550,9 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function delete($table, $where, $where_format = null)
         {
+            $fails = $GLOBALS['mcpwp_test_wpdb_delete_fails'] ?? false;
+            if (is_callable($fails)) { $fails = $fails($table, $where); }
+            if ($fails) { return false; }
             if ($table === $this->options && isset($where['option_name'])) {
                 $name = (string) $where['option_name'];
                 // An options-API row (the key store, #1096): same compare-and-delete.
@@ -4780,6 +4887,21 @@ function wp_update_nav_menu_item($menu_id, $item_id, $item_data)
         'data'    => $item_data,
     );
     return 1000 + count($GLOBALS['_mcpwp_test_nav_menu_item_writes']);
+}
+
+if (!function_exists('update_meta_cache')) {
+    function update_meta_cache($meta_type, $object_ids) {
+        $check = apply_filters('update_' . $meta_type . '_metadata_cache', null, $object_ids);
+        if (null !== $check) { return (bool)$check; }
+        global $wpdb;
+        $ids = array_values(array_unique(array_map('intval', (array)$object_ids)));
+        if (empty($ids)) { return array(); }
+        $rows = $wpdb->get_results('SELECT post_id, meta_key, meta_value FROM ' . $wpdb->postmeta . ' WHERE post_id IN (' . implode(',', $ids) . ')', ARRAY_A);
+        $cache = array_fill_keys($ids, array());
+        foreach ((array)$rows as $row) { $cache[(int)$row['post_id']][$row['meta_key']][] = $row['meta_value']; }
+        foreach ($cache as $id => $values) { wp_cache_set($id, $values, $meta_type . '_meta'); }
+        return $cache;
+    }
 }
 
 function get_post_meta($post_id, $key = '', $single = false)
