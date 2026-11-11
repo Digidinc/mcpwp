@@ -891,7 +891,7 @@ class Mcpwp_Theme_Builder {
 			}
 			return array( 'counts' => array(), 'values' => array(), 'occurrences' => empty( $document->keys ) ? array() : array( 'unknown_media_intent' => array() ) );
 		}
-		if ( 'multipart' === $document->format ) {
+		if ( in_array( $document->format, array( 'multipart', 'parsed-form' ), true ) ) {
 			return array( 'counts' => array(), 'values' => array(), 'occurrences' => array( 'multipart_guard:' . wp_json_encode( $source->path ) => self::multipart_input_evidence( $source ) ) );
 		}
 		if ( null === $document->keys ) {
@@ -1057,6 +1057,13 @@ class Mcpwp_Theme_Builder {
 		$multipart_sources = array();
 		foreach ( self::intent_parameter_bags( $bags ) as $bag ) {
 			if ( $bag instanceof Mcpwp_Raw_Parameter_Source ) {
+				if ( 'parsed-form' === $bag->document->format ) {
+					$parsed = self::multipart_input_evidence( $bag );
+					if ( $parsed['unreadable'] || ( $parsed['limit'] >= 0 && $parsed['fields'] >= $parsed['limit'] ) ) {
+						return new WP_Error( 'invalid_params', __( 'Parsed form input reaches max_input_vars or cannot be verified. Send application/json or fewer fields.', 'mcpwp' ), array( 'status' => 400 ) );
+					}
+					continue;
+				}
 				if ( 'unknown' === $bag->document->format ) {
 					$unknown = self::raw_intent_evidence( $bag );
 					if ( ! empty( $unknown['occurrences'] ) ) {

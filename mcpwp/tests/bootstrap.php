@@ -341,7 +341,7 @@ class WP_REST_Request
     protected function is_json_content_type()
     {
         $type = $this->get_content_type();
-        return isset($type['value']) && (bool) preg_match('/(^|\s|,)application\/([\w!#\$&-\^\.\+]+\+)?json(\+oembed)?($|\s|;|,)/i', $type['value']);
+        return isset($type['value']) && wp_is_json_media_type($type['value']);
     }
 
     /** Core's order (WP_REST_Request::get_parameter_order()), filter included. */
@@ -500,6 +500,12 @@ class WP_REST_Request
         return $this->body;
     }
 
+}
+
+// WordPress's JSON detector remains independent of PHP's POST body handler.
+function wp_is_json_media_type($media_type)
+{
+    return (bool) preg_match('/(^|\s|,)application\/([\w!#\$&-\^\.\+]+\+)?json(\+oembed)?($|\s|;|,)/i', $media_type);
 }
 
 class WP_REST_Server

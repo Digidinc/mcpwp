@@ -1554,7 +1554,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 
 	public static function unknown_media_intent_paths(): array {
 		$cases = array();
-		foreach ( array( '', 'text/plain; x=application/json', 'application/octet-stream; x=multipart/form-data', 'application/problem+json; boundary="form"' ) as $header ) {
+		foreach ( array( 'text/plain; x=application/json', 'application/octet-stream; x=multipart/form-data', 'application/problem+json; boundary="form"' ) as $header ) {
 			foreach ( array( false, true ) as $visible ) {
 				$cases[ $header . ' visible=' . (int) $visible ] = array( $header, $visible );
 			}
@@ -1575,6 +1575,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			$query['metadata'] = array( 'nested' => array( 'preview' => false ) );
 		}
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', array(), array( 'Content-Type' => $header ) );
+		$request->set_body( '{}' );
 		$request->set_query_params( $query );
 		$response = ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
 		if ( $visible ) {
@@ -1586,6 +1587,209 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			$this->assertSame( 200, $response->get_status() );
 			$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 		}
+	}
+
+	public static function php_native_header_spellings(): array {
+		return array(
+			array( 'multipart/form-data x; boundary=B', 'multipart/form-data' ),
+			array( 'multipart/form-data , x; boundary=B', 'multipart/form-data' ),
+			array( 'multipart/form-data,application/json; boundary=B', 'multipart/form-data' ),
+			array( 'application/x-www-form-urlencoded, text/plain', 'application/x-www-form-urlencoded' ),
+			array( 'application/x-www-form-urlencoded x', 'application/x-www-form-urlencoded' ),
+			array( 'Multipart/Form-Data; charset=utf-8; boundary="B"', 'multipart/form-data' ),
+			array( ' application/json ; x=multipart/form-data', 'application/json' ),
+			array( 'APPLICATION/JSON; charset=utf-8', 'application/json' ),
+			array( 'text/plain; x=application/json', 'text/plain' ),
+			array( '', '' ),
+		);
+	}
+
+	/** @dataProvider php_native_header_spellings */
+	public function test_media_token_matches_php_sapi_rule( string $header, string $expected ): void {
+		$this->assertTrue( method_exists( Mcpwp_Raw_Parameter_Source::class, 'php_media_type' ) );
+		$this->assertSame( $expected, Mcpwp_Raw_Parameter_Source::php_media_type( $header ) );
+	}
+
+	public static function native_header_truncation_paths(): array {
+		$cases = array();
+		foreach ( array_slice( self::php_native_header_spellings(), 0, 5 ) as $case ) {
+			foreach ( array( false, true ) as $batch ) {
+				$cases[ $case[0] . ( $batch ? ' batch' : ' REST' ) ] = array( $case[0], $case[1], $batch );
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * Model the exact $_POST prefix PHP exposes after truncation, retaining
+	 * the complete URL-encoded wire body where PHP leaves it available.
+	 * @dataProvider native_header_truncation_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_php_parsed_header_variants_cannot_skip_late_intent( string $header, string $kind, bool $batch ): void {
+		$this->install_elementor( false );
+		$this->dispatch_template_args( 'REST', array( 'dry_run' => true ) );
+		$limit = (int) ini_get( 'max_input_vars' );
+		if ( $limit < 3 ) {
+			$this->markTestSkipped( 'Requires a finite PHP input cap above required fields.' );
+		}
+		$template = array( 'title' => 'Late intent', 'type' => 'single' );
+		$parsed = $batch ? array( 'operations' => array( array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => $template ) ) ) : $template;
+		// A batch operation has method/path and two body leaves; a direct
+		// template has just title/type. Fill the visible prefix to the cap.
+		$required = $batch ? 4 : 2;
+		for ( $i = $required; $i < $limit; ++$i ) {
+			$parsed[ 'padding_' . $i ] = 'x';
+		}
+		$request = new WP_REST_Request( 'POST', $batch ? '/mcpwp/v1/batch' : '/mcpwp/v1/theme-builder/templates', $parsed, array( 'Content-Type' => $header ) );
+		if ( 'application/x-www-form-urlencoded' === $kind ) {
+			$wire = $parsed;
+			for ( $i = $limit; $i < 1500; ++$i ) {
+				$wire[ 'padding_' . $i ] = 'x';
+			}
+			if ( $batch ) {
+				$wire['operations'][0]['body']['dry_run'] = '1';
+				// http_build_query emits nested operation fields first. Put
+				// the intent field last, exactly as in the reported request.
+				unset( $wire['operations'][0]['body']['dry_run'] );
+				$raw = http_build_query( $wire ) . '&operations[0][body][dry_run]=1';
+			} else {
+				$raw = http_build_query( $wire ) . '&dry_run=1';
+			}
+			$request->set_body( $raw );
+		}
+		$response = $batch ? ( new Mcpwp_REST_Batch() )->handle_batch( $request ) : ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'], 'A PHP-parsed form must not fall through unknown-media handling after input truncation.' );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_meta'] );
+		if ( $response instanceof WP_Error ) {
+			$this->assertSame( 'invalid_params', $response->get_error_code() );
+		} else {
+			$data = $response->get_data();
+			if ( $batch ) {
+				$data = $data['results'][0]['data'];
+			}
+			$this->assertTrue( isset( $data['code'] ) || ! empty( $data['dry_run'] ) );
+		}
+	}
+
+	public static function query_only_intent_paths(): array {
+		return array( array( '1', false ), array( 'false', false ), array( '1', true ), array( null, false ), array( '1', false, 'text/plain' ), array( 'false', false, 'application/octet-stream' ) );
+	}
+
+	/**
+	 * @dataProvider query_only_intent_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_bodyless_headerless_query_uses_normal_intent_rules( $flag, bool $method_override, string $header = '' ): void {
+		$this->install_elementor( false );
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
+		$query = array( 'rest_route' => '/mcpwp/v1/theme-builder/templates', 'title' => 'Query only', 'type' => 'single' );
+		if ( null !== $flag ) {
+			$query['dry_run'] = $flag;
+		}
+		if ( $method_override ) {
+			$query['_method'] = 'POST';
+		}
+		$_SERVER['QUERY_STRING'] = http_build_query( $query );
+		// WordPress has already resolved GET's _method=POST before calling
+		// the create callback; preserve the original override in the query.
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', array(), '' === $header ? array() : array( 'Content-Type' => $header ) );
+		$request->set_query_params( $query );
+		$response = ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
+		$this->assertInstanceOf( WP_REST_Response::class, $response, 'No body means there is no unknown body format to reject.' );
+		$this->assertSame( 200, $response->get_status() );
+		if ( '1' === $flag ) {
+			$this->assertTrue( $response->get_data()['dry_run'] );
+			$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+		} else {
+			$this->assertSame( 'publish', $response->get_data()['status'] );
+			$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
+		}
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_internal_json_post_bucket_is_not_php_form_input(): void {
+		$this->install_elementor( false );
+		define( 'MCPWP_TESTS', true );
+		$elements = $this->minimal_elements();
+		for ( $i = 0; $i <= (int) ini_get( 'max_input_vars' ); ++$i ) {
+			$elements[0]['settings'][ 'custom_' . $i ] = 'x';
+		}
+		$data = $this->dispatch_template_args( 'MCP', array( 'elementor_data' => $elements ) )->get_data();
+		$this->assertFalse( $data['result']['isError'], wp_json_encode( $data ) );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertSame( 1, $GLOBALS['mcpwp_theme_test_save_calls'] );
+	}
+
+	public static function dual_php_wordpress_json_paths(): array {
+		return array( array( 'REST' ), array( 'MCP' ), array( 'mcpwp_call' ), array( 'batch' ), array( 'wp_batch' ) );
+	}
+
+	/**
+	 * PHP may parse a form view while WordPress also accepts the comma-listed
+	 * JSON media type. Preserve BOTH actual decoder views, not just one.
+	 * @dataProvider dual_php_wordpress_json_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_php_form_prefix_does_not_erase_wordpress_json_evidence( string $door ): void {
+		$this->install_elementor( false );
+		define( 'MCPWP_TESTS', true );
+		$this->dispatch_template_args( 'REST', array( 'dry_run' => true ) );
+		$body = '{"title":"Dual decoder","type":"single","dry_run":true,"dry_run":false}';
+		if ( in_array( $door, array( 'batch', 'wp_batch' ), true ) ) {
+			$body = '{"operations":[{"method":"POST","path":"/theme-builder/templates","body":' . $body . '}]}';
+		}
+		if ( in_array( $door, array( 'MCP', 'mcpwp_call', 'wp_batch' ), true ) ) {
+			$params = '{"name":"' . ( 'wp_batch' === $door ? 'wp_batch' : 'wp_create_theme_template' ) . '","arguments":' . $body . '}';
+			if ( 'mcpwp_call' === $door ) {
+				$params = '{"name":"mcpwp_call","arguments":' . $params . '}';
+			}
+			$body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":' . $params . '}';
+		}
+		parse_str( $body, $post );
+		$request = new WP_REST_Request( 'POST', 'REST' === $door ? '/mcpwp/v1/theme-builder/templates' : ( 'batch' === $door ? '/mcpwp/v1/batch' : '/mcpwp/v1/mcp' ), $post, array( 'Content-Type' => 'application/x-www-form-urlencoded,application/json' ) );
+		$request->set_body( $body );
+		$response = 'REST' === $door ? ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request ) : ( 'batch' === $door ? ( new Mcpwp_REST_Batch() )->handle_batch( $request ) : ( new Mcpwp_REST_MCP() )->handle_mcp( $request ) );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'], 'The WordPress JSON view must retain repeated intent when PHP also parsed a form view.' );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_meta'] );
+	}
+
+	public static function parsed_body_backstop_paths(): array {
+		return array( array( '', false ), array( '', true ), array( 'text/plain', false ), array( 'text/plain', true ) );
+	}
+
+	/**
+	 * A pre-parsed body is authoritative input even when its header is absent
+	 * or was not recognized. It must retain the request-wide cap guard.
+	 * @dataProvider parsed_body_backstop_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_parsed_body_cannot_be_filed_as_unknown( string $header, bool $has_wire ): void {
+		$this->install_elementor( false );
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
+		$limit = (int) ini_get( 'max_input_vars' );
+		if ( $limit < 3 ) {
+			$this->markTestSkipped( 'Requires a finite input cap above required fields.' );
+		}
+		$post = array( 'title' => 'Preparsed', 'type' => 'single' );
+		for ( $i = 2; $i < $limit; ++$i ) {
+			$post[ 'padding_' . $i ] = 'x';
+		}
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $post, '' === $header ? array() : array( 'Content-Type' => $header ) );
+		if ( $has_wire ) {
+			$request->set_body( http_build_query( $post ) );
+		}
+		$response = ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'invalid_params', $response->get_error_code() );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
 	}
 
 }

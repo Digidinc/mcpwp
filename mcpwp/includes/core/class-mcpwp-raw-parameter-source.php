@@ -22,6 +22,12 @@ final class Mcpwp_Raw_Parameter_Source {
 		$this->channel = $channel;
 	}
 
+	/** PHP's SAPI selects its body handler before WordPress parses MIME parameters. */
+	public static function php_media_type( $header ) {
+		$header = trim( (string) $header );
+		return strtolower( trim( substr( $header, 0, strcspn( $header, ';, ' ) ) ) );
+	}
+
 	/** Select a fragment without re-encoding or discarding duplicate keys. */
 	public function at( $path ) {
 		$source = clone $this;

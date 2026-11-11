@@ -68,20 +68,38 @@ abstract class Mcpwp_REST_API {
 				}
 			}
 			$body = $request->get_body();
-			$content_type = $request->get_content_type();
-			$type = strtolower( (string) ( $content_type['value'] ?? '' ) );
+			$parsed_body = $request->get_body_params();
+			$type = Mcpwp_Raw_Parameter_Source::php_media_type( $request->get_header( 'Content-Type' ) );
 			if ( 'multipart/form-data' === $type ) {
-				// PHP consumed the parts; preserve the parsed body snapshot.
-				$sources[] = new Mcpwp_Raw_Parameter_Source( 'multipart', $request->get_body_params(), 'body' );
+				// Match the body handler PHP actually used, including headers
+				// whose WordPress media value still contains a comma or space.
+				$sources[] = new Mcpwp_Raw_Parameter_Source( 'multipart', $parsed_body, 'body' );
 			} elseif ( 'application/json' === $type || 'application/x-www-form-urlencoded' === $type ) {
 				if ( '' !== $body ) {
 					$sources[] = new Mcpwp_Raw_Parameter_Source( 'application/json' === $type ? 'json' : 'form', $body, 'body' );
+				} elseif ( ! $internal && ! empty( $parsed_body ) && 'application/x-www-form-urlencoded' === $type ) {
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'parsed-form', $parsed_body, 'body' );
 				}
-			} elseif ( ! $internal || '' !== (string) $request->get_header( 'Content-Type' ) ) {
-				// An absent header on a synthetic internal request is not a new
-				// unknown wire source. Explicit unknown media types retain all
-				// visible parsed fields for the core's fail-closed intent guard.
+			} elseif ( ! $internal && ! empty( $parsed_body ) ) {
+				// Parsed SAPI input must never escape its input-limit guard by
+				// being filed as unknown. A consumed body uses multipart's
+				// history guard; available form bytes are also scanned in full.
+				if ( '' !== $body ) {
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'form', $body, 'body' );
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'parsed-form', $parsed_body, 'body' );
+				} else {
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'multipart', $parsed_body, 'body' );
+				}
+			} elseif ( '' !== $body && ( ! $internal || '' !== (string) $request->get_header( 'Content-Type' ) ) ) {
+				// No body means no unknown body format: query-only requests use
+				// the normal query rules, even when their header is absent.
 				$sources[] = new Mcpwp_Raw_Parameter_Source( 'unknown', $bags, 'body' );
+			}
+			// PHP can parse a form while WordPress also accepts a comma-listed
+			// JSON media type. Retain that independent decoder's raw view too.
+			$wordpress_type = $request->get_content_type();
+			if ( '' !== $body && 'application/json' !== $type && isset( $wordpress_type['value'] ) && wp_is_json_media_type( $wordpress_type['value'] ) ) {
+				$sources[] = new Mcpwp_Raw_Parameter_Source( 'json', $body, 'body' );
 			}
 			self::$raw_parameter_sources[ $request ] = $sources;
 		}
