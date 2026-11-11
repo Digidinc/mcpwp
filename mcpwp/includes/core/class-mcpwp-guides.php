@@ -21,6 +21,48 @@ if ( ! defined( 'ABSPATH' ) ) {
 class Mcpwp_Guides {
 
 	/**
+	 * Public documentation site (#1073).
+	 */
+	const DOCS_BASE_URL = 'https://docs.mcpwp.net';
+
+	/**
+	 * Agent-readable index of every documentation page (#1073).
+	 */
+	const DOCS_LLMS_URL = 'https://docs.mcpwp.net/llms.txt';
+
+	/**
+	 * Guide topic => documentation page path (Markdown form, no host).
+	 *
+	 * Only topics with a real page are listed; a topic without one carries no
+	 * link rather than a guessed one. Topics with no entry (menus, workflows,
+	 * cloudflare) are reachable through DOCS_LLMS_URL.
+	 *
+	 * @var array<string,string>
+	 */
+	const DOCS_PAGES = array(
+		'elementor'       => '/tools/elementor.md',
+		'seo'             => '/tools/seo.md',
+		'media'           => '/tools/media.md',
+		'content'         => '/tools/content.md',
+		'forms'           => '/tools/forms.md',
+		'woocommerce'     => '/tools/woocommerce.md',
+		'learnpress'      => '/tools/learnpress.md',
+		'onboarding'      => '/get-started/first-connection.md',
+		'troubleshooting' => '/reference/errors.md',
+	);
+
+	/**
+	 * Documentation page URL for a guide topic.
+	 *
+	 * @param string $topic Guide topic slug.
+	 * @return string Absolute URL, or '' when the topic has no docs page.
+	 */
+	public static function docs_url( $topic ) {
+		$topic = (string) $topic;
+		return isset( self::DOCS_PAGES[ $topic ] ) ? self::DOCS_BASE_URL . self::DOCS_PAGES[ $topic ] : '';
+	}
+
+	/**
 	 * Get all available guide topics with descriptions.
 	 *
 	 * Filters topics based on active plugins/capabilities.
@@ -129,6 +171,10 @@ class Mcpwp_Guides {
 			$req = $topic['requires'];
 			if ( null === $req || ( isset( $capability_map[ $req ] ) && $capability_map[ $req ] ) ) {
 				unset( $topic['requires'] );
+				$docs_url = self::docs_url( $topic['topic'] );
+				if ( '' !== $docs_url ) {
+					$topic['docs_url'] = $docs_url;
+				}
 				$filtered[] = $topic;
 			}
 		}
@@ -153,7 +199,15 @@ class Mcpwp_Guides {
 			);
 		}
 
-		return call_user_func( array( __CLASS__, $method ) );
+		$guide = call_user_func( array( __CLASS__, $method ) );
+
+		// #1073: one fetch from the guide to its full docs page.
+		$docs_url = self::docs_url( $topic );
+		if ( is_array( $guide ) && '' !== $docs_url && ! isset( $guide['docs_url'] ) ) {
+			$guide['docs_url'] = $docs_url;
+		}
+
+		return $guide;
 	}
 
 	/**

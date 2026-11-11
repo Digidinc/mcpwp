@@ -5984,6 +5984,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$lines[] = '';
 		}
 
+		// #1073: from a tool to the full concept page in one fetch. No tool
+		// name is spelled out here, so a category-restricted key keeps the
+		// section (lines_naming_only_callable_tools() drops lines that name
+		// a tool it cannot call).
+		$lines[] = '## Documentation';
+		$lines[] = '';
+		$lines[] = 'Full docs: ' . Mcpwp_Guides::DOCS_BASE_URL . '. An agent-readable index of every page, in Markdown, is at ' . Mcpwp_Guides::DOCS_LLMS_URL . '. A guide returned by the guide tool carries a `docs_url` to its full page.';
+		$lines[] = '';
+
 		// --- WordPress primer ---
 		$lines[] = '## WordPress Concepts';
 		$lines[] = '';

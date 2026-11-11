@@ -17,6 +17,38 @@ if ( ! defined( 'ABSPATH' ) ) {
 trait Mcpwp_Free_Tools_Ops_Trait {
 
 	/**
+	 * Category slugs a key can be granted: the auth trait's own list, so the
+	 * wp_create_api_key enum cannot drift from what the creation path accepts
+	 * (#1073). The reserved `meta` slug is not in that list.
+	 *
+	 * @return string[]
+	 */
+	private function api_key_category_slugs() {
+		return array_keys( Mcpwp_REST_API::get_all_tool_category_labels() );
+	}
+
+	/**
+	 * The `role` parameter description, generated from the auth trait's
+	 * role => category map (#1073) so a role's categories are stated once.
+	 *
+	 * @return string
+	 */
+	private function api_key_role_description() {
+		$parts = array();
+		foreach ( Mcpwp_REST_API::get_role_definitions() as $slug => $definition ) {
+			$categories = isset( $definition['categories'] ) ? (array) $definition['categories'] : array();
+			if ( 'custom' === $slug ) {
+				$parts[] = $slug . ' (pick categories)';
+			} elseif ( array() === $categories ) {
+				$parts[] = $slug . ' (all tools)';
+			} else {
+				$parts[] = $slug . ' (' . implode( ', ', $categories ) . ')';
+			}
+		}
+		return 'Access role: ' . implode( '; ', $parts ) . '. Every key may also use mcpwp_find_tools and mcpwp_call.';
+	}
+
+	/**
 	 * @return array
 	 */
 	private function get_api_keys_tools() {
@@ -44,15 +76,15 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 				),
 				'role' => array(
 					'type'        => 'string',
-					'description' => 'Access role: admin (all tools), author (content/media/taxonomy), designer (elementor/gutenberg/media/site), editor (content/media/taxonomy/seo), custom (pick categories)',
-					'enum'        => array( 'admin', 'author', 'designer', 'editor', 'custom' ),
+					'description' => $this->api_key_role_description(),
+					'enum'        => array_keys( Mcpwp_REST_API::get_role_definitions() ),
 				),
 				'tool_categories' => array(
 					'type'        => 'array',
-					'description' => 'Tool categories to allow (only for custom role). Options: content, media, taxonomy, elementor, gutenberg, seo, forms, site, admin, webhooks',
+					'description' => 'Tool categories to allow (only for custom role). Options: ' . implode( ', ', $this->api_key_category_slugs() ),
 					'items'       => array(
 						'type' => 'string',
-						'enum' => array( 'content', 'media', 'taxonomy', 'elementor', 'gutenberg', 'seo', 'forms', 'site', 'admin', 'webhooks' ),
+						'enum' => $this->api_key_category_slugs(),
 					),
 				),
 				'scopes' => array(

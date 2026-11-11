@@ -1636,7 +1636,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 		// Guides & Workflows
 		$tools[] = $this->define_tool(
 			'wp_get_guide',
-			'Get a detailed guide on a specific topic. Call with no topic to list all available topics. Topics include: onboarding, elementor, seo, menus, media, content, forms, woocommerce, workflows, troubleshooting. Only shows topics relevant to active plugins.',
+			'Get a detailed guide on a specific topic. Call with no topic to list all available topics. Topics include: onboarding, elementor, seo, menus, media, content, forms, woocommerce, workflows, troubleshooting. Only shows topics relevant to active plugins. A guide carries a docs_url to its full page on docs.mcpwp.net.',
 			array(
 				'topic' => array(
 					'type'        => 'string',
