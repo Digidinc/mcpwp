@@ -105,3 +105,42 @@ test("initialize still succeeds, without instructions, when WordPress sends none
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("an error answer to initialize does not leave a later same-id response waiting", async () => {
+  const home = mkdtempSync(join(tmpdir(), "mcpwp-1074-"));
+  // WordPress hangs on initialize, so any wait on instructions shows as latency.
+  const hang = createServer(() => {});
+  await new Promise((ok) => hang.listen(0, "127.0.0.1", ok));
+  const child = spawn(process.execPath, [bundle], {
+    env: { PATH: process.env.PATH, HOME: home, WP_URL: `http://127.0.0.1:${hang.address().port}`, WP_API_KEY: "k", WP_SITE_NAME: "smoke" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  try {
+    const lines = [];
+    const waiters = [];
+    let out = "";
+    child.stdout.on("data", (d) => {
+      out += d;
+      let i;
+      while ((i = out.indexOf("\n")) !== -1) {
+        lines.push(JSON.parse(out.slice(0, i)));
+        out = out.slice(i + 1);
+        waiters.shift()?.();
+      }
+    });
+    const next = () => new Promise((ok) => (lines.length ? ok() : waiters.push(ok))).then(() => lines.shift());
+    // Invalid initialize (no protocolVersion): the SDK answers with an error.
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} }) + "\n");
+    assert.ok((await next()).error, "initialize was refused");
+    const started = Date.now();
+    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }) + "\n");
+    const pong = await next();
+    assert.ok(pong.result);
+    assert.ok(Date.now() - started < 2500, `ping waited ${Date.now() - started}ms`);
+  } finally {
+    child.kill();
+    hang.close();
+    hang.closeAllConnections?.();
+    rmSync(home, { recursive: true, force: true });
+  }
+});

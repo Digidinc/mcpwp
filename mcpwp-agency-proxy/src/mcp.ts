@@ -21,6 +21,7 @@ import {
   siteUrl,
   fetchNoRedirect,
   supportedProtocolVersion,
+  SUPPORTED_PROTOCOL_VERSIONS,
   LATEST_PROTOCOL_VERSION,
 } from './proxy';
 import type { Env, SiteEntry } from './types';
@@ -124,13 +125,21 @@ export async function handleInitialize(
   let instructions = GENERIC_INSTRUCTIONS;
 
   if (agencyId && env) {
-    const sites = await getSites(agencyId, env);
-    const target = sites.length === 1 ? sites[0] : sites.find((s) => s.site_id === siteHint);
-    if (target) {
-      const upstream = await fetchInitialize(target, env.ENCRYPTION_KEY, agencyId, negotiated);
-      if (upstream?.instructions) instructions = upstream.instructions + GATEWAY_NOTE;
-      // An older plugin may answer with a lower version; the client must hear it.
-      protocolVersion = supportedProtocolVersion(upstream?.protocolVersion) ?? negotiated;
+    try {
+      const sites = await getSites(agencyId, env);
+      const target = sites.length === 1 ? sites[0] : sites.find((s) => s.site_id === siteHint);
+      if (target) {
+        const upstream = await fetchInitialize(target, env.ENCRYPTION_KEY, agencyId, negotiated);
+        if (upstream?.instructions) instructions = upstream.instructions + GATEWAY_NOTE;
+        // An older plugin may answer with a lower version and the client must
+        // hear it, but a site never raises the version the client asked for.
+        const answered = supportedProtocolVersion(upstream?.protocolVersion);
+        const order = SUPPORTED_PROTOCOL_VERSIONS as readonly string[];
+        if (answered && order.indexOf(answered) >= order.indexOf(negotiated)) protocolVersion = answered;
+      }
+    } catch (err) {
+      // A registry (KV) failure must not fail the client's handshake.
+      console.warn('[mcpwp-proxy] initialize: site lookup failed:', err);
     }
   }
 

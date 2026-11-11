@@ -174,6 +174,21 @@ export function supportedProtocolVersion(value: unknown): string | null {
     : null;
 }
 
+/**
+ * Resolve an inbound `MCP-Protocol-Version` header the way the plugin does
+ * (CLAUDE.md, MCP protocol negotiation): absent or empty means 2025-03-26, which
+ * is what upstream assumes with no header, so null is returned and none is sent;
+ * a supported version is returned; anything else (including two different
+ * values, which is ambiguous) is `invalid` and refused with 400, never forwarded.
+ */
+export function resolveHeaderVersion(raw: string | null | undefined): { version: string | null } | { invalid: true } {
+  const header = (raw ?? '').trim();
+  if (header === '') return { version: null };
+  const values = [...new Set(header.split(',').map((v) => v.trim()))];
+  const version = values.length === 1 ? supportedProtocolVersion(values[0]) : null;
+  return version ? { version } : { invalid: true };
+}
+
 function upstreamHeaders(apiKey: string, protocolVersion?: string | null): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json', 'X-API-Key': apiKey };
   const version = supportedProtocolVersion(protocolVersion);

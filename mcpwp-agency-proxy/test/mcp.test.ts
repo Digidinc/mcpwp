@@ -137,6 +137,26 @@ describe('handleInitialize', () => {
   });
 });
 
+describe('handleInitialize hardening (#1074 review)', () => {
+  it('a site never raises the version the client asked for', async () => {
+    const { env } = await makeEnvWithSite();
+    vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(
+      initResponse({ protocolVersion: '2025-11-25', instructions: UPSTREAM_INSTRUCTIONS })
+    );
+    const result = (await handleInitialize(1, AGENCY_ID, env, undefined, '2025-03-26')) as InitResult;
+    expect(result.result.protocolVersion).toBe('2025-03-26');
+  });
+
+  it('a registry (KV) failure falls back to generic instructions instead of throwing', async () => {
+    const kv = { get: async () => { throw new Error('KV down'); } } as unknown as KVNamespace;
+    const env = { AGENCY_KV: kv, ENCRYPTION_KEY: TEST_KEY } as unknown as Env;
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const result = (await handleInitialize(1, AGENCY_ID, env, undefined, '2025-06-18')) as InitResult;
+    expect(result.result.protocolVersion).toBe('2025-06-18');
+    expect(result.result.instructions).toContain('proxy_list_sites');
+  });
+});
+
 describe('MCP-Protocol-Version forwarding (#1074)', () => {
   it('tools/list sends the client\'s version upstream', async () => {
     const { env } = await makeEnvWithSite();

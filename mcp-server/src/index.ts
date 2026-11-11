@@ -14,8 +14,10 @@ import { join } from "path";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CallToolRequestSchema,
+  type JSONRPCMessage,
   LATEST_PROTOCOL_VERSION,
   SUPPORTED_PROTOCOL_VERSIONS,
   ListToolsRequestSchema,
@@ -387,12 +389,17 @@ async function main() {
     };
     // #1074: the SDK answers `initialize` without instructions. Add the ones
     // WordPress sent (the "Finding Tools" guidance) to that one response.
-    const deliverOut = transport.send.bind(transport);
-    transport.send = async (message, options) => {
-      const id = (message as { id?: unknown }).id;
-      if (initializeId !== undefined && id === initializeId && "result" in message) {
+    // Typed through the Transport interface, whose send() takes the options.
+    const out: Transport = transport;
+    const deliverOut = out.send.bind(out);
+    out.send = async (message: JSONRPCMessage, options?: TransportSendOptions) => {
+      const id = "id" in message ? message.id : undefined;
+      if (initializeId !== undefined && id === initializeId) {
+        // Any response to that id ends the wait, an error included (#1074).
         initializeId = undefined;
-        return deliverOut(withUpstreamInstructions(message, await activeProxy.getInstructions()), options);
+        if ("result" in message) {
+          return deliverOut(withUpstreamInstructions(message, await activeProxy.getInstructions()), options);
+        }
       }
       return deliverOut(message, options);
     };
