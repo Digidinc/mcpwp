@@ -428,4 +428,75 @@ final class RefusalReporting1106Test extends TestCase {
 		$hint = Mcpwp_Error_Hints::get_hint_for_code( 'invalid_api_key' );
 		$this->assertSame( Mcpwp_REST_MCP::invalid_api_key_hint(), $hint['hint'] );
 	}
+
+	// ------------------------------------------------------------------
+	// Review follow-ups: ordering, wording, oauth hint
+	// ------------------------------------------------------------------
+
+	public static function malformed_wrappers(): array {
+		return array(
+			'no name'        => array( array() ),
+			'name array'     => array( array( 'name' => array( 'x' ) ) ),
+			'name empty'     => array( array( 'name' => '' ) ),
+			'wraps itself'   => array( array( 'name' => 'mcpwp_call' ) ),
+			'wraps find'     => array( array( 'name' => 'mcpwp_find_tools' ) ),
+			'stray key'      => array( array( 'name' => 'wp_set_site_context', 'bogus' => 1 ) ),
+		);
+	}
+
+	/**
+	 * @dataProvider malformed_wrappers
+	 */
+	public function test_a_malformed_wrapper_still_meets_the_scope_refusal_first( array $args ): void {
+		$key = $this->mint( 'admin', array( 'read', 'write' ) );
+		$out = $this->mcp( $key, $this->call_msg( 9, 'mcpwp_call', $args ) );
+
+		$this->assertSame( 200, $out['status'] );
+		$result = $out['data']['result'];
+		$this->assertTrue( $result['isError'] );
+		$this->assertSame( 'insufficient_scope', $result['structuredContent']['error']['code'], wp_json_encode( $result['structuredContent'] ) );
+		$this->assertEmpty( $GLOBALS['mcpwp_test_dispatched_routes'] );
+	}
+
+	/**
+	 * A key with the scope the wrapper is classified at still gets the specific
+	 * wrapper error, not a scope refusal.
+	 *
+	 * @dataProvider malformed_wrappers
+	 */
+	public function test_a_malformed_wrapper_for_a_full_scope_key_keeps_its_specific_error( array $args ): void {
+		$key = $this->mint( 'admin', array( 'read', 'write', 'admin' ) );
+		$out = $this->mcp( $key, $this->call_msg( 9, 'mcpwp_call', $args ) );
+
+		$this->assertSame( 200, $out['status'] );
+		$code = $out['data']['result']['structuredContent']['error']['code'];
+		$this->assertContains( $code, array( 'invalid_arguments', 'recursion_denied', 'invalid_params' ) );
+	}
+
+	public function test_the_category_sentence_is_not_repeated_in_the_hint(): void {
+		$key     = $this->mint( 'author', array( 'read', 'write' ) );
+		$verdict = ( new Mcpwp_REST_MCP() )->verify_api_key( $this->rest( 'GET', '/mcpwp/v1/woocommerce/orders', $key ) );
+		$data    = $verdict->get_error_data();
+
+		$this->assertStringContainsString( 'content, media, taxonomy', $verdict->get_error_message() );
+		$this->assertStringNotContainsString( 'content, media, taxonomy', $data['hint'], 'The allowed list lives in the message only.' );
+		$this->assertStringContainsString( '"woocommerce" category', $data['hint'] );
+	}
+
+	public function test_a_missing_key_points_at_setup(): void {
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$verdict = ( new Mcpwp_REST_MCP() )->verify_api_key( new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array(), array() ) );
+		$this->assertInstanceOf( WP_Error::class, $verdict );
+		$this->assertSame( 'missing_api_key', $verdict->get_error_code() );
+		$hint = $verdict->get_error_data()['hint'];
+		$this->assertStringContainsString( 'MCPWP > Setup', $hint );
+		$this->assertStringNotContainsString( 'MCPWP > Settings', $hint );
+	}
+
+	public function test_an_invalid_oauth_shaped_token_carries_the_hint(): void {
+		foreach ( array( 'mcpwp_at_', 'spai_at_' ) as $prefix ) {
+			$error = $this->invalid_key_error( $prefix . str_repeat( 'b', 48 ) );
+			$this->assertSame( Mcpwp_REST_MCP::invalid_api_key_hint(), $error->get_error_data()['hint'], $prefix );
+		}
+	}
 }

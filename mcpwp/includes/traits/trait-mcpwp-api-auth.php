@@ -1341,7 +1341,7 @@ trait Mcpwp_Api_Auth {
 				__( 'API key is required.', 'mcpwp' ),
 				array(
 					'status' => 401,
-					'hint'   => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Settings, or call wp_create_api_key if you have admin access.',
+					'hint'   => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Setup, or call wp_create_api_key if you have admin access.',
 				)
 			);
 		}
@@ -1413,7 +1413,7 @@ trait Mcpwp_Api_Auth {
 					__( 'API key not configured. Please visit the MCPWP settings.', 'mcpwp' ),
 					array(
 						'status' => 500,
-						'hint'   => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Settings to generate an API key.',
+						'hint'   => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Setup to generate an API key.',
 					)
 				);
 			}
@@ -4207,7 +4207,10 @@ trait Mcpwp_Api_Auth {
 			return new WP_Error(
 				'invalid_api_key',
 				__( 'Invalid API key.', 'mcpwp' ),
-				array( 'status' => 401 )
+				array(
+					'status' => 401,
+					'hint'   => self::invalid_api_key_hint(),
+				)
 			);
 		}
 
@@ -4481,7 +4484,10 @@ trait Mcpwp_Api_Auth {
 			return new WP_Error(
 				'invalid_api_key',
 				__( 'Invalid API key.', 'mcpwp' ),
-				array( 'status' => 401 )
+				array(
+					'status' => 401,
+					'hint'   => self::invalid_api_key_hint(),
+				)
 			);
 		}
 
@@ -4516,7 +4522,10 @@ trait Mcpwp_Api_Auth {
 			return new WP_Error(
 				'invalid_api_key',
 				__( 'Invalid API key.', 'mcpwp' ),
-				array( 'status' => 401 )
+				array(
+					'status' => 401,
+					'hint'   => self::invalid_api_key_hint(),
+				)
 			);
 		}
 
@@ -6159,7 +6168,7 @@ trait Mcpwp_Api_Auth {
 				$category,
 				$allowed_text
 			);
-			$hint                     .= sprintf( ' The "%1$s" category is also not enabled for this key (allowed: %2$s).', $category, $allowed_text );
+			$hint                     .= sprintf( ' The new key must also include the "%s" category.', $category );
 			$data['category']           = $category;
 			$data['allowed_categories'] = self::present_tool_categories( $allowed );
 		}

@@ -1895,6 +1895,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				// a direct call to it would, never against "mcpwp_call".
 				$resolved = $this->resolve_mcpwp_call( is_array( $params ) ? $params : array() );
 				if ( null !== $resolved['error'] ) {
+					// A malformed wrapper still answers to the key's scope
+					// first, as it did when the envelope judged it: the
+					// scope refusal wins over invalid_arguments for a key
+					// that could not have called it anyway.
+					$wrapper_refusal = $this->tool_call_scope_refusal( $params );
+					if ( null !== $wrapper_refusal ) {
+						return $this->scope_refusal_result( $id, $wrapper_refusal );
+					}
 					$this->fire_tool_called( 'mcpwp_call', microtime( true ), $this->analytics_code_for_client_code( $resolved['error']['code'] ) );
 					return $this->tool_error_result( $id, $resolved['error']['code'], $resolved['error']['message'], $resolved['error']['data'] );
 				}
@@ -1909,10 +1917,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				// replay and every other gate, as the envelope check did.
 				$scope_refusal = $this->tool_call_scope_refusal( $params );
 				if ( null !== $scope_refusal ) {
-					$this->fire_tool_called( $scope_refusal['tool'], microtime( true ), 'scope_denied' );
-					$refusal_category = in_array( $scope_refusal['tool'], self::get_discovery_allowlist_tool_names(), true ) ? '' : $this->tool_category_for( $scope_refusal['tool'] );
-					$refusal          = $this->build_insufficient_scope_error( $this->get_current_api_key_record(), $scope_refusal['required_scope'], $refusal_category );
-					return $this->tool_error_result( $id, 'insufficient_scope', $refusal->get_error_message(), (array) $refusal->get_error_data() );
+					return $this->scope_refusal_result( $id, $scope_refusal );
 				}
 				// Only now is the call audited and dispatched, and with the
 				// params already rewritten: the audit wrapper
@@ -4196,6 +4201,20 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		return null;
+	}
+
+	/**
+	 * The in-protocol insufficient_scope tool result for a refused call.
+	 *
+	 * @param mixed $id      JSON-RPC id.
+	 * @param array $refusal tool_call_scope_refusal() result.
+	 * @return array
+	 */
+	private function scope_refusal_result( $id, array $refusal ) {
+		$this->fire_tool_called( $refusal['tool'], microtime( true ), 'scope_denied' );
+		$category = in_array( $refusal['tool'], self::get_discovery_allowlist_tool_names(), true ) ? '' : $this->tool_category_for( $refusal['tool'] );
+		$error    = $this->build_insufficient_scope_error( $this->get_current_api_key_record(), $refusal['required_scope'], $category );
+		return $this->tool_error_result( $id, 'insufficient_scope', $error->get_error_message(), (array) $error->get_error_data() );
 	}
 
 	/**
