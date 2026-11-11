@@ -207,6 +207,29 @@ final class IntegrationWriteFailureSurfacedTest extends TestCase
         $this->assertArrayNotHasKey('pexels', $this->records());
     }
 
+    /** @dataProvider secretContainerEncodings */
+    public function test_secret_key_is_masked_before_decoding_in_both_logs($secret): void
+    {
+        require_once dirname(__DIR__) . '/includes/core/class-mcpwp-action-log.php';
+        update_option('mcpwp_settings', array('enable_logging' => true));
+        $GLOBALS['mcpwp_test_wpdb_rows'] = array();
+        $args = array('provider' => 'figma', 'config' => array('oauth_client_secret' => $secret));
+        $this->assertInstanceOf(WP_REST_Response::class, $this->controller()->configure_integration($this->request($args)));
+        $id = Mcpwp_Action_Log::begin('wp_configure_integration', $args, 'fixture', 'ai');
+        Mcpwp_Action_Log::complete($id, 1, true, '');
+        foreach (array('mcpwp_activity_log' => 'request_data', Mcpwp_Action_Log::TABLE => 'arguments') as $table => $column) {
+            $rows = $GLOBALS['mcpwp_test_wpdb_rows'][$GLOBALS['wpdb']->prefix . $table] ?? array();
+            $this->assertNotEmpty($rows, 'both audit tables record the action');
+            $data = json_decode(end($rows)[$column], true);
+            $this->assertSame('[redacted]', $data['config']['oauth_client_secret']);
+        }
+    }
+
+    public function secretContainerEncodings(): array
+    {
+        return array(array('[]'), array('{}'), array('a:0:{}'), array('O:8:"stdClass":0:{}'), array('abc'));
+    }
+
     public function test_configure_activity_log_redacts_short_secrets(): void
     {
         update_option('mcpwp_settings', array('enable_logging' => true));

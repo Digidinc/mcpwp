@@ -234,18 +234,88 @@ final class FigmaProGateTest extends TestCase
         $figma = new Mcpwp_Figma();
         if ('callback' === $path) {
             set_transient('mcpwp_figma_oauth_state_race', array('created_at' => time()), 600);
-            $this->assertIsArray($figma->exchange_oauth_code('code', 'race'));
+            $result = $figma->exchange_oauth_code('code', 'race');
         } else {
             $refresh = new ReflectionMethod(Mcpwp_Figma::class, 'refresh_oauth_token');
             $refresh->setAccessible(true);
-            $this->assertIsArray($refresh->invoke($figma, Mcpwp_Integration_Manager::get_instance()->get_provider_config('figma')));
+            $result = $refresh->invoke($figma);
         }
 
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('figma_config_changed', $result->get_error_code());
         $config = Mcpwp_Integration_Manager::get_instance()->get_provider_config('figma');
         $this->assertSame('NEW', $config['default_file_key'], 'OAuth owns tokens, not the concurrent file selection');
         $this->assertTrue('rotated-fixture' === $config['oauth_client_secret'], 'concurrent credential rotation survives');
-        $this->assertTrue('fresh-access' === $config['access_token'], 'new access token stored');
-        $this->assertTrue('fresh-refresh' === $config['refresh_token'], 'new refresh token stored');
+        $this->assertTrue('expired-fixture' === $config['access_token'], 'late access token was not stored');
+        $this->assertTrue('refresh-fixture' === $config['refresh_token'], 'late refresh token was not stored');
+    }
+
+    /** @dataProvider oauthConcurrentWrites */
+    public function test_late_oauth_completion_cannot_overwrite_a_new_generation(string $path, string $mutation): void
+    {
+        $this->setTier(true);
+        $this->configure(array(
+            'oauth_client_id' => 'client', 'oauth_client_secret' => 'fixture-secret',
+            'access_token' => 'expired-fixture', 'refresh_token' => 'refresh-fixture',
+            'expires_at' => '2000-01-01 00:00:00',
+        ));
+        require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-integrations.php';
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $fired = false;
+        add_filter('pre_http_request', function ($response, $args, $url) use ($manager, $mutation, &$fired) {
+            if (false === strpos($url, '/oauth/token') || $fired) {
+                return $response;
+            }
+            $fired = true;
+            $request = new WP_REST_Request('POST', '/mcpwp/v1/integrations/configure');
+            $request->set_param('provider', 'figma');
+            if ('overlap' === $mutation) {
+                $inner = new ReflectionMethod(Mcpwp_Figma::class, 'refresh_oauth_token');
+                $inner->setAccessible(true);
+                $this->assertIsArray($inner->invoke(new Mcpwp_Figma()));
+            } elseif ('remove' === $mutation || 'recreate' === $mutation) {
+                $this->assertInstanceOf(WP_REST_Response::class, (new Mcpwp_REST_Integrations())->remove_integration($request));
+                if ('recreate' === $mutation) {
+                    $this->configure(array('access_token' => 'new-incarnation', 'refresh_token' => 'new-incarnation-refresh'));
+                }
+            } else {
+                $request->set_param('config', array('refresh_token' => 'rotated-fixture', 'access_token' => 'new-fixture'));
+                $this->assertInstanceOf(WP_REST_Response::class, (new Mcpwp_REST_Integrations())->configure_integration($request));
+            }
+            return array('response' => array('code' => 200), 'body' => wp_json_encode(array('access_token' => 'late-fixture', 'refresh_token' => 'late-refresh', 'expires_in' => 3600)));
+        }, 20, 3);
+        $figma = new Mcpwp_Figma();
+        if ('callback' === $path) {
+            set_transient('mcpwp_figma_oauth_state_generation', array('created_at' => time()), 600);
+            $result = $figma->exchange_oauth_code('code', 'generation');
+        } else {
+            $refresh = new ReflectionMethod(Mcpwp_Figma::class, 'refresh_oauth_token');
+            $refresh->setAccessible(true);
+            $result = $refresh->invoke($figma);
+        }
+        $this->assertTrue($fired, 'interleaved mutation ran');
+        $this->assertInstanceOf(WP_Error::class, $result, 'a late completion must report a conflict');
+        $this->assertSame('figma_config_changed', $result->get_error_code());
+        $config = $manager->get_provider_config('figma');
+        if ('remove' === $mutation) {
+            $this->assertFalse($config, 'a removed provider stays removed');
+        } else {
+            $access = 'overlap' === $mutation ? 'fresh-access' : ('recreate' === $mutation ? 'new-incarnation' : 'new-fixture');
+            $refresh = 'overlap' === $mutation ? 'fresh-refresh' : ('recreate' === $mutation ? 'new-incarnation-refresh' : 'rotated-fixture');
+            $this->assertTrue($access === $config['access_token'], 'newer access token survives');
+            $this->assertTrue($refresh === $config['refresh_token'], 'newer refresh token survives');
+        }
+    }
+
+    public function oauthConcurrentWrites(): array
+    {
+        $cases = array();
+        foreach (array('refresh', 'callback') as $path) {
+            foreach (array('rotation', 'remove', 'overlap', 'recreate') as $mutation) {
+                $cases[$path . ' ' . $mutation] = array($path, $mutation);
+            }
+        }
+        return $cases;
     }
 
     public function oauthSavePaths(): array

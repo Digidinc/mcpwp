@@ -140,6 +140,93 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
         };
     }
 
+    /** @dataProvider versionConflictCases */
+    public function test_version_is_rechecked_inside_every_cas_attempt(string $mutation): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'initial-fixture')));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $this->assertSame(1, $snapshot['generation']);
+        $this->assertNotSame('', $snapshot['record_id']);
+        $this->between_read_and_write(function () use ($manager, $mutation): void {
+            if ('unrelated' === $mutation) {
+                $this->assertTrue($manager->set_provider_key('openai', 'other-fixture'));
+            } elseif ('status' === $mutation) {
+                $status = new ReflectionMethod(Mcpwp_Integration_Manager::class, 'record_test_status');
+                $status->setAccessible(true);
+                $this->assertTrue($status->invoke($manager, 'figma', true));
+            } elseif ('remove' === $mutation || 'recreate' === $mutation) {
+                $this->assertSame(Mcpwp_Integration_Manager::WRITE_STORED, $manager->remove_provider_record('figma'));
+                if ('recreate' === $mutation) {
+                    $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'recreated-fixture')));
+                }
+            } else {
+                $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'rotated-fixture')));
+            }
+        });
+        $saved = $manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot);
+        if ('unrelated' === $mutation) {
+            $this->assertTrue($saved, 'unrelated writes may retry');
+            $after = $manager->get_provider_snapshot('figma');
+            $this->assertSame(2, $after['generation']);
+            $this->assertSame($snapshot['record_id'], $after['record_id']);
+            $this->assertTrue($manager->has_provider_key('openai'));
+        } else {
+            $this->assertFalse($saved, 'same-provider changes invalidate the captured version');
+            $this->assertSame('generation_conflict', $manager->get_last_save_error());
+            $after = $manager->get_provider_snapshot('figma');
+            if ('remove' === $mutation) {
+                $this->assertFalse($after);
+            } else {
+                $expected = 'recreate' === $mutation ? 'recreated-fixture' : ('status' === $mutation ? 'initial-fixture' : 'rotated-fixture');
+                $this->assertTrue($expected === $after['config']['access_token'], 'late credentials never land');
+                if ('recreate' === $mutation) {
+                    $this->assertSame($snapshot['generation'], $after['generation'], 'counter restart cannot cause ABA');
+                    $this->assertNotSame($snapshot['record_id'], $after['record_id']);
+                }
+            }
+        }
+    }
+
+    public function versionConflictCases(): array
+    {
+        return array(array('rotation'), array('remove'), array('recreate'), array('unrelated'), array('status'));
+    }
+
+    public function test_legacy_generation_zero_and_key_writes_use_the_same_version_rules(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $blob = Mcpwp_Encryption::get_instance()->encrypt(wp_json_encode(array('access_token' => 'legacy-fixture')));
+        $this->seed(array('figma' => $this->record($blob) + array('multi_field' => true)));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $this->assertSame(0, $snapshot['generation']);
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'new-fixture'), $snapshot));
+        $after = $manager->get_provider_snapshot('figma');
+        $this->assertSame(1, $after['generation']);
+        $this->assertNotSame('', $after['record_id']);
+        $this->assertFalse($manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot));
+        $this->assertTrue($manager->set_provider_key('openai', 'first-fixture'));
+        $key = $manager->get_provider_snapshot('openai');
+        $this->assertTrue($manager->set_provider_key('openai', 'second-fixture'));
+        $next = $manager->get_provider_snapshot('openai');
+        $this->assertSame($key['generation'] + 1, $next['generation']);
+        $this->assertSame($key['record_id'], $next['record_id']);
+    }
+
+    public function test_a_removed_legacy_generation_zero_cannot_be_recreated_by_completion(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $blob = Mcpwp_Encryption::get_instance()->encrypt(wp_json_encode(array('access_token' => 'legacy-fixture')));
+        $this->seed(array('figma' => $this->record($blob) + array('multi_field' => true)));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $this->assertSame(0, $snapshot['generation']);
+        $this->assertSame('', $snapshot['record_id']);
+        $this->assertSame(Mcpwp_Integration_Manager::WRITE_STORED, $manager->remove_provider_record('figma'));
+        $this->assertFalse($manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot));
+        $this->assertSame('generation_conflict', $manager->get_last_save_error());
+        $this->assertFalse($manager->has_provider_key('figma'));
+    }
+
     /** #1004: a key-only write must never replace a structured record. */
     public function test_key_only_writes_refuse_every_multi_field_provider(): void
     {

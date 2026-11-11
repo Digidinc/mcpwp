@@ -47,7 +47,7 @@ class Mcpwp_Integration_Manager {
 	/**
 	 * Why the last set_provider_key() / set_provider_config() returned false:
 	 * 'unknown_provider', 'encryption_failed', 'integration_write_failed' or
-	 * 'invalid_config' ('' after a save that succeeded).
+	 * 'invalid_config' or 'generation_conflict' ('' after a save that succeeded).
 	 *
 	 * @var string
 	 */
@@ -388,10 +388,11 @@ class Mcpwp_Integration_Manager {
 	 * Merge multi-field config for a provider (e.g. screenshot worker URL + token).
 	 *
 	 * @param string $provider Provider slug.
-	 * @param array  $config   Associative array of field values.
+	 * @param array      $config   Associative array of field values.
+	 * @param array|null $expected Internal snapshot for a conditional completion.
 	 * @return bool True on success.
 	 */
-	public function set_provider_config( $provider, $config ) {
+	public function set_provider_config( $provider, $config, $expected = null ) {
 		$this->last_save_error = '';
 
 		if ( ! isset( self::PROVIDERS[ $provider ] ) ) {
@@ -404,11 +405,11 @@ class Mcpwp_Integration_Manager {
 		$config     = is_array( $config ) ? $config : array();
 		$error      = null;
 		$encryption = Mcpwp_Encryption::get_instance();
-		$outcome    = $this->write_records(
-			function ( array $records ) use ( $provider, $config, $encryption, &$error ) {
+		$outcome    = $this->write_provider_record(
+			$provider,
+			function ( $record ) use ( $provider, $config, $encryption, &$error ) {
 				$stored = array();
-				if ( $this->is_multi_field_provider( $provider ) && isset( $records[ $provider ] ) ) {
-					$record    = $records[ $provider ];
+				if ( $this->is_multi_field_provider( $provider ) && null !== $record ) {
 					$decrypted = is_array( $record ) && ! empty( $record['key_encrypted'] ) ? $encryption->decrypt( $record['key_encrypted'] ) : false;
 					$stored    = false !== $decrypted && ! empty( $record['multi_field'] ) ? json_decode( $decrypted, true ) : false;
 					if ( ! is_array( $stored ) ) {
@@ -431,19 +432,19 @@ class Mcpwp_Integration_Manager {
 					return $error;
 				}
 
-				$records[ $provider ] = array(
+				return array(
 					'key_encrypted' => $encrypted,
 					'configured_at' => current_time( 'mysql' ),
 					'last_tested'   => null,
 					'test_status'   => null,
 					'multi_field'   => true,
 				);
-				return $records;
-			}
+			},
+			$expected
 		);
 
 		if ( self::WRITE_STORED !== $outcome ) {
-			$this->last_save_error         = $error ? $error->get_error_code() : 'integration_write_failed';
+			$this->last_save_error         = $error ? $error->get_error_code() : ( 'generation_conflict' === $this->last_save_error ? 'generation_conflict' : 'integration_write_failed' );
 			$this->last_save_error_message = $error ? $error->get_error_message() : '';
 			return false;
 		}
@@ -485,25 +486,36 @@ class Mcpwp_Integration_Manager {
 	 * @return array|false Config array or false.
 	 */
 	public function get_provider_config( $provider ) {
+		$snapshot = $this->get_provider_snapshot( $provider );
+		return false === $snapshot ? false : $snapshot['config'];
+	}
+
+	/**
+	 * Read config and its version from the same record, before external work.
+	 * Legacy records start at generation zero and acquire an incarnation on write.
+	 *
+	 * @param string $provider Provider slug.
+	 * @return array|false Internal snapshot; never return it through an API.
+	 */
+	public function get_provider_snapshot( $provider ) {
 		$data = get_option( self::OPTION_NAME, array() );
 		if ( ! is_array( $data ) || empty( $data[ $provider ]['key_encrypted'] ) ) {
 			return false;
 		}
-
-		$encryption = Mcpwp_Encryption::get_instance();
-		$decrypted  = $encryption->decrypt( $data[ $provider ]['key_encrypted'] );
+		$record    = $data[ $provider ];
+		$decrypted = Mcpwp_Encryption::get_instance()->decrypt( $record['key_encrypted'] );
 		if ( false === $decrypted ) {
 			return false;
 		}
-
-		// Multi-field providers store JSON.
-		if ( ! empty( $data[ $provider ]['multi_field'] ) ) {
-			$config = json_decode( $decrypted, true );
-			return is_array( $config ) ? $config : false;
+		$config = ! empty( $record['multi_field'] ) ? json_decode( $decrypted, true ) : array( 'key' => $decrypted );
+		if ( ! is_array( $config ) ) {
+			return false;
 		}
-
-		// Single-key fallback.
-		return array( 'key' => $decrypted );
+		return array(
+			'config'     => $config,
+			'generation' => isset( $record['generation'] ) ? (int) $record['generation'] : 0,
+			'record_id'  => isset( $record['record_id'] ) ? $record['record_id'] : '',
+		);
 	}
 
 	/**
@@ -560,7 +572,16 @@ class Mcpwp_Integration_Manager {
 	 *                stored for it) or WRITE_FAILED (it is still stored).
 	 */
 	public function remove_provider_record( $provider ) {
-		return $this->write_provider_record( $provider, null );
+		$outcome = $this->write_provider_record(
+			$provider,
+			static function () {
+				return null;
+			}
+		);
+		if ( self::WRITE_STORED === $outcome && class_exists( 'Mcpwp_Encryption_Migration' ) ) {
+			Mcpwp_Encryption_Migration::clear_provider_failure( $provider );
+		}
+		return $outcome;
 	}
 
 	/**
@@ -592,7 +613,16 @@ class Mcpwp_Integration_Manager {
 	 *              not be made, or there was no such provider to remove.
 	 */
 	private function save_provider_record( $provider, $record ) {
-		$saved = self::WRITE_STORED === $this->write_provider_record( $provider, $record );
+		$saved = self::WRITE_STORED === $this->write_provider_record(
+			$provider,
+			static function () use ( $record ) {
+				return $record;
+			}
+		);
+
+		if ( $saved && class_exists( 'Mcpwp_Encryption_Migration' ) ) {
+			Mcpwp_Encryption_Migration::clear_provider_failure( $provider );
+		}
 
 		$this->last_save_error = $saved ? '' : 'integration_write_failed';
 
@@ -600,42 +630,59 @@ class Mcpwp_Integration_Manager {
 	}
 
 	/**
-	 * Write one provider's record (null removes it) and return the outcome.
+	 * The single provider-write chokepoint (configure, key, remove, OAuth, status).
+	 *
+	 * The options-row CAS is the optimistic lock: version checks and mutation
+	 * are evaluated against the same row on every attempt. Any successful write
+	 * to this provider invalidates older OAuth work; unrelated providers may retry.
+	 * A new incarnation prevents remove/recreate from matching an old generation.
 	 *
 	 * @param string     $provider Provider slug.
-	 * @param array|null $record   The provider's new record, or null to remove it.
+	 * @param callable   $change   Current record -> record, null removes, false skips.
+	 * @param array|null $expected Snapshot version; null for an operator write.
 	 * @return string WRITE_STORED, WRITE_UNCHANGED or WRITE_FAILED.
 	 */
-	private function write_provider_record( $provider, $record ) {
+	private function write_provider_record( $provider, callable $change, $expected = null ) {
+		$conflict = false;
 		$outcome = $this->write_records(
-			static function ( array $records ) use ( $provider, $record ) {
-				if ( null === $record ) {
-					if ( ! array_key_exists( $provider, $records ) ) {
-						return null;
-					}
-
-					unset( $records[ $provider ] );
-
-					return $records;
+			function ( array $records ) use ( $provider, $change, $expected, &$conflict ) {
+				$current    = isset( $records[ $provider ] ) ? $records[ $provider ] : null;
+				$generation = is_array( $current ) && isset( $current['generation'] ) ? (int) $current['generation'] : 0;
+				$record_id  = is_array( $current ) && isset( $current['record_id'] ) ? $current['record_id'] : '';
+				if ( null !== $expected && ( null === $current || $generation !== $expected['generation'] || $record_id !== $expected['record_id'] ) ) {
+					$conflict = true;
+					return new WP_Error( 'generation_conflict' );
 				}
 
-				$records[ $provider ] = $record;
-
+				$next = call_user_func( $change, $current );
+				if ( is_wp_error( $next ) ) {
+					return $next;
+				}
+				if ( false === $next ) {
+					return null;
+				}
+				if ( null === $next ) {
+					if ( null === $current ) {
+						return null;
+					}
+					unset( $records[ $provider ] );
+				} else {
+					$next['generation'] = $generation + 1;
+					$next['record_id']  = '' !== $record_id ? $record_id : bin2hex( random_bytes( 16 ) );
+					$records[ $provider ] = $next;
+				}
 				return $records;
 			}
 		);
 
-		if ( self::WRITE_STORED === $outcome && class_exists( 'Mcpwp_Encryption_Migration' ) ) {
-			Mcpwp_Encryption_Migration::clear_provider_failure( $provider );
-		}
-
+		$this->last_save_error = $conflict ? 'generation_conflict' : ( self::WRITE_FAILED === $outcome ? 'integration_write_failed' : '' );
 		return $outcome;
 	}
 
 	/**
 	 * Record a connection test's outcome on the provider's record.
 	 *
-	 * Only the two status fields change. A provider with no record — removed
+	 * Only the two status fields and record version change. A provider with no record — removed
 	 * while its test ran, or never stored — has nothing to record, and a stale
 	 * copy must not bring it back.
 	 *
@@ -647,16 +694,15 @@ class Mcpwp_Integration_Manager {
 	private function record_test_status( $provider, $success ) {
 		$tested_at = current_time( 'mysql' );
 
-		$outcome = $this->write_records(
-			static function ( array $records ) use ( $provider, $success, $tested_at ) {
-				if ( ! isset( $records[ $provider ] ) || ! is_array( $records[ $provider ] ) ) {
-					return null;
+		$outcome = $this->write_provider_record(
+			$provider,
+			static function ( $record ) use ( $success, $tested_at ) {
+				if ( ! is_array( $record ) ) {
+					return false;
 				}
-
-				$records[ $provider ]['last_tested'] = $tested_at;
-				$records[ $provider ]['test_status'] = $success ? 'ok' : 'failed';
-
-				return $records;
+				$record['last_tested'] = $tested_at;
+				$record['test_status'] = $success ? 'ok' : 'failed';
+				return $record;
 			}
 		);
 

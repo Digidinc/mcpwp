@@ -267,7 +267,8 @@ class Mcpwp_Figma {
 			return self::pro_required_error();
 		}
 
-		$config = $this->get_raw_config();
+		$snapshot = $this->manager->get_provider_snapshot( 'figma' );
+		$config   = false === $snapshot ? array() : $snapshot['config'];
 		if ( empty( $config['oauth_client_id'] ) || empty( $config['oauth_client_secret'] ) ) {
 			return new WP_Error( 'figma_oauth_not_ready', __( 'Figma OAuth credentials are missing.', 'mcpwp' ) );
 		}
@@ -317,7 +318,10 @@ class Mcpwp_Figma {
 		$tokens['token_type']    = isset( $payload['token_type'] ) ? (string) $payload['token_type'] : 'Bearer';
 		$tokens['expires_at']    = ! empty( $payload['expires_in'] ) ? gmdate( 'Y-m-d H:i:s', time() + (int) $payload['expires_in'] ) : '';
 
-		if ( ! $this->manager->set_provider_config( 'figma', $tokens ) ) {
+		if ( ! $this->manager->set_provider_config( 'figma', $tokens, $snapshot ) ) {
+			if ( 'generation_conflict' === $this->manager->get_last_save_error() ) {
+				return new WP_Error( 'figma_config_changed', __( 'Figma configuration changed during OAuth. The late tokens were not saved. Retry using the current configuration.', 'mcpwp' ), array( 'status' => 409 ) );
+			}
 			return new WP_Error( 'figma_save_failed', __( 'Figma OAuth succeeded, but the tokens could not be saved.', 'mcpwp' ) );
 		}
 
@@ -686,7 +690,7 @@ class Mcpwp_Figma {
 		}
 
 		if ( ! empty( $config['refresh_token'] ) ) {
-			$refreshed = $this->refresh_oauth_token( $config );
+			$refreshed = $this->refresh_oauth_token();
 			if ( is_wp_error( $refreshed ) ) {
 				return $refreshed;
 			}
@@ -718,14 +722,16 @@ class Mcpwp_Figma {
 	/**
 	 * Refresh a stored OAuth token.
 	 *
-	 * @param array $config Figma config.
 	 * @return array|WP_Error
 	 */
-	private function refresh_oauth_token( $config ) {
+	private function refresh_oauth_token() {
 		// HTTP chokepoint: a token refresh calls Figma and writes new tokens.
 		if ( ! self::is_entitled() ) {
 			return self::pro_required_error();
 		}
+
+		$snapshot = $this->manager->get_provider_snapshot( 'figma' );
+		$config   = false === $snapshot ? array() : $snapshot['config'];
 
 		if ( empty( $config['oauth_client_id'] ) || empty( $config['oauth_client_secret'] ) || empty( $config['refresh_token'] ) ) {
 			return new WP_Error( 'figma_refresh_unavailable', __( 'Figma OAuth refresh is unavailable because credentials or refresh token are missing.', 'mcpwp' ) );
@@ -771,7 +777,10 @@ class Mcpwp_Figma {
 		$tokens['token_type'] = isset( $payload['token_type'] ) ? (string) $payload['token_type'] : 'Bearer';
 		$tokens['expires_at'] = ! empty( $payload['expires_in'] ) ? gmdate( 'Y-m-d H:i:s', time() + (int) $payload['expires_in'] ) : '';
 
-		if ( ! $this->manager->set_provider_config( 'figma', $tokens ) ) {
+		if ( ! $this->manager->set_provider_config( 'figma', $tokens, $snapshot ) ) {
+			if ( 'generation_conflict' === $this->manager->get_last_save_error() ) {
+				return new WP_Error( 'figma_config_changed', __( 'Figma configuration changed during OAuth. The late tokens were not saved. Retry using the current configuration.', 'mcpwp' ), array( 'status' => 409 ) );
+			}
 			return new WP_Error( 'figma_refresh_save_failed', __( 'Figma OAuth token refresh succeeded, but the new token could not be saved.', 'mcpwp' ) );
 		}
 
