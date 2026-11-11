@@ -240,22 +240,6 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			)
 		);
 
-		// Widgets.
-		register_rest_route(
-			$this->namespace,
-			'/elementor/widgets',
-			array(
-				'methods'             => WP_REST_Server::READABLE,
-				'callback'            => array( $this, 'get_widgets' ),
-				'permission_callback' => array( $this, 'check_permission' ),
-				'args'                => array(
-					'widget' => array(
-						'description' => __( 'Widget type name to get full controls schema.', 'mcpwp' ),
-						'type'        => 'string',
-					),
-				),
-			)
-		);
 
 		// Globals.
 		register_rest_route(
@@ -1902,7 +1886,6 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$conditions = get_post_meta( $post_id, '_elementor_conditions', true );
 		return is_array( $conditions ) ? $this->normalize_custom_code_conditions( $conditions ) : array();
 	}
-
 
 	/**
 	 * Redact raw code from activity logs and dry-run summaries.

@@ -34,16 +34,12 @@ class Mcpwp_REST_Events extends Mcpwp_REST_API {
 	 * Register REST routes.
 	 */
 	public function register_routes() {
+		// Free owns GET /events in every edition. The calendar list was
+		// shadowed there; do not expose it at a new URL as part of this fix.
 		register_rest_route(
 			$this->namespace,
 			'/events',
 			array(
-				array(
-					'methods'             => WP_REST_Server::READABLE,
-					'callback'            => array( $this, 'list_events' ),
-					'permission_callback' => array( $this, 'check_permission' ),
-					'args'                => $this->get_events_args(),
-				),
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_event' ),

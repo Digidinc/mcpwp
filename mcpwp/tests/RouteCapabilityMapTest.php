@@ -16,6 +16,8 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/helpers/rest-route-uniqueness.php';
+
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-core.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-media.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-design-references.php';
@@ -336,7 +338,11 @@ final class RouteCapabilityMapTest extends TestCase {
 	}
 
 	public function test_every_row_is_registered(): void {
-		$stale = array_values( array_diff( array_keys( Mcpwp_Route_Capability_Map::rows() ), $this->registered_keys() ) );
+		// #1107 removes shadowed numeric aliases, not their policy rows. An
+		// equivalent surviving registration still carries that existing policy.
+		$rows = array_map( 'mcpwp_test_canonical_rest_route', array_keys( Mcpwp_Route_Capability_Map::rows() ) );
+		$registered = array_map( 'mcpwp_test_canonical_rest_route', $this->registered_keys() );
+		$stale = array_values( array_diff( $rows, $registered ) );
 		$this->assertSame( array(), $stale, "Map rows for routes that are not registered:\n" . implode( "\n", $stale ) );
 	}
 
