@@ -9,6 +9,12 @@
 use PHPUnit\Framework\TestCase;
 
 require_once dirname(__DIR__, 2) . '/includes/class-mcpwp-uninstaller.php';
+require_once dirname(__DIR__, 2) . '/includes/core/class-mcpwp-key-state.php';
+
+class Mcpwp_Legacy_Uninstall_Test_Auth
+{
+    use Mcpwp_Api_Auth;
+}
 
 final class LegacyUninstallerTest extends TestCase
 {
@@ -150,5 +156,74 @@ final class LegacyUninstallerTest extends TestCase
         $src = file_get_contents(dirname(__DIR__, 2) . '/includes/class-mcpwp-deactivator.php');
         $this->assertStringNotContainsString('DROP TABLE', $src);
         $this->assertStringNotContainsString('Mcpwp_Uninstaller', $src);
+    }
+
+    public function test_the_action_log_prune_cron_is_cleared(): void
+    {
+        $GLOBALS['mcpwp_test_cron']['mcpwp_action_log_daily_prune'] = 1;
+
+        Mcpwp_Uninstaller::drop_legacy_data_for_current_site();
+
+        $this->assertArrayNotHasKey('mcpwp_action_log_daily_prune', $GLOBALS['mcpwp_test_cron']);
+    }
+
+    public function test_a_revoked_bridged_key_stays_dead_after_uninstall_and_reinstall(): void
+    {
+        $auth = new Mcpwp_Legacy_Uninstall_Test_Auth();
+        $key  = $auth->regenerate_api_key();
+        $rows = get_option('mcpwp_api_keys');
+        $this->assertNotEmpty($rows);
+        // The 2.8 migration copied the same hash into spai_api_keys and never removed it.
+        update_option('spai_api_keys', $rows);
+        update_option('spai_api_key', reset($rows)['hash']);
+        foreach ($auth->list_scoped_api_keys(false) as $record) {
+            $auth->revoke_scoped_api_key($record['id']);
+        }
+        $request = new WP_REST_Request('GET', '/mcpwp/v1/site-info', array(), array('X-API-Key' => $key));
+        $this->assertInstanceOf(WP_Error::class, $auth->verify_api_key($request));
+
+        Mcpwp_Uninstaller::drop_legacy_data_for_current_site(); // uninstall: revocation record goes too.
+
+        // Reinstall: fresh install, nothing left to adopt the old key from.
+        $GLOBALS['mcpwp_test_transients'] = array();
+        if (method_exists('Mcpwp_REST_MCP', 'reset_verdict_memo')) {
+            Mcpwp_REST_MCP::reset_verdict_memo();
+        }
+        $fresh   = new Mcpwp_Legacy_Uninstall_Test_Auth();
+        $request = new WP_REST_Request('GET', '/mcpwp/v1/site-info', array(), array('X-API-Key' => $key));
+        $this->assertInstanceOf(WP_Error::class, $fresh->verify_api_key($request));
+        foreach (array('spai_api_keys', 'spai_api_key', 'mcpwp_migrated_from_spai', 'spai_pro_license', 'spai_trial_started') as $option) {
+            $this->assertContains($option, Mcpwp_Uninstaller::LEGACY_OPTIONS);
+        }
+    }
+
+    public function test_stored_provider_keys_are_removed(): void
+    {
+        update_option('mcpwp_integrations', array('openai' => 'enc'));
+
+        Mcpwp_Uninstaller::drop_legacy_data_for_current_site();
+
+        $this->assertArrayNotHasKey('mcpwp_integrations', $GLOBALS['mcpwp_test_options']);
+    }
+
+    public function test_another_installed_copy_is_detected_by_text_domain_and_self_is_ignored(): void
+    {
+        $plugins = array(
+            'mcpwp/mcpwp.php'     => array('TextDomain' => 'mcpwp'),
+            'akismet/akismet.php' => array('TextDomain' => 'akismet'),
+        );
+        $this->assertFalse(Mcpwp_Uninstaller::another_copy_installed($plugins, 'mcpwp/mcpwp.php'));
+
+        $plugins['mcpwp-old/mcpwp.php'] = array('TextDomain' => 'mcpwp');
+        $this->assertTrue(Mcpwp_Uninstaller::another_copy_installed($plugins, 'mcpwp/mcpwp.php'));
+        $this->assertTrue(Mcpwp_Uninstaller::another_copy_installed($plugins, 'mcpwp-old/mcpwp.php'));
+    }
+
+    public function test_uninstall_php_guards_the_class_load_and_skips_when_another_copy_exists(): void
+    {
+        $src = file_get_contents(dirname(__DIR__, 2) . '/uninstall.php');
+        $this->assertStringContainsString("! class_exists( 'Mcpwp_Uninstaller' )", $src);
+        $this->assertStringContainsString('another_copy_installed', $src);
+        $this->assertLessThan(strpos($src, 'drop_graph_data()'), strpos($src, 'another_copy_installed'));
     }
 }

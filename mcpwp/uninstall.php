@@ -34,7 +34,20 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 	exit;
 }
 
-require_once __DIR__ . '/includes/class-mcpwp-uninstaller.php';
+if ( ! class_exists( 'Mcpwp_Uninstaller' ) ) {
+	// Already loaded when another copy of the plugin is active in this
+	// request — declaring it twice would be a fatal.
+	require_once __DIR__ . '/includes/class-mcpwp-uninstaller.php';
+}
+
+// Another installed copy of MCPWP (e.g. `mcpwp-old/`) shares these tables and
+// options; deleting this copy must not wipe the other's data.
+if ( ! function_exists( 'get_plugins' ) ) {
+	require_once ABSPATH . 'wp-admin/includes/plugin.php';
+}
+if ( Mcpwp_Uninstaller::another_copy_installed( get_plugins(), defined( 'WP_UNINSTALL_PLUGIN' ) ? WP_UNINSTALL_PLUGIN : '' ) ) {
+	return;
+}
 
 Mcpwp_Uninstaller::drop_graph_data();
 

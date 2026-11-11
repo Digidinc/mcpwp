@@ -225,6 +225,23 @@ class Mcpwp_Uninstaller {
 		'mcpwp_action_log_backfill_lock',
 		'mcpwp_action_log_backfill_cursor',
 		'mcpwp_action_log_post_type_backfill_cursor',
+		// Stored third-party provider keys (encrypted) — the plugin's own data.
+		'mcpwp_integrations',
+		// Migrated licence/trial copies and the 2.8.x originals the licence
+		// bridge still reads (Mcpwp_License).
+		'mcpwp_pro_license',
+		'mcpwp_trial_started',
+		'spai_pro_license',
+		'spai_trial_started',
+		// The 2.8.x API key stores. find_legacy_spai_key() still authenticates
+		// against these, so leaving them lets a key revoked in mcpwp_api_keys
+		// come back to life after uninstall + reinstall (#995 review). Exact
+		// names only — never a spai_% pattern.
+		'spai_api_keys',
+		'spai_api_key',
+		// Cleared so a reinstall is a clean slate rather than a 2.8.x cutover
+		// that re-runs the migration and re-opens the licence bridge.
+		'mcpwp_migrated_from_spai',
 	);
 
 	/** @var array<string> Transients cleared with the older data (#995). */
@@ -237,6 +254,7 @@ class Mcpwp_Uninstaller {
 	const LEGACY_CRON_HOOKS = array(
 		'mcpwp_cleanup_logs',
 		'mcpwp_check_alerts',
+		'mcpwp_action_log_daily_prune',
 	);
 
 	/**
@@ -287,5 +305,30 @@ class Mcpwp_Uninstaller {
 		foreach ( self::LEGACY_CRON_HOOKS as $hook ) {
 			wp_clear_scheduled_hook( $hook );
 		}
+	}
+
+	/**
+	 * Whether another installed plugin is a copy of MCPWP (#995 review).
+	 *
+	 * Tables and options are keyed by the fixed `mcpwp_` names, not by plugin
+	 * directory, so deleting one copy (say `mcpwp-old/`) while another copy is
+	 * installed — active or not — would wipe the data the other one owns.
+	 * A copy is recognised by the `mcpwp` Text Domain header, the same
+	 * identity every build ships. Compared by basename, so the plugin being
+	 * uninstalled does not count as its own other copy.
+	 *
+	 * @param array<string,array<string,mixed>> $plugins     get_plugins() output (basename => headers).
+	 * @param string                            $uninstalled Basename being uninstalled.
+	 */
+	public static function another_copy_installed( array $plugins, $uninstalled ) {
+		foreach ( $plugins as $basename => $headers ) {
+			if ( (string) $basename === (string) $uninstalled || ! is_array( $headers ) ) {
+				continue;
+			}
+			if ( isset( $headers['TextDomain'] ) && 'mcpwp' === $headers['TextDomain'] ) {
+				return true;
+			}
+		}
+		return false;
 	}
 }
