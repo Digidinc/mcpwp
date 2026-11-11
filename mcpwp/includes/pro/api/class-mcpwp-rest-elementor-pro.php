@@ -26,6 +26,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 */
 	private $custom_code_cpt = 'elementor_snippet';
 
+	protected function success_response( $data, $status = 200 ) {
+		return parent::success_response( is_array( $data ) ? Mcpwp_Custom_Code_Conditions::annotate_response( $data ) : $data, $status );
+	}
+
 	/**
 	 * Elementor Pro handler.
 	 *
@@ -1023,26 +1027,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			if ( ! is_array( $conditions ) ) {
 				return $this->error_response( 'invalid_conditions', __( 'conditions must be an array.', 'mcpwp' ), 400 );
 			}
-			// A selected object needs its sub-condition kind. Dropping an
-			// explicit selector during sanitization would change its scope.
-			foreach ( $conditions as $condition ) {
-				if ( is_string( $condition ) ) {
-					list( $type, $name, $sub_name, $sub_id ) = array_pad( explode( '/', $condition, 4 ), 4, '' );
-					$condition = compact( 'type', 'name', 'sub_name', 'sub_id' );
-				}
-				if ( ! is_array( $condition ) ) {
-					continue;
-				}
-				foreach ( array( 'name', 'sub_name', 'sub_id' ) as $field ) {
-					if ( isset( $condition[ $field ] ) && '' !== (string) $condition[ $field ] && '' === sanitize_text_field( $condition[ $field ] ) ) {
-						return $this->error_response( 'invalid_conditions', __( 'Display condition selectors must not become empty when sanitized.', 'mcpwp' ), 400 );
-					}
-				}
-				if ( isset( $condition['sub_id'] ) && '' !== (string) $condition['sub_id'] && ( ! isset( $condition['sub_name'] ) || '' === sanitize_text_field( $condition['sub_name'] ) ) ) {
-					return $this->error_response( 'invalid_conditions', __( 'A display condition sub_id requires sub_name.', 'mcpwp' ), 400 );
-				}
+			$converted = Mcpwp_Custom_Code_Conditions::convert( $conditions );
+			if ( is_wp_error( $converted ) ) {
+				return $this->error_response( 'invalid_conditions', __( 'Every display condition must be convertible without changing its scope.', 'mcpwp' ), 400 );
 			}
-			$payload['conditions'] = $this->normalize_custom_code_conditions( $conditions );
+			$payload['conditions'] = $this->normalize_custom_code_conditions( $converted );
 		} elseif ( $creating ) {
 			$payload['conditions'] = $this->normalize_custom_code_conditions( array() );
 		}
@@ -1683,11 +1672,12 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			$previous_cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
 			$strings = Mcpwp_Activator::coerce_custom_code_conditions_to_strings( $conditions );
 			if ( is_wp_error( $strings ) ) {
-				return $strings;
+				throw new RuntimeException( $strings->get_error_message() );
 			}
 			// Pro can construct the document before saving it. Expose only
 			// string meta during that call, and restore it if the call fails.
 			update_post_meta( $post_id, '_elementor_conditions', wp_slash( $strings ) );
+			Mcpwp_Custom_Code_Conditions::clear_quarantine( $post_id );
 
 			if (
 				class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' )
@@ -1799,6 +1789,13 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return void
 	 */
 	private function sync_custom_code_conditions_cache( $post_id ) {
+		$raw = Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id );
+		$conditions = $this->coerce_conditions_to_strings( $raw, $post_id );
+		if ( is_wp_error( $conditions ) ) {
+			Mcpwp_Custom_Code_Conditions::quarantine( $post_id, $raw );
+			return;
+		}
+		Mcpwp_Custom_Code_Conditions::clear_quarantine( $post_id );
 		if (
 			! class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' )
 			|| ! class_exists( '\\Elementor\\Plugin' )
@@ -1837,9 +1834,6 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			// Conditions_Manager::save_conditions(), which overwrites this
 			// meta with that form; never the object-array shape this class
 			// uses for its own API contract).
-			$conditions = get_post_meta( $post_id, '_elementor_conditions', true );
-			$conditions = is_array( $conditions ) ? $conditions : array();
-			$conditions = $this->coerce_conditions_to_strings( $conditions, $post_id );
 
 			if ( method_exists( $cache, 'update' ) ) {
 				$cache->update( $document, $conditions );
@@ -1866,17 +1860,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 *
 	 * @param array $conditions Stored conditions.
 	 * @param int   $post_id    Snippet ID.
-	 * @return string[] Conditions in Elementor's persisted format.
+	 * @return string[]|WP_Error Complete conditions in Elementor's persisted format.
 	 */
 	private function coerce_conditions_to_strings( array $conditions, $post_id ) {
-		$strings = array();
-		foreach ( $conditions as $condition ) {
-			$converted = Mcpwp_Activator::coerce_custom_code_conditions_to_strings( array( $condition ) );
-			if ( ! is_wp_error( $converted ) ) {
-				$strings = array_merge( $strings, $converted );
-			}
-		}
-		return $strings;
+		return Mcpwp_Custom_Code_Conditions::convert( $conditions );
 	}
 
 	/**
@@ -1920,8 +1907,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			}
 		}
 
-		$conditions = get_post_meta( $post_id, '_elementor_conditions', true );
-		return is_array( $conditions ) ? $this->normalize_custom_code_conditions( $conditions ) : array();
+		$conditions = Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id );
+		return $this->normalize_custom_code_conditions( $conditions );
 	}
 
 	/**

@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/core/class-mcpwp-custom-code-conditions.php';
+
 // mcpwp_activate() (mcpwp.php) requires this file directly, without going
 // through plugins_loaded's own require order — so this file cannot assume
 // the trait is already loaded the way most of the codebase can. Idempotent.
@@ -948,51 +950,7 @@ class Mcpwp_Activator {
 	 * @return string[]|WP_Error
 	 */
 	public static function coerce_custom_code_conditions_to_strings( array $conditions ) {
-		$strings = array();
-
-		foreach ( $conditions as $condition ) {
-			if ( is_string( $condition ) && '' !== $condition ) {
-				$strings[] = $condition;
-				continue;
-			}
-			if ( ! is_array( $condition ) || ! isset( $condition['type'], $condition['name'] ) ) {
-				return new WP_Error( 'invalid_custom_code_conditions', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
-			}
-
-			$parts = array();
-			foreach ( array( 'type', 'name', 'sub_name', 'sub_id' ) as $key ) {
-				$value = isset( $condition[ $key ] ) ? $condition[ $key ] : '';
-				if ( ! is_scalar( $value ) ) {
-					return new WP_Error( 'invalid_custom_code_conditions', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
-				}
-				$raw   = (string) $value;
-				$value = sanitize_text_field( $raw );
-				// A repair may change shape, never scope. Sanitizing a legacy
-				// component to a different value could turn it into a broader
-				// Elementor condition, so leave it untouched and fail closed.
-				if ( $raw !== $value ) {
-					return new WP_Error( 'invalid_custom_code_conditions', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
-				}
-				if ( false !== strpos( $value, '/' ) ) {
-					return new WP_Error( 'invalid_custom_code_conditions', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
-				}
-				$parts[ $key ] = $value;
-			}
-			if ( ! in_array( $parts['type'], array( 'include', 'exclude' ), true ) || '' === $parts['name'] || ( '' !== $parts['sub_id'] && '' === $parts['sub_name'] ) ) {
-				return new WP_Error( 'invalid_custom_code_conditions', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
-			}
-
-			$string = $parts['type'] . '/' . $parts['name'];
-			if ( '' !== $parts['sub_name'] ) {
-				$string .= '/' . $parts['sub_name'];
-			}
-			if ( '' !== $parts['sub_id'] ) {
-				$string .= '/' . $parts['sub_id'];
-			}
-			$strings[] = $string;
-		}
-
-		return $strings;
+		return Mcpwp_Custom_Code_Conditions::convert( $conditions );
 	}
 
 	/**
@@ -1008,7 +966,7 @@ class Mcpwp_Activator {
 
 		$lock_token = self::acquire_migration_lock( self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_OPTION, self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_TTL );
 		if ( false === $lock_token ) {
-			return new WP_Error( 'conditions_repair_busy', __( 'Custom Code condition repair is already running.', 'mcpwp' ) );
+			return true;
 		}
 
 		try {
@@ -1026,31 +984,20 @@ class Mcpwp_Activator {
 	 * @return true|WP_Error
 	 */
 	public static function ensure_custom_code_conditions_repaired() {
-		$lock_token = self::acquire_migration_lock( self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_OPTION, self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_TTL );
-		if ( false === $lock_token ) {
-			return new WP_Error( 'conditions_repair_busy', __( 'Custom Code condition repair is already running.', 'mcpwp' ) );
-		}
-
-		try {
-			$cursor = 0;
-			do {
-				$snippet_ids = self::custom_code_conditions_batch( $cursor, self::CUSTOM_CODE_REPAIR_BATCH_SIZE );
-				if ( is_wp_error( $snippet_ids ) ) {
-					return $snippet_ids;
-				}
-				foreach ( $snippet_ids as $post_id ) {
-					$result = self::repair_one_custom_code_conditions( (int) $post_id );
-					if ( is_wp_error( $result ) ) {
-						return $result;
-					}
-					$cursor = (int) $post_id;
-				}
-			} while ( count( $snippet_ids ) === self::CUSTOM_CODE_REPAIR_BATCH_SIZE );
-
-			return true;
-		} finally {
-			self::release_migration_lock( self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_OPTION, $lock_token );
-		}
+		// Request guards are idempotent per row and do not contend with the
+		// upgrade cursor lock. One administrator's repair cannot refuse a save.
+		$cursor = 0;
+		do {
+			$snippet_ids = self::custom_code_conditions_batch( $cursor, self::CUSTOM_CODE_REPAIR_BATCH_SIZE );
+			if ( is_wp_error( $snippet_ids ) ) {
+				return $snippet_ids;
+			}
+			foreach ( $snippet_ids as $post_id ) {
+				self::repair_one_custom_code_conditions( (int) $post_id );
+				$cursor = (int) $post_id;
+			}
+		} while ( count( $snippet_ids ) === self::CUSTOM_CODE_REPAIR_BATCH_SIZE );
+		return true;
 	}
 
 	/** @return true|WP_Error */
@@ -1127,63 +1074,53 @@ class Mcpwp_Activator {
 
 	/** @return true|WP_Error */
 	private static function repair_one_custom_code_conditions( $post_id ) {
-		$conditions = get_post_meta( $post_id, '_elementor_conditions', true );
-		if ( is_array( $conditions ) && ! empty( $conditions ) ) {
-			$has_legacy = false;
-			foreach ( $conditions as $condition ) {
-				if ( ! is_string( $condition ) ) {
-					$has_legacy = true;
-					break;
-				}
-			}
-			if ( $has_legacy ) {
-				$strings = self::coerce_custom_code_conditions_to_strings( $conditions );
-				if ( is_wp_error( $strings ) ) {
-					return $strings;
-				}
-
-				// The previous-value argument is WordPress's compare-and-swap
-				// guard: a concurrent editor wins rather than being overwritten.
-				update_post_meta( $post_id, '_elementor_conditions', $strings, $conditions );
-				if ( get_post_meta( $post_id, '_elementor_conditions', true ) !== $strings ) {
-					return new WP_Error( 'conditions_repair_failed', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
-				}
+		$raw = Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id );
+		$strings = self::coerce_custom_code_conditions_to_strings( $raw );
+		if ( is_wp_error( $strings ) ) {
+			Mcpwp_Custom_Code_Conditions::quarantine( $post_id, $raw );
+			return true;
+		}
+		if ( $raw !== $strings ) {
+			// A concurrent editor wins. Re-read before deciding whether this
+			// record can enter the cache; never reject another snippet's save.
+			update_post_meta( $post_id, '_elementor_conditions', wp_slash( $strings ), $raw );
+			$current = Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id );
+			if ( is_wp_error( self::coerce_custom_code_conditions_to_strings( $current ) ) ) {
+				Mcpwp_Custom_Code_Conditions::quarantine( $post_id, $current );
+				return true;
 			}
 		}
-
-		return self::repair_custom_code_conditions_cache_entry( $post_id );
+		Mcpwp_Custom_Code_Conditions::clear_quarantine( $post_id );
+		self::repair_custom_code_conditions_cache_entry( $post_id );
+		return true;
 	}
 
-	/** @return true|WP_Error */
+	/** @return true */
 	private static function repair_custom_code_conditions_cache_entry( $post_id ) {
 		$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
 		if ( ! is_array( $cache ) ) {
-			return new WP_Error( 'conditions_repair_failed', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
+			return true;
 		}
-
 		$changed = false;
 		foreach ( $cache as $location => $templates ) {
 			if ( ! is_array( $templates ) || ! array_key_exists( $post_id, $templates ) ) {
 				continue;
 			}
-			$strings = self::coerce_custom_code_conditions_to_strings( $templates[ $post_id ] );
+			$strings = is_array( $templates[ $post_id ] ) ? self::coerce_custom_code_conditions_to_strings( $templates[ $post_id ] ) : new WP_Error( 'invalid_custom_code_conditions' );
 			if ( is_wp_error( $strings ) ) {
-				return $strings;
+				// The stored meta is authoritative when an old cache entry alone
+				// cannot be converted as a complete list.
+				$strings = self::coerce_custom_code_conditions_to_strings( Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id ) );
 			}
-			if ( $templates[ $post_id ] !== $strings ) {
+			if ( ! is_wp_error( $strings ) && $templates[ $post_id ] !== $strings ) {
 				$cache[ $location ][ $post_id ] = $strings;
-				$changed                         = true;
+				$changed = true;
 			}
 		}
-
-		if ( ! $changed ) {
-			return true;
+		if ( $changed ) {
+			update_option( 'elementor_pro_theme_builder_conditions', $cache, false );
 		}
-
-		update_option( 'elementor_pro_theme_builder_conditions', $cache, false );
-		return get_option( 'elementor_pro_theme_builder_conditions', array() ) === $cache
-			? true
-			: new WP_Error( 'conditions_repair_failed', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
+		return true;
 	}
 
 	/** @return bool|WP_Error */
@@ -1196,7 +1133,9 @@ class Mcpwp_Activator {
 			}
 			foreach ( $snippet_ids as $post_id ) {
 				$conditions = get_post_meta( (int) $post_id, '_elementor_conditions', true );
-				if ( is_array( $conditions ) ) {
+				if ( is_array( $conditions ) && is_wp_error( self::coerce_custom_code_conditions_to_strings( $conditions ) ) ) {
+					Mcpwp_Custom_Code_Conditions::quarantine( (int) $post_id, $conditions );
+				} elseif ( is_array( $conditions ) ) {
 					foreach ( $conditions as $condition ) {
 						if ( ! is_string( $condition ) ) {
 							return true;

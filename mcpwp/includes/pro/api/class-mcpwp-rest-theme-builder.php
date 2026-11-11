@@ -15,6 +15,10 @@ if ( ! defined( 'ABSPATH' ) ) {
  * Manages theme locations and display conditions.
  */
 class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
+	protected function success_response( $data, $status = 200 ) {
+		return parent::success_response( is_array( $data ) ? Mcpwp_Custom_Code_Conditions::annotate_response( $data ) : $data, $status );
+	}
+
 
 	/**
 	 * Theme Builder handler.

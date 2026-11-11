@@ -738,7 +738,7 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 	// explode('/', $condition), a hard TypeError on anything else.
 	// ---------------------------------------------------------------
 
-	public function test_coerce_conditions_to_strings_stringifies_and_drops_non_strings(): void {
+	public function test_coerce_conditions_to_strings_refuses_a_partial_result(): void {
 		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
 		$method     = new ReflectionMethod( Mcpwp_REST_Elementor_Pro::class, 'coerce_conditions_to_strings' );
 		$method->setAccessible( true );
@@ -757,11 +757,7 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 			999
 		);
 
-		$this->assertSame(
-			array( 'include/general', 'include/singular' ),
-			$result,
-			'A real string passes through, an array with type/name is stringified the same way Conditions_Manager::save_conditions() does, and anything with no usable shape (an int, an array with no type/name) is dropped rather than fatal Elementor\'s own parser.'
-		);
+		$this->assertInstanceOf( WP_Error::class, $result, 'The whole snippet must be refused when any condition cannot be converted.' );
 	}
 
 	public function test_coerce_conditions_to_strings_is_a_noop_when_everything_is_already_a_string(): void {

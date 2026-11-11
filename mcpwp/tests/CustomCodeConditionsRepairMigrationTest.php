@@ -96,13 +96,14 @@ final class CustomCodeConditionsRepairMigrationTest extends TestCase {
 		$this->assertSame( array( 'exclude/general' ), $cache['elementor_head'][999] );
 	}
 
-	public function test_unconvertible_legacy_entry_stays_unchanged_and_blocks_repair(): void {
+	public function test_unconvertible_legacy_entry_is_reported_without_blocking_repair(): void {
 		$legacy = array( array( 'type' => 'include', 'name' => 'singular', 'sub_id' => '6' ) );
 		$this->seed( 682, $legacy );
 
-		$result = Mcpwp_Activator::ensure_custom_code_conditions_repaired();
-		$this->assertInstanceOf( WP_Error::class, $result );
+		$result = Mcpwp_Activator::repair_custom_code_conditions();
+		$this->assertTrue( $result );
+		$this->assertContains( 682, Mcpwp_Custom_Code_Conditions::skipped_ids() );
 		$this->assertSame( $legacy, get_post_meta( 682, '_elementor_conditions', true ) );
-		$this->assertFalse( get_option( 'mcpwp_custom_code_conditions_repaired', false ) );
+		$this->assertSame( 1, get_option( 'mcpwp_custom_code_conditions_repaired', false ) );
 	}
 }

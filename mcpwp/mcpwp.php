@@ -223,6 +223,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		return;
 	}
 
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-custom-code-conditions.php';
+	Mcpwp_Custom_Code_Conditions::register_hooks();
+
 	// Load traits first
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-state.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-store.php';
