@@ -340,15 +340,9 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function create_theme_template( $request ) {
-		$data = array(
-			'title'          => $request->get_param( 'title' ),
-			'type'           => $request->get_param( 'type' ),
-			'elementor_data' => $request->get_param( 'elementor_data' ),
-			'scope'          => $request->get_param( 'scope' ),
-			'post_type'      => $request->get_param( 'post_type' ),
-			'post_ids'       => $request->get_param( 'post_ids' ),
-			'dry_run'        => rest_sanitize_boolean( $request->get_param( 'dry_run' ) ),
-		);
+		// Preserve preview spellings and value presence for the core's one
+		// fail-closed parser, shared by REST, MCP and batch callers.
+		$data = $request->get_params();
 
 		$result = $this->theme_builder->create_theme_template( $data );
 

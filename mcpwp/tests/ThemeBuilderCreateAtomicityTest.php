@@ -486,4 +486,146 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$this->assertSame( 0, $GLOBALS['mcpwp_theme_test_save_calls'] );
 	}
 
+	public static function preview_alias_paths(): array {
+		$cases = array();
+		foreach ( array( 'REST', 'MCP', 'mcpwp_call', 'batch', 'wp_batch', 'core' ) as $door ) {
+			foreach ( array( 'dry_run', 'dryRun', 'dry-run', 'DRY_RUN', 'dryrun', 'dry run', 'dry.run', 'preview' ) as $alias ) {
+				foreach ( array( 'true' => true, 'null' => null, 'empty string' => '', 'array' => array() ) as $label => $value ) {
+					$cases[ "$door $alias $label" ] = array( $door, array( $alias => $value ) );
+				}
+				$cases[ "$door conflicting $alias" ] = array( $door, array( 'dry_run' => false, $alias => true ) );
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * Real route handlers behind the test REST server's dispatch hook. The
+	 * same adapter receives a direct request or one forwarded by MCP/batch.
+	 */
+	private function dispatch_template_args( string $door, array $args ) {
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
+		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
+		$controller = new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() );
+		add_filter( 'rest_dispatch_request', function ( $result, $request ) use ( $controller ) {
+			if ( '/mcpwp/v1/theme-builder/templates' === $request->get_route() ) {
+				return $controller->create_theme_template( $request );
+			}
+			if ( '/mcpwp/v1/batch' === $request->get_route() ) {
+				return ( new Mcpwp_REST_Batch() )->handle_batch( $request );
+			}
+			return $result;
+		}, 10, 2 );
+
+		$args += array( 'title' => 'Alias preview', 'type' => 'single', 'scope' => 'entire_site' );
+		if ( 'core' === $door ) {
+			return ( new Mcpwp_Theme_Builder() )->create_theme_template( $args );
+		}
+		if ( 'REST' === $door ) {
+			return $controller->create_theme_template( new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $args ) );
+		}
+		if ( in_array( $door, array( 'batch', 'wp_batch' ), true ) ) {
+			$args = array( 'operations' => array( array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => $args ) ) );
+		}
+		if ( 'batch' === $door ) {
+			return ( new Mcpwp_REST_Batch() )->handle_batch( new WP_REST_Request( 'POST', '/mcpwp/v1/batch', $args ) );
+		}
+		$params = array( 'name' => 'wp_create_theme_template', 'arguments' => $args );
+		if ( 'mcpwp_call' === $door ) {
+			$params = array( 'name' => 'mcpwp_call', 'arguments' => $params );
+		} elseif ( 'wp_batch' === $door ) {
+			$params['name'] = 'wp_batch';
+		}
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array(
+			'jsonrpc' => '2.0', 'id' => 1078, 'method' => 'tools/call', 'params' => $params,
+		) );
+		return ( new Mcpwp_REST_MCP() )->handle_mcp( $request );
+	}
+
+	/**
+	 * Every preview spelling and malformed flag must refuse to enter the
+	 * write path, including a false canonical flag alongside a true alias.
+	 *
+	 * @dataProvider preview_alias_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_preview_aliases_and_ambiguous_values_never_write( string $door, array $flags ): void {
+		$this->install_elementor( false );
+		define( 'MCPWP_TESTS', true );
+		$conditions = array( 'single' => array( 99 => array( 'include/general' ) ) );
+		update_option( 'elementor_pro_theme_builder_conditions', $conditions );
+		$writes = 0;
+		add_filter( 'wp_insert_post_data', function ( $data ) use ( &$writes ) {
+			++$writes;
+			return $data;
+		} );
+		$response = $this->dispatch_template_args( $door, $flags );
+
+		$this->assertSame( 0, $writes, 'A preview flag must not insert or publish even temporarily.' );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_meta'] );
+		$this->assertSame( $conditions, get_option( 'elementor_pro_theme_builder_conditions' ) );
+		$this->assertSame( 0, $GLOBALS['mcpwp_theme_test_save_calls'] );
+		$this->assertSame( 0, $GLOBALS['mcpwp_theme_test_cache_regenerate_calls'] ?? 0 );
+
+		$data = $response instanceof WP_REST_Response ? $response->get_data() : $response;
+		if ( isset( $data['result'] ) ) {
+			if ( ! empty( $data['result']['isError'] ) ) {
+				// The MCP schema may refuse an unknown/conflicting spelling
+				// before dispatch. Refusing is safe; silently writing is not.
+				$this->assertSame( 'invalid_arguments', $data['result']['structuredContent']['error']['code'] );
+				return;
+			}
+			$data = json_decode( $data['result']['content'][0]['text'], true );
+		}
+		if ( isset( $data['results'] ) ) {
+			$this->assertSame( 0, $data['failed'] );
+			$data = $data['results'][0]['data'];
+		}
+		$this->assertTrue( $data['dry_run'] );
+		$this->assertSame( 'publish', $data['would_create']['post_status'] );
+	}
+
+	public static function false_alias_paths(): array {
+		$cases = array();
+		foreach ( array( 'REST', 'MCP', 'mcpwp_call', 'batch', 'wp_batch', 'core' ) as $door ) {
+			$cases[ "$door omitted" ] = array( $door, array() );
+			foreach ( array( 'dry_run', 'dryRun', 'dry-run', 'DRY_RUN', 'dryrun', 'dry run', 'dry.run', 'preview' ) as $alias ) {
+				$cases[ "$door $alias false" ] = array( $door, array( $alias => false ) );
+				$cases[ "$door $alias zero" ] = array( $door, array( $alias => '0' ) );
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * @dataProvider false_alias_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_clear_false_aliases_and_omitted_flags_keep_normal_writes( string $door, array $flags ): void {
+		$this->install_elementor( false );
+		define( 'MCPWP_TESTS', true );
+		$response = $this->dispatch_template_args( $door, $flags );
+		$data = $response instanceof WP_REST_Response ? $response->get_data() : $response;
+		if ( isset( $data['result'] ) ) {
+			if ( ! empty( $data['result']['isError'] ) ) {
+				$this->assertSame( 'preview', key( $flags ) );
+				$this->assertSame( 'invalid_arguments', $data['result']['structuredContent']['error']['code'] );
+				$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+				return;
+			}
+			$data = json_decode( $data['result']['content'][0]['text'], true );
+		}
+		if ( isset( $data['results'] ) ) {
+			$this->assertSame( 0, $data['failed'] );
+			$data = $data['results'][0]['data'];
+		}
+		$this->assertArrayHasKey( 'id', $data );
+		$this->assertSame( 'publish', $data['status'] );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
+		$this->assertNotEmpty( $GLOBALS['_mcpwp_test_meta'][ $data['id'] ] );
+	}
+
 }

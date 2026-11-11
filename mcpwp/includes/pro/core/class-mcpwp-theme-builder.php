@@ -715,6 +715,35 @@ class Mcpwp_Theme_Builder {
 	}
 
 	/**
+	 * Resolve all preview flags before any template write. Match MCP's
+	 * case/separator-insensitive key handling, plus the explicit preview
+	 * spelling. A present flag permits writes only when clearly false;
+	 * ambiguous values and conflicting aliases always keep the call a preview.
+	 *
+	 * @param array $data Template creation parameters.
+	 * @return bool Whether to preview without writing.
+	 */
+	private function is_create_dry_run( $data ) {
+		foreach ( $data as $key => $value ) {
+			$key = strtolower( (string) preg_replace( '/[^a-zA-Z0-9]/', '', (string) $key ) );
+			if ( ! in_array( $key, array( 'dryrun', 'preview' ), true ) ) {
+				continue;
+			}
+
+			if ( false === $value || 0 === $value || 0.0 === $value ) {
+				continue;
+			}
+			if ( is_string( $value ) && in_array( strtolower( trim( $value ) ), array( 'false', '0' ), true ) ) {
+				continue;
+			}
+
+			return true;
+		}
+
+		return false;
+	}
+
+	/**
 	 * Create a Theme Builder template and assign it to a location in one step.
 	 *
 	 * @param array $data {
@@ -731,7 +760,7 @@ class Mcpwp_Theme_Builder {
 			return new WP_Error( 'not_available', __( 'Elementor Pro Theme Builder is not available.', 'mcpwp' ) );
 		}
 
-		$dry_run = ! empty( $data['dry_run'] );
+		$dry_run = $this->is_create_dry_run( $data );
 		$title   = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '';
 		$type    = ! empty( $data['type'] ) ? sanitize_text_field( $data['type'] ) : '';
 		$scope   = ! empty( $data['scope'] ) ? sanitize_text_field( $data['scope'] ) : 'entire_site';
