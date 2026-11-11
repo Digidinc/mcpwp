@@ -1,0 +1,34 @@
+schema_version: 1
+kind: mupot_agent_proposal
+
+identity:
+  slug: example-agent
+  display_name: Example Agent
+  role: Bounded MCPWP Contributor
+
+runtime:
+  kind: codex-desktop
+  adapter: codex-desktop-example-agent
+
+placement:
+  project_slug: mcpwp
+  squad_hint: mcpwp-core
+
+requested_capabilities:
+  - evidence-preparation
+
+authority:
+  mode: requested_only
+  self_grant: false
+  publishing: human_approval_required
+  outreach: human_approval_required
+  spending: human_approval_required
+  production_control: human_approval_required
+  product_claims: human_approval_required
+
+paths:
+  home: agents/example-agent
+  charter: agents/example-agent/CHARTER.md
+  setup: agents/example-agent/SETUP.md
+  assets: agents/example-agent/assets/README.md
+  memory: agents/example-agent/memory/README.md

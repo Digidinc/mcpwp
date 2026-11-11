@@ -1,0 +1,44 @@
+schema_version: 1
+kind: mupot_agent_proposal
+
+identity:
+  id: fd1ded67-9c03-42e5-946e-72609e2ad059
+  slug: lumen-video-director
+  display_name: Lumen
+  role: MCPWP AI Video Director
+
+runtime:
+  kind: codex-desktop
+  model: gpt-5.6-terra
+  adapter: codex-desktop-lumen
+
+placement:
+  project_id: 09796d70-1d87-46d7-ac48-adc0551abab7
+  project_slug: mcpwp
+  squad_id: c0e87a6d-77de-4cf8-89a3-79e5843cdd30
+  squad_hint: mcpwp-core
+
+requested_capabilities:
+  - video-direction
+  - remotion-production
+  - obs-coordination
+  - content-strategy
+  - evidence-receipts
+
+authority:
+  mode: requested_only
+  self_grant: false
+  publishing: human_approval_required
+  outreach: human_approval_required
+  spending: human_approval_required
+  production_control: human_approval_required
+  product_claims: human_approval_required
+  current_review_gate: gate:kasra-core
+
+paths:
+  home: agents/lumen
+  charter: agents/lumen/CHARTER.md
+  setup: agents/lumen/SETUP.md
+  assets: agents/lumen/assets/README.md
+  memory: agents/lumen/memory/README.md
+  operations: content/video/README.md
