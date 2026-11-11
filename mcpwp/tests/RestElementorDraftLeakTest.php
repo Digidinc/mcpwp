@@ -26,6 +26,15 @@ use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-elementor.php';
 
+/**
+ * #1114: these handler outcomes also vary after another test defines
+ * ELEMENTOR_VERSION (one success assertion versus two error assertions).
+ * Own the plugin-absent precondition in a fresh process; constants cannot
+ * be restored in tearDown(). Do not inherit the parent's plugin constants.
+ *
+ * @runTestsInSeparateProcesses
+ * @preserveGlobalState disabled
+ */
 final class RestElementorDraftLeakTest extends TestCase {
 
 	private const PUBLISHED_ID = 301;

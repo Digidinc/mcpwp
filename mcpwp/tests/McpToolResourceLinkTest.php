@@ -28,6 +28,14 @@ final class McpToolResourceLinkTest extends TestCase {
 		$GLOBALS['mcpwp_test_options']           = array();
 		$GLOBALS['mcpwp_test_transients']        = array();
 		$GLOBALS['mcpwp_test_filters']           = array();
+		// #1114: the old-version test checks every content item. Always
+		// include the Elementor next-step hint instead of inheriting whether
+		// an earlier test defined the process-wide ELEMENTOR_VERSION.
+		add_filter( 'mcpwp_site_capabilities', static function ( $caps ) {
+			$caps['elementor'] = true;
+			return $caps;
+		} );
+		Mcpwp_Integration::clear_cache();
 		$GLOBALS['mcpwp_test_dispatched_routes'] = array();
 		$GLOBALS['_mcpwp_test_posts']            = array();
 		$GLOBALS['_mcpwp_test_meta']             = array();
@@ -58,6 +66,8 @@ final class McpToolResourceLinkTest extends TestCase {
 	protected function tearDown(): void {
 		unset( $GLOBALS['mcpwp_test_rest_response_override'] );
 		$GLOBALS['mcpwp_test_filters'] = array();
+		Mcpwp_Integration::clear_cache();
+		delete_transient( 'mcpwp_capabilities_cache' );
 	}
 
 	private function call_create_page( $version ) {

@@ -35,6 +35,16 @@ final class McpProtocolVersionTest extends TestCase {
 		$GLOBALS['mcpwp_test_transients']        = array();
 		$GLOBALS['mcpwp_test_current_user']      = 2;
 		$GLOBALS['mcpwp_test_filters']           = array();
+		// #1114: other tests define plugin constants that cannot be undone.
+		// Pin the free catalog's capability gates here so protocol coverage
+		// includes Elementor and blocks even when this class runs first.
+		add_filter( 'mcpwp_site_capabilities', static function ( $caps ) {
+			$caps['elementor'] = true;
+			$caps['gutenberg'] = true;
+			return $caps;
+		} );
+		// A previous test's resolved integrations outlive the filter reset.
+		Mcpwp_Integration::clear_cache();
 		$GLOBALS['mcpwp_test_dispatched_routes'] = array();
 		$GLOBALS['_mcpwp_test_posts']            = array();
 		$GLOBALS['_mcpwp_test_meta']             = array();
@@ -54,6 +64,7 @@ final class McpProtocolVersionTest extends TestCase {
 		unset( $GLOBALS['mcpwp_test_theme_headers'] );
 		$GLOBALS['mcpwp_test_filters'] = array();
 		Mcpwp_Integration::clear_cache();
+		delete_transient( 'mcpwp_capabilities_cache' );
 		unset( $GLOBALS['mcpwp_test_rest_response_override'] );
 		$GLOBALS['_mcpwp_test_posts'] = array();
 	}
@@ -273,6 +284,30 @@ final class McpProtocolVersionTest extends TestCase {
 	// ---------------------------------------------------------------
 	// tools/list per version
 	// ---------------------------------------------------------------
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_tools_list_covers_the_full_free_catalog_without_plugin_constants(): void {
+		// A fresh process reproduces the bad order: no earlier test has
+		// defined ELEMENTOR_VERSION. Coverage must still include those tools.
+		$this->assertFalse( defined( 'ELEMENTOR_VERSION' ) );
+		$expected = array_column(
+			array_merge(
+				( new Mcpwp_MCP_Free_Tools() )->get_tools(),
+				( new Mcpwp_MCP_Pro_Tools() )->get_staging_pro_tools(),
+				( new Mcpwp_MCP_Meta_Tools() )->get_tools()
+			),
+			'name'
+		);
+		sort( $expected );
+		foreach ( array_merge( self::OLD_VERSIONS, self::STRUCTURED_VERSIONS ) as $version ) {
+			$actual = array_keys( $this->tools_list( $version ) );
+			sort( $actual );
+			$this->assertSame( $expected, $actual, "$version: protocol shaping covers the full catalog." );
+		}
+	}
 
 	public function test_tools_list_under_old_versions_has_no_2025_06_18_tool_fields(): void {
 		foreach ( self::OLD_VERSIONS as $version ) {
