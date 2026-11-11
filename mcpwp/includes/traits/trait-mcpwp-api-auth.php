@@ -2939,6 +2939,12 @@ trait Mcpwp_Api_Auth {
 			// #1118 P0-1: an object_id the guard skips (negative, '12abc') but
 			// absint() reads as a post, under a type that names a post.
 			foreach ( array_merge( array( $params ), isset( $params['items'] ) && is_array( $params['items'] ) ? $params['items'] : array() ) as $menu_item ) {
+				if ( ! $is_read_method && is_array( $menu_item ) && array_key_exists( 'type', $menu_item ) ) {
+					$type = self::normalize_menu_item_type( $menu_item['type'] );
+					if ( is_wp_error( $type ) ) {
+						return $type;
+					}
+				}
 				if ( is_array( $menu_item ) && self::menu_item_type_names_post( $menu_item ) && array_key_exists( 'object_id', $menu_item ) && self::is_ambiguous_post_ref_value( $menu_item['object_id'] ) ) {
 					return new WP_Error( 'invalid_post_ref', __( 'Post ids must be plain positive integers.', 'mcpwp' ), array( 'status' => 400 ) );
 				}
@@ -2999,17 +3005,53 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Parse a menu-item type for both the category gate and write handlers.
+	 *
+	 * Do not strip or case-fold input: sanitize_key()/sanitize_text_field()
+	 * can turn an unrecognised value into a type that names a post. Keep the
+	 * existing aliases, but refuse every value outside this exact vocabulary.
+	 * Callers apply the documented custom default only when type is omitted.
+	 *
+	 * @param mixed $type Raw type.
+	 * @return array{type:string,object:string}|WP_Error Canonical type and alias object default.
+	 */
+	public static function normalize_menu_item_type( $type ) {
+		$types = array(
+			'custom'    => array( 'type' => 'custom', 'object' => '' ),
+			'post_type' => array( 'type' => 'post_type', 'object' => '' ),
+			'taxonomy'  => array( 'type' => 'taxonomy', 'object' => '' ),
+			'post'      => array( 'type' => 'post_type', 'object' => 'post' ),
+			'page'      => array( 'type' => 'post_type', 'object' => 'page' ),
+			'category'  => array( 'type' => 'taxonomy', 'object' => 'category' ),
+			'tag'       => array( 'type' => 'taxonomy', 'object' => 'post_tag' ),
+			'post_tag'  => array( 'type' => 'taxonomy', 'object' => 'post_tag' ),
+		);
+		if ( is_string( $type ) && isset( $types[ $type ] ) ) {
+			return $types[ $type ];
+		}
+		return new WP_Error( 'invalid_menu_item_type', __( 'Unrecognised menu item type.', 'mcpwp' ), array( 'status' => 400 ) );
+	}
+
+	/**
 	 * Whether a nav-menu item's type says its object_id is a post.
 	 *
 	 * @param array $item Item payload.
 	 * @return bool
 	 */
 	public static function menu_item_type_names_post( array $item ) {
-		// #1121: compared the way the handler reads it — sanitize_key()
-		// lowercases and strips (Mcpwp_Site_Manager::add_menu_item()), so
-		// 'Page' and ' page ' are 'page'. A case-sensitive compare skipped them.
-		$type = isset( $item['type'] ) && is_string( $item['type'] ) ? self::normalize_post_ref_token( $item['type'] ) : '';
-		return in_array( $type, array( 'post_type', 'post', 'page' ), true );
+		// The gate must never be looser than any reader of the field.
+		// (1) The write handlers parse the type exactly, through
+		// normalize_menu_item_type(): only that vocabulary reaches a post.
+		$type = self::normalize_menu_item_type( array_key_exists( 'type', $item ) ? $item['type'] : 'custom' );
+		if ( ! is_wp_error( $type ) && 'post_type' === $type['type'] ) {
+			return true;
+		}
+		// (2) #1121: a reader that folds the value the way sanitize_key() does
+		// (lowercase, strip) sees 'Page' and ' page ' as 'page'. Those values
+		// are refused by the exact parse above, but the gate still demands the
+		// post capability for them rather than depend on that refusal.
+		$folded = isset( $item['type'] ) && is_string( $item['type'] ) ? self::normalize_post_ref_token( $item['type'] ) : '';
+		return in_array( $folded, array( 'post_type', 'post', 'page' ), true );
 	}
 
 	/**

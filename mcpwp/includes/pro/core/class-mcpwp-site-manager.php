@@ -236,26 +236,15 @@ class Mcpwp_Site_Manager {
 		// contract. Older callers passed the WordPress object directly as `type`
 		// (post|page|category|tag); keep those as back-compat aliases so existing
 		// integrations do not break.
-		$type      = isset( $data['type'] ) ? sanitize_key( (string) $data['type'] ) : 'custom';
+		$type = Mcpwp_REST_API::normalize_menu_item_type( array_key_exists( 'type', $data ) ? $data['type'] : 'custom' );
+		if ( is_wp_error( $type ) ) {
+			return $type;
+		}
 		$object    = isset( $data['object'] ) ? sanitize_key( (string) $data['object'] ) : '';
 		$object_id = isset( $data['object_id'] ) ? absint( $data['object_id'] ) : 0;
 
-		switch ( $type ) {
-			case 'post':
-			case 'page':
-				$object = '' !== $object ? $object : $type;
-				$type   = 'post_type';
-				break;
-			case 'category':
-				$object = '' !== $object ? $object : 'category';
-				$type   = 'taxonomy';
-				break;
-			case 'tag':
-			case 'post_tag':
-				$object = '' !== $object ? $object : 'post_tag';
-				$type   = 'taxonomy';
-				break;
-		}
+		$object = '' !== $object ? $object : $type['object'];
+		$type   = $type['type'];
 
 		switch ( $type ) {
 			case 'post_type':
@@ -280,7 +269,6 @@ class Mcpwp_Site_Manager {
 				break;
 
 			case 'custom':
-			default:
 				$item_data['menu-item-type'] = 'custom';
 				$item_data['menu-item-url']  = isset( $data['url'] ) ? esc_url_raw( $data['url'] ) : '';
 				break;
@@ -315,6 +303,12 @@ class Mcpwp_Site_Manager {
 	 * @return int|WP_Error Item ID.
 	 */
 	public function update_menu_item( $menu_id, $item_id, $data ) {
+		if ( array_key_exists( 'type', $data ) ) {
+			$type = Mcpwp_REST_API::normalize_menu_item_type( $data['type'] );
+			if ( is_wp_error( $type ) ) {
+				return $type;
+			}
+		}
 		$item_data = array();
 
 		if ( isset( $data['title'] ) ) {
