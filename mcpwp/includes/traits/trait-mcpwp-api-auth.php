@@ -2936,6 +2936,17 @@ trait Mcpwp_Api_Auth {
 		// A single item (POST /menus/{id}/items) is a scalar ref; the items[]
 		// of a menu created in one call (POST /menus) are per-item refs.
 		if ( $this->route_matches( $path, '/menus' ) ) {
+			if ( ! $is_read_method && array_key_exists( 'items', $params ) ) {
+				if ( ! is_array( $params['items'] ) ) {
+					return new WP_Error( 'invalid_menu_item', __( 'Menu items must be an array of objects.', 'mcpwp' ), array( 'status' => 400 ) );
+				}
+				foreach ( $params['items'] as $menu_item ) {
+					$valid = self::validate_menu_item_shape( $menu_item );
+					if ( is_wp_error( $valid ) ) {
+						return $valid;
+					}
+				}
+			}
 			// #1118 P0-1: an object_id the guard skips (negative, '12abc') but
 			// absint() reads as a post, under a type that names a post.
 			foreach ( array_merge( array( $params ), isset( $params['items'] ) && is_array( $params['items'] ) ? $params['items'] : array() ) as $menu_item ) {
@@ -3002,6 +3013,19 @@ trait Mcpwp_Api_Auth {
 			// read refs the #1032 pre-existing-template exemption may use.
 			'source'         => array_values( array_unique( $source ) ),
 		);
+	}
+
+	/**
+	 * Menu items must be field maps, never scalar values or nested lists.
+	 *
+	 * @param mixed $item Item payload.
+	 * @return true|WP_Error
+	 */
+	public static function validate_menu_item_shape( $item ) {
+		if ( ! is_array( $item ) || empty( $item ) || count( array_filter( array_keys( $item ), 'is_int' ) ) > 0 ) {
+			return new WP_Error( 'invalid_menu_item', __( 'Menu items must be objects with named fields.', 'mcpwp' ), array( 'status' => 400 ) );
+		}
+		return true;
 	}
 
 	/**

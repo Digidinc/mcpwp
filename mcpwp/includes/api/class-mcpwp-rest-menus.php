@@ -651,7 +651,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 			);
 		}
 
-		$params = $request->get_params();
+		$params = $this->gate_params( $request );
 		$type   = self::normalize_menu_item_type( array_key_exists( 'type', $params ) ? $params['type'] : 'custom' );
 		if ( is_wp_error( $type ) ) {
 			return $type;
@@ -758,7 +758,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function update_menu_item( $request ) {
-		$params = $request->get_params();
+		$params = $this->gate_params( $request );
 		if ( array_key_exists( 'type', $params ) ) {
 			$type = self::normalize_menu_item_type( $params['type'] );
 			if ( is_wp_error( $type ) ) {
