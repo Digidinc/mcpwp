@@ -319,10 +319,29 @@ class WP_REST_Request
         return $this->route;
     }
 
+    /** Mirrors WP_REST_Request::get_content_type(), including parameter separation. */
+    public function get_content_type()
+    {
+        $value = $this->get_header('Content-Type');
+        if (empty($value)) {
+            return null;
+        }
+        $parameters = '';
+        if (strpos($value, ';')) {
+            list($value, $parameters) = explode(';', $value, 2);
+        }
+        $value = strtolower($value);
+        if (false === strpos($value, '/')) {
+            return null;
+        }
+        list($type, $subtype) = explode('/', $value, 2);
+        return array_map('trim', compact('value', 'type', 'subtype', 'parameters'));
+    }
+
     protected function is_json_content_type()
     {
-        $type = (string) $this->get_header('content-type');
-        return '' !== $type && false !== stripos($type, 'json');
+        $type = $this->get_content_type();
+        return isset($type['value']) && (bool) preg_match('/(^|\s|,)application\/([\w!#\$&-\^\.\+]+\+)?json(\+oembed)?($|\s|;|,)/i', $type['value']);
     }
 
     /** Core's order (WP_REST_Request::get_parameter_order()), filter included. */

@@ -59,22 +59,29 @@ abstract class Mcpwp_REST_API {
 		}
 		if ( ! self::$raw_parameter_sources->contains( $request ) ) {
 			$sources = array();
-			// Internal requests inherit the original query; never re-read the
-			// ambient HTTP query as if it belonged to a nested dispatch.
-			if ( ! self::$raw_parameter_context instanceof SplObjectStorage || ! self::$raw_parameter_context->contains( $request ) ) {
+			// Internal requests inherit the original query and media type.
+			$internal = self::$raw_parameter_context instanceof SplObjectStorage && self::$raw_parameter_context->contains( $request );
+			if ( ! $internal ) {
 				$query = isset( $_SERVER['QUERY_STRING'] ) ? (string) $_SERVER['QUERY_STRING'] : '';
 				if ( '' !== $query ) {
 					$sources[] = new Mcpwp_Raw_Parameter_Source( 'form', $query, 'query' );
 				}
 			}
 			$body = $request->get_body();
-			$type = strtolower( (string) $request->get_header( 'Content-Type' ) );
-			if ( false !== strpos( $type, 'multipart/form-data' ) ) {
-				// PHP consumed the parts. Preserve the body independently of
-				// query parameters for the core's presence/input-limit guard.
+			$content_type = $request->get_content_type();
+			$type = strtolower( (string) ( $content_type['value'] ?? '' ) );
+			if ( 'multipart/form-data' === $type ) {
+				// PHP consumed the parts; preserve the parsed body snapshot.
 				$sources[] = new Mcpwp_Raw_Parameter_Source( 'multipart', $request->get_body_params(), 'body' );
-			} elseif ( '' !== $body && ( false !== strpos( $type, 'json' ) || false !== strpos( $type, 'application/x-www-form-urlencoded' ) ) ) {
-				$sources[] = new Mcpwp_Raw_Parameter_Source( false !== strpos( $type, 'json' ) ? 'json' : 'form', $body, 'body' );
+			} elseif ( 'application/json' === $type || 'application/x-www-form-urlencoded' === $type ) {
+				if ( '' !== $body ) {
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'application/json' === $type ? 'json' : 'form', $body, 'body' );
+				}
+			} elseif ( ! $internal || '' !== (string) $request->get_header( 'Content-Type' ) ) {
+				// An absent header on a synthetic internal request is not a new
+				// unknown wire source. Explicit unknown media types retain all
+				// visible parsed fields for the core's fail-closed intent guard.
+				$sources[] = new Mcpwp_Raw_Parameter_Source( 'unknown', $bags, 'body' );
 			}
 			self::$raw_parameter_sources[ $request ] = $sources;
 		}

@@ -383,7 +383,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$builder = new Mcpwp_Theme_Builder();
 		if ( $via_rest ) {
 			$controller = new Mcpwp_REST_Theme_Builder( $builder );
-			$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $args );
+			$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $args, array( 'Content-Type' => 'application/x-www-form-urlencoded' ) );
 			$response   = $controller->create_theme_template( $request );
 			$this->assertInstanceOf( WP_REST_Response::class, $response );
 			$result = $response->get_data();
@@ -435,7 +435,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			$args['dry_run'] = $flag;
 		}
 		$controller = new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() );
-		$response   = $controller->create_theme_template( new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $args ) );
+		$response   = $controller->create_theme_template( new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', $args, array( 'Content-Type' => 'application/x-www-form-urlencoded' ) ) );
 		$result     = $response->get_data();
 
 		$this->assertSame( 'publish', $result['status'] );
@@ -467,7 +467,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			return $result;
 		}, 10, 2 );
 		$args = $this->create_args( array( 'dry_run' => true, 'scope' => 'entire_site', 'elementor_data' => $this->minimal_elements() ) );
-		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array(
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'Content-Type' => 'application/json' ), array(
 			'jsonrpc' => '2.0',
 			'id'      => 1078,
 			'method'  => 'tools/call',
@@ -759,7 +759,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'preview replay', array( 'admin' ) );
 		$call = function ( array $query, int $id ) use ( $key ) {
 			$controller = new Mcpwp_REST_MCP();
-			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => $key['key'] ), array(
+			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'Content-Type' => 'application/json', 'X-API-Key' => $key['key'] ), array(
 				'jsonrpc' => '2.0', 'id' => $id, 'method' => 'tools/call',
 				'params' => array( 'name' => 'wp_create_theme_template',
 					'arguments' => array( 'title' => 'Pinned', 'type' => 'single' ),
@@ -801,7 +801,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			$operations = array_reverse( $operations );
 		}
 		if ( $via_mcp ) {
-			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array(
+			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'Content-Type' => 'application/json' ), array(
 				'jsonrpc' => '2.0', 'id' => 1078, 'method' => 'tools/call',
 				'params' => array( 'name' => 'wp_batch', 'arguments' => array( 'operations' => $operations ) ),
 			) );
@@ -809,7 +809,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			$this->assertFalse( $result['result']['isError'], wp_json_encode( $result ) );
 			$result = json_decode( $result['result']['content'][0]['text'], true );
 		} else {
-			$result = ( new Mcpwp_REST_Batch() )->handle_batch( new WP_REST_Request( 'POST', '/mcpwp/v1/batch', array( 'operations' => $operations ) ) )->get_data();
+			$result = ( new Mcpwp_REST_Batch() )->handle_batch( new WP_REST_Request( 'POST', '/mcpwp/v1/batch', array( 'operations' => $operations ), array( 'Content-Type' => 'application/x-www-form-urlencoded' ) ) )->get_data();
 		}
 		$this->assertTrue( $result['results'][ $reverse ? 1 : 0 ]['data']['dry_run'] );
 		$this->assertSame( 'publish', $result['results'][ $reverse ? 0 : 1 ]['data']['status'] );
@@ -901,7 +901,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		);
 		$query_operations = $operations;
 		$query_operations[0]['body']['dry_run'] = '00';
-		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array(
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'Content-Type' => 'application/json' ), array(
 			'jsonrpc' => '2.0', 'id' => 1078, 'method' => 'tools/call',
 			'params' => array( 'name' => 'wp_batch', 'arguments' => array( 'operations' => $operations ) ),
 		) );
@@ -915,12 +915,12 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 	}
 
-	private function dispatch_raw_template_request( string $door, string $raw_body, string $raw_query = '', bool $form = false ) {
+	private function dispatch_raw_template_request( string $door, string $raw_body, string $raw_query = '', bool $form = false, $content_type = null ) {
 		$this->dispatch_template_args( 'REST', array( 'dry_run' => true ) );
 		$_SERVER['QUERY_STRING'] = $raw_query;
-		$path = 'REST' === $door ? '/theme-builder/templates' : ( 'batch' === $door ? '/batch' : '/mcp' );
+		$path = 'REST' === $door ? '/theme-builder/templates' : ( 'batch' === $door ? '/batch' : ( 'WebMCP' === $door ? '/webmcp/call' : '/mcp' ) );
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1' . $path, array(), array(
-			'Content-Type' => $form ? 'application/x-www-form-urlencoded' : 'application/json',
+			'Content-Type' => null !== $content_type ? $content_type : ( $form ? 'application/x-www-form-urlencoded' : 'application/json' ),
 		) );
 		$request->set_body( $raw_body );
 		parse_str( $raw_query, $query );
@@ -931,6 +931,10 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		}
 		if ( 'REST' === $door ) {
 			return ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
+		}
+		if ( 'WebMCP' === $door ) {
+			require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-webmcp.php';
+			return ( new Mcpwp_REST_WebMCP() )->handle_call( $request );
 		}
 		return 'batch' === $door ? ( new Mcpwp_REST_Batch() )->handle_batch( $request ) : ( new Mcpwp_REST_MCP() )->handle_mcp( $request );
 	}
@@ -1135,7 +1139,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$preview = $message;
 		$preview['params']['_meta'] = array( 'dry_run' => true );
 		$message['id'] = 2;
-		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array(), array( $preview, $message ) );
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'Content-Type' => 'application/json' ), array( $preview, $message ) );
 		$data = ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
 		$first = json_decode( $data[0]['result']['content'][0]['text'], true );
 		$second = json_decode( $data[1]['result']['content'][0]['text'], true );
@@ -1231,7 +1235,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		), array( 'Content-Type' => $type ) );
 		$response = ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
 		$this->assertInstanceOf( WP_REST_Response::class, $response );
-		$this->assertSame( 201, $response->get_status() );
+		$this->assertSame( 200, $response->get_status() );
 		$this->assertSame( 'publish', $response->get_data()['status'] );
 		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 	}
@@ -1282,7 +1286,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$request->set_query_params( array( 'preview' => '0' ) );
 		$response = ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
 		$this->assertInstanceOf( WP_REST_Response::class, $response );
-		$this->assertSame( 201, $response->get_status() );
+		$this->assertSame( 200, $response->get_status() );
 		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 	}
 
@@ -1355,7 +1359,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
 		} else {
 			$this->assertInstanceOf( WP_REST_Response::class, $response );
-			$this->assertSame( 201, $response->get_status() );
+			$this->assertSame( 200, $response->get_status() );
 			$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 		}
 	}
@@ -1370,7 +1374,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$body = array( 'operations' => array( array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => array( 'title' => 'Multipart batch', 'type' => 'single' ) ) ) );
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/batch', $body, array( 'Content-Type' => 'Multipart/Form-Data; boundary=php-consumed-parts' ) );
 		$data = ( new Mcpwp_REST_Batch() )->handle_batch( $request )->get_data();
-		$this->assertSame( 201, $data['results'][0]['status'] );
+		$this->assertSame( 200, $data['results'][0]['status'] );
 		$this->assertSame( 'publish', $data['results'][0]['data']['status'] );
 		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 	}
@@ -1412,7 +1416,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/batch', array( 'operations' => $operations ), array( 'Content-Type' => 'multipart/form-data; boundary=php-consumed-parts' ) );
 		$data = ( new Mcpwp_REST_Batch() )->handle_batch( $request )->get_data();
 		$this->assertSame( 400, $data['results'][ $reverse ? 1 : 0 ]['status'] );
-		$this->assertSame( 201, $data['results'][ $reverse ? 0 : 1 ]['status'] );
+		$this->assertSame( 200, $data['results'][ $reverse ? 0 : 1 ]['status'] );
 		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 	}
 
@@ -1433,6 +1437,155 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 	public function test_post_field_cannot_be_resplit_by_query_configuration( string $separators, string $field, $expected ): void {
 		$this->assertTrue( method_exists( Mcpwp_Theme_Builder::class, 'prepare_post_field' ) );
 		$this->assertSame( $expected, Mcpwp_Theme_Builder::prepare_post_field( $field, $separators ) );
+	}
+
+	public static function json_media_parameter_paths(): array {
+		$cases = array();
+		$headers = array(
+			'application/json; x=multipart/form-data',
+			'application/json;boundary=multipart/form-data',
+			'application/json; a=multipart/form-data',
+			'application/json; charset=utf-8; boundary="multipart/form-data"',
+			'application/json; boundary="multipart/form-data"; charset=utf-8',
+			' Application/JSON ; charset=utf-8; x="multipart/form-data"',
+			'APPLICATION/JSON; Content-Type="application/x-www-form-urlencoded"',
+			'application/json; x="form"; y="json"',
+			'application/json; profile="x;multipart/form-data"; boundary="json"',
+		);
+		foreach ( array( 'REST', 'MCP', 'mcpwp_call', 'batch', 'wp_batch', 'WebMCP' ) as $door ) {
+			foreach ( $headers as $index => $header ) {
+				$cases[ "$door header $index" ] = array( $door, $header );
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * @dataProvider json_media_parameter_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_json_media_parameters_cannot_hide_repeated_intent( string $door, string $header ): void {
+		$this->install_elementor( false );
+		define( 'MCPWP_TESTS', true );
+		$template = '{"title":"Media parameters","type":"single","dry_run":true,"dry_run":false}';
+		$body = $template;
+		if ( in_array( $door, array( 'batch', 'wp_batch' ), true ) ) {
+			$body = '{"operations":[{"method":"POST","path":"/theme-builder/templates","body":' . $template . '}]}';
+		}
+		if ( in_array( $door, array( 'MCP', 'mcpwp_call', 'wp_batch' ), true ) ) {
+			$params = '{"name":"' . ( 'wp_batch' === $door ? 'wp_batch' : 'wp_create_theme_template' ) . '","arguments":' . $body . '}';
+			if ( 'mcpwp_call' === $door ) {
+				$params = '{"name":"mcpwp_call","arguments":' . $params . '}';
+			}
+			$body = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":' . $params . '}';
+		} elseif ( 'WebMCP' === $door ) {
+			$body = '{"name":"wp_create_theme_template","arguments":' . $template . '}';
+		}
+		$response = $this->dispatch_raw_template_request( $door, $body, '', false, $header );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'], 'Header parameters must not choose a different raw-body parser.' );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_meta'] );
+		if ( 'WebMCP' === $door ) {
+			$this->assertInstanceOf( WP_Error::class, $response );
+			$this->assertSame( 'webmcp_tool_not_allowed', $response->get_error_code() );
+			return;
+		}
+		$this->assertInstanceOf( WP_REST_Response::class, $response );
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		if ( isset( $data['result'] ) ) {
+			$this->assertFalse( $data['result']['isError'], wp_json_encode( $data ) );
+			$data = json_decode( $data['result']['content'][0]['text'], true );
+		}
+		if ( isset( $data['results'] ) ) {
+			$data = $data['results'][0]['data'];
+		}
+		$this->assertTrue( $data['dry_run'] );
+	}
+
+	public static function non_json_media_parameter_paths(): array {
+		$cases = array();
+		foreach ( array( 'REST', 'batch' ) as $door ) {
+			foreach ( array(
+				'application/x-www-form-urlencoded; x=application/json',
+				'application/x-www-form-urlencoded; x=multipart/form-data',
+				' Application/X-WWW-Form-Urlencoded ; charset=utf-8; boundary="json"',
+				'multipart/form-data; x=application/json; boundary="form"',
+				'Multipart/Form-Data; charset=utf-8; boundary="application/json"',
+			) as $header ) {
+				$cases[ $door . ' ' . $header ] = array( $door, $header );
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * @dataProvider non_json_media_parameter_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_header_parameters_do_not_block_supported_plain_creates( string $door, string $header ): void {
+		$this->install_elementor( false );
+		$this->dispatch_template_args( 'REST', array( 'dry_run' => true ) );
+		$multipart = 0 === stripos( $header, 'multipart/form-data' );
+		$body = array( 'title' => 'Media create', 'type' => 'single' );
+		if ( ! $multipart ) {
+			$body['dry_run'] = '0';
+		}
+		if ( 'batch' === $door ) {
+			$body = array( 'operations' => array( array( 'method' => 'POST', 'path' => '/theme-builder/templates', 'body' => $body ) ) );
+		}
+		$request = new WP_REST_Request( 'POST', 'REST' === $door ? '/mcpwp/v1/theme-builder/templates' : '/mcpwp/v1/batch', $body, array( 'Content-Type' => $header ) );
+		if ( ! $multipart ) {
+			$request->set_body( http_build_query( $body ) );
+		}
+		$response = 'REST' === $door ? ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request ) : ( new Mcpwp_REST_Batch() )->handle_batch( $request );
+		$this->assertInstanceOf( WP_REST_Response::class, $response );
+		$this->assertSame( 200, $response->get_status() );
+		$data = $response->get_data();
+		if ( 'batch' === $door ) {
+			$this->assertSame( 200, $data['results'][0]['status'] );
+			$data = $data['results'][0]['data'];
+		}
+		$this->assertArrayHasKey( 'status', $data );
+		$this->assertSame( 'publish', $data['status'] );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
+	}
+
+	public static function unknown_media_intent_paths(): array {
+		$cases = array();
+		foreach ( array( '', 'text/plain; x=application/json', 'application/octet-stream; x=multipart/form-data', 'application/problem+json; boundary="form"' ) as $header ) {
+			foreach ( array( false, true ) as $visible ) {
+				$cases[ $header . ' visible=' . (int) $visible ] = array( $header, $visible );
+			}
+		}
+		return $cases;
+	}
+
+	/**
+	 * @dataProvider unknown_media_intent_paths
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_unknown_media_type_refuses_only_visible_intent( string $header, bool $visible ): void {
+		$this->install_elementor( false );
+		require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
+		$query = array( 'title' => 'Unknown media', 'type' => 'single' );
+		if ( $visible ) {
+			$query['metadata'] = array( 'nested' => array( 'preview' => false ) );
+		}
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/theme-builder/templates', array(), array( 'Content-Type' => $header ) );
+		$request->set_query_params( $query );
+		$response = ( new Mcpwp_REST_Theme_Builder( new Mcpwp_Theme_Builder() ) )->create_theme_template( $request );
+		if ( $visible ) {
+			$this->assertInstanceOf( WP_Error::class, $response );
+			$this->assertSame( 'invalid_params', $response->get_error_code() );
+			$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
+		} else {
+			$this->assertInstanceOf( WP_REST_Response::class, $response );
+			$this->assertSame( 200, $response->get_status() );
+			$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
+		}
 	}
 
 }

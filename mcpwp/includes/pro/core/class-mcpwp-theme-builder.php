@@ -880,6 +880,17 @@ class Mcpwp_Theme_Builder {
 	 */
 	public static function raw_intent_evidence( $source ) {
 		$document = $source->document;
+		if ( 'unknown' === $document->format ) {
+			if ( null === $document->keys ) {
+				$document->keys = array();
+				foreach ( $document->raw as $parameters ) {
+					if ( is_array( $parameters ) ) {
+						self::record_php_intent_fields( $document, $parameters );
+					}
+				}
+			}
+			return array( 'counts' => array(), 'values' => array(), 'occurrences' => empty( $document->keys ) ? array() : array( 'unknown_media_intent' => array() ) );
+		}
 		if ( 'multipart' === $document->format ) {
 			return array( 'counts' => array(), 'values' => array(), 'occurrences' => array( 'multipart_guard:' . wp_json_encode( $source->path ) => self::multipart_input_evidence( $source ) ) );
 		}
@@ -1046,6 +1057,13 @@ class Mcpwp_Theme_Builder {
 		$multipart_sources = array();
 		foreach ( self::intent_parameter_bags( $bags ) as $bag ) {
 			if ( $bag instanceof Mcpwp_Raw_Parameter_Source ) {
+				if ( 'unknown' === $bag->document->format ) {
+					$unknown = self::raw_intent_evidence( $bag );
+					if ( ! empty( $unknown['occurrences'] ) ) {
+						return new WP_Error( 'invalid_params', __( 'Preview intent requires a supported Content-Type. Send application/json or application/x-www-form-urlencoded.', 'mcpwp' ), array( 'status' => 400 ) );
+					}
+					continue;
+				}
 				if ( 'multipart' === $bag->document->format ) {
 					$multipart_sources[] = $bag;
 					continue;

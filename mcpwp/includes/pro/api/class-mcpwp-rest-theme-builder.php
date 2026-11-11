@@ -363,9 +363,9 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 			'template_id' => $result['id'] ?? null,
 			'type'        => $data['type'],
 			'scope'       => $data['scope'] ?? 'entire_site',
-		), 201 );
+		) );
 
-		return $this->success_response( $result, 201 );
+		return $this->success_response( $result );
 	}
 
 	/**
