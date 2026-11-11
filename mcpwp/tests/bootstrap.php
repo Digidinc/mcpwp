@@ -976,7 +976,7 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
 					'request_skipped' => array(), 'cache_bypass' => false,
 					'raw_read_depth' => 0, 'inspection' => array(),
 					'condition_lengths' => array(), 'meta_cache_guard' => false,
-					'legacy_cache_too_large' => false, 'entry_overlay' => null, 'request_invalid_entries' => array(), 'filtered_views' => array(), 'view_dirty' => false, 'view_refreshing' => false, 'view_input' => null, 'active_view' => null, 'pro_rebuild_candidate' => false, 'safe_meta_ids' => array(),
+					'legacy_cache_too_large' => false, 'entry_overlay' => null, 'request_invalid_entries' => array(), 'filtered_views' => array(), 'view_dirty' => false, 'view_refreshing' => false, 'view_input' => null, 'active_view' => null, 'pro_rebuild_candidate' => false, 'safe_meta_ids' => array(), 'oversized_meta_ids' => null, 'pre_view_read' => null,
 					'request_invalid_entries' => array(),
 				) as $name => $value) {
 					$property = new ReflectionProperty('Mcpwp_Custom_Code_Conditions', $name);
@@ -2624,12 +2624,12 @@ if (! isset($GLOBALS['wpdb'])) {
                     return $answer;
                 }
             }
-            if (0 === strpos(trim((string)$query), 'SELECT post_id') && false !== strpos($query, 'postmeta') && preg_match('/post_id IN \(([0-9, ]+)\)/', $query, $meta_ids)) {
+            if (0 === strpos(trim((string)$query), 'SELECT post_id') && false !== strpos($query, 'postmeta') && (preg_match('/post_id IN \(([0-9, ]+)\)/', $query, $meta_ids) || false !== strpos($query, 'OCTET_LENGTH(meta_value) > '))) {
                 $this->queries[] = (string)$query;
                 preg_match("/meta_key = '([^']+)'/", $query, $key_filter);
                 preg_match('/OCTET_LENGTH\(meta_value\) <= (\d+)/', $query, $meta_bound);
                 $rows = array();
-                foreach (array_map('intval', explode(',', $meta_ids[1])) as $post_id) {
+                foreach (isset($meta_ids[1]) ? array_map('intval', explode(',', $meta_ids[1])) : array_keys($GLOBALS['_mcpwp_test_meta'] ?? array()) as $post_id) {
                     foreach ((array)($GLOBALS['_mcpwp_test_meta'][$post_id] ?? array()) as $key => $value) {
                         if (isset($key_filter[1]) && $key !== $key_filter[1]) { continue; }
                         $raw = maybe_serialize($value);

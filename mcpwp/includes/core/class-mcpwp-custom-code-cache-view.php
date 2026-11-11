@@ -97,13 +97,13 @@ class Mcpwp_Custom_Code_Cache_View {
 	 * @param array $base The freshly-built compatibility-view input.
 	 * @return array{hit:bool,fingerprint?:string|null,cache?:array,invalid_ids?:array,skipped_ids?:array}
 	 */
-	public static function read( array $base ): array {
+	public static function read( ?array $base = null ): array {
 		$row = self::snapshot_raw();
 		if ( null === $row || '' === $row['option_value'] ) {
 			return array( 'hit' => false );
 		}
 		$snapshot = self::safe_snapshot( $row['option_value'] );
-		if ( null === $snapshot || ! hash_equals( $snapshot['base_hash'], self::base_hash( $base ) ) ) {
+		if ( null === $snapshot || ( null !== $base && ! hash_equals( $snapshot['base_hash'], self::base_hash( $base ) ) ) ) {
 			return array( 'hit' => false );
 		}
 		$current = array_key_exists( 'generation', $row ) ? $row['generation'] : self::generation();

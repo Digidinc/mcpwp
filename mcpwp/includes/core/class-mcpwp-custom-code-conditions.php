@@ -44,6 +44,8 @@ class Mcpwp_Custom_Code_Conditions {
 	private static $active_view = null;
 	private static $pro_rebuild_candidate = false;
 	private static $safe_meta_ids = array();
+	private static $oversized_meta_ids = null;
+	private static $pre_view_read = null;
 
 	public static function register_hooks() {
 		// This is Elementor Pro's own rebuild query. Excluding unsafe IDs here
@@ -52,13 +54,13 @@ class Mcpwp_Custom_Code_Conditions {
 		add_filter( 'option_elementor_pro_theme_builder_conditions', array( __CLASS__, 'filter_conditions_cache' ) );
 		add_filter( 'default_option_elementor_pro_theme_builder_conditions', array( __CLASS__, 'default_conditions_cache' ) );
 		add_action( 'update_option_elementor_pro_theme_builder_conditions', array( __CLASS__, 'mark_view_dirty' ) );
+		add_action( 'add_option_elementor_pro_theme_builder_conditions', array( __CLASS__, 'mark_view_dirty' ) );
+		add_action( 'delete_option_elementor_pro_theme_builder_conditions', array( __CLASS__, 'mark_view_dirty' ) );
 		add_filter( 'rest_post_dispatch', array( __CLASS__, 'refresh_pending_view' ), PHP_INT_MAX - 20 );
 		add_action( 'shutdown', array( __CLASS__, 'refresh_pending_view' ), 1 );
 		add_filter( 'pre_option_elementor_pro_theme_builder_conditions', array( __CLASS__, 'filter_oversized_legacy_cache_option' ), 1, 3 );
 		add_filter( 'update_post_metadata_cache', array( __CLASS__, 'filter_oversized_meta_cache_prime' ), 1, 2 );
 		add_filter( 'get_post_metadata', array( __CLASS__, 'filter_oversized_snippet_meta' ), 1, 5 );
-		add_filter( 'get_post_metadata', array( __CLASS__, 'filter_changed_view_source' ), 2, 5 );
-		add_filter( 'get_post_metadata', array( __CLASS__, 'filter_pro_rebuild_conditions_meta' ), 10, 5 );
 		add_action( 'admin_init', array( __CLASS__, 'refresh_admin_report' ) );
 		add_action( 'admin_notices', array( __CLASS__, 'render_admin_notice' ) );
 		add_filter( 'site_status_tests', array( __CLASS__, 'register_site_health_test' ) );
@@ -67,6 +69,10 @@ class Mcpwp_Custom_Code_Conditions {
 		add_action( 'deleted_post_meta', array( __CLASS__, 'invalidate_report_on_meta' ), 10, 4 );
 		add_action( 'save_post', array( __CLASS__, 'invalidate_report_on_post' ), 10, 3 );
 		add_action( 'before_delete_post', array( __CLASS__, 'invalidate_report_on_post' ), 10, 2 );
+		foreach ( array( 'elementor_head', 'elementor_body_start', 'elementor_body_end' ) as $location ) {
+			add_action( 'elementor/theme/before_do_' . $location, array( __CLASS__, 'begin_custom_code_render' ) );
+			add_action( 'elementor/theme/after_do_' . $location, array( __CLASS__, 'end_custom_code_render' ) );
+		}
 	}
 
 	/**
@@ -228,6 +234,12 @@ class Mcpwp_Custom_Code_Conditions {
 	/** Add unsafe snippets to Pro's own regeneration query exclusion list. */
 	public static function filter_regenerate_query( $args ) {
 		self::$pro_rebuild_candidate = true;
+		self::$inspection = array();
+		self::$condition_lengths = array();
+		self::$safe_meta_ids = array();
+		self::$oversized_meta_ids = null;
+		add_filter( 'get_post_metadata', array( __CLASS__, 'filter_oversized_snippet_meta' ), 1, 5 );
+		add_filter( 'get_post_metadata', array( __CLASS__, 'filter_pro_rebuild_conditions_meta' ), 10, 5 );
 		if ( ! is_array( $args ) ) {
 			return $args;
 		}
@@ -246,6 +258,24 @@ class Mcpwp_Custom_Code_Conditions {
 	 * Per-entry cache rows may still provide safe document entries separately.
 	 */
 	public static function filter_oversized_legacy_cache_option( $pre_option, $option, $default ) {
+		if ( false !== $pre_option ) {
+			return $pre_option;
+		}
+		if ( ! self::$view_refreshing ) {
+			if ( null === self::$pre_view_read ) {
+				self::$pre_view_read = Mcpwp_Custom_Code_Cache_View::read();
+			}
+			if ( ! empty( self::$pre_view_read['hit'] ) ) {
+				self::$active_view = self::$pre_view_read['cache'];
+				self::$request_invalid_entries = array_fill_keys( self::$pre_view_read['invalid_ids'], true );
+				foreach ( self::$pre_view_read['skipped_ids'] as $post_id ) {
+					self::mark_skipped( $post_id );
+				}
+				// Pro owns its mutable cache; keep request-validation aliases out
+				// of the returned buckets to avoid copy-on-write during rendering.
+				return unserialize( serialize( self::$active_view ), array( 'allowed_classes' => false ) );
+			}
+		}
 		$length = self::legacy_cache_option_length();
 		if ( null !== $length && $length > self::MAX_LEGACY_CACHE_BYTES ) {
 			self::$legacy_cache_too_large = true;
@@ -362,6 +392,14 @@ class Mcpwp_Custom_Code_Conditions {
 		return $current === $expected ? $check : array( '' );
 	}
 
+	public static function begin_custom_code_render() {
+		add_filter( 'get_post_metadata', array( __CLASS__, 'filter_changed_view_source' ), 2, 5 );
+	}
+
+	public static function end_custom_code_render() {
+		remove_filter( 'get_post_metadata', array( __CLASS__, 'filter_changed_view_source' ), 2 );
+	}
+
 	private static function printing_custom_code() {
 		foreach ( debug_backtrace( DEBUG_BACKTRACE_IGNORE_ARGS, 12 ) as $frame ) {
 			if ( ( $frame['class'] ?? '' ) === 'ElementorPro\\Modules\\CustomCode\\Document' && ( $frame['function'] ?? '' ) === 'print_content' ) {
@@ -408,15 +446,33 @@ class Mcpwp_Custom_Code_Conditions {
 		}
 		if ( ! empty( $unknown ) ) {
 			global $wpdb;
-			$placeholders = implode( ',', array_fill( 0, count( $unknown ), '%d' ) );
-			$wpdb->last_error = '';
-			// Only unsafe IDs cross the DB/PHP boundary; normal pages do not
-			// allocate one result row per healthy document just for a size check.
-			$rows = $wpdb->get_results( $wpdb->prepare(
-				"SELECT post_id, OCTET_LENGTH(meta_value) AS bytes FROM {$wpdb->postmeta} INNER JOIN {$wpdb->posts} p ON p.ID = post_id WHERE p.post_type = 'elementor_snippet' AND meta_key = %s AND OCTET_LENGTH(meta_value) > %d AND post_id IN ($placeholders)",
-				array_merge( array( '_elementor_conditions', self::MAX_SERIALIZED_BYTES ), $unknown )
-			), ARRAY_A );
-			if ( ! is_array( $rows ) || '' !== $wpdb->last_error ) {
+			if ( null === self::$oversized_meta_ids ) {
+				$wpdb->last_error = '';
+				// One indexed site-wide scan returns only oversized rows. An IN
+				// list proportional to the page's document count is unnecessary.
+				$rows = $wpdb->get_results( $wpdb->prepare(
+					"SELECT post_id, OCTET_LENGTH(meta_value) AS bytes FROM {$wpdb->postmeta} WHERE meta_key = %s AND OCTET_LENGTH(meta_value) > %d",
+					'_elementor_conditions', self::MAX_SERIALIZED_BYTES
+				), ARRAY_A );
+				if ( is_array( $rows ) && '' === $wpdb->last_error ) {
+					self::$oversized_meta_ids = array();
+					foreach ( $rows as $row ) {
+						if ( self::is_snippet( (int) $row['post_id'] ) ) {
+					self::$oversized_meta_ids[ (int) $row['post_id'] ] = (int) $row['bytes'];
+					}
+					}
+				}
+			}
+			$rows = null;
+			if ( is_array( self::$oversized_meta_ids ) ) {
+				$rows = array();
+				foreach ( $unknown as $post_id ) {
+					if ( isset( self::$oversized_meta_ids[ $post_id ] ) ) {
+						$rows[] = array( 'post_id' => $post_id, 'bytes' => self::$oversized_meta_ids[ $post_id ] );
+					}
+				}
+			}
+			if ( ! is_array( $rows ) ) {
 				// Do not hydrate unmeasured values when the size probe failed.
 				foreach ( $unknown as $post_id ) {
 					if ( self::is_snippet( $post_id ) ) {
@@ -464,7 +520,7 @@ class Mcpwp_Custom_Code_Conditions {
 			if ( isset( self::$filtered_views[ $base_hash ] ) ) {
 				return self::$filtered_views[ $base_hash ];
 			}
-			$snapshot = Mcpwp_Custom_Code_Cache_View::read( $cache );
+			$snapshot = self::$pre_view_read ?? Mcpwp_Custom_Code_Cache_View::read( $cache );
 			if ( ! empty( $snapshot['hit'] ) ) {
 				self::$request_invalid_entries = array_fill_keys( $snapshot['invalid_ids'], true );
 				foreach ( $snapshot['skipped_ids'] as $post_id ) {
@@ -546,6 +602,7 @@ class Mcpwp_Custom_Code_Conditions {
 
 	/** Source mutations invalidate request memo; persistent snapshots remain fingerprint-gated. */
 	public static function mark_view_dirty() {
+		self::$pre_view_read = null;
 		$invalidated = Mcpwp_Custom_Code_Cache_View::invalidate();
 		self::$active_view = null;
 		self::$view_dirty = true;
@@ -582,11 +639,13 @@ class Mcpwp_Custom_Code_Conditions {
 			self::$inspection = array();
 			self::$condition_lengths = array();
 			self::$safe_meta_ids = array();
+			self::$oversized_meta_ids = null;
 			self::$entry_overlay = null;
 			self::$request_skipped = array();
 			self::$request_invalid_entries = array();
 			self::$filtered_views = array();
 			self::$view_input = null;
+			self::$pre_view_read = null;
 			$cache = get_option( 'elementor_pro_theme_builder_conditions', array() );
 			if ( null === self::$view_input ) {
 				$cache = self::filter_conditions_cache( is_array( $cache ) ? $cache : array() );
@@ -844,6 +903,10 @@ class Mcpwp_Custom_Code_Conditions {
 
 	/** Invalidate only when the underlying snippet set may have changed. */
 	public static function invalidate_report_on_meta( $meta_id, $post_id, $meta_key ) {
+		if ( '_elementor_conditions' === $meta_key ) {
+			self::$oversized_meta_ids = null;
+			add_filter( 'get_post_metadata', array( __CLASS__, 'filter_oversized_snippet_meta' ), 1, 5 );
+		}
 		if ( in_array( $meta_key, array( '_elementor_conditions', '_elementor_location' ), true ) && self::is_snippet( $post_id ) ) {
 			unset( self::$inspection[ (int) $post_id ] );
 			unset( self::$condition_lengths[ (int) $post_id ], self::$safe_meta_ids[ (int) $post_id ] );
@@ -864,6 +927,7 @@ class Mcpwp_Custom_Code_Conditions {
 
 	/** Cache-entry CAS writers call this after changing one document row. */
 	public static function invalidate_cache_view( $post_id = 0 ) {
+		self::$pre_view_read = null;
 		self::$filtered_views = array();
 		if ( $post_id > 0 ) {
 			unset( self::$inspection[ (int) $post_id ] );
