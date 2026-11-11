@@ -32,6 +32,7 @@
       <file>./unit/test-graph-builder.php</file>
       <file>./unit/test-graph-signals.php</file>
       <file>./unit/test-graph-uninstaller.php</file>
+      <file>./unit/test-legacy-uninstaller.php</file>
     </testsuite>
   </testsuites>
 </phpunit>

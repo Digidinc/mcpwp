@@ -198,4 +198,94 @@ class Mcpwp_Uninstaller {
 			}
 		}
 	}
+
+	/** @var array<string> The older custom tables (suffixes, exact — never a LIKE pattern) (#995). */
+	const LEGACY_TABLES = array(
+		'mcpwp_activity_log',
+		'mcpwp_webhooks',
+		'mcpwp_webhook_logs',
+		'mcpwp_feedback',
+		'mcpwp_action_log',
+	);
+
+	/** @var array<string> Core options and action-log migration markers (#995). */
+	const LEGACY_OPTIONS = array(
+		'mcpwp_api_key',
+		'mcpwp_api_keys',
+		'mcpwp_settings',
+		'mcpwp_version',
+		'mcpwp_db_version',
+		'mcpwp_rate_limit_settings',
+		'mcpwp_first_activation',
+		'mcpwp_premium_preferred',
+		'mcpwp_last_update_flush',
+		'mcpwp_action_log_resource_post_type_column',
+		'mcpwp_action_log_column_migration_lock',
+		'mcpwp_action_log_post_type_backfilled',
+		'mcpwp_action_log_backfill_lock',
+		'mcpwp_action_log_backfill_cursor',
+		'mcpwp_action_log_post_type_backfill_cursor',
+	);
+
+	/** @var array<string> Transients cleared with the older data (#995). */
+	const LEGACY_TRANSIENTS = array(
+		'mcpwp_capabilities_cache',
+		'mcpwp_new_api_key',
+	);
+
+	/** @var array<string> Cron hooks cleared with the older data (#995). */
+	const LEGACY_CRON_HOOKS = array(
+		'mcpwp_cleanup_logs',
+		'mcpwp_check_alerts',
+	);
+
+	/**
+	 * Drop the older tables and core options for every site — the current
+	 * site on single-site, every site in the network on multisite (#995).
+	 * Same looping as drop_graph_data().
+	 */
+	public static function drop_legacy_data() {
+		if ( is_multisite() ) {
+			$site_ids = get_sites(
+				array(
+					'fields' => 'ids',
+					'number' => 0,
+				)
+			);
+			foreach ( $site_ids as $site_id ) {
+				switch_to_blog( $site_id );
+				self::drop_legacy_data_for_current_site();
+				restore_current_blog();
+			}
+			return;
+		}
+
+		self::drop_legacy_data_for_current_site();
+	}
+
+	/**
+	 * Drop the older tables, options, transients and cron for ONLY the
+	 * current site (#995). Idempotent. Table names are the exact fixed
+	 * suffixes above on this site's prefix — nothing is matched by pattern, so
+	 * another plugin's tables are never touched, and no post content is.
+	 */
+	public static function drop_legacy_data_for_current_site() {
+		global $wpdb;
+
+		foreach ( self::LEGACY_TABLES as $suffix ) {
+			$table = $wpdb->prefix . $suffix;
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe; $suffix is a fixed class constant, never input.
+			$wpdb->query( "DROP TABLE IF EXISTS {$table}" );
+		}
+
+		foreach ( self::LEGACY_OPTIONS as $option ) {
+			delete_option( $option );
+		}
+		foreach ( self::LEGACY_TRANSIENTS as $transient ) {
+			delete_transient( $transient );
+		}
+		foreach ( self::LEGACY_CRON_HOOKS as $hook ) {
+			wp_clear_scheduled_hook( $hook );
+		}
+	}
 }
