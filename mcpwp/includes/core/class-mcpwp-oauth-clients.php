@@ -14,10 +14,15 @@
  *  - The registration endpoint is unauthenticated by design, so everything it
  *    can write is bounded: at most 5 redirect URIs of at most 2,000 characters
  *    each, a 100-character plain-text name, 10 registrations per (IP, redirect
- *    hosts) per hour, 50 per site per rolling day, a purge of never-authorized
- *    clients older than 24 hours, and a cap of 500 clients enforced by evicting
- *    the oldest never-authorized client (refusing only when all 500 have
- *    been authorized).
+ *    hosts) per hour, and a count of LIVE pending registrations — clients
+ *    never used to complete an authorization, for at most one hour — of 20
+ *    per address and 50 per site.  A pending client expires after one hour
+ *    and stops counting, so a flood can lock out nobody for longer than that;
+ *    at the site cap a newcomer displaces the oldest pending client of the
+ *    address holding the most, and an authenticated administrator is never
+ *    held back by it.  The store is capped at 500 clients, enforced by
+ *    evicting the oldest never-authorized client (refusing only when all 500
+ *    have been authorized).
  *  - Every read-modify-write of the store runs under a lock row, and a
  *    registration is verified in storage before its id is returned; a lost
  *    race is a 503 "retry", never a later invalid_client.
@@ -74,33 +79,36 @@ class Mcpwp_OAuth_Clients {
 
 	/**
 	 * A client never authorized (no code ever issued for it) and older than
-	 * this (24 hours) is purged — kasra-review P1-B: a real client completes
-	 * consent within minutes of registering, so a day bounds the junk an
-	 * anonymous caller can park in the store.  An authorized client is never
-	 * purged or evicted.
+	 * this (1 hour) is purged and stops counting against the registration
+	 * limits — a real client completes consent within minutes of registering
+	 * (and registers again if it did not), so an hour bounds both the junk an
+	 * anonymous caller can park in the store and how long a flood can hold
+	 * the pending-registration limits.  An authorized client is never purged
+	 * or evicted.
 	 */
-	const UNUSED_CLIENT_MAX_AGE = 86400;
+	const UNUSED_CLIENT_MAX_AGE = 3600;
 
 	/** Registrations allowed per (IP address, redirect hosts) per window. */
 	const REGISTRATIONS_PER_WINDOW = 10;
 
 	/**
-	 * Registrations one address (IPv4, or an IPv6 /64) may make in any
-	 * rolling day ACROSS ALL redirect hosts (#1101 PR-3a).  The hourly
-	 * (address, hosts) bucket alone let one address mint a fresh bucket per
-	 * redirect host and spend the whole per-site day; capped at 20 of the
-	 * site's 50, one address can no longer lock everyone else out.
+	 * Live pending registrations (never authorized, younger than
+	 * UNUSED_CLIENT_MAX_AGE) one address (IPv4, or an IPv6 /64) may hold at
+	 * once, across all redirect hosts.  The hourly (address, hosts) bucket
+	 * alone let one address mint a fresh bucket per redirect host.  Counted
+	 * from the store, not from a daily counter: a registration that expired or
+	 * was authorized frees its slot, so the limit can never outlive the
+	 * registrations it counts.
 	 */
-	const ADDRESS_REGISTRATIONS_PER_DAY = 20;
+	const ADDRESS_PENDING_LIMIT = 20;
 
-	/** Registrations allowed per site in any rolling day. */
-	const SITE_REGISTRATIONS_PER_DAY = 50;
-
-	/** The rolling window for the per-site cap (1 day). */
-	const SITE_WINDOW = 86400;
-
-	/** Option holding the per-site registration timestamps (not autoloaded). */
-	const SITE_WINDOW_OPTION = 'mcpwp_oauth_dcr_site_window';
+	/**
+	 * Live pending registrations the whole site may hold at once.  At the
+	 * limit a newcomer from an address holding fewer pending registrations
+	 * than the heaviest holder displaces that holder's oldest one (fair
+	 * share); a newcomer who is itself the heaviest holder is refused.
+	 */
+	const SITE_PENDING_LIMIT = 50;
 
 	/** Lock row guarding every read-modify-write of the store. */
 	const LOCK_OPTION = 'mcpwp_oauth_clients_lock';
@@ -110,6 +118,13 @@ class Mcpwp_OAuth_Clients {
 
 	/** Lock attempts before giving up with a 503. */
 	const LOCK_ATTEMPTS = 3;
+
+	/**
+	 * Lock attempts a registration makes (about one second at the retry
+	 * pause): a parallel burst of in-limit registrations queues on the lock
+	 * instead of failing with a 503 after 150 ms.
+	 */
+	const REGISTER_LOCK_ATTEMPTS = 20;
 
 	/** Pause between lock attempts (50 ms). */
 	const LOCK_RETRY_MICROSECONDS = 50000;
@@ -474,30 +489,46 @@ class Mcpwp_OAuth_Clients {
 	 *
 	 * Order matters:
 	 *  1. validate (no state touched by a malformed request);
-	 *  2. under the store lock: the per-requester buckets — (caller IP,
-	 *     redirect host set) per hour, so many real users behind one
-	 *     Cloudflare or OpenAI egress address do not share one bucket, and
-	 *     the caller address across all hosts per day (a spoofable
-	 *     X-Forwarded-For is still ignored unless MCPWP_TRUST_PROXY_HEADERS
-	 *     says otherwise); then the per-site rolling-day cap, the 24-hour purge,
-	 *     LRU eviction of a never-authorized client at the 500 cap, the write,
-	 *     and a re-read that proves the new client landed.
+	 *  2. WITHOUT the lock: the rate limits are checked against the stored
+	 *     state — a refused request never takes the store lock (so a flood of
+	 *     refused requests cannot starve in-limit ones into a 503) and never
+	 *     writes anything;
+	 *  3. under the store lock: the same checks again on a fresh read (the
+	 *     authoritative ones), the 1-hour purge, the fair-share displacement
+	 *     at the site limit, LRU eviction of a never-authorized client at the
+	 *     500 cap, the write, and a re-read that proves the new client landed;
+	 *     only then is the (address, hosts) hourly bucket counted.
+	 *
+	 * The limits are keyed on the address the caller passes — handle_register()
+	 * passes the plugin's trusted resolution (REMOTE_ADDR unless
+	 * MCPWP_TRUST_PROXY_HEADERS says otherwise).
 	 *
 	 * The id is returned only once the record is verified in storage.  Any
 	 * failure to get the lock or to verify is a 503 "try again" — never a
 	 * client_id that later turns out not to exist.
 	 *
-	 * @param mixed  $metadata Decoded JSON body.
-	 * @param string $ip       Caller IP (REMOTE_ADDR unless proxy headers are trusted).
-	 * @param int    $now      Current time (testable).
+	 * @param mixed  $metadata   Decoded JSON body.
+	 * @param string $ip         Caller IP.
+	 * @param int    $now        Current time (testable).
+	 * @param bool   $privileged True for an authenticated site administrator:
+	 *                           exempt from the per-address, per-site and
+	 *                           hourly limits (never from the 500 cap).
 	 * @return array|WP_Error RFC 7591 §3.2.1 client information response.
 	 */
-	public static function register( $metadata, $ip, $now = 0 ) {
+	public static function register( $metadata, $ip, $now = 0, $privileged = false ) {
 		$now = $now > 0 ? (int) $now : time();
 
 		$draft = self::validate_registration_metadata( $metadata );
 		if ( is_wp_error( $draft ) ) {
 			return $draft;
+		}
+
+		$hosts = self::redirect_hosts( $draft['redirect_uris'] );
+
+		// Lock-free pre-check: a request the limits refuse never contends.
+		$pre = self::plan_registration( self::purge_stale( self::all(), $now ), $ip, $hosts, $now, (bool) $privileged );
+		if ( is_wp_error( $pre ) ) {
+			return $pre;
 		}
 
 		$client_id = self::CLIENT_ID_PREFIX . bin2hex( random_bytes( 16 ) );
@@ -508,15 +539,15 @@ class Mcpwp_OAuth_Clients {
 			'created_at'           => $now,
 			'last_used_at'         => 0,
 			'authorized_at'        => 0,
-			'registration_ip_hash' => self::hash_ip( $ip ),
+			'registration_ip_hash' => self::hash_ip( self::rate_limit_address( $ip ) ),
 		);
 
-		$token = self::acquire_lock( $now );
+		$token = self::acquire_lock( $now, self::LOCK_OPTION, self::REGISTER_LOCK_ATTEMPTS );
 		if ( false === $token ) {
 			return self::busy_error();
 		}
 
-		$result = self::register_locked( $record, $now, $ip, self::redirect_hosts( $draft['redirect_uris'] ) );
+		$result = self::register_locked( $record, $now, $ip, $hosts, (bool) $privileged );
 
 		self::release_lock( $token );
 
@@ -526,41 +557,25 @@ class Mcpwp_OAuth_Clients {
 	/**
 	 * The part of register() that runs under the store lock.
 	 *
-	 * #1101 round 2: the per-address and per-(address, hosts) buckets are
-	 * read, checked and counted HERE, under the store lock, like the site
-	 * window — a parallel burst from one address can no longer read the
-	 * same count N times and spend the site's day.  They are counted only
-	 * once the client is verified in storage, so a 503 costs no slot.
-	 *
-	 * @param array    $record New client record.
-	 * @param int      $now    Current time.
-	 * @param string   $ip     Caller IP.
-	 * @param string[] $hosts  Redirect hosts.
+	 * @param array    $record     New client record.
+	 * @param int      $now        Current time.
+	 * @param string   $ip         Caller IP.
+	 * @param string[] $hosts      Redirect hosts.
+	 * @param bool     $privileged Exempt from the rate limits.
 	 * @return array|WP_Error
 	 */
-	private static function register_locked( array $record, $now, $ip, array $hosts ) {
+	private static function register_locked( array $record, $now, $ip, array $hosts, $privileged ) {
 		self::flush_option_cache( self::OPTION );
-		self::flush_option_cache( self::SITE_WINDOW_OPTION );
-
-		$slot = self::check_registration_slot( $ip, $hosts, $now );
-		if ( is_wp_error( $slot ) ) {
-			return $slot;
-		}
-
-		// Per-site cap: at most SITE_REGISTRATIONS_PER_DAY in any rolling day.
-		$window = self::site_window( $now );
-		if ( count( $window ) >= self::SITE_REGISTRATIONS_PER_DAY ) {
-			return new WP_Error(
-				'temporarily_unavailable',
-				'Too many app registrations right now; try again later.',
-				array(
-					'status'      => 429,
-					'retry_after' => max( 1, (int) min( $window ) + self::SITE_WINDOW - $now ),
-				)
-			);
-		}
 
 		$clients = self::purge_stale( self::all(), $now );
+
+		$plan = self::plan_registration( $clients, $ip, $hosts, $now, $privileged );
+		if ( is_wp_error( $plan ) ) {
+			return $plan;
+		}
+		if ( null !== $plan['evict'] ) {
+			unset( $clients[ $plan['evict'] ] );
+		}
 
 		// At the cap, evict the oldest never-authorized client to make room.
 		// An authorized client is never evicted: someone is using it.
@@ -588,9 +603,7 @@ class Mcpwp_OAuth_Clients {
 			return self::busy_error();
 		}
 
-		$window[] = $now;
-		update_option( self::SITE_WINDOW_OPTION, array_values( $window ), false );
-		self::commit_registration_slot( $slot, $now );
+		self::commit_registration_slot( $plan['state'], $now );
 
 		return array(
 			'client_id'                  => $record['client_id'],
@@ -604,21 +617,101 @@ class Mcpwp_OAuth_Clients {
 	}
 
 	/**
-	 * Registration timestamps inside the rolling day, oldest first.
+	 * Decide a registration against the limits; change nothing.
 	 *
-	 * @param int $now Current time.
-	 * @return int[]
+	 * The pending registrations are the clients in $clients that were never
+	 * authorized (the caller has already purged the expired ones).  Returns
+	 * the hourly-bucket state to count after a verified write, and the id of
+	 * the pending client a newcomer displaces at the site limit (or null).
+	 *
+	 * @param array    $clients    Live client records (purge_stale() applied).
+	 * @param string   $ip         Caller IP.
+	 * @param string[] $hosts      Redirect hosts.
+	 * @param int      $now        Current time.
+	 * @param bool     $privileged Authenticated administrator: no limits.
+	 * @return array|WP_Error array( 'state' => array, 'evict' => string|null ), or the 429.
 	 */
-	private static function site_window( $now ) {
-		$stored = get_option( self::SITE_WINDOW_OPTION, array() );
-		$window = array();
-		foreach ( is_array( $stored ) ? $stored : array() as $at ) {
-			if ( is_numeric( $at ) && (int) $at > $now - self::SITE_WINDOW ) {
-				$window[] = (int) $at;
-			}
+	private static function plan_registration( array $clients, $ip, array $hosts, $now, $privileged ) {
+		if ( $privileged ) {
+			return array(
+				'state' => array(),
+				'evict' => null,
+			);
 		}
-		sort( $window );
-		return $window;
+
+		$address = self::hash_ip( self::rate_limit_address( $ip ) );
+
+		// Pending registrations per address: id => created_at, oldest first.
+		$by_address = array();
+		$total      = 0;
+		foreach ( $clients as $client_id => $record ) {
+			if ( self::has_been_authorized( $record ) ) {
+				continue;
+			}
+			$holder                              = isset( $record['registration_ip_hash'] ) && is_string( $record['registration_ip_hash'] ) ? $record['registration_ip_hash'] : '';
+			$by_address[ $holder ][ $client_id ] = (int) ( $record['created_at'] ?? 0 );
+			++$total;
+		}
+		foreach ( $by_address as $holder => $pending ) {
+			asort( $pending );
+			$by_address[ $holder ] = $pending;
+		}
+
+		$mine = isset( $by_address[ $address ] ) ? $by_address[ $address ] : array();
+		if ( count( $mine ) >= self::ADDRESS_PENDING_LIMIT ) {
+			return self::limit_error( (int) reset( $mine ) + self::UNUSED_CLIENT_MAX_AGE - $now );
+		}
+
+		$state = self::check_registration_slot( $ip, $hosts, $now );
+		if ( is_wp_error( $state ) ) {
+			return $state;
+		}
+
+		$evict = null;
+		if ( $total >= self::SITE_PENDING_LIMIT ) {
+			// Fair share: the heaviest holder (ties: the one whose oldest
+			// registration is oldest) gives up its oldest pending client to a
+			// newcomer who holds fewer.  A newcomer who is the heaviest
+			// holder gets nothing — one address cannot displace others.
+			$heaviest = null;
+			$count    = 0;
+			$oldest   = PHP_INT_MAX;
+			foreach ( $by_address as $holder => $pending ) {
+				$first = (int) reset( $pending );
+				if ( count( $pending ) > $count || ( count( $pending ) === $count && $first < $oldest ) ) {
+					$heaviest = $holder;
+					$count    = count( $pending );
+					$oldest   = $first;
+				}
+			}
+			if ( null === $heaviest || $count <= count( $mine ) ) {
+				$all_oldest = $total > 0 ? min( array_map( 'min', $by_address ) ) : $now;
+				return self::limit_error( (int) $all_oldest + self::UNUSED_CLIENT_MAX_AGE - $now );
+			}
+			$evict = (string) array_key_first( $by_address[ $heaviest ] );
+		}
+
+		return array(
+			'state' => $state,
+			'evict' => $evict,
+		);
+	}
+
+	/**
+	 * The 429 "too many registrations" answer.
+	 *
+	 * @param int $retry_after Seconds until the oldest counted registration expires.
+	 * @return WP_Error
+	 */
+	private static function limit_error( $retry_after ) {
+		return new WP_Error(
+			'temporarily_unavailable',
+			'Too many app registrations right now; try again later.',
+			array(
+				'status'      => 429,
+				'retry_after' => max( 1, (int) $retry_after ),
+			)
+		);
 	}
 
 	/**
@@ -823,15 +916,16 @@ class Mcpwp_OAuth_Clients {
 	 *
 	 * @param int    $now  Current time.
 	 * @param string $name Lock row (option_name); the client store's by default.
+	 * @param int    $attempts Tries before giving up (LOCK_ATTEMPTS by default).
 	 * @return string|false Token for release_lock(), or false.
 	 */
-	public static function acquire_lock( $now = 0, $name = self::LOCK_OPTION ) {
+	public static function acquire_lock( $now = 0, $name = self::LOCK_OPTION, $attempts = self::LOCK_ATTEMPTS ) {
 		global $wpdb;
 		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'insert' ) ) {
 			return false; // Nothing to arbitrate with: refuse rather than run unlocked.
 		}
 
-		for ( $attempt = 0; $attempt < self::LOCK_ATTEMPTS; $attempt++ ) {
+		for ( $attempt = 0; $attempt < max( 1, (int) $attempts ); $attempt++ ) {
 			if ( $attempt > 0 ) {
 				usleep( self::LOCK_RETRY_MICROSECONDS );
 			}
@@ -959,31 +1053,10 @@ class Mcpwp_OAuth_Clients {
 	}
 
 	/**
-	 * Count one registration against the (caller IP, redirect hosts) bucket.
-	 *
-	 * Fixed one-hour window in a transient keyed by a keyed hash, so neither
-	 * the address nor the hosts are stored in clear.  Varying the hosts buys
-	 * an attacker new hourly buckets but not more of the day: one address
-	 * (IPv6: one /64) may register at most ADDRESS_REGISTRATIONS_PER_DAY
-	 * clients across all hosts, under the per-site daily cap.
-	 *
-	 * @param string   $ip    Caller IP.
-	 * @param string[] $hosts Redirect hosts (redirect_hosts()).
-	 * @param int      $now   Current time.
-	 * @return true|WP_Error
-	 */
-	public static function consume_registration_slot( $ip, array $hosts, $now ) {
-		$slot = self::check_registration_slot( $ip, $hosts, $now );
-		if ( is_wp_error( $slot ) ) {
-			return $slot;
-		}
-		self::commit_registration_slot( $slot, $now );
-		return true;
-	}
-
-	/**
-	 * Read and check both buckets; count nothing.  register() calls this
-	 * under the store lock.
+	 * Read and check the (caller IP, redirect hosts) hourly bucket; count
+	 * nothing.  Varying the hosts buys an attacker new hourly buckets but not
+	 * more pending registrations: the per-address and per-site pending limits
+	 * (plan_registration()) cap those across all hosts.
 	 *
 	 * @param string   $ip    Caller IP.
 	 * @param string[] $hosts Redirect hosts.
@@ -992,38 +1065,22 @@ class Mcpwp_OAuth_Clients {
 	 */
 	public static function check_registration_slot( $ip, array $hosts, $now ) {
 		$address = self::rate_limit_address( $ip );
-		$keys    = array(
-			// Per-address ceiling across every redirect host (#1101 PR-3a):
-			// varying the hosts buys new hourly buckets, never more of the day.
-			'address' => array( 'mcpwp_oauth_dcr_addr_' . substr( self::hash_ip( $address ), 0, 32 ), self::ADDRESS_REGISTRATIONS_PER_DAY, self::SITE_WINDOW ),
-			'hosts'   => array( 'mcpwp_oauth_dcr_' . substr( self::hash_ip( $address . '|' . implode( ',', $hosts ) ), 0, 32 ), self::REGISTRATIONS_PER_WINDOW, self::RATE_LIMIT_WINDOW ),
-		);
-		$state = array();
-		foreach ( $keys as $name => list( $key, $limit, $window ) ) {
-			$bucket = get_transient( $key );
-			if ( ! is_array( $bucket ) || ! isset( $bucket['count'], $bucket['reset'] ) || (int) $bucket['reset'] <= $now ) {
-				$bucket = array(
-					'count' => 0,
-					'reset' => $now + $window,
-				);
-			}
-			if ( (int) $bucket['count'] >= $limit ) {
-				return new WP_Error(
-					'temporarily_unavailable',
-					'Too many app registrations right now; try again later.',
-					array(
-						'status'      => 429,
-						'retry_after' => max( 1, (int) $bucket['reset'] - $now ),
-					)
-				);
-			}
-			$state[ $name ] = array( $key, $bucket );
+		$key     = 'mcpwp_oauth_dcr_' . substr( self::hash_ip( $address . '|' . implode( ',', $hosts ) ), 0, 32 );
+		$bucket  = get_transient( $key );
+		if ( ! is_array( $bucket ) || ! isset( $bucket['count'], $bucket['reset'] ) || (int) $bucket['reset'] <= $now ) {
+			$bucket = array(
+				'count' => 0,
+				'reset' => $now + self::RATE_LIMIT_WINDOW,
+			);
 		}
-		return $state;
+		if ( (int) $bucket['count'] >= self::REGISTRATIONS_PER_WINDOW ) {
+			return self::limit_error( (int) $bucket['reset'] - $now );
+		}
+		return array( 'hosts' => array( $key, $bucket ) );
 	}
 
 	/**
-	 * Count one registration in both buckets checked by check_registration_slot().
+	 * Count one registration in the bucket checked by check_registration_slot().
 	 *
 	 * @param array $state Bucket state.
 	 * @param int   $now   Current time.

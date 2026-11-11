@@ -336,25 +336,31 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ), '198.51.100.9' ) );
 	}
 
-	public function test_per_site_cap_of_fifty_per_rolling_day(): void {
+	/**
+	 * The site cap counts LIVE pending registrations (never authorized, under an
+	 * hour old), not a day's worth of attempts: 50 from 50 addresses fill it, a
+	 * 51st does not exceed it (it displaces one of the fair-share holders), and
+	 * once they expire they stop counting.
+	 */
+	public function test_site_pending_limit_holds_at_fifty_and_expiry_frees_it(): void {
 		for ( $i = 0; $i < 50; $i++ ) {
 			// A different address and host each time: every per-requester
-			// bucket is fresh, so only the site cap can stop number 51.
+			// bucket is fresh, so only the site limit can act on number 51.
 			$this->assertIsArray( $this->register( array( 'redirect_uris' => array( 'https://app' . $i . '.example/cb' ) ), '198.51.100.' . $i ) );
 		}
-
-		$over = $this->register( array( 'redirect_uris' => array( 'https://app-new.example/cb' ) ), '203.0.113.200' );
-		$this->assert_error( $over, 'temporarily_unavailable' );
-		$this->assertSame( 429, $over->get_error_data()['status'] );
-		$this->assertGreaterThan( 0, $over->get_error_data()['retry_after'] );
 		$this->assertCount( 50, Mcpwp_OAuth_Clients::all() );
 
-		// Rolling: registrations older than a day no longer count.
-		$window = get_option( Mcpwp_OAuth_Clients::SITE_WINDOW_OPTION );
-		update_option( Mcpwp_OAuth_Clients::SITE_WINDOW_OPTION, array_map( function () {
-			return time() - DAY_IN_SECONDS - 5;
-		}, $window ), false );
 		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( 'https://app-new.example/cb' ) ), '203.0.113.200' ) );
+		$this->assertCount( 50, Mcpwp_OAuth_Clients::all(), 'Never more than the limit pending at once.' );
+
+		// Expiry: registrations older than the unused-client age stop counting.
+		$clients = Mcpwp_OAuth_Clients::all();
+		foreach ( $clients as $id => $record ) {
+			$clients[ $id ]['created_at'] = time() - Mcpwp_OAuth_Clients::UNUSED_CLIENT_MAX_AGE - 5;
+		}
+		update_option( Mcpwp_OAuth_Clients::OPTION, $clients, false );
+		$this->assertIsArray( $this->register( array( 'redirect_uris' => array( 'https://app-later.example/cb' ) ), '203.0.113.201' ) );
+		$this->assertCount( 1, Mcpwp_OAuth_Clients::all(), 'The expired ones are purged.' );
 	}
 
 	public function test_endpoint_sends_retry_after_on_429(): void {
@@ -389,11 +395,11 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 
 	/** Round 2: at the cap, the oldest NEVER-authorized client is evicted. */
 	public function test_cap_of_500_evicts_the_oldest_never_authorized_client(): void {
-		$this->seed_clients( 1, time() - 3 * HOUR_IN_SECONDS, 0 );   // oldest never-authorized (inside the 24 h purge window) → evicted
+		$this->seed_clients( 1, time() - 20 * MINUTE_IN_SECONDS, 0 );   // oldest never-authorized (inside the 1 h purge window) → evicted
 		$oldest = array_keys( Mcpwp_OAuth_Clients::all() )[0];
 		$this->seed_clients( 1, time() - 5 * DAY_IN_SECONDS, time() ); // older still, but AUTHORIZED → kept
 		$authorized = array_keys( Mcpwp_OAuth_Clients::all() )[1];
-		$this->seed_clients( 498, time() - HOUR_IN_SECONDS, 0 );
+		$this->seed_clients( 498, time() - 10 * MINUTE_IN_SECONDS, 0 );
 
 		$result = $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) );
 
@@ -467,7 +473,9 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 
 		$this->assert_error( $result, 'temporarily_unavailable' );
 		$this->assertSame( 503, $result->get_error_data()['status'] );
-		$this->assertSame( array(), get_option( Mcpwp_OAuth_Clients::SITE_WINDOW_OPTION, array() ), 'A failed registration does not count against the site cap.' );
+		foreach ( array_keys( $GLOBALS['mcpwp_test_transients'] ) as $name ) {
+			$this->assertStringStartsNotWith( 'mcpwp_oauth_dcr_', $name, 'A failed registration is not counted.' );
+		}
 		$this->assertArrayNotHasKey( Mcpwp_OAuth_Clients::LOCK_OPTION, $GLOBALS['mcpwp_test_wpdb_options'] );
 	}
 
@@ -482,11 +490,11 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		$this->assertSame( 503, $result->get_error_data()['status'] );
 	}
 
-	/** P1-B (was 7 days): never-authorized clients are purged after 24 hours. */
-	public function test_registration_purges_never_authorized_clients_older_than_24_hours_first(): void {
-		$this->seed_clients( 499, time() - 25 * HOUR_IN_SECONDS, 0 );                     // never authorized, 25 h → purged
+	/** Never-authorized clients are purged after an hour (was 24 hours: #1115 hardening). */
+	public function test_registration_purges_never_authorized_clients_older_than_an_hour_first(): void {
+		$this->seed_clients( 499, time() - 2 * HOUR_IN_SECONDS, 0 );                      // never authorized, 2 h → purged
 		$this->seed_clients( 1, time() - 8 * DAY_IN_SECONDS, time() - 9 * DAY_IN_SECONDS ); // old but AUTHORIZED → kept
-		$this->seed_clients( 1, time() - 23 * HOUR_IN_SECONDS, 0 );                       // never authorized, 23 h → kept
+		$this->seed_clients( 1, time() - 30 * MINUTE_IN_SECONDS, 0 );                     // never authorized, 30 min → kept
 
 		$result = $this->register( array( 'redirect_uris' => array( self::CHATGPT_REDIRECT ) ) );
 
@@ -494,11 +502,13 @@ final class OAuthDynamicRegistrationTest extends TestCase {
 		$this->assertCount( 3, Mcpwp_OAuth_Clients::all() );
 	}
 
-	public function test_purge_boundary_is_24_hours(): void {
+	public function test_purge_boundary_is_one_hour(): void {
 		$now     = time();
+		$max_age = Mcpwp_OAuth_Clients::UNUSED_CLIENT_MAX_AGE;
+		$this->assertSame( HOUR_IN_SECONDS, $max_age );
 		$clients = array(
-			'mcpwpc_' . str_repeat( '1', 32 ) => array( 'created_at' => $now - DAY_IN_SECONDS - 1, 'last_used_at' => 0, 'authorized_at' => 0 ),
-			'mcpwpc_' . str_repeat( '2', 32 ) => array( 'created_at' => $now - DAY_IN_SECONDS + 60, 'last_used_at' => 0, 'authorized_at' => 0 ),
+			'mcpwpc_' . str_repeat( '1', 32 ) => array( 'created_at' => $now - $max_age - 1, 'last_used_at' => 0, 'authorized_at' => 0 ),
+			'mcpwpc_' . str_repeat( '2', 32 ) => array( 'created_at' => $now - $max_age + 60, 'last_used_at' => 0, 'authorized_at' => 0 ),
 			'mcpwpc_' . str_repeat( '3', 32 ) => array( 'created_at' => $now - 30 * DAY_IN_SECONDS, 'last_used_at' => 0, 'authorized_at' => $now - 29 * DAY_IN_SECONDS ),
 		);
 		$kept = Mcpwp_OAuth_Clients::purge_stale( $clients, $now );

@@ -86,6 +86,11 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 		return new WP_REST_Request( $method, $route, array(), array( 'X-API-Key' => $key ) );
 	}
 
+	/** An OAuth access token is a bearer credential: Authorization header only. */
+	private function request_with_bearer( string $token, string $method, string $route ): WP_REST_Request {
+		return new WP_REST_Request( $method, $route, array(), array( 'Authorization' => 'Bearer ' . $token ) );
+	}
+
 	private function assert_forbidden_category( $result, string $message ): void {
 		$this->assertInstanceOf( WP_Error::class, $result, $message );
 		$this->assertSame( 'forbidden_category', $result->get_error_code(), $message );
@@ -101,7 +106,7 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 		$auth  = $this->harness();
 		$token = $auth->issue_oauth_access_token( array( 'read', 'write', 'admin' ), 3600, array( 'user_id' => 7 ) )['access_token'];
 
-		$result = $auth->verify_api_key( $this->request_with_key( $token, 'GET', '/mcpwp/v1/pages' ) );
+		$result = $auth->verify_api_key( $this->request_with_bearer( $token, 'GET', '/mcpwp/v1/pages' ) );
 
 		$this->assert_forbidden_category( $result, 'An OAuth principal must not reach a disabled category' );
 	}
@@ -112,14 +117,14 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 		$auth  = $this->harness();
 		$token = $auth->issue_oauth_access_token( array( 'read', 'write', 'admin' ), 3600, array( 'user_id' => 7 ) )['access_token'];
 
-		$this->assertTrue( $auth->verify_api_key( $this->request_with_key( $token, 'GET', '/mcpwp/v1/pages' ) ) );
+		$this->assertTrue( $auth->verify_api_key( $this->request_with_bearer( $token, 'GET', '/mcpwp/v1/pages' ) ) );
 	}
 
 	public function test_oauth_token_allowed_when_no_category_is_disabled(): void {
 		$auth  = $this->harness();
 		$token = $auth->issue_oauth_access_token( array( 'read', 'write', 'admin' ), 3600, array( 'user_id' => 7 ) )['access_token'];
 
-		$this->assertTrue( $auth->verify_api_key( $this->request_with_key( $token, 'GET', '/mcpwp/v1/pages' ) ) );
+		$this->assertTrue( $auth->verify_api_key( $this->request_with_bearer( $token, 'GET', '/mcpwp/v1/pages' ) ) );
 	}
 
 	/**
@@ -130,7 +135,7 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 		update_option( 'mcpwp_disabled_tool_categories', array( 'content' ) );
 
 		$result = $this->harness()->verify_api_key(
-			$this->request_with_key( 'mcpwp_at_deadbeefdeadbeefdeadbeefdeadbeef', 'GET', '/mcpwp/v1/pages' )
+			$this->request_with_bearer( 'mcpwp_at_deadbeefdeadbeefdeadbeefdeadbeef', 'GET', '/mcpwp/v1/pages' )
 		);
 
 		$this->assertInstanceOf( WP_Error::class, $result );

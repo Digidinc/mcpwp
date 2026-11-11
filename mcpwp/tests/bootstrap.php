@@ -1096,6 +1096,20 @@ function delete_user_meta($user_id, $key)
     return true;
 }
 
+if (! function_exists('delete_metadata')) {
+    // Only the shape the uninstaller uses: every user's value of one key.
+    function delete_metadata($meta_type, $object_id, $meta_key, $meta_value = '', $delete_all = false)
+    {
+        if ('user' !== $meta_type || ! $delete_all) {
+            return false;
+        }
+        foreach (array_keys($GLOBALS['mcpwp_test_user_meta'] ?? array()) as $uid) {
+            unset($GLOBALS['mcpwp_test_user_meta'][ $uid ][ $meta_key ]);
+        }
+        return true;
+    }
+}
+
 // -------------------------------------------------------------------------
 // Minimal hooks system (filters/actions) for unit tests.
 // -------------------------------------------------------------------------
