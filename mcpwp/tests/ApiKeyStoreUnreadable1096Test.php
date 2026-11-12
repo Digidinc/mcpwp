@@ -276,8 +276,8 @@ final class ApiKeyStoreUnreadable1096Test extends TestCase {
 	/**
 	 * Core's is_serialized() accepts any "a:N:" string ending in ';' or '}', and
 	 * unserialize() then fails: get_option() answers FALSE, not the string. Both
-	 * "false" and "a string" must read as unreadable; only an absent row and an
-	 * empty value are an empty store.
+	 * "false" and "a string" must read as unreadable; only an absent row and a
+	 * serialised empty list are an empty store (an empty string is not).
 	 *
 	 * @return array{store:string,legacy:string,revoked:string,live:string}
 	 */
@@ -307,7 +307,7 @@ final class ApiKeyStoreUnreadable1096Test extends TestCase {
 		$len  = strlen( $site['store'] );
 		$looks_serialised = 0;
 
-		for ( $cut = 1; $cut < $len; $cut++ ) {
+		for ( $cut = 0; $cut < $len; $cut++ ) {
 			$bytes = substr( $site['store'], 0, $cut );
 			$this->set_raw_row( $bytes );
 			if ( in_array( substr( $bytes, -1 ), array( ';', '}' ), true ) ) {
@@ -351,15 +351,67 @@ final class ApiKeyStoreUnreadable1096Test extends TestCase {
 		$this->assertStringContainsString( 'refusing every API key', ob_get_clean() );
 	}
 
-	public function test_an_absent_row_and_an_empty_value_are_an_empty_store_not_an_unreadable_one(): void {
+	public function test_only_an_absent_row_and_a_serialised_empty_list_are_an_empty_store(): void {
 		$this->assertFalse( Mcpwp_Key_State::store_is_unreadable(), 'No row.' );
 		$this->assertTrue( Mcpwp_Key_State::is_fresh_site() );
 
-		$this->set_raw_row( '' );
-		$this->assertFalse( Mcpwp_Key_State::store_is_unreadable(), 'An empty value.' );
-
 		$this->set_raw_row( 'a:0:{}' );
-		$this->assertFalse( Mcpwp_Key_State::store_is_unreadable(), 'An empty list.' );
+		$this->assertFalse( Mcpwp_Key_State::store_is_unreadable(), 'A serialised empty list.' );
+		$this->assertTrue( Mcpwp_Key_State::is_fresh_site(), 'And it is still a fresh site.' );
+	}
+
+	public static function present_but_not_a_list(): array {
+		return array(
+			'empty string'            => array( '' ),
+			'serialised empty string' => array( 's:0:"";' ),
+			'serialised null'         => array( 'N;' ),
+			'serialised false'        => array( 'b:0;' ),
+			'serialised zero'         => array( 'i:0;' ),
+			'a scalar string'         => array( 's:3:"abc";' ),
+		);
+	}
+
+	/**
+	 * Nothing in the plugin writes any of these, so a row holding one is damage:
+	 * counting it as an empty store would let the legacy key and the spai_ copy
+	 * of a revoked key authenticate.
+	 *
+	 * @dataProvider present_but_not_a_list
+	 */
+	public function test_a_present_row_that_is_not_a_list_is_unreadable_and_fails_closed( string $bytes ): void {
+		$site = $this->three_key_site();
+		$this->set_raw_row( $bytes );
+		$auth = new Mcpwp_Unreadable_Test_Auth();
+
+		$this->assertTrue( Mcpwp_Key_State::store_is_unreadable() );
+		$this->assertFalse( Mcpwp_Key_State::is_fresh_site() );
+		foreach ( array( 'legacy', 'revoked', 'live' ) as $which ) {
+			$this->assertInstanceOf( WP_Error::class, $auth->verify_api_key( $this->request( $site[ $which ] ) ), "the $which key is refused" );
+		}
+		$this->assertSame( 'critical', Mcpwp_Key_Store_Health::run_site_status_test()['status'] );
+		$this->assertSame( 'keystore_unreadable', $auth->create_scoped_api_key( 'x', array( 'read' ), 'admin' )['error'], 'mutate() refuses it' );
+		$this->assertSame( $bytes, $GLOBALS['mcpwp_test_wpdb_options']['mcpwp_api_keys'], 'and the bytes are untouched' );
+	}
+
+	public function test_a_fresh_site_with_no_row_still_mints_its_first_key(): void {
+		Mcpwp_Activator::ensure_api_keys();
+
+		$this->assertNotEmpty( get_option( 'mcpwp_api_key', '' ), 'The first legacy key is minted.' );
+		$this->assertCount( 1, (array) get_option( 'mcpwp_api_keys' ), 'And its scoped record is written.' );
+		$this->assertFalse( Mcpwp_Key_State::store_is_unreadable() );
+	}
+
+	public function test_a_store_whose_every_key_was_revoked_still_honours_the_revocations(): void {
+		// Revoking everything leaves revoked RECORDS, not an empty list.
+		$auth    = new Mcpwp_Unreadable_Test_Auth();
+		$revoked = 'spai_' . str_repeat( 'z', 48 );
+		$a       = $auth->create_scoped_api_key( 'only', array( 'admin' ), 'admin' );
+		$auth->revoke_scoped_api_key( $a['id'] );
+		$records = get_option( 'mcpwp_api_keys' );
+		update_option( 'spai_api_keys', array( array( 'id' => 'sp', 'label' => 'copy', 'hash' => $records[0]['hash'], 'scopes' => array( 'admin' ), 'revoked_at' => null ) ) );
+
+		$this->assertFalse( Mcpwp_Key_State::store_is_unreadable() );
+		$this->assertInstanceOf( WP_Error::class, $auth->verify_api_key( $this->request( $a['key'] ) ), 'The revoked key stays refused, through the spai_ copy too.' );
 	}
 
 	public function test_the_key_store_loads_what_it_needs_on_the_activation_request(): void {

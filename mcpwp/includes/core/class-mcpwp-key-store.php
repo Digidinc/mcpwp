@@ -167,12 +167,10 @@ class Mcpwp_Key_Store {
 	 * Whether the stored value is something the store can be built on.
 	 *
 	 * @param string $raw Stored bytes.
-	 * @return bool An empty value or a serialised array.
+	 * @return bool A serialised array.
 	 */
 	private static function is_readable_store( $raw ) {
-		if ( '' === $raw ) {
-			return true;
-		}
+		// Only a serialised list is readable ('a:0:{}' is the empty one); '' is not.
 		return is_array( maybe_unserialize( $raw ) );
 	}
 

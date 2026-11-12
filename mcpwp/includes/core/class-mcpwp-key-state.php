@@ -77,10 +77,14 @@ class Mcpwp_Key_State {
 		// a list of keys". get_option() hands back FALSE for a truncated value
 		// whose last character is ';' or '}' (core's is_serialized() accepts it,
 		// unserialize() then fails), so false is NOT "not unreadable": only the
-		// absence of the row, or an empty value, is (#1096).
+		// absence of the row, or a serialised empty array, is. An empty string
+		// ('' or 's:0:"";') is NOT an empty store either: nothing in the plugin
+		// writes one, so a present row that is not a list of keys is always
+		// someone's damage, and treating it as empty would let the legacy key and
+		// the spai_ copy of a revoked key authenticate (#1096).
 		$absent = '__mcpwp_row_absent__';
 		$value  = get_option( 'mcpwp_api_keys', $absent );
-		return $absent !== $value && ! is_array( $value ) && '' !== $value;
+		return $absent !== $value && ! is_array( $value );
 	}
 
 	/**
