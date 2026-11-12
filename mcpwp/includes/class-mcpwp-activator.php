@@ -533,7 +533,8 @@ class Mcpwp_Activator {
 	 * table holds at least as many rows as were copyable; only then merge the
 	 * option into `mcpwp_approval_requests_pre_3149` (autoload off; ids
 	 * already in the backup win) — kept, not deleted, so a downgrade or a bad
-	 * migration can be recovered by hand; a later release removes it —
+	 * migration can be recovered by hand; cleanup_approvals_backup() (#1053)
+	 * removes it later, fail closed —
 	 * delete the option and set the flag.
 	 *
 	 * Late import (#1042 review round 1, W3): if the option exists again
@@ -685,6 +686,120 @@ class Mcpwp_Activator {
 		} finally {
 			self::release_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, $lock_token );
 		}
+	}
+
+	/**
+	 * Transient (a day) holding the last reason the backup cleanup refused —
+	 * or `deleted` — so "why is it still there" has an answer (#1053). A
+	 * transient, not an option: nothing for the uninstaller to chase.
+	 */
+	const APPROVALS_BACKUP_CLEANUP_STATUS = 'mcpwp_approvals_backup_cleanup_status';
+
+	/**
+	 * One-time cleanup (#1053): delete `mcpwp_approval_requests_pre_3149`,
+	 * the recovery copy migrate_approvals_to_table() keeps of the old option.
+	 *
+	 * Fails closed: it deletes only when the table migration flag is set AND
+	 * the approvals table is readable and holds rows AND nothing lives only
+	 * in the backup (no record was skipped by the copy) AND the legacy option
+	 * has not reappeared (a late import is still owed, and the backup is its
+	 * tombstone). Otherwise the backup stays and the reason is recorded in
+	 * APPROVALS_BACKUP_CLEANUP_STATUS (and the debug log). Idempotent: once
+	 * the option is gone it answers `nothing_to_clean` without a query.
+	 *
+	 * Holds the same migration lock as the copy, so it cannot interleave with
+	 * a late import. Per site: options and the table are per blog, and the
+	 * hourly cron that calls this runs once per site, so multisite needs no
+	 * network loop. Call from cron or admin context only, never a public
+	 * request hook.
+	 *
+	 * Trade-off: with the backup gone a late import (an old-code worker or a
+	 * downgrade recreating `mcpwp_approval_requests`) can no longer tell
+	 * already-decided ids from new ones.
+	 *
+	 * @return string Outcome: deleted | nothing_to_clean | not_migrated |
+	 *                busy | late_import_pending | skipped_records |
+	 *                table_unreadable | table_empty.
+	 */
+	public static function cleanup_approvals_backup() {
+		if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
+			require_once __DIR__ . '/core/class-mcpwp-approvals.php';
+		}
+		$backup_option = Mcpwp_Approvals::LEGACY_BACKUP_OPTION;
+		if ( false === get_option( $backup_option, false ) ) {
+			return 'nothing_to_clean';
+		}
+		if ( ! get_option( Mcpwp_Approvals::MIGRATED_FLAG ) ) {
+			return self::approvals_backup_refused( 'not_migrated' );
+		}
+
+		$lock_token = self::acquire_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, self::APPROVALS_TABLE_LOCK_TTL );
+		if ( false === $lock_token ) {
+			return self::approvals_backup_refused( 'busy' );
+		}
+
+		try {
+			if ( function_exists( 'wp_cache_delete' ) ) {
+				foreach ( array( $backup_option, Mcpwp_Approvals::OPTION_NAME, Mcpwp_Approvals::SKIPPED_OPTION, 'alloptions', 'notoptions' ) as $cached ) {
+					wp_cache_delete( $cached, 'options' );
+				}
+			}
+			$backup = get_option( $backup_option, false );
+			if ( false === $backup ) {
+				return 'nothing_to_clean';
+			}
+			if ( false !== get_option( Mcpwp_Approvals::OPTION_NAME, false ) ) {
+				return self::approvals_backup_refused( 'late_import_pending' );
+			}
+			$skipped = get_option( Mcpwp_Approvals::SKIPPED_OPTION, array() );
+			if ( ! empty( $skipped ) ) {
+				// A skipped record exists nowhere but the backup.
+				return self::approvals_backup_refused( 'skipped_records' );
+			}
+
+			// An empty backup protects nothing; a non-empty one needs proof
+			// the table took over.
+			if ( is_array( $backup ) && ! empty( $backup ) ) {
+				global $wpdb;
+				$table = Mcpwp_Approvals::table_name();
+				$wpdb->last_error = '';
+				// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant.
+				$rows = $wpdb->get_var( "SELECT COUNT(*) FROM {$table}" );
+				if ( null === $rows || false === $rows || '' !== (string) $wpdb->last_error ) {
+					return self::approvals_backup_refused( 'table_unreadable' );
+				}
+				if ( (int) $rows < 1 ) {
+					return self::approvals_backup_refused( 'table_empty' );
+				}
+			}
+
+			delete_option( $backup_option );
+			if ( function_exists( 'wp_cache_delete' ) ) {
+				wp_cache_delete( $backup_option, 'options' );
+			}
+			if ( false !== get_option( $backup_option, false ) ) {
+				return self::approvals_backup_refused( 'delete_failed' );
+			}
+			set_transient( self::APPROVALS_BACKUP_CLEANUP_STATUS, 'deleted', DAY_IN_SECONDS );
+			return 'deleted';
+		} finally {
+			self::release_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, $lock_token );
+		}
+	}
+
+	/**
+	 * Record why the backup cleanup left the option alone.
+	 *
+	 * @param string $reason Outcome code.
+	 * @return string The same code.
+	 */
+	private static function approvals_backup_refused( $reason ) {
+		set_transient( self::APPROVALS_BACKUP_CLEANUP_STATUS, $reason, DAY_IN_SECONDS );
+		if ( 'not_migrated' !== $reason && defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP approvals backup cleanup: kept mcpwp_approval_requests_pre_3149 (' . $reason . ')' );
+		}
+		return $reason;
 	}
 
 	/**

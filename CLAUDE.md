@@ -884,7 +884,7 @@ Config stored per-provider in `mcpwp_integrations` wp_option (encrypted). Manage
 | `mcpwp_first_activation` | Initial activation timestamp |
 | `mcpwp_approvals_identity_migrated` | One-time flag: on upgrade, purge identity-less pending/approved approvals so a reconnected OAuth principal can't self-approve a pre-fix request |
 | `mcpwp_approvals_table_migrated` | One-time flag (#1042): the approvals queue was copied from the old `mcpwp_approval_requests` option into the `{prefix}mcpwp_approvals` table |
-| `mcpwp_approval_requests_pre_3149` | The old approvals option, renamed by that migration and kept (autoload off) for recovery by hand; a later release removes it |
+| `mcpwp_approval_requests_pre_3149` | The old approvals option, renamed by that migration and kept (autoload off) for recovery by hand; removed by the hourly cron's one-time, fail-closed `Mcpwp_Activator::cleanup_approvals_backup()` (#1053) only once the table is readable and non-empty, no record was skipped and the legacy option has not reappeared — the reason it stayed is the `mcpwp_approvals_backup_cleanup_status` transient |
 
 ## WP Hooks
 

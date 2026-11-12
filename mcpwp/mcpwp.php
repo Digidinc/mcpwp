@@ -829,6 +829,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 			static function () {
 				require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 				Mcpwp_Activator::migrate_approvals_to_table();
+				// One-time, fail-closed removal of the pre-3.14.9 recovery
+				// copy (#1053). Cron only, never a public request.
+				Mcpwp_Activator::cleanup_approvals_backup();
 				// And retry any visibility categories still pending (#1042).
 				Mcpwp_Approvals::rederive_pending( 500 );
 			}
