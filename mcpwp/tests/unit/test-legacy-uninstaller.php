@@ -101,6 +101,21 @@ final class LegacyUninstallerTest extends TestCase
         $this->assertArrayHasKey('someone_elses_hook', $GLOBALS['mcpwp_test_cron']);
     }
 
+    public function test_removes_the_key_store_last_used_and_lock_options(): void
+    {
+        foreach (array('mcpwp_api_keys_last_used', 'mcpwp_api_keys_lock') as $option) {
+            $this->assertContains($option, Mcpwp_Uninstaller::LEGACY_OPTIONS);
+            update_option($option, 'x');
+        }
+        update_option('mcpwp_api_keys_other_plugin_lookalike', 'keep');
+
+        Mcpwp_Uninstaller::drop_legacy_data_for_current_site();
+
+        $this->assertArrayNotHasKey('mcpwp_api_keys_last_used', $GLOBALS['mcpwp_test_options']);
+        $this->assertArrayNotHasKey('mcpwp_api_keys_lock', $GLOBALS['mcpwp_test_options']);
+        $this->assertSame('keep', get_option('mcpwp_api_keys_other_plugin_lookalike'));
+    }
+
     public function test_is_idempotent(): void
     {
         Mcpwp_Uninstaller::drop_legacy_data_for_current_site();

@@ -212,6 +212,9 @@ class Mcpwp_Uninstaller {
 	const LEGACY_OPTIONS = array(
 		'mcpwp_api_key',
 		'mcpwp_api_keys',
+		// The key store's last-used bookkeeping and write lock (#1096).
+		'mcpwp_api_keys_last_used',
+		'mcpwp_api_keys_lock',
 		'mcpwp_settings',
 		'mcpwp_version',
 		'mcpwp_db_version',
