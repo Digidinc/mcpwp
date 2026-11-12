@@ -2677,11 +2677,18 @@ trait Mcpwp_Api_Auth {
 		if ( ( is_int( $value ) || is_float( $value ) ) && $value < 0 ) {
 			return true;
 		}
+		// An id must round-trip as a positive integer: a float that is not
+		// finite or does not fit an int casts to a different number here than
+		// in a consumer's absint() (PHP wraps it), so it is refused.
+		if ( is_float( $value ) && ( ! is_finite( $value ) || $value >= 9.2233720368547758E18 ) ) {
+			return true;
+		}
 		if ( ! is_string( $value ) ) {
 			return false;
 		}
 		if ( is_numeric( $value ) ) {
-			return (float) $value < 0;
+			$as_float = (float) $value;
+			return $as_float < 0 || ! is_finite( $as_float ) || $as_float >= 9.2233720368547758E18;
 		}
 		return 1 === preg_match( '/^\s*[+-]?\d/', $value );
 	}

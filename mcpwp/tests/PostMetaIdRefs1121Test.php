@@ -185,6 +185,67 @@ final class PostMetaIdRefs1121Test extends TestCase {
 		}
 	}
 
+	/** @return array<string,array{0:mixed,1:bool}> */
+	public static function round_trip_values(): array {
+		return array(
+			'2^63 as float'              => array( 9.2233720368547758E18, true ),
+			'PHP_INT_MAX as float'       => array( (float) PHP_INT_MAX, true ),
+			'1e19'                       => array( 1e19, true ),
+			'wraps to -2048'             => array( 18446744073709549568.0, true ),
+			'wraps to 4096'              => array( 18446744073709547520.0, true ),
+			'-1e19'                      => array( -1e19, true ),
+			'INF'                        => array( INF, true ),
+			'-INF'                       => array( -INF, true ),
+			'NAN'                        => array( NAN, true ),
+			'string 1e19'                => array( '1e19', true ),
+			'string 18446744073709549568' => array( '18446744073709549568', true ),
+			'string 1e400'               => array( '1e400', true ),
+			'PHP_INT_MAX int'            => array( PHP_INT_MAX, false ),
+			'float 8.0'                  => array( 8.0, false ),
+			'-0.0 (is not an id)'        => array( -0.0, false ),
+			'int 8'                      => array( 8, false ),
+			'string 8'                   => array( '8', false ),
+		);
+	}
+
+	/**
+	 * An id has to round-trip as a positive integer.
+	 *
+	 * @dataProvider round_trip_values
+	 * @param mixed $value
+	 */
+	public function test_ids_that_do_not_round_trip_as_a_positive_integer_are_refused( $value, bool $refused ): void {
+		$this->assertSame( $refused, Mcpwp_REST_API::is_ambiguous_post_ref_value( $value ) );
+	}
+
+	public function test_out_of_range_floats_are_refused_on_id_meta_values(): void {
+		$big = 18446744073709549568.0;
+		$cases = array(
+			'_upsell_ids list'       => array( '_upsell_ids', array( $big ) ),
+			'_children list'         => array( '_children', array( self::PUB, $big ) ),
+			'_crosssell_ids list'    => array( '_crosssell_ids', array( $big ) ),
+			'_thumbnail_id scalar'   => array( '_thumbnail_id', 18446744073709547520.0 ),
+			'_THUMBNAIL_ID scalar'   => array( '_THUMBNAIL_ID', $big ),
+			'gallery csv'            => array( '_product_image_gallery', self::ATT_FREE . ',1e19' ),
+			'JSON array string'      => array( '_upsell_ids', '[18446744073709549568]' ),
+			'JSON object string'     => array( '_upsell_ids', '{"0":18446744073709549568}' ),
+			'JSON float, 1e19'       => array( '_upsell_ids', '[1.0e19]' ),
+		);
+		foreach ( $cases as $label => list( $key, $value ) ) {
+			$this->assertSame( 'invalid_post_ref/400', $this->meta( array( 'key' => $key, 'value' => $value ) ), $label );
+		}
+	}
+
+	public function test_out_of_range_floats_are_refused_on_featured_image_references(): void {
+		$a   = $this->token();
+		$big = 18446744073709545472.0;
+		$this->assertSame( 'invalid_post_ref/400', $this->code( $this->check( 'PUT', '/posts/' . self::OWN, array( 'id' => self::OWN, 'featured_image' => $big ), $a ) ), 'PUT /posts/{id}' );
+		$this->assertSame( 'invalid_post_ref/400', $this->code( $this->check( 'POST', '/posts', array( 'title' => 'x', 'featured_image' => $big ), $a ) ), 'POST /posts' );
+		$this->assertContains( $this->code( $this->check( 'POST', '/posts/bulk', array( 'posts' => array( array( 'title' => 'x', 'featured_image' => $big ) ) ), $a ) ), array( 'invalid_post_ref/400', 'invalid_item/400' ), 'POST /posts/bulk: refused before the handler.' );
+		$this->assertSame( 'invalid_post_ref/400', $this->code( $this->check( 'POST', '/posts/' . self::OWN . '/featured-image', array( 'id' => self::OWN, 'media_id' => $big ), $a ) ), 'featured-image media_id' );
+		$this->assertTrue( $this->check( 'PUT', '/posts/' . self::OWN, array( 'id' => self::OWN, 'featured_image' => self::ATT_FREE ), $a ), 'A readable id still passes.' );
+	}
+
 	public function test_a_list_longer_than_the_post_ref_cap_is_refused_before_any_lookup(): void {
 		$ids = range( 1, 501 );
 		$this->assertSame( 'too_many_ids/400', $this->meta( array( 'key' => '_upsell_ids', 'value' => $ids ) ) );
@@ -227,8 +288,14 @@ final class PostMetaIdRefs1121Test extends TestCase {
 	// ── two-way pin: a new id-meta key has to be classified ───────────────
 
 	/**
-	 * Every meta key literal in includes/ that looks like an id-meta, and what
-	 * was decided about it. 'ref' keys are in get_post_ref_meta_value_keys();
+	 * An inventory of THIS plugin's own meta key literals in includes/ that
+	 * look like id-metas (underscore-style names ending _id/_ids, plus
+	 * _product_image_gallery and _children). It is not coverage of the
+	 * ecosystem: hyphenated keys and other plugins' image-id keys (for
+	 * example _yoast_wpseo_opengraph-image-id, ACF image fields) are not
+	 * scanned or classified here — that scope is an owner decision.
+	 *
+	 * Every such literal, and what was decided about it. 'ref' keys are in get_post_ref_meta_value_keys();
 	 * 'not' keys were reviewed and name no post a /post-meta write could reach.
 	 */
 	const CLASSIFIED = array(
