@@ -143,7 +143,12 @@ class Mcpwp_ChatGPT_Connector {
 			);
 		}
 
-		$had_link = $this->revoke();
+		$link = $this->revoke_link();
+		if ( 'busy' === $link || 'unreadable' === $link ) {
+			// The old link is still live: mint nothing, say so.
+			return new WP_Error( 'mcpwp_chatgpt_keystore_busy', self::busy_message( $link ) );
+		}
+		$had_link = 'revoked' === $link;
 
 		$created = $this->auth->create_scoped_api_key(
 			__( 'ChatGPT connector', 'mcpwp' ),
@@ -215,7 +220,10 @@ class Mcpwp_ChatGPT_Connector {
 			);
 		}
 		if ( 'revoke' === $action ) {
-			$this->revoke();
+			$state = $this->revoke_link();
+			if ( 'busy' === $state || 'unreadable' === $state ) {
+				return array( 'type' => 'error', 'message' => self::busy_message( $state ) );
+			}
 			return array( 'type' => 'updated', 'message' => __( 'ChatGPT link revoked. ChatGPT can no longer reach this site with it.', 'mcpwp' ) );
 		}
 		return null;
@@ -252,11 +260,49 @@ class Mcpwp_ChatGPT_Connector {
 	 * @return bool True when a live key was revoked.
 	 */
 	public function revoke() {
+		return 'revoked' === $this->revoke_link();
+	}
+
+	/**
+	 * Revoke the current connector key and say what happened (#1096).
+	 *
+	 * The stored key id is forgotten only once the revoke is CONFIRMED, or the
+	 * key is already gone. On a busy key store the key is still live, so the id
+	 * stays: forgetting it would leave a live link, carried in a URL, that
+	 * nothing on this page could ever revoke again.
+	 *
+	 * @return string 'none' (no link was stored), 'revoked', 'gone' (the key was
+	 *                already revoked or missing; the id is forgotten), 'busy'
+	 *                (NOT revoked; the id is kept; retry) or 'unreadable' (the
+	 *                stored keys are corrupt; NOT revoked; the id is kept).
+	 */
+	public function revoke_link() {
 		$key_id = (string) get_option( self::OPTION_KEY_ID, '' );
-		delete_option( self::OPTION_KEY_ID );
 		if ( '' === $key_id ) {
-			return false;
+			return 'none';
 		}
-		return (bool) $this->auth->revoke_scoped_api_key( $key_id );
+		if ( method_exists( $this->auth, 'revoke_scoped_api_key_outcome' ) ) {
+			$outcome = (string) $this->auth->revoke_scoped_api_key_outcome( $key_id );
+		} else {
+			$outcome = $this->auth->revoke_scoped_api_key( $key_id ) ? 'revoked' : 'not_found';
+		}
+		if ( 'busy' === $outcome || 'unreadable' === $outcome ) {
+			return $outcome;
+		}
+		delete_option( self::OPTION_KEY_ID );
+		return 'revoked' === $outcome ? 'revoked' : 'gone';
+	}
+
+	/**
+	 * The "store busy" refusal shared by every connector action.
+	 *
+	 * @return string
+	 */
+	private static function busy_message( $state = 'busy' ) {
+		if ( 'unreadable' === $state ) {
+			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
+			return Mcpwp_Key_State::unreadable_message();
+		}
+		return __( 'The API key store is busy, so nothing was changed and the current ChatGPT link is still active. Try again in a moment.', 'mcpwp' );
 	}
 }

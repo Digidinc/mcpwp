@@ -234,7 +234,11 @@ final class MigrateEmptyCustomCategoryKeysTest extends TestCase {
 			'mcpwp_api_keys',
 			array( array( 'id' => 'n', 'role' => 'custom', 'tool_categories' => array(), 'hash' => 'h-n', 'label' => 'N' ) )
 		);
-		$GLOBALS['mcpwp_test_update_option_fail']['mcpwp_api_keys'] = true;
+		// The key store is written by compare-and-swap on the row (#1096), so a
+		// failed write is a failed row update.
+		$GLOBALS['mcpwp_test_wpdb_update_fails'] = static function ( $name ) {
+			return 'mcpwp_api_keys' === $name;
+		};
 
 		Mcpwp_Activator::migrate_empty_custom_category_keys();
 
@@ -242,7 +246,7 @@ final class MigrateEmptyCustomCategoryKeysTest extends TestCase {
 		$this->assertSame( array(), get_option( 'mcpwp_api_keys' )[0]['tool_categories'], 'the failed write must not have partially applied' );
 
 		// Once the write can succeed again, a later call finishes the job.
-		unset( $GLOBALS['mcpwp_test_update_option_fail']['mcpwp_api_keys'] );
+		$GLOBALS['mcpwp_test_wpdb_update_fails'] = false;
 		Mcpwp_Activator::migrate_empty_custom_category_keys();
 
 		$this->assertSame( 1, get_option( 'mcpwp_deny_all_categories_migrated' ) );

@@ -767,11 +767,14 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		// error_response()'s $context, which only feeds the generic hint map
 		// and would drop the extra field) so the caller gets it back for real.
 		if ( is_array( $created ) && isset( $created['error'] ) ) {
+			if ( 'keystore_busy' === $created['error'] ) {
+				return $this->keystore_busy_response( (string) $created['message'] );
+			}
 			$extra = array_diff_key( $created, array_flip( array( 'error', 'message' ) ) );
 			$error = new WP_Error(
 				$created['error'],
 				$created['message'],
-				array_merge( array( 'status' => 400 ), $extra )
+				array_merge( array( 'status' => in_array( $created['error'], array( 'keystore_unreadable', 'keystore_write_failed' ), true ) ? 500 : 400 ), $extra )
 			);
 			return class_exists( 'Mcpwp_Error_Hints' ) ? Mcpwp_Error_Hints::enhance_error( $error ) : $error;
 		}
@@ -786,6 +789,31 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 			),
 			201
 		);
+	}
+
+	/**
+	 * The "key store busy, nothing was changed, retry" answer (#1096).
+	 *
+	 * A real 503 with a Retry-After header, not a 4xx a caller would read as
+	 * permanent. The body keeps the WP_Error JSON shape.
+	 *
+	 * @param string $message What was not done.
+	 * @return WP_REST_Response
+	 */
+	private function keystore_busy_response( $message ) {
+		$response = new WP_REST_Response(
+			array(
+				'code'    => 'keystore_busy',
+				'message' => $message,
+				'data'    => array(
+					'status'      => 503,
+					'retry_after' => 1,
+				),
+			),
+			503
+		);
+		$response->header( 'Retry-After', '1' );
+		return $response;
 	}
 
 	public function revoke_api_key( $request ) {
@@ -805,9 +833,24 @@ class Mcpwp_REST_Site_Updates extends Mcpwp_REST_API {
 		// incident-response lever, and reversible in the sense that matters —
 		// a replacement can be minted. Slowing it down favours an attacker
 		// who already holds a key.
-		$revoked = $this->revoke_scoped_api_key( $key_id );
+		$outcome = $this->revoke_scoped_api_key_outcome( $key_id );
 
-		if ( ! $revoked ) {
+		if ( 'unreadable' === $outcome ) {
+			// Retrying cannot help: the stored keys are corrupt (#1096). No Retry-After.
+			return new WP_Error(
+				'keystore_unreadable',
+				Mcpwp_Key_State::unreadable_message(),
+				array( 'status' => 500 )
+			);
+		}
+
+		if ( 'busy' === $outcome ) {
+			// The key is NOT revoked and the failure is transient (#1096): say
+			// so with a retryable status, not "not found".
+			return $this->keystore_busy_response( __( 'The API key store is busy. The key was NOT revoked; retry the request.', 'mcpwp' ) );
+		}
+
+		if ( 'revoked' !== $outcome ) {
 			return $this->error_response(
 				'not_found',
 				__( 'API key not found or already revoked.', 'mcpwp' ),

@@ -497,6 +497,10 @@ function __($text, $domain = 'default')
             'domain' => $domain,
         );
     }
+    // A test arms a translation (#1096), e.g. a label the column cannot hold.
+    if (isset($GLOBALS['mcpwp_test_translations'][ $text ])) {
+        return $GLOBALS['mcpwp_test_translations'][ $text ];
+    }
     return $text;
 }
 
@@ -528,14 +532,13 @@ if (! function_exists('maybe_serialize')) {
 }
 
 if (! function_exists('maybe_unserialize')) {
+    // Core's: anything is_serialized() accepts is unserialised, and a failure is
+    // FALSE, not the original string (so a value cut short at a ';' or '}' reads
+    // as false, #1096).
     function maybe_unserialize($data)
     {
-        if (is_string($data)) {
-            $trimmed = trim($data);
-            if (preg_match('/^[aOs]:[0-9]+:/', $trimmed) || 'b:0;' === $trimmed || 'b:1;' === $trimmed || 'N;' === $trimmed) {
-                $out = @unserialize($trimmed);
-                return (false === $out && 'b:0;' !== $trimmed) ? $data : $out;
-            }
+        if (is_string($data) && is_serialized($data)) {
+            return @unserialize(trim($data));
         }
         return $data;
     }
@@ -790,6 +793,12 @@ function get_option($name, $default = false)
     if (isset($GLOBALS['mcpwp_test_object_cache']['options:notoptions'][ $name ])) {
         return $default;
     }
+    // A stale object-cache copy (#1096): a test arms this to model the cached
+    // snapshot a reader gets from the options API while the database row has
+    // moved on. Dropped by wp_cache_delete() of the option, or of `alloptions`.
+    if (isset($GLOBALS['mcpwp_test_option_cache_stale']) && array_key_exists($name, $GLOBALS['mcpwp_test_option_cache_stale'])) {
+        return $GLOBALS['mcpwp_test_option_cache_stale'][ $name ];
+    }
     if (array_key_exists($name, $GLOBALS['mcpwp_test_options'])) {
         return $GLOBALS['mcpwp_test_options'][ $name ];
     }
@@ -926,8 +935,10 @@ function is_serialized($data, $strict = true)
     if (! preg_match('/^([adObis]):/', $data, $m)) {
         return false;
     }
+    // Core (strict): the last byte is ';' or '}' whatever the token is, so a
+    // store cut short at a ';' still counts as serialised (#1096).
     $last = substr($data, -1);
-    return in_array($m[1], array('a', 'O'), true) ? '}' === $last : ';' === $last;
+    return ';' === $last || '}' === $last;
 }
 
 function wp_delete_post($post_id, $force_delete = false)
@@ -2713,7 +2724,15 @@ if (! isset($GLOBALS['wpdb'])) {
             }
 
             if (preg_match("/SELECT option_value FROM \\S*options WHERE option_name = '([^']+)'/", (string) $query, $m)) {
-                return $GLOBALS['mcpwp_test_wpdb_options'][ $m[1] ] ?? null;
+                if (array_key_exists($m[1], $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    return $GLOBALS['mcpwp_test_wpdb_options'][ $m[1] ];
+                }
+                // One options table in real WordPress (#1096): a row written through
+                // the options API is what a direct SELECT returns, as stored bytes.
+                if (array_key_exists($m[1], $GLOBALS['mcpwp_test_options'] ?? array())) {
+                    return maybe_serialize($GLOBALS['mcpwp_test_options'][ $m[1] ]);
+                }
+                return null;
             }
             // Answer the one query the Elementor writer depends on.
             //
@@ -3085,11 +3104,25 @@ if (! isset($GLOBALS['wpdb'])) {
                 return $deleted;
             }
 
+            // Conditional write comparing the row as connection-charset text (#1096):
+            // the collation decides equality, as in MySQL.
+            if (preg_match("/^UPDATE (\\S*options) SET option_value = '((?:[^'\\\\]|\\\\.)*)' WHERE option_name = '((?:[^'\\\\]|\\\\.)*)' AND option_value = '((?:[^'\\\\]|\\\\.)*)'$/s", trim((string) $query), $m)) {
+                $un = static function ($v) {
+                    return str_replace(array("\\'", '\\\\'), array("'", '\\'), $v);
+                };
+                return $this->update($m[1], array('option_value' => $un($m[2])), array('option_name' => $un($m[3]), 'option_value' => $un($m[4])));
+            }
+
             // The byte-exact compare-and-swap on an options row (#845 review):
             // HEX(option_value) is immune to the column's case-insensitive,
             // pad-space collation. Evaluated through update(), so every
             // concurrency hook a test arms still applies, with an exact compare.
             if (preg_match("/^UPDATE (\\S*options) SET option_value = '((?:[^'\\\\]|\\\\.)*)' WHERE option_name = '((?:[^'\\\\]|\\\\.)*)' AND HEX\\(option_value\\) = '([0-9A-Fa-f]*)'$/s", trim((string) $query), $m)) {
+                // A latin1 table read over a utf8mb4 connection (#1096): the byte-exact
+                // compare can never match, though the row is unchanged.
+                if (! empty($GLOBALS['mcpwp_test_wpdb_hex_compare_blind'])) {
+                    return 0;
+                }
                 $this->exact_option_value_compare = true;
                 try {
                     return $this->update(
@@ -3103,6 +3136,11 @@ if (! isset($GLOBALS['wpdb'])) {
             }
 
             return 0;
+        }
+        public function get_col_charset($table, $column)
+        {
+            // A test arms a narrower column charset (#1096), e.g. 'latin1'.
+            return $GLOBALS['mcpwp_test_wpdb_col_charset'] ?? 'utf8mb4';
         }
         public function insert($table, $data, $format = null)
         {
@@ -3126,6 +3164,22 @@ if (! isset($GLOBALS['wpdb'])) {
                     return false;
                 }
                 $name = (string) $data['option_name'];
+                // The API key store (#1096) is an options-API value in this
+                // double: a created row must stay visible to get_option() and
+                // survive a test resetting the raw-row table.
+                if ('mcpwp_api_keys' === $name) {
+                    if (array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array()) || array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                        $this->last_error = "Duplicate entry '" . $name . "' for key 'option_name'";
+                        return false;
+                    }
+                    $stored_value = (string) $data['option_value'];
+                    if (! empty($GLOBALS['mcpwp_test_force_truncate_insert'])) {
+                        $stored_value = substr($stored_value, 0, 60); // The column cut the row short.
+                    }
+                    $GLOBALS['mcpwp_test_options'][ $name ] = maybe_unserialize($stored_value);
+                    $this->last_error = '';
+                    return 1;
+                }
                 if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
                     // A localized server or the SQLite driver word it differently.
                     $this->last_error = $GLOBALS['mcpwp_test_wpdb_duplicate_message'] ?? ("Duplicate entry '" . $name . "' for key 'option_name'");
@@ -3208,6 +3262,14 @@ if (! isset($GLOBALS['wpdb'])) {
         {
             if ($table === $this->options && isset($where['option_name'])) {
                 $name = (string) $where['option_name'];
+                // An options-API row (the key store, #1096): same compare-and-delete.
+                if (! array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array()) && array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array())) {
+                    if (isset($where['option_value']) && (string) $where['option_value'] !== (string) maybe_serialize($GLOBALS['mcpwp_test_options'][ $name ])) {
+                        return 0;
+                    }
+                    unset($GLOBALS['mcpwp_test_options'][ $name ]);
+                    return 1;
+                }
                 if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
                     // Like the real DELETE ... WHERE option_value = %s: a
                     // compare-and-delete that misses removes nothing.
@@ -3464,6 +3526,14 @@ if (! function_exists('wp_schedule_single_event')) {
 if (! function_exists('wp_cache_delete')) {
     function wp_cache_delete($key, $group = '')
     {
+        // #1096: a stale options-cache copy armed by a test goes with the entry.
+        if ('options' === $group) {
+            if ('alloptions' === $key) {
+                $GLOBALS['mcpwp_test_option_cache_stale'] = array();
+            } else {
+                unset($GLOBALS['mcpwp_test_option_cache_stale'][ (string) $key ]);
+            }
+        }
         // Deletes from the object cache double below, as core does. A no-op
         // delete made every cache invalidation unobservable: removing one
         // could not fail a test (#845 review).
@@ -3557,6 +3627,46 @@ if (! function_exists('wp_cache_add')) {
             'ttl'     => (int) $expire,
         );
         return true;
+    }
+}
+
+if (! function_exists('wp_cache_set')) {
+    function wp_cache_set($key, $data, $group = '', $expire = 0)
+    {
+        $GLOBALS['mcpwp_test_object_cache'][ (string) $group . ':' . (string) $key ] = array(
+            'value'   => $data,
+            'expires' => (int) $expire > 0 ? time() + (int) $expire : 0,
+            'ttl'     => (int) $expire,
+        );
+        // A set replaces whatever stale copy a test armed (#1096).
+        if ('options' === $group) {
+            if ('alloptions' === $key) {
+                $GLOBALS['mcpwp_test_option_cache_stale'] = array();
+            } else {
+                unset($GLOBALS['mcpwp_test_option_cache_stale'][ (string) $key ]);
+            }
+        }
+        return true;
+    }
+}
+
+if (! function_exists('wp_load_alloptions')) {
+    /**
+     * Core's alloptions: every option as stored bytes, cached under one key.
+     * $force_cache re-reads the "database" (the options double) and re-caches.
+     */
+    function wp_load_alloptions($force_cache = false)
+    {
+        $cached = wp_cache_get('alloptions', 'options');
+        if (! $force_cache && is_array($cached)) {
+            return $cached;
+        }
+        $all = array();
+        foreach (($GLOBALS['mcpwp_test_options'] ?? array()) as $name => $value) {
+            $all[ $name ] = maybe_serialize($value);
+        }
+        wp_cache_set('alloptions', $all, 'options');
+        return $all;
     }
 }
 

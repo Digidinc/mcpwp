@@ -30,21 +30,7 @@ class Mcpwp_Activator {
 		// Create API role and user
 		self::create_api_role_and_user();
 
-		// Generate a first API key only on a genuinely fresh site (both key
-		// stores empty). On any other site a minted legacy key would be refused
-		// at auth (#1097) and shown to the admin as a key that never works.
-		require_once __DIR__ . '/core/class-mcpwp-key-state.php';
-		if ( Mcpwp_Key_State::is_fresh_site() ) {
-			$api_key = self::generate_api_key();
-			update_option( 'mcpwp_api_key', wp_hash_password( $api_key ) );
-			// Store plain text temporarily so admin can see it on first visit
-			set_transient( 'mcpwp_new_api_key', $api_key, HOUR_IN_SECONDS );
-			// Flag first activation for welcome flow
-			update_option( 'mcpwp_first_activation', true );
-		}
-
-		// Ensure scoped API key store exists for key-level revocation/scopes.
-		self::ensure_scoped_api_keys();
+		self::ensure_api_keys();
 
 		// Set default options
 		if ( false === get_option( 'mcpwp_settings' ) ) {
@@ -781,15 +767,8 @@ class Mcpwp_Activator {
 			$auth   = new self();
 			$all_ok = true;
 
-			foreach ( array( 'mcpwp_api_keys', 'spai_api_keys' ) as $option_name ) {
-				// Re-read INSIDE the lock — never reuse a read from before the
-				// lock was acquired, which could already be stale relative to a
-				// write another request made while we were waiting.
-				$keys = get_option( $option_name, array() );
-				if ( ! is_array( $keys ) || empty( $keys ) ) {
-					continue;
-				}
-
+			// The transformation, as a pure function of the keys it is given.
+			$transform = static function ( array $keys ) use ( $auth ) {
 				$changed = false;
 				foreach ( $keys as &$key ) {
 					if ( ! is_array( $key ) ) {
@@ -810,23 +789,49 @@ class Mcpwp_Activator {
 					}
 				}
 				unset( $key );
+				return array( $changed ? $keys : null, $changed );
+			};
 
-				if ( ! $changed ) {
-					continue;
-				}
+			// mcpwp_api_keys goes through Mcpwp_Key_Store (#1096): this runs on
+			// the request path, and a plain read-modify-write here could
+			// overwrite a key created or revoked in the meantime. The read
+			// happens INSIDE the store lock, from the database. A busy store
+			// leaves the migration unfinished and it is retried.
+			if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
+				require_once __DIR__ . '/core/class-mcpwp-key-store.php';
+			}
+			$store = Mcpwp_Key_Store::mutate(
+				static function ( array $keys ) use ( $transform ) {
+					return empty( $keys ) ? array( null, false ) : $transform( $keys );
+				},
+				false
+			);
+			if ( ! $store['written'] ) {
+				$all_ok = false;
+			}
 
-				$written = update_option( $option_name, $keys );
-				if ( ! $written ) {
-					// update_option() returns false both on a genuine write
-					// failure AND when the new value is byte-identical to what
-					// is already stored. $changed being true here means we
-					// built a $keys array that DIFFERS from what get_option()
-					// just handed us, so a false return means the write did
-					// not happen — verify by re-reading rather than assuming
-					// either meaning.
-					$verify = get_option( $option_name, array() );
-					if ( $verify !== $keys ) {
-						$all_ok = false;
+			// The legacy 2.8 store is not contended by any request path.
+			$option_name = 'spai_api_keys';
+			{
+				// Re-read INSIDE the lock — never reuse a read from before the
+				// lock was acquired, which could already be stale relative to a
+				// write another request made while we were waiting.
+				$keys = get_option( $option_name, array() );
+				if ( is_array( $keys ) && ! empty( $keys ) ) {
+					list( $new_keys, $changed ) = $transform( $keys );
+					if ( $changed ) {
+						$keys    = $new_keys;
+						$written = update_option( $option_name, $keys );
+						if ( ! $written ) {
+							// update_option() returns false both on a genuine
+							// write failure AND when the new value is
+							// byte-identical to what is already stored; verify
+							// by re-reading rather than assuming either.
+							$verify = get_option( $option_name, array() );
+							if ( $verify !== $keys ) {
+								$all_ok = false;
+							}
+						}
 					}
 				}
 			}
@@ -1451,6 +1456,34 @@ class Mcpwp_Activator {
 	}
 
 	/**
+	 * The key part of activation, split out so it can run on its own: mint a
+	 * first key on a genuinely fresh site, and make sure the scoped store exists.
+	 *
+	 * Runs on the request path at every plugin update (mcpwp.php calls
+	 * activate() whenever mcpwp_db_version is behind), so it must never write on
+	 * the strength of a store it could not read (#1096).
+	 *
+	 * @return void
+	 */
+	public static function ensure_api_keys() {
+		// Generate a first API key only on a genuinely fresh site (both key
+		// stores empty). On any other site a minted legacy key would be refused
+		// at auth (#1097) and shown to the admin as a key that never works.
+		require_once __DIR__ . '/core/class-mcpwp-key-state.php';
+		if ( Mcpwp_Key_State::is_fresh_site() ) {
+			$api_key = self::generate_api_key();
+			update_option( 'mcpwp_api_key', wp_hash_password( $api_key ) );
+			// Store plain text temporarily so admin can see it on first visit
+			set_transient( 'mcpwp_new_api_key', $api_key, HOUR_IN_SECONDS );
+			// Flag first activation for welcome flow
+			update_option( 'mcpwp_first_activation', true );
+		}
+
+		// Ensure scoped API key store exists for key-level revocation/scopes.
+		self::ensure_scoped_api_keys();
+	}
+
+	/**
 	 * Generate a secure API key.
 	 *
 	 * @return string API key.
@@ -1463,8 +1496,12 @@ class Mcpwp_Activator {
 	 * Ensure scoped API key option exists and migrate legacy single-key storage.
 	 */
 	private static function ensure_scoped_api_keys() {
-		$existing = get_option( 'mcpwp_api_keys', array() );
-		if ( is_array( $existing ) && ! empty( $existing ) ) {
+		require_once __DIR__ . '/core/class-mcpwp-key-state.php';
+		if ( Mcpwp_Key_State::store_is_unreadable() ) {
+			// #1096: a store that exists but cannot be read is NOT an empty one.
+			// Overwriting it would drop every revocation record and let the legacy
+			// key and the spai_ copies of revoked keys authenticate again. Leave
+			// it exactly as it is; Mcpwp_Key_Store_Health reports it to an admin.
 			return;
 		}
 
@@ -1474,14 +1511,11 @@ class Mcpwp_Activator {
 		}
 
 		$legacy_hash = self::looks_like_password_hash( $legacy_key ) ? (string) $legacy_key : wp_hash_password( (string) $legacy_key );
-		if ( $legacy_hash !== $legacy_key ) {
-			update_option( 'mcpwp_api_key', $legacy_hash );
-		}
 
 		$key_id = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true );
 		$record = array(
 			'id'           => sanitize_key( (string) $key_id ),
-			'label'        => __( 'Primary API Key', 'mcpwp' ),
+			'label'        => 'Primary API Key',
 			'hash'         => $legacy_hash,
 			'scopes'       => array( 'read', 'write', 'admin' ),
 			'created_at'   => current_time( 'mysql' ),
@@ -1489,7 +1523,24 @@ class Mcpwp_Activator {
 			'revoked_at'   => null,
 		);
 
-		update_option( 'mcpwp_api_keys', array( $record ) );
+		// Through the key-store write path, on the store as it is under the lock
+		// (this runs on the request path at every plugin update).
+		if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
+			require_once __DIR__ . '/core/class-mcpwp-key-store.php';
+		}
+		$stored = Mcpwp_Key_Store::mutate(
+			static function ( array $keys ) use ( $record ) {
+				return empty( $keys ) ? array( array( $record ), true ) : array( null, false );
+			},
+			false
+		);
+
+		// 'unavailable' (no database to arbitrate with) writes nothing and fails
+		// closed: the legacy key keeps working through the request-path migration,
+		// which goes through the same write path and retries on its own.
+		if ( $stored['written'] && true === $stored['result'] && $legacy_hash !== $legacy_key ) {
+			update_option( 'mcpwp_api_key', $legacy_hash );
+		}
 	}
 
 	/**
