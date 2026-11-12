@@ -507,9 +507,30 @@ final class RefusalReporting1106Test extends TestCase {
 	}
 
 	public function test_an_invalid_oauth_shaped_token_carries_the_hint(): void {
+		// An OAuth access token is a bearer credential: presented as one, an
+		// invalid token is refused as an invalid key and carries the hint.
 		foreach ( array( 'mcpwp_at_', 'spai_at_' ) as $prefix ) {
-			$error = $this->invalid_key_error( $prefix . str_repeat( 'b', 48 ) );
-			$this->assertSame( Mcpwp_REST_MCP::invalid_api_key_hint(), $error->get_error_data()['hint'], $prefix );
+			Mcpwp_REST_MCP::reset_verdict_memo();
+			$request = new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'Authorization' => 'Bearer ' . $prefix . str_repeat( 'b', 48 ) ), array() );
+			$verdict = ( new Mcpwp_REST_MCP() )->verify_api_key( $request );
+			$this->assertInstanceOf( WP_Error::class, $verdict, $prefix );
+			$this->assertSame( 'invalid_api_key', $verdict->get_error_code(), $prefix );
+			$this->assertSame( Mcpwp_REST_MCP::invalid_api_key_hint(), $verdict->get_error_data()['hint'], $prefix );
+		}
+	}
+
+	public function test_an_oauth_shaped_token_in_the_api_key_header_is_refused_with_a_hint_whichever_way_it_is_rejected(): void {
+		// Whether the server treats the value as an invalid key or as no
+		// credential at all (an OAuth token outside Authorization: Bearer),
+		// the refusal is a 401 that tells the caller what to do.
+		foreach ( array( 'mcpwp_at_', 'spai_at_' ) as $prefix ) {
+			Mcpwp_REST_MCP::reset_verdict_memo();
+			$verdict = ( new Mcpwp_REST_MCP() )->verify_api_key( $this->rest( 'GET', '/mcpwp/v1/site-info', $prefix . str_repeat( 'b', 48 ) ) );
+			$this->assertInstanceOf( WP_Error::class, $verdict, $prefix );
+			$this->assertContains( $verdict->get_error_code(), array( 'invalid_api_key', 'missing_api_key' ), $prefix );
+			$this->assertSame( 401, $verdict->get_error_data()['status'], $prefix );
+			$enhanced = Mcpwp_Error_Hints::enhance_error( $verdict );
+			$this->assertNotEmpty( $enhanced->get_error_data()['hint'] ?? '', $prefix );
 		}
 	}
 }
