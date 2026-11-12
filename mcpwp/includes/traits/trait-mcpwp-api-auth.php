@@ -2862,6 +2862,20 @@ trait Mcpwp_Api_Auth {
 			}
 		}
 
+		// #1121: POST /post-meta/{id} {key, value} — the value names posts when
+		// the key is a known id meta (get_post_ref_meta_value_keys()). Read-only
+		// references (an attachment set as the thumbnail, a product linked as an
+		// upsell), so '@read-user' semantics: user-run principals, writes only.
+		if ( $user_run && ! $is_read_method && preg_match( '#^/post-meta/\d+$#', $path ) && array_key_exists( 'value', $params ) ) {
+			$meta_ids = self::post_ref_meta_ids( isset( $params['key'] ) ? $params['key'] : '', $params['value'] );
+			if ( is_wp_error( $meta_ids ) ) {
+				return $meta_ids;
+			}
+			foreach ( $meta_ids as $meta_id ) {
+				$read[] = $meta_id;
+			}
+		}
+
 		if ( empty( $scalar ) && empty( $items ) && empty( $read ) ) {
 			return null;
 		}
@@ -2887,8 +2901,127 @@ trait Mcpwp_Api_Auth {
 	 * @return bool
 	 */
 	public static function menu_item_type_names_post( array $item ) {
-		$type = isset( $item['type'] ) && is_string( $item['type'] ) ? $item['type'] : '';
+		// #1121: compared the way the handler reads it — sanitize_key()
+		// lowercases and strips (Mcpwp_Site_Manager::add_menu_item()), so
+		// 'Page' and ' page ' are 'page'. A case-sensitive compare skipped them.
+		$type = isset( $item['type'] ) && is_string( $item['type'] ) ? self::normalize_post_ref_token( $item['type'] ) : '';
 		return in_array( $type, array( 'post_type', 'post', 'page' ), true );
+	}
+
+	/**
+	 * sanitize_key() semantics without the WordPress dependency: lowercase,
+	 * then drop everything outside [a-z0-9_-].
+	 *
+	 * @param string $token Raw token.
+	 * @return string
+	 */
+	public static function normalize_post_ref_token( $token ) {
+		return (string) preg_replace( '/[^a-z0-9_\-]/', '', strtolower( (string) $token ) );
+	}
+
+	/**
+	 * Post-meta keys whose VALUE names posts (#1121), and the value's shape:
+	 * 'scalar' (one id), 'csv' ('1,2,3') or 'list' (an array, or a JSON string
+	 * the handler decodes). Keys are lowercase: look one up through
+	 * post_ref_meta_ids(), which lowercases first. Only keys /post-meta can
+	 * write: _elementor_* keys are refused there outright.
+	 *
+	 * @return array<string,string>
+	 */
+	public static function get_post_ref_meta_value_keys() {
+		return array(
+			'_thumbnail_id'          => 'scalar', // Featured image (core).
+			'_product_image_gallery' => 'csv',    // WooCommerce gallery attachment ids.
+			'_upsell_ids'            => 'list',   // WooCommerce linked products.
+			'_crosssell_ids'         => 'list',
+			'_children'              => 'list',   // WooCommerce grouped product children.
+		);
+	}
+
+	/**
+	 * The ONE decoder for a /post-meta value: a string that opens a JSON
+	 * object or array and parses is the structure it encodes (as an
+	 * associative array); anything else is returned unchanged. The handler
+	 * stores what this returns and the guard audits what this returns, so the
+	 * two can never read a value differently (#1121: '{"0":8}' was decoded by
+	 * one and not the other).
+	 *
+	 * @param mixed $value Raw value.
+	 * @return mixed
+	 */
+	public static function decode_post_meta_value( $value ) {
+		if ( is_string( $value ) ) {
+			$head = substr( ltrim( $value ), 0, 1 );
+			if ( '{' === $head || '[' === $head ) {
+				$decoded = json_decode( $value, true );
+				if ( null !== $decoded ) {
+					return $decoded;
+				}
+			}
+		}
+		return $value;
+	}
+
+	/**
+	 * The post ids a /post-meta write names, or a WP_Error.
+	 *
+	 * Empty when the key is not a known id meta. The key is lowercased first
+	 * (wp_postmeta.meta_key collates case-insensitively: '_THUMBNAIL_ID' is
+	 * the '_thumbnail_id' row) and the value is read through
+	 * decode_post_meta_value(), the handler's own decoder.
+	 *
+	 * Errors: 400 invalid_post_ref (a negative, signed, nested or otherwise
+	 * ambiguous value) and 400 too_many_ids (over post_ref_batch_cap()).
+	 *
+	 * @param mixed $key   Raw key param.
+	 * @param mixed $value Raw value param.
+	 * @return int[]|WP_Error
+	 */
+	public static function post_ref_meta_ids( $key, $value ) {
+		if ( ! is_string( $key ) ) {
+			return array();
+		}
+		$shapes = self::get_post_ref_meta_value_keys();
+		$key    = strtolower( trim( $key ) );
+		if ( ! isset( $shapes[ $key ] ) ) {
+			return array();
+		}
+		$shape = $shapes[ $key ];
+		$value = self::decode_post_meta_value( $value );
+
+		// A scalar key holding a list is ambiguous: the handler's absint()
+		// reads it as 1 (or 0), the store keeps the array.
+		if ( 'scalar' === $shape && is_array( $value ) && ! empty( $value ) ) {
+			return new WP_Error( 'invalid_post_ref', __( 'Post ids must be plain positive integers.', 'mcpwp' ), array( 'status' => 400 ) );
+		}
+		if ( is_array( $value ) ) {
+			$parts = array_values( $value );
+		} elseif ( is_string( $value ) && 'scalar' !== $shape ) {
+			$parts = array_map( 'trim', explode( ',', $value ) );
+		} else {
+			$parts = array( $value );
+		}
+		if ( count( $parts ) > self::post_ref_batch_cap() ) {
+			return new WP_Error(
+				'too_many_ids',
+				sprintf(
+					/* translators: %d: cap */
+					__( 'A single request may name at most %d posts.', 'mcpwp' ),
+					self::post_ref_batch_cap()
+				),
+				array( 'status' => 400 )
+			);
+		}
+		$ids = array();
+		foreach ( $parts as $part ) {
+			if ( self::is_ambiguous_post_ref_value( $part ) ) {
+				return new WP_Error( 'invalid_post_ref', __( 'Post ids must be plain positive integers.', 'mcpwp' ), array( 'status' => 400 ) );
+			}
+			if ( is_numeric( $part ) && (int) $part > 0 ) {
+				$ids[] = (int) $part;
+			}
+		}
+		return $ids;
 	}
 
 	/**

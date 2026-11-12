@@ -454,17 +454,15 @@ final class PostRefInventoryGuard1101cTest extends TestCase {
 	}
 
 	/**
-	 * DEFERRED, not swept: POST /post-meta/{id} {key, value} — for an id-meta
-	 * key (_thumbnail_id, _product_image_gallery, _upsell_ids …) `value`
-	 * names posts. Declaring it was cut from PR-3c (#1118 scope cut: case-
-	 * variant keys and JSON-object values bypassed it); it gets its own PR
-	 * with key normalisation and the handler's own decoder. `value` is not
-	 * id-like, so the sweep cannot see it; this pins that the map still
-	 * declares only the path id there, exactly as on main.
+	 * POST /post-meta/{id} {key, value}: for an id-meta key (_thumbnail_id,
+	 * _product_image_gallery, _upsell_ids …) `value` names posts. `value` is
+	 * not id-like, so the sweep cannot see it and the map declares only the
+	 * path id; the value is judged by collect_post_refs() through
+	 * Mcpwp_REST_API::post_ref_meta_ids() (#1121, PostMetaIdRefs1121Test).
 	 */
-	public function test_post_meta_value_refs_are_deferred_and_the_route_is_as_on_main(): void {
+	public function test_post_meta_value_refs_are_handled_outside_the_map(): void {
 		$this->assertSame( array( 'id' ), Mcpwp_REST_API::post_ref_specs_for_path( '/post-meta/1' ) );
-		$this->assertFalse( method_exists( 'Mcpwp_REST_API', 'get_post_ref_meta_value_keys' ), 'The cut code is gone, not dormant.' );
+		$this->assertTrue( method_exists( 'Mcpwp_REST_API', 'post_ref_meta_ids' ) );
 	}
 
 	// ── 3. nested keys: the reviewed list ─────────────────────────────────

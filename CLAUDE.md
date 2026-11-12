@@ -604,6 +604,14 @@ apply (or when forced via settings). See `mcpwp/includes/core/class-mcpwp-indexn
 | `/approvals/{id}/apply` | POST | Apply approved change |
 | `/approvals/{id}/rollback` | POST | Rollback applied change |
 
+On `POST /post-meta/{id}`, when `key` is a known id-meta (`Mcpwp_REST_API::get_post_ref_meta_value_keys()`:
+`_thumbnail_id`, `_product_image_gallery`, `_upsell_ids`, `_crosssell_ids`, `_children`), a user-run
+principal must be able to read every post `value` names (`read_post`, #1121). The key is lowercased
+before the lookup (`meta_key` collates case-insensitively) and the value is read through
+`Mcpwp_REST_API::decode_post_meta_value()`, the same decoder the handler stores with. Negative, signed
+and nested values are `400 invalid_post_ref`; more than 500 ids is `400 too_many_ids`; bot keys are
+unchanged. A new id-meta key must be classified in `PostMetaIdRefs1121Test::CLASSIFIED`.
+
 ### Webhooks & Events
 | Endpoint | Method | Purpose |
 |----------|--------|---------|

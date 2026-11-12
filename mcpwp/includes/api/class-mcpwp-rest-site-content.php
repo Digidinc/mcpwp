@@ -627,7 +627,9 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 
 		// The featured image goes through the same check as the dedicated
 		// route: it has to be an attachment.
-		if ( '_thumbnail_id' === $key && ! empty( $value ) ) {
+		// Compared lowercase: meta_key collates case-insensitively, so
+		// '_THUMBNAIL_ID' is the same row (#1121).
+		if ( '_thumbnail_id' === strtolower( $key ) && ! empty( $value ) ) {
 			$attachment = get_post( absint( $value ) );
 			if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
 				return $this->error_response( 'invalid_media', __( '_thumbnail_id must be the ID of a media attachment.', 'mcpwp' ), 400 );
@@ -646,12 +648,9 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		}
 
 		// A JSON object/array sent as a string is meant as a structure.
-		if ( is_string( $value ) ) {
-			$trimmed = ltrim( $value );
-			if ( ( '{' === substr( $trimmed, 0, 1 ) || '[' === substr( $trimmed, 0, 1 ) ) && null !== json_decode( $value ) ) {
-				$value = json_decode( $value, true );
-			}
-		}
+		// The same decoder the authorization guard reads the value with
+		// (decode_post_meta_value(), #1121).
+		$value = self::decode_post_meta_value( $value );
 
 		// The same policy as meta on a post write (#797): one answer to "can
 		// this key be written, and how is the value treated". The two core
