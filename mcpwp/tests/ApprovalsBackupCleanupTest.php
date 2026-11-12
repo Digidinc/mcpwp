@@ -24,6 +24,7 @@ final class ApprovalsBackupCleanupTest extends TestCase {
 		$GLOBALS['mcpwp_test_approvals_table_exists'] = true;
 		$GLOBALS['mcpwp_test_approvals_rows']         = array();
 		$GLOBALS['mcpwp_test_transients']             = array();
+		$GLOBALS['mcpwp_test_wpdb_rows']              = array();
 		$GLOBALS['mcpwp_test_delete_option_fail']     = array();
 		$GLOBALS['mcpwp_test_update_option_fail']     = array();
 		$GLOBALS['mcpwp_test_wpdb_intercept']         = null;
@@ -280,7 +281,6 @@ final class ApprovalsBackupCleanupTest extends TestCase {
 			'apr_keep'   => array( 'id' => 'apr_keep', 'status' => 'rejected', 'requested_by_key_id' => 'k', 'created_at' => gmdate( 'c' ), 'updated_at' => gmdate( 'c' ) ),
 			'apr_old'    => array( 'id' => 'apr_old', 'status' => 'rejected', 'requested_by_key_id' => 'k', 'created_at' => $old, 'updated_at' => $old ),
 			'apr_noid'   => array( 'id' => 'apr_noid', 'status' => 'pending', 'created_at' => gmdate( 'c' ), 'updated_at' => gmdate( 'c' ) ),
-			'apr_oldpnd' => array( 'id' => 'apr_oldpnd', 'status' => 'pending', 'requested_by_key_id' => 'k', 'created_at' => $old, 'updated_at' => $old ),
 		);
 		update_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, $backup, false );
 		$this->old_enough();
@@ -289,24 +289,91 @@ final class ApprovalsBackupCleanupTest extends TestCase {
 		$this->assertSame( array_fill_keys( array_keys( $backup ), true ), $this->backup_option() );
 	}
 
-	public function test_a_recent_closed_record_or_a_young_pending_one_missing_is_refused(): void {
-		foreach ( array( 'rejected' => 100, 'pending' => 100 ) as $status => $age_days ) {
-			$when = gmdate( 'c', time() - $age_days * self::DAY );
-			$GLOBALS['mcpwp_test_transients'] = array();
-			update_option(
-				Mcpwp_Approvals::LEGACY_BACKUP_OPTION,
-				array(
-					'apr_x' => array( 'id' => 'apr_x', 'status' => $status, 'requested_by_key_id' => 'k', 'created_at' => $when, 'updated_at' => $when ),
-					'apr_y' => array( 'id' => 'apr_y', 'status' => 'rejected', 'requested_by_key_id' => 'k', 'created_at' => $when, 'updated_at' => $when ),
-				),
-				false
-			);
-			$this->old_enough();
-			// 100 days is past retention for a closed record but not for a pending one (90 + 30 TTL).
-			$GLOBALS['mcpwp_test_approvals_rows'] = array( 'apr_y' => array( 'id' => 'apr_y' ) );
-			$expected = 'rejected' === $status ? 'shrunk' : 'rows_missing';
-			$this->assertSame( $expected, Mcpwp_Activator::cleanup_approvals_backup(), $status );
+	/**
+	 * Every backup record predates the flag, so the realistic table-loss
+	 * fixture dates them all long before it. One unrelated row sits in the
+	 * recreated table.
+	 *
+	 * @return array<string,array>
+	 */
+	private function lost_record( string $status, string $action, bool $identity = true, string $age = '-200 days' ): array {
+		$when   = gmdate( 'c', strtotime( $age ) );
+		$record = array( 'id' => 'apr_lost', 'status' => $status, 'action' => $action, 'created_at' => $when, 'updated_at' => $when );
+		if ( $identity ) {
+			$record['requested_by_key_id'] = 'k1';
 		}
+		return $record;
+	}
+
+	private function table_lost_everything_but_one_new_row( array $record ): string {
+		update_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, array( 'apr_lost' => $record ), false );
+		$this->old_enough();
+		$GLOBALS['mcpwp_test_approvals_rows'] = array( 'apr_new' => array( 'id' => 'apr_new' ) );
+		return Mcpwp_Activator::cleanup_approvals_backup();
+	}
+
+	public function test_a_missing_open_record_is_a_lost_record_however_old_it_is(): void {
+		foreach ( array(
+			'pending destructive_operation (never expires)' => array( 'pending', 'destructive_operation' ),
+			'pending bulk publish'                          => array( 'pending', 'bulk_publish' ),
+			'pending post_content_update (only re-labelled expired)' => array( 'pending', 'post_content_update' ),
+			'approved'                                      => array( 'approved', 'destructive_operation' ),
+			'applying'                                      => array( 'applying', 'post_content_update' ),
+			'rolling_back'                                  => array( 'rolling_back', 'post_content_update' ),
+			'apply_failed'                                  => array( 'apply_failed', 'post_content_update' ),
+		) as $label => $case ) {
+			$record = $this->lost_record( $case[0], $case[1] );
+			$this->assertSame( 'rows_missing', $this->table_lost_everything_but_one_new_row( $record ), $label );
+			$this->assertSame( array( 'apr_lost' => $record ), $this->backup_option(), $label . ': the record is still in the backup' );
+		}
+	}
+
+	public function test_a_closed_record_old_enough_to_have_been_retained_away_may_be_missing(): void {
+		$this->assertSame( 'shrunk', $this->table_lost_everything_but_one_new_row( $this->lost_record( 'rejected', 'destructive_operation' ) ) );
+		$this->assertSame( array( 'apr_lost' => true ), $this->backup_option() );
+	}
+
+	public function test_a_closed_record_younger_than_retention_missing_is_refused(): void {
+		$this->assertSame( 'rows_missing', $this->table_lost_everything_but_one_new_row( $this->lost_record( 'rejected', 'destructive_operation', true, '-10 days' ) ) );
+	}
+
+	public function test_an_identity_less_pending_or_approved_record_is_gone_by_the_migrations_own_purge(): void {
+		foreach ( array( 'pending', 'approved' ) as $status ) {
+			$this->assertSame( 'shrunk', $this->table_lost_everything_but_one_new_row( $this->lost_record( $status, 'destructive_operation', false ) ), $status );
+		}
+	}
+
+	public function test_an_audit_logged_removal_is_accepted_for_open_and_closed_records(): void {
+		foreach ( array( array( 'pending', 'destructive_operation', '-200 days' ), array( 'approved', 'destructive_operation', '-200 days' ), array( 'rejected', 'destructive_operation', '-10 days' ) ) as $case ) {
+			$GLOBALS['mcpwp_test_wpdb_rows'] = array();
+			$GLOBALS['mcpwp_test_transients'] = array();
+			$record = $this->lost_record( $case[0], $case[1], true, $case[2] );
+			update_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION, array( 'apr_lost' => $record ), false );
+			$this->old_enough();
+			$GLOBALS['mcpwp_test_approvals_rows'] = array( 'apr_new' => array( 'id' => 'apr_new' ) );
+			$this->assertSame( 'rows_missing', Mcpwp_Activator::cleanup_approvals_backup(), $case[0] . ' before the audit row exists' );
+			$this->assertTrue( Mcpwp_Action_Log::record_approval_removal( array( 'approval_id' => 'apr_lost', 'final_status' => $case[0], 'removal_reason' => 'retention' ) ) );
+			$this->assertTrue( Mcpwp_Action_Log::approval_removal_logged( 'apr_lost' ) );
+			$this->assertSame( 'shrunk', Mcpwp_Activator::cleanup_approvals_backup(), $case[0] . ' with its audit row' );
+		}
+	}
+
+	public function test_an_unreadable_audit_log_counts_as_not_logged(): void {
+		$record = $this->lost_record( 'pending', 'destructive_operation' );
+		Mcpwp_Action_Log::record_approval_removal( array( 'approval_id' => 'apr_lost', 'removal_reason' => 'retention' ) );
+		$GLOBALS['mcpwp_test_action_log_read_fails'] = true;
+		try {
+			$this->assertSame( 'rows_missing', $this->table_lost_everything_but_one_new_row( $record ) );
+		} finally {
+			$GLOBALS['mcpwp_test_action_log_read_fails'] = false;
+		}
+	}
+
+	public function test_a_closed_record_with_no_usable_date_is_never_gone_by_age(): void {
+		$record = array( 'id' => 'apr_lost', 'status' => 'rejected', 'action' => 'destructive_operation', 'requested_by_key_id' => 'k1' );
+		$this->assertSame( 'rows_missing', $this->table_lost_everything_but_one_new_row( $record ) );
+		$record['created_at'] = 'not a date';
+		$this->assertSame( 'rows_missing', $this->table_lost_everything_but_one_new_row( $record ) );
 	}
 
 	public function test_nothing_is_gone_when_retention_is_switched_off(): void {

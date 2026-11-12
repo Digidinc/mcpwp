@@ -849,7 +849,7 @@ class Mcpwp_Activator {
 				return self::approvals_backup_refused( 'table_unreadable' );
 			}
 			foreach ( $records as $id => $record ) {
-				if ( ! isset( $present[ $id ] ) && ! self::approvals_backup_record_is_gone( $record ) ) {
+				if ( ! isset( $present[ $id ] ) && ! self::approvals_backup_record_is_gone( $id, $record ) ) {
 					return self::approvals_backup_refused( 'rows_missing' );
 				}
 			}
@@ -897,20 +897,45 @@ class Mcpwp_Activator {
 	}
 
 	/**
-	 * A backup record that is not in the table and should not be: the
-	 * migration purges an identity-less pending/approved one on purpose, and
-	 * retention deletes a closed record CLOSED_RETENTION_DAYS after its last
-	 * change (a pending one is first expired after the pending TTL, so it
-	 * gets that much longer). Any other missing record means the table lost
-	 * it. A record with no usable date is never "gone".
+	 * A backup record that is not in the table and should not be. Three
+	 * things really remove a record, and only these count:
+	 *  - the migration's purge of an identity-less pending/approved record
+	 *    (also dropped by the late import) — no audit row, so it is matched
+	 *    by its shape;
+	 *  - retention and the closed-record purge, both through
+	 *    Mcpwp_Approvals::audited_delete(): the approval_record_removed audit
+	 *    row is written BEFORE the DELETE, so its presence proves the removal
+	 *    (checked for every record, open or closed);
+	 *  - for a record that was CLOSED in the backup, being older than the
+	 *    retention window, in case the audit row was pruned from the log.
+	 * An OPEN record (pending, approved, applying, rolling_back, apply_failed)
+	 * is never removed any other way — not even an expired-looking pending
+	 * post_content_update, which expire_stale_one() only re-labels `expired`
+	 * in place — so one missing from the table without an audit row is a
+	 * record the table lost. An unreadable audit log counts as "not logged"
+	 * (fail closed). A record with no usable date is never "gone" by age.
 	 *
-	 * @param array $record A backup record.
+	 * @param string $id     Approval id.
+	 * @param array  $record A backup record.
 	 * @return bool
 	 */
-	private static function approvals_backup_record_is_gone( array $record ) {
+	private static function approvals_backup_record_is_gone( $id, array $record ) {
 		$status = isset( $record['status'] ) ? (string) $record['status'] : '';
+		$open   = in_array( $status, Mcpwp_Approvals::open_statuses(), true );
 		if ( in_array( $status, array( 'pending', 'approved' ), true ) && ( ! isset( $record['requested_by_key_id'] ) || '' === (string) $record['requested_by_key_id'] ) ) {
 			return true;
+		}
+		if ( ! class_exists( 'Mcpwp_Action_Log' ) ) {
+			$log_file = __DIR__ . '/core/class-mcpwp-action-log.php';
+			if ( is_readable( $log_file ) ) {
+				require_once $log_file;
+			}
+		}
+		if ( class_exists( 'Mcpwp_Action_Log' ) && method_exists( 'Mcpwp_Action_Log', 'approval_removal_logged' ) && true === Mcpwp_Action_Log::approval_removal_logged( $id ) ) {
+			return true;
+		}
+		if ( $open ) {
+			return false;
 		}
 		$days = (int) apply_filters( 'mcpwp_approvals_closed_retention_days', Mcpwp_Approvals::CLOSED_RETENTION_DAYS );
 		if ( $days < 1 ) {
@@ -926,11 +951,7 @@ class Mcpwp_Activator {
 		if ( 0 === $last ) {
 			return false;
 		}
-		$window = $days * DAY_IN_SECONDS;
-		if ( in_array( $status, Mcpwp_Approvals::open_statuses(), true ) ) {
-			$window += (int) apply_filters( 'mcpwp_approval_pending_ttl', Mcpwp_Approvals::PENDING_CONTENT_TTL );
-		}
-		return $last < time() - $window;
+		return $last < time() - $days * DAY_IN_SECONDS;
 	}
 
 	/**
