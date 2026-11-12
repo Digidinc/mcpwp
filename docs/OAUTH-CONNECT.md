@@ -36,6 +36,12 @@ The `mcpwp_at_` bearer tokens issued carry only the granted scopes.
 - **Client-IP resolution** for rate limiting, the auth-failure throttle and the public feedback relay uses `REMOTE_ADDR` by default; proxy headers (`CF-Connecting-IP`, `X-Forwarded-For`, `X-Real-IP`) are trusted only behind the same `MCPWP_TRUST_PROXY_HEADERS` opt-in, so a caller can't spoof them to evade the throttle or forge a whitelisted IP. A resolved value must parse as an IP address; anything else is discarded rather than used as a throttle key. Set the constant only when the site sits behind a trusted proxy that overwrites these headers.
 - **Public feedback relay** (`POST /feedback/relay`) carries a second, site-wide ceiling on top of its per-IP limit, because a per-IP throttle bounds one source but not a flood spread across many genuine addresses.
 
+## Reconnecting an existing ChatGPT connector
+
+The discovery documents advertise only the `read` and `write` scopes; `admin` is never offered over OAuth (admin-level actions stay on the deliberate `X-API-Key` path). A connector added before that was the case may have cached the old registration or the old scope request, and ChatGPT can then fail at sign-in with `invalid_scope`.
+
+After updating MCPWP, remove the connector in ChatGPT and add it again. It fetches the current metadata and registers fresh. Nothing needs changing on the site. API keys are unaffected.
+
 ## Which auth to use
 
 | Client | Auth |
