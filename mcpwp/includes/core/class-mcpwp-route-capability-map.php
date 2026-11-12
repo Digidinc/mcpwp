@@ -24,6 +24,18 @@
  * The scope table stays the outer gate for everyone; the capability column
  * only ever narrows what a user-run principal may do.
  *
+ * WHAT THE MAP COVERS (#1108): it is enforced for requests that reach a REST
+ * route — the route's own request, a /batch or /mcp sub-request, and an MCP
+ * tool whose declared route is one of these rows (tool_rows() only documents
+ * which rows the few placeholder-routed tools dispatch to). It is NOT
+ * enforcement for CALLBACK tools: a tool registered through the
+ * mcpwp_register_tools filter with a 'callback' runs in-process and never goes
+ * through a REST route, so no row applies to it. Its gates are the scope floor
+ * (write), the tool's category and the callback's own checks. Whether to route
+ * callback tools through this chokepoint, or refuse them for user-run
+ * principals, is an open owner decision (it can break third-party tools);
+ * CapabilityMapFollowups1108Test pins the current behaviour.
+ *
  * GENERIC POST DOORS (/posts*, /pages*, /content*) — one rule, two branches,
  * enforced in Mcpwp_Api_Auth::check_generic_post_type_access() (next to
  * check_user_run_post_type_capability()), for CREATE (the post_type param)
@@ -542,6 +554,13 @@ class Mcpwp_Route_Capability_Map {
 	 * MCP tools whose declared route is not literally a registered pattern
 	 * (a {type} placeholder, or a multisite-only route), each pointing at the
 	 * rows it dispatches to.  Every other tool resolves through its route.
+	 *
+	 * DOCUMENTATION of tool rows, NOT enforcement (#1108): nothing reads this
+	 * method when a request is gated; the chokepoint resolves the request's
+	 * own method and route (resolve()). It exists so RouteCapabilityMapTest can
+	 * prove every built-in tool lands on a row. Callback tools (registered via
+	 * mcpwp_register_tools with a 'callback') run in-process, never reach a REST
+	 * route and so are not covered by any row — see the header.
 	 *
 	 * @return array<string,string[]>
 	 */

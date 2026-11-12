@@ -594,6 +594,210 @@ class Mcpwp_Post_Fields {
 	}
 
 	/**
+	 * Whether the current request's principal acts as a real WordPress user.
+	 * Set by the permission chokepoint (set_user_run_principal()) on every
+	 * request and sub-request, before any handler runs.
+	 *
+	 * @var bool
+	 */
+	private static $user_run_principal = false;
+
+	/**
+	 * Record whether the principal behind the request being handled acts as a
+	 * real user. Called by the API-auth chokepoint; false for bots.
+	 *
+	 * @param bool $user_run Whether the principal acts as a user.
+	 * @return void
+	 */
+	public static function set_user_run_principal( $user_run ) {
+		self::$user_run_principal = (bool) $user_run;
+	}
+
+	/**
+	 * Every meta write by a user-run principal goes through here (#1108):
+	 * /post-meta, post and page create/update (and so every door built on
+	 * them). Bot-run principals are not asked.
+	 *
+	 * For each key WordPress itself is asked, current_user_can(
+	 * 'edit_post_meta', $post_id, $key), wherever a rule can exist: for a key
+	 * that is not protected (a plugin that guards it through map_meta_cap or
+	 * an auth filter is heard) and for a protected key that something declared
+	 * an auth rule for. A protected key nobody declared a rule for (_sku,
+	 * _price, _yoast_*, _wp_page_template, _thumbnail_id) stays governed by
+	 * edit_post on its post, as the explicit meta route has always worked.
+	 * meta_key compares case-insensitively in the database while hook names
+	 * do not, so every case variant a rule is known under is asked too.
+	 *
+	 * @param int    $post_id   Post the keys are written to; 0 for a create (asked
+	 *                          BEFORE the post is inserted, so a refusal has no
+	 *                          side effect to roll back).
+	 * @param array  $meta      Validated {key: value}.
+	 * @param string $post_type Post type.
+	 * @param array  $intended  For a create (post id 0): the intended 'status' and
+	 *                          'parent', so rules that read the post see them.
+	 * @return WP_Error|null Refusal, or null when every key may be written.
+	 */
+	public static function meta_write_refusal( $post_id, array $meta, $post_type, array $intended = array() ) {
+		if ( ! self::$user_run_principal ) {
+			return null;
+		}
+		$restore = (int) $post_id > 0 ? null : self::begin_prospective_post( (string) $post_type, $intended );
+		try {
+			return self::meta_write_refusal_for( (int) $post_id, $meta, (string) $post_type );
+		} finally {
+			if ( null !== $restore ) {
+				$restore();
+			}
+		}
+	}
+
+	/**
+	 * The per-key decision of meta_write_refusal(), for an existing post or
+	 * (post id 0) the prospective post begin_prospective_post() installed.
+	 *
+	 * @param int    $post_id   Post id, 0 for the prospective post.
+	 * @param array  $meta      Validated {key: value}.
+	 * @param string $post_type Post type.
+	 * @return WP_Error|null
+	 */
+	private static function meta_write_refusal_for( $post_id, array $meta, $post_type ) {
+		foreach ( array_keys( $meta ) as $key ) {
+			foreach ( self::meta_key_variants( (string) $key, (int) $post_id, (string) $post_type ) as $variant ) {
+				$protected = function_exists( 'is_protected_meta' ) && is_protected_meta( $variant, 'post' );
+				if ( $protected && ! self::meta_auth_declared( $variant, $post_type ) ) {
+					continue;
+				}
+				if ( ! current_user_can( 'edit_post_meta', (int) $post_id, $variant ) ) {
+					return new WP_Error(
+						'rest_forbidden_meta_key',
+						__( 'Your WordPress account is not allowed to write this meta key.', 'mcpwp' ),
+						array(
+							'status' => 403,
+							'key'    => (string) $key,
+						)
+					);
+				}
+			}
+		}
+		return null;
+	}
+
+	/**
+	 * The key plus every other spelling of it that the database would treat as
+	 * the same row (case-insensitive): registered keys, keys already on the
+	 * post, and keys named by an auth hook.
+	 *
+	 * @param string $key       Meta key as sent.
+	 * @param int    $post_id   Post.
+	 * @param string $post_type Post type.
+	 * @return string[]
+	 */
+	public static function meta_key_variants( $key, $post_id, $post_type ) {
+		$lower = strtolower( $key );
+		// The lower-case spelling is always asked about: a rule is almost
+		// always declared for it, and a spelling no hook, registration or row
+		// names yet must not slip past a rule declared for another case.
+		$variants = array( $key => true, $lower => true );
+
+		if ( function_exists( 'get_registered_meta_keys' ) ) {
+			foreach ( array( $post_type, '' ) as $subtype ) {
+				$registered = get_registered_meta_keys( 'post', $subtype );
+				foreach ( is_array( $registered ) ? array_keys( $registered ) : array() as $known ) {
+					if ( strtolower( (string) $known ) === $lower ) {
+						$variants[ (string) $known ] = true;
+					}
+				}
+			}
+		}
+
+		if ( $post_id > 0 && function_exists( 'get_post_meta' ) ) {
+			$existing = get_post_meta( $post_id );
+			foreach ( is_array( $existing ) ? array_keys( $existing ) : array() as $known ) {
+				if ( strtolower( (string) $known ) === $lower ) {
+					$variants[ (string) $known ] = true;
+				}
+			}
+		}
+
+		// Hook names carry the key's own spelling.
+		$hooks    = isset( $GLOBALS['wp_filter'] ) && is_array( $GLOBALS['wp_filter'] ) ? array_keys( $GLOBALS['wp_filter'] ) : array();
+		$patterns = array(
+			array( 'auth_post_meta_', '' ),
+			array( 'auth_post_meta_', '_for_' . strtolower( $post_type ) ),
+			array( 'auth_post_' . strtolower( $post_type ) . '_meta_', '' ),
+		);
+		foreach ( $hooks as $hook ) {
+			$hook = (string) $hook;
+			foreach ( $patterns as list( $prefix, $suffix ) ) {
+				$len = strlen( $key );
+				if ( 0 === strpos( strtolower( $hook ), $prefix ) && strtolower( $hook ) === $prefix . $lower . $suffix ) {
+					$variants[ substr( $hook, strlen( $prefix ), $len ) ] = true;
+				}
+			}
+		}
+
+		return array_map( 'strval', array_keys( $variants ) );
+	}
+
+	/**
+	 * Make a post that does not exist yet visible to WordPress's own capability
+	 * and auth-callback machinery for the duration of one check: get_post( 0 )
+	 * answers the global $post, so a create is judged exactly as core's REST
+	 * create judges it after inserting (same type, an own-authored post of the
+	 * intended status and parent), but BEFORE anything is inserted — no hook
+	 * fires and nothing is left behind. It also replaces whatever unrelated
+	 * global $post the request carried, so a create is never judged against it.
+	 *
+	 * @param string $post_type Post type being created.
+	 * @param array  $intended  Optional 'status' and 'parent'.
+	 * @return callable Restores the previous global $post.
+	 */
+	private static function begin_prospective_post( $post_type, array $intended ) {
+		$had      = array_key_exists( 'post', $GLOBALS );
+		$previous = $had ? $GLOBALS['post'] : null;
+
+		$GLOBALS['post'] = new WP_Post(
+			(object) array(
+				'ID'          => 0,
+				'post_author' => function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0,
+				'post_type'   => (string) $post_type,
+				'post_status' => isset( $intended['status'] ) && '' !== (string) $intended['status'] ? (string) $intended['status'] : 'draft',
+				'post_parent' => isset( $intended['parent'] ) ? (int) $intended['parent'] : 0,
+				'filter'      => 'raw',
+			)
+		);
+
+		return static function () use ( $had, $previous ) {
+			if ( $had ) {
+				$GLOBALS['post'] = $previous;
+			} else {
+				unset( $GLOBALS['post'] );
+			}
+		};
+	}
+
+	/**
+	 * Whether anything declared who may write this meta key: register_meta()'s
+	 * auth_callback or a plugin's own auth_post_meta_{key},
+	 * auth_post_meta_{key}_for_{type} or (deprecated, still applied by
+	 * WordPress) auth_post_{type}_meta_{key} filter (#1108).
+	 *
+	 * @param string $key       Meta key.
+	 * @param string $post_type Post type.
+	 * @return bool
+	 */
+	public static function meta_auth_declared( $key, $post_type ) {
+		if ( ! function_exists( 'has_filter' ) ) {
+			return false;
+		}
+		if ( has_filter( 'auth_post_meta_' . $key ) ) {
+			return true;
+		}
+		return '' !== (string) $post_type
+			&& ( has_filter( 'auth_post_meta_' . $key . '_for_' . $post_type ) || has_filter( 'auth_post_' . $post_type . '_meta_' . $key ) );
+	}
+
+	/**
 	 * @param string $key       Meta key.
 	 * @param string $post_type Post type (registrations are per subtype).
 	 * @return bool

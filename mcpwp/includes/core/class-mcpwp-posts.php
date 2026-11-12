@@ -470,6 +470,15 @@ class Mcpwp_Posts {
 			$post_data['post_name'] = sanitize_title( $data['slug'] );
 		}
 
+		// #1108: a user-run principal may write only the meta WordPress lets
+		// that user write — judged before the post exists, against the post
+		// about to be created (same type, own author, intended status), so a refusal
+		// fires no hook and leaves nothing behind.
+		$meta_refused = Mcpwp_Post_Fields::meta_write_refusal( 0, $clean_meta, $post_type, array( 'status' => $post_data['post_status'] ) );
+		if ( is_wp_error( $meta_refused ) ) {
+			return $meta_refused;
+		}
+
 		// Content guardrails (#957): enforced centrally by
 		// Mcpwp_Content_Guardrails::on_insert_post_data(), a wp_insert_post_data
 		// filter that runs inside the wp_insert_post() call below — not here.
@@ -601,6 +610,11 @@ class Mcpwp_Posts {
 		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null, false, $post->post_type );
 		if ( is_wp_error( $clean_meta ) ) {
 			return $clean_meta;
+		}
+		// #1108: refused before anything is written.
+		$meta_refused = Mcpwp_Post_Fields::meta_write_refusal( $post_id, $clean_meta, $post->post_type );
+		if ( is_wp_error( $meta_refused ) ) {
+			return $meta_refused;
 		}
 
 		$before = array(

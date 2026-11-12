@@ -156,6 +156,21 @@ class Mcpwp_Pages {
 			$page_data['page_template'] = sanitize_text_field( $data['template'] );
 		}
 
+		// #1108: judged before the page exists, against the page about to be
+		// created (own author, intended status and parent): no hook fires, nothing to undo.
+		$meta_refused = Mcpwp_Post_Fields::meta_write_refusal(
+			0,
+			$clean_meta,
+			'page',
+			array(
+				'status' => $page_data['post_status'],
+				'parent' => isset( $page_data['post_parent'] ) ? $page_data['post_parent'] : 0,
+			)
+		);
+		if ( is_wp_error( $meta_refused ) ) {
+			return $meta_refused;
+		}
+
 		// Content guardrails (#957): enforced centrally by
 		// Mcpwp_Content_Guardrails::on_insert_post_data(), a wp_insert_post_data
 		// filter that runs inside the wp_insert_post() call below — not here.
@@ -243,6 +258,11 @@ class Mcpwp_Pages {
 		$clean_meta = Mcpwp_Post_Fields::validate_meta( isset( $data['meta'] ) ? $data['meta'] : null );
 		if ( is_wp_error( $clean_meta ) ) {
 			return $clean_meta;
+		}
+		// #1108: refused before anything is written.
+		$meta_refused = Mcpwp_Post_Fields::meta_write_refusal( $page_id, $clean_meta, 'page' );
+		if ( is_wp_error( $meta_refused ) ) {
+			return $meta_refused;
 		}
 
 		$before = array(
