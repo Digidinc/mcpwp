@@ -992,6 +992,10 @@ function wp_trash_post($post_id)
 
 function delete_option($name)
 {
+    // Test-only: simulate a DB delete that does not take effect.
+    if (! empty($GLOBALS['mcpwp_test_delete_option_fail'][ $name ])) {
+        return false;
+    }
     unset($GLOBALS['mcpwp_test_options'][ $name ]);
     return true;
 }

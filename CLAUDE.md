@@ -883,8 +883,8 @@ Config stored per-provider in `mcpwp_integrations` wp_option (encrypted). Manage
 | `mcpwp_site_uuid` | Anonymous site UUID for analytics (`mcpwp-<uuid4>`) |
 | `mcpwp_first_activation` | Initial activation timestamp |
 | `mcpwp_approvals_identity_migrated` | One-time flag: on upgrade, purge identity-less pending/approved approvals so a reconnected OAuth principal can't self-approve a pre-fix request |
-| `mcpwp_approvals_table_migrated` | One-time flag (#1042): the approvals queue was copied from the old `mcpwp_approval_requests` option into the `{prefix}mcpwp_approvals` table |
-| `mcpwp_approval_requests_pre_3149` | The old approvals option, renamed by that migration and kept (autoload off) for recovery by hand; removed by the hourly cron's one-time, fail-closed `Mcpwp_Activator::cleanup_approvals_backup()` (#1053) only once the table is readable and non-empty, no record was skipped and the legacy option has not reappeared — the reason it stayed is the `mcpwp_approvals_backup_cleanup_status` transient |
+| `mcpwp_approvals_table_migrated` | One-time flag (#1042): the approvals queue was copied from the old `mcpwp_approval_requests` option into the `{prefix}mcpwp_approvals` table. Holds the Unix time of that first migration (older sites hold `1`; the backup shrink treats that as "now" on its first pass). Readers must only test truthiness |
+| `mcpwp_approval_requests_pre_3149` | The old approvals option, renamed by that migration (autoload off) as a recovery copy. After `mcpwp_approvals_table_migrated`'s age (90 days) and a per-id check against the table, the hourly cron's `Mcpwp_Activator::cleanup_approvals_backup()` (#1053) shrinks it to an `id => true` tombstone map (kept so a late import cannot resurrect a decided id); it never deletes a non-empty map. Why it was left alone: the `mcpwp_approvals_backup_cleanup_status` transient |
 
 ## WP Hooks
 

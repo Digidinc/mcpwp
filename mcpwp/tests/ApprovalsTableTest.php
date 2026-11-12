@@ -121,7 +121,7 @@ final class ApprovalsTableTest extends TestCase {
 		$this->assertSame( array_keys( $expected ), array_keys( $migrated ) );
 		$this->assertSame( array( 'apr_mig_staging', 'apr_mig_pending', 'apr_mig_large', 'apr_mig_rejected' ), array_keys( mcpwp_test_approvals_all() ), 'The rest in the option\'s order, after the one a crashed run had copied.' );
 		$this->assertCount( 4, $GLOBALS['mcpwp_test_approvals_rows'] );
-		$this->assertSame( 1, get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
+		$this->assertGreaterThan( 1, (int) get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
 		$this->assertFalse( get_option( Mcpwp_Approvals::OPTION_NAME, false ), 'The old option is gone under its old name.' );
 		$this->assertSame( $items, get_option( Mcpwp_Approvals::LEGACY_BACKUP_OPTION ), 'Kept, renamed, for recovery by hand.' );
 		$this->assertFalse( $GLOBALS['mcpwp_test_options_autoload'][ Mcpwp_Approvals::LEGACY_BACKUP_OPTION ], 'The backup does not autoload.' );
@@ -172,7 +172,7 @@ final class ApprovalsTableTest extends TestCase {
 		update_option( 'spai_approval_requests', $items, false );
 
 		$this->assertTrue( Mcpwp_Activator::migrate_approvals_to_table() );
-		$this->assertSame( 1, get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
+		$this->assertGreaterThan( 1, (int) get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
 		$this->assertCount( 4, mcpwp_test_approvals_all() );
 		$this->assertSame( 'pending', Mcpwp_Approvals::get_request( 'apr_mig_pending' )['status'] );
 		$this->assertIsArray( Mcpwp_Approvals::list_requests() );
