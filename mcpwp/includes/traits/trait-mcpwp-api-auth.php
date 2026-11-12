@@ -2674,23 +2674,79 @@ trait Mcpwp_Api_Auth {
 		if ( is_array( $value ) || is_object( $value ) || true === $value ) {
 			return true;
 		}
-		if ( ( is_int( $value ) || is_float( $value ) ) && $value < 0 ) {
-			return true;
+		// A float (or float-shaped string) is an id only when it is a whole
+		// number an int holds exactly (< 2^53): then a cast, absint() and the
+		// handlers all read the same integer. 4095.99999999999 (read as 4095,
+		// stored as 4096), 1e19 (wraps), INF and NAN are refused. Values a
+		// handler STORES verbatim (id-metas) take the stricter path in
+		// canonicalize_post_meta_value(), which refuses every float.
+		if ( is_float( $value ) ) {
+			return $value < 0 || ! self::is_exact_whole_number( $value );
 		}
-		// An id must round-trip as a positive integer: a float that is not
-		// finite or does not fit an int casts to a different number here than
-		// in a consumer's absint() (PHP wraps it), so it is refused.
-		if ( is_float( $value ) && ( ! is_finite( $value ) || $value >= 9.2233720368547758E18 ) ) {
-			return true;
+		if ( is_int( $value ) ) {
+			return $value < 0;
 		}
 		if ( ! is_string( $value ) ) {
 			return false;
 		}
+		// '', ' ' and signed zeros ('0', '-0', '+00') are not ids: every reading is 0.
+		if ( '' === trim( $value ) || 1 === preg_match( '/^\\s*[+-]?0+\\s*$/', $value ) ) {
+			return false;
+		}
+		// A digit-only string is an id (or 0); a string that opens like a
+		// number but is anything else ('12abc', '-5', '1e3', '4.096e3', '5.0')
+		// is read differently by a cast and a store, so it is refused.
+		if ( 1 === preg_match( '/^\s*\+?[0-9]+\s*$/', $value ) ) {
+			return null === self::canonical_post_id_token( $value ) && ! self::is_zero_digits( $value );
+		}
 		if ( is_numeric( $value ) ) {
 			$as_float = (float) $value;
-			return $as_float < 0 || ! is_finite( $as_float ) || $as_float >= 9.2233720368547758E18;
+			return $as_float < 0 || ! self::is_exact_whole_number( $as_float );
 		}
-		return 1 === preg_match( '/^\s*[+-]?\d/', $value );
+		return 1 === preg_match( '/^\s*[+-]?[.\d]/', $value );
+	}
+
+	/**
+	 * Whether a float is finite, whole and below 2^53 (exactly an int).
+	 *
+	 * @param float $value Float.
+	 * @return bool
+	 */
+	private static function is_exact_whole_number( $value ) {
+		return is_finite( $value ) && abs( $value ) < 9007199254740992.0 && floor( $value ) === $value;
+	}
+
+	/**
+	 * Whether a digit-only string is zero ('0', '000', ' +0 ').
+	 *
+	 * @param string $value Digit-only string.
+	 * @return bool
+	 */
+	private static function is_zero_digits( $value ) {
+		return '' === ltrim( trim( $value, " \t\n\r\0\x0B+" ), '0' );
+	}
+
+	/**
+	 * The ONE definition of an id token: a PHP int > 0, or a digit-only
+	 * string ('5', ' 7 ', '+7', '007') whose value fits an int and is > 0.
+	 * Anything else (a float, an exponent/decimal/hex string, a bool, null,
+	 * an array, zero, an overflowing number) is null — not an id.
+	 *
+	 * @param mixed $value Raw value.
+	 * @return int|null
+	 */
+	public static function canonical_post_id_token( $value ) {
+		if ( is_int( $value ) ) {
+			return $value > 0 ? $value : null;
+		}
+		if ( ! is_string( $value ) || 1 !== preg_match( '/^\s*\+?([0-9]+)\s*$/', $value, $m ) ) {
+			return null;
+		}
+		$digits = ltrim( $m[1], '0' );
+		if ( '' === $digits || strlen( $digits ) > 19 || ( 19 === strlen( $digits ) && strcmp( $digits, '9223372036854775807' ) > 0 ) ) {
+			return null;
+		}
+		return (int) $digits;
 	}
 
 	/**
@@ -2970,41 +3026,56 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
-	 * The post ids a /post-meta write names, or a WP_Error.
+	 * The ONE canonicaliser for an id-meta write: the ids the value names
+	 * AND the canonical value to store, so what the guard checks is by
+	 * construction what the handler stores.
 	 *
-	 * Empty when the key is not a known id meta. The key is lowercased first
-	 * (wp_postmeta.meta_key collates case-insensitively: '_THUMBNAIL_ID' is
-	 * the '_thumbnail_id' row) and the value is read through
-	 * decode_post_meta_value(), the handler's own decoder.
+	 * Null when the key is not a known id meta. The key is lowercased first
+	 * (wp_postmeta.meta_key collates case-insensitively), and the value goes
+	 * through decode_post_meta_value(). Accepted: a PHP int > 0, a digit-only
+	 * string ('5', ' 7 ', '+7', '007'), a comma list of those ('5,6'), and
+	 * an array (or JSON array/object) of those. Every float, exponent /
+	 * decimal / hex string, bool, nested array, zero or null inside a list is
+	 * 400 invalid_post_ref; over post_ref_batch_cap() ids is 400 too_many_ids.
+	 * A whole-number float (5.0) is refused too: JSON clients send 5, and a
+	 * float has no single reading across a cast, a store and absint().
 	 *
-	 * Errors: 400 invalid_post_ref (a negative, signed, nested or otherwise
-	 * ambiguous value) and 400 too_many_ids (over post_ref_batch_cap()).
+	 * 'value' is what to store: an int for the scalar shape, a canonical
+	 * 'a,b' string for csv, a list of ints for list; null (delete) and the
+	 * empty scalars ('', 0, '0' — the clearing forms) pass as they are.
 	 *
 	 * @param mixed $key   Raw key param.
 	 * @param mixed $value Raw value param.
-	 * @return int[]|WP_Error
+	 * @return array{ids:int[],value:mixed}|WP_Error|null
 	 */
-	public static function post_ref_meta_ids( $key, $value ) {
+	public static function canonicalize_post_meta_value( $key, $value ) {
 		if ( ! is_string( $key ) ) {
-			return array();
+			return null;
 		}
 		$shapes = self::get_post_ref_meta_value_keys();
 		$key    = strtolower( trim( $key ) );
 		if ( ! isset( $shapes[ $key ] ) ) {
-			return array();
+			return null;
 		}
-		$shape = $shapes[ $key ];
-		$value = self::decode_post_meta_value( $value );
+		$shape   = $shapes[ $key ];
+		$value   = self::decode_post_meta_value( $value );
+		$invalid = new WP_Error( 'invalid_post_ref', __( 'Post ids must be positive integers.', 'mcpwp' ), array( 'status' => 400 ) );
 
-		// A scalar key holding a list is ambiguous: the handler's absint()
-		// reads it as 1 (or 0), the store keeps the array.
-		if ( 'scalar' === $shape && is_array( $value ) && ! empty( $value ) ) {
-			return new WP_Error( 'invalid_post_ref', __( 'Post ids must be plain positive integers.', 'mcpwp' ), array( 'status' => 400 ) );
+		if ( null === $value ) {
+			return array( 'ids' => array(), 'value' => null );
 		}
+		if ( 'scalar' === $shape ) {
+			if ( '' === $value || 0 === $value || '0' === $value ) {
+				return array( 'ids' => array(), 'value' => $value );
+			}
+			$id = self::canonical_post_id_token( $value );
+			return null === $id ? $invalid : array( 'ids' => array( $id ), 'value' => $id );
+		}
+
 		if ( is_array( $value ) ) {
 			$parts = array_values( $value );
-		} elseif ( is_string( $value ) && 'scalar' !== $shape ) {
-			$parts = array_map( 'trim', explode( ',', $value ) );
+		} elseif ( is_string( $value ) ) {
+			$parts = '' === trim( $value ) ? array() : explode( ',', $value );
 		} else {
 			$parts = array( $value );
 		}
@@ -3021,14 +3092,29 @@ trait Mcpwp_Api_Auth {
 		}
 		$ids = array();
 		foreach ( $parts as $part ) {
-			if ( self::is_ambiguous_post_ref_value( $part ) ) {
-				return new WP_Error( 'invalid_post_ref', __( 'Post ids must be plain positive integers.', 'mcpwp' ), array( 'status' => 400 ) );
+			$id = self::canonical_post_id_token( $part );
+			if ( null === $id ) {
+				return $invalid;
 			}
-			if ( is_numeric( $part ) && (int) $part > 0 ) {
-				$ids[] = (int) $part;
-			}
+			$ids[] = $id;
 		}
-		return $ids;
+		return array( 'ids' => $ids, 'value' => 'csv' === $shape ? implode( ',', $ids ) : $ids );
+	}
+
+	/**
+	 * The post ids a /post-meta write names (see canonicalize_post_meta_value()),
+	 * empty when the key is not an id meta, or a WP_Error.
+	 *
+	 * @param mixed $key   Raw key param.
+	 * @param mixed $value Raw value param.
+	 * @return int[]|WP_Error
+	 */
+	public static function post_ref_meta_ids( $key, $value ) {
+		$canonical = self::canonicalize_post_meta_value( $key, $value );
+		if ( null === $canonical ) {
+			return array();
+		}
+		return is_wp_error( $canonical ) ? $canonical : $canonical['ids'];
 	}
 
 	/**

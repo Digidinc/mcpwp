@@ -201,7 +201,17 @@ final class PostMetaIdRefs1121Test extends TestCase {
 			'string 18446744073709549568' => array( '18446744073709549568', true ),
 			'string 1e400'               => array( '1e400', true ),
 			'PHP_INT_MAX int'            => array( PHP_INT_MAX, false ),
-			'float 8.0'                  => array( 8.0, false ),
+			'float 8.0 (a whole number)' => array( 8.0, false ),
+			'float 4095.99999999999'     => array( 4095.99999999999, true ),
+			'string 5.0 (whole)'         => array( '5.0', false ),
+			'string .5'                  => array( '.5', true ),
+			'string 007'                 => array( '007', false ),
+			'string +7'                  => array( '+7', false ),
+			'string " 7 "'              => array( ' 7 ', false ),
+			'2^53 int'                   => array( 9007199254740992, false ),
+			'2^53 float'                 => array( 9007199254740992.0, true ),
+			'string 4.096e3 whole is 4096' => array( '4.096e3', false ),
+			'digits overflowing an int'  => array( '9223372036854775808', true ),
 			'-0.0 (is not an id)'        => array( -0.0, false ),
 			'int 8'                      => array( 8, false ),
 			'string 8'                   => array( '8', false ),
@@ -243,7 +253,139 @@ final class PostMetaIdRefs1121Test extends TestCase {
 		$this->assertSame( 'invalid_post_ref/400', $this->code( $this->check( 'POST', '/posts', array( 'title' => 'x', 'featured_image' => $big ), $a ) ), 'POST /posts' );
 		$this->assertContains( $this->code( $this->check( 'POST', '/posts/bulk', array( 'posts' => array( array( 'title' => 'x', 'featured_image' => $big ) ) ), $a ) ), array( 'invalid_post_ref/400', 'invalid_item/400' ), 'POST /posts/bulk: refused before the handler.' );
 		$this->assertSame( 'invalid_post_ref/400', $this->code( $this->check( 'POST', '/posts/' . self::OWN . '/featured-image', array( 'id' => self::OWN, 'media_id' => $big ), $a ) ), 'featured-image media_id' );
+		$this->assertSame( 'invalid_post_ref/400', $this->code( $this->check( 'PUT', '/posts/' . self::OWN, array( 'id' => self::OWN, 'featured_image' => self::ATT_DRAFT - 0.00000001 ), $a ) ), 'A float that is not a whole number.' );
 		$this->assertTrue( $this->check( 'PUT', '/posts/' . self::OWN, array( 'id' => self::OWN, 'featured_image' => self::ATT_FREE ), $a ), 'A readable id still passes.' );
+	}
+
+	public function test_values_that_are_not_positive_integers_are_refused_on_every_id_meta(): void {
+		$bad = array(
+			'float just under a whole number' => 4095.99999999999,
+			'whole-number float'              => 5.0,
+			'float 2^53'                      => 9007199254740992.0,
+			'-0.0'                            => -0.0,
+			'string 4.096e3'                  => '4.096e3',
+			'string 1e3'                      => '1e3',
+			'string 5.0'                      => '5.0',
+			'string hex'                      => '0x10',
+			'true'                            => true,
+			'false'                           => false,
+		);
+		foreach ( array( '_thumbnail_id', '_THUMBNAIL_ID' ) as $key ) {
+			foreach ( $bad as $label => $value ) {
+				$this->assertSame( 'invalid_post_ref/400', $this->meta( array( 'key' => $key, 'value' => $value ) ), "$key: $label" );
+			}
+		}
+		foreach ( array( '_upsell_ids', '_crosssell_ids', '_children' ) as $key ) {
+			foreach ( $bad as $label => $value ) {
+				$this->assertSame( 'invalid_post_ref/400', $this->meta( array( 'key' => $key, 'value' => array( self::PUB, $value ) ) ), "$key: list with $label" );
+			}
+			$this->assertSame( 'invalid_post_ref/400', $this->meta( array( 'key' => $key, 'value' => array( self::PUB, null ) ) ), "$key: null in a list" );
+			$this->assertSame( 'invalid_post_ref/400', $this->meta( array( 'key' => $key, 'value' => array( self::PUB, 0 ) ) ), "$key: zero in a list" );
+			$this->assertSame( 'invalid_post_ref/400', $this->meta( array( 'key' => $key, 'value' => '[4095.99999999999]' ) ), "$key: JSON float" );
+		}
+		$this->assertSame( 'invalid_post_ref/400', $this->meta( array( 'key' => '_product_image_gallery', 'value' => self::ATT_FREE . ',4.096e3' ) ) );
+		$this->assertSame( 'invalid_post_ref/400', $this->meta( array( 'key' => '_product_image_gallery', 'value' => array( self::ATT_FREE, 5.5 ) ) ) );
+	}
+
+	public function test_accepted_values_are_stored_in_canonical_form(): void {
+		$cases = array(
+			array( '_thumbnail_id', 7, array( 7 ), 7 ),
+			array( '_thumbnail_id', '7', array( 7 ), 7 ),
+			array( '_thumbnail_id', ' 7 ', array( 7 ), 7 ),
+			array( '_thumbnail_id', '007', array( 7 ), 7 ),
+			array( '_thumbnail_id', '+7', array( 7 ), 7 ),
+			array( '_thumbnail_id', '', array(), '' ),
+			array( '_thumbnail_id', 0, array(), 0 ),
+			array( '_thumbnail_id', '0', array(), '0' ),
+			array( '_thumbnail_id', null, array(), null ),
+			array( '_product_image_gallery', '5,6', array( 5, 6 ), '5,6' ),
+			array( '_product_image_gallery', ' 5 , 006 ', array( 5, 6 ), '5,6' ),
+			array( '_product_image_gallery', array( 5, '6' ), array( 5, 6 ), '5,6' ),
+			array( '_product_image_gallery', '', array(), '' ),
+			array( '_upsell_ids', '[5,"6"]', array( 5, 6 ), array( 5, 6 ) ),
+			array( '_upsell_ids', '{"a":5,"b":"06"}', array( 5, 6 ), array( 5, 6 ) ),
+			array( '_upsell_ids', '5,6', array( 5, 6 ), array( 5, 6 ) ),
+			array( '_upsell_ids', array( 'x' => 5 ), array( 5 ), array( 5 ) ),
+			array( '_children', '[]', array(), array() ),
+			array( '_UPSELL_IDS', array( 9007199254740992 ), array( 9007199254740992 ), array( 9007199254740992 ) ),
+		);
+		foreach ( $cases as $i => list( $key, $in, $ids, $stored ) ) {
+			$c = Mcpwp_REST_API::canonicalize_post_meta_value( $key, $in );
+			$this->assertIsArray( $c, "case $i" );
+			$this->assertSame( $ids, $c['ids'], "case $i ids" );
+			$this->assertSame( $stored, $c['value'], "case $i stored value" );
+		}
+		$this->assertNull( Mcpwp_REST_API::canonicalize_post_meta_value( 'subtitle', 4095.99999999999 ), 'Not an id-meta: not touched.' );
+		$this->assertSame( 'ALLOWED', $this->meta( array( 'key' => '_thumbnail_id', 'value' => ' ' . self::ATT_FREE . ' ' ) ) );
+		$this->assertSame( 'ALLOWED', $this->meta( array( 'key' => '_upsell_ids', 'value' => '' ) ) );
+	}
+
+	public function test_the_handler_stores_what_the_guard_checked(): void {
+		$source = (string) file_get_contents( dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-content.php' );
+		$this->assertStringContainsString( 'self::canonicalize_post_meta_value( $key, $value )', $source );
+		$this->assertStringContainsString( "\$value = \$canonical['value'];", $source, 'The handler stores the canonical value, not the raw input.' );
+		$guard = (string) file_get_contents( dirname( __DIR__ ) . '/includes/traits/trait-mcpwp-api-auth.php' );
+		$this->assertStringContainsString( 'self::post_ref_meta_ids(', $guard );
+	}
+
+	/**
+	 * Property: for a generated corpus, an accepted value's STORED form, read
+	 * the way consumers read it (absint / (int) of the stored string, a csv
+	 * split, wp_parse_id_list-style), is exactly the id list the guard checks.
+	 */
+	public function test_property_consumer_reading_of_the_stored_value_equals_the_checked_ids(): void {
+		$pool = array( 0, 1, 5, 7, 4095, 4096, 4097, 9007199254740991, 9007199254740992, PHP_INT_MAX, -1, -4096,
+			0.0, -0.0, 5.0, 4095.99999999999, 4095.5, 4096.00000000001, 1e19, 1.8446744073709552E+19, 2 ** 53 + 0.0, 1.0E-5, INF, NAN,
+			'', ' ', '0', '00', '5', ' 7 ', '007', '+7', '-7', '5.0', '4.096e3', '1e3', '0x10', '12abc', 'abc', '9223372036854775807', '9223372036854775808', '99999999999999999999',
+			true, false, null, array( 5 ), array(), array( array( 5 ) ) );
+		mt_srand( 1121 );
+		$corpus = array();
+		foreach ( $pool as $v ) {
+			$corpus[] = $v;
+			$corpus[] = array( $v );
+			$corpus[] = array( 5, $v );
+			$corpus[] = array( 'k' => $v );
+			if ( is_scalar( $v ) ) {
+				$corpus[] = '5,' . $v;
+				$corpus[] = json_encode( array( $v ) );
+				$corpus[] = json_encode( array( 'a' => $v ) );
+			}
+		}
+		for ( $i = 0; $i < 400; $i++ ) {
+			$corpus[] = array( $pool[ mt_rand( 0, count( $pool ) - 1 ) ], $pool[ mt_rand( 0, count( $pool ) - 1 ) ] );
+		}
+		$accepted = 0;
+		foreach ( array_keys( Mcpwp_REST_API::get_post_ref_meta_value_keys() ) as $key ) {
+			$shape = Mcpwp_REST_API::get_post_ref_meta_value_keys()[ $key ];
+			foreach ( $corpus as $n => $value ) {
+				$c = Mcpwp_REST_API::canonicalize_post_meta_value( strtoupper( $key ), $value );
+				if ( ! is_array( $c ) ) {
+					$this->assertInstanceOf( WP_Error::class, $c, "$key #$n is refused, never passed through" );
+					continue;
+				}
+				$accepted++;
+				$stored = $c['value'];
+				// Storage stringifies scalars and serialises arrays; read it back.
+				if ( 'scalar' === $shape ) {
+					$read = null === $stored ? array() : ( 0 === absint( (string) $stored ) ? array() : array( absint( (string) $stored ) ) );
+				} elseif ( 'csv' === $shape ) {
+					$read = ( null === $stored || '' === $stored ) ? array() : array_map( 'absint', explode( ',', (string) $stored ) );
+				} else {
+					$read = array_map( static function ( $x ) {
+						return absint( (string) $x );
+					}, (array) $stored );
+					if ( null === $stored ) {
+						$read = array();
+					}
+				}
+				$this->assertSame( $c['ids'], array_values( $read ), "$key #$n: stored form reads as the checked ids" );
+				foreach ( $c['ids'] as $id ) {
+					$this->assertIsInt( $id );
+					$this->assertGreaterThan( 0, $id );
+				}
+			}
+		}
+		$this->assertGreaterThan( 100, $accepted, 'The corpus exercises accepted values too.' );
 	}
 
 	public function test_a_list_longer_than_the_post_ref_cap_is_refused_before_any_lookup(): void {

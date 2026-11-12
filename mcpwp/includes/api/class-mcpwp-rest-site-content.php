@@ -625,6 +625,17 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			);
 		}
 
+		// An id-meta's value is canonicalised ONCE: the ids the authorization
+		// guard checked and the value stored below are the same list, for every
+		// principal (#1121). Not an id-meta: the generic decoder, as before.
+		$canonical = self::canonicalize_post_meta_value( $key, $value );
+		if ( is_wp_error( $canonical ) ) {
+			return $this->error_response_from_wp_error( $canonical );
+		}
+		if ( is_array( $canonical ) ) {
+			$value = $canonical['value'];
+		}
+
 		// The featured image goes through the same check as the dedicated
 		// route: it has to be an attachment.
 		// Compared lowercase: meta_key collates case-insensitively, so
@@ -650,7 +661,9 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		// A JSON object/array sent as a string is meant as a structure.
 		// The same decoder the authorization guard reads the value with
 		// (decode_post_meta_value(), #1121).
-		$value = self::decode_post_meta_value( $value );
+		if ( ! is_array( $canonical ) ) {
+			$value = self::decode_post_meta_value( $value );
+		}
 
 		// The same policy as meta on a post write (#797): one answer to "can
 		// this key be written, and how is the value treated". The two core
