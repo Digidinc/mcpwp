@@ -258,6 +258,9 @@ class Mcpwp_Uninstaller {
 		'mcpwp_cleanup_logs',
 		'mcpwp_check_alerts',
 		'mcpwp_action_log_daily_prune',
+		// Per-site schedules deactivation clears only on the current site.
+		'mcpwp_compute_signals',
+		'mcpwp_figma_sync_design_tokens',
 	);
 
 	/**
@@ -317,7 +320,8 @@ class Mcpwp_Uninstaller {
 	 * directory, so deleting one copy (`mcpwp-old/`, or `mcpwp-premium/` while
 	 * a Free `mcpwp/` stays) while another is installed — active or not —
 	 * would wipe the data the other owns. A copy is identified like
-	 * Mcpwp_Duplicate_Copy does: Plugin Name `MCPWP` or `MCPWP Premium` AND
+	 * Mcpwp_Duplicate_Copy does: Plugin Name `MCPWP`, `MCPWP Premium` or `MCPWP (Premium)` (the
+	 * Freemius SDK appends/strips a "(Premium)" suffix) AND
 	 * the `mcpwp` Text Domain, so an add-on or an unrelated plugin that merely
 	 * reuses the text domain does not suppress cleanup. Compared by basename,
 	 * so the plugin being uninstalled never counts as its own other copy.
@@ -332,7 +336,7 @@ class Mcpwp_Uninstaller {
 			}
 			$name = isset( $headers['Name'] ) ? trim( (string) $headers['Name'] ) : '';
 			$td   = isset( $headers['TextDomain'] ) ? (string) $headers['TextDomain'] : '';
-			if ( 'mcpwp' === $td && preg_match( '/^MCPWP(\s+Premium)?$/i', $name ) ) {
+			if ( 'mcpwp' === $td && preg_match( '/^MCPWP(\s+\(?Premium\)?)?$/i', $name ) ) {
 				return true;
 			}
 		}

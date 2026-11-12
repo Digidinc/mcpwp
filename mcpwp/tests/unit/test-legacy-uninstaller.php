@@ -10,6 +10,7 @@ use PHPUnit\Framework\TestCase;
 
 require_once dirname(__DIR__, 2) . '/includes/class-mcpwp-uninstaller.php';
 require_once dirname(__DIR__, 2) . '/includes/core/class-mcpwp-key-state.php';
+require_once dirname(__DIR__, 2) . '/includes/class-mcpwp-duplicate-copy.php';
 
 class Mcpwp_Legacy_Uninstall_Test_Auth
 {
@@ -234,6 +235,41 @@ final class LegacyUninstallerTest extends TestCase
         $this->assertFalse(Mcpwp_Uninstaller::another_copy_installed(array('forms/forms.php' => $this->header('MCPWP Addon for Forms', 'mcpwp')), $self));
         // Right name, wrong text domain.
         $this->assertFalse(Mcpwp_Uninstaller::another_copy_installed(array('x/x.php' => $this->header('MCPWP', 'something-else')), $self));
+    }
+
+    public function test_every_premium_name_form_counts_as_a_copy(): void
+    {
+        foreach (array('MCPWP', 'MCPWP Premium', 'MCPWP (Premium)', 'mcpwp (premium)', 'MCPWP  Premium') as $name) {
+            $this->assertTrue(
+                Mcpwp_Uninstaller::another_copy_installed(array('mcpwp-premium/mcpwp.php' => $this->header($name, 'mcpwp')), 'mcpwp/mcpwp.php'),
+                $name
+            );
+        }
+        foreach (array('MCPWP Pro Addon', 'MCPWP (Premium) Forms', 'MCPWPX', 'Premium MCPWP') as $name) {
+            $this->assertFalse(
+                Mcpwp_Uninstaller::another_copy_installed(array('x/x.php' => $this->header($name, 'mcpwp')), 'mcpwp/mcpwp.php'),
+                $name
+            );
+        }
+    }
+
+    public function test_the_duplicate_copy_guard_accepts_the_same_premium_name_forms(): void
+    {
+        foreach (array('MCPWP', 'MCPWP Premium', 'MCPWP (Premium)') as $name) {
+            $this->assertTrue(Mcpwp_Duplicate_Copy::is_mcpwp_main_file("<?php\n/**\n * Plugin Name: {$name}\n */"), $name);
+        }
+        $this->assertFalse(Mcpwp_Duplicate_Copy::is_mcpwp_main_file("<?php\n/**\n * Plugin Name: MCPWP Addon for Forms\n */"));
+    }
+
+    public function test_per_site_signal_and_figma_crons_are_cleared(): void
+    {
+        $GLOBALS['mcpwp_test_cron']['mcpwp_compute_signals']            = 1;
+        $GLOBALS['mcpwp_test_cron']['mcpwp_figma_sync_design_tokens'] = 1;
+
+        Mcpwp_Uninstaller::drop_legacy_data_for_current_site();
+
+        $this->assertArrayNotHasKey('mcpwp_compute_signals', $GLOBALS['mcpwp_test_cron']);
+        $this->assertArrayNotHasKey('mcpwp_figma_sync_design_tokens', $GLOBALS['mcpwp_test_cron']);
     }
 
     public function test_a_copy_loaded_from_elsewhere_such_as_mu_plugins_is_detected(): void
