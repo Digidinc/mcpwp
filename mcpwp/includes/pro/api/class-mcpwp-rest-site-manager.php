@@ -285,7 +285,8 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		$data = array(
 			'title'       => $request->get_param( 'title' ),
 			'url'         => $request->get_param( 'url' ),
-			'type'        => $request->get_param( 'type' ),
+			'type'        => array_key_exists( 'type', $request->get_params() ) ? $request->get_param( 'type' ) : 'custom',
+			'object'      => $request->get_param( 'object' ),
 			'object_id'   => $request->get_param( 'object_id' ),
 			'parent_id'   => $request->get_param( 'parent_id' ),
 			'position'    => $request->get_param( 'position' ),
@@ -294,7 +295,9 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 			'description' => $request->get_param( 'description' ),
 		);
 
-		$item_id = $this->manager->add_menu_item( $menu_id, $data );
+		$item_id = $this->manager->add_menu_item( $menu_id, $data, function ( $object_id ) use ( $request ) {
+			return $this->post_ref_item_visible( $request, $object_id );
+		} );
 
 		if ( is_wp_error( $item_id ) ) {
 			return $this->error_response_from_wp_error( $item_id );
@@ -325,6 +328,10 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 			'target'    => $request->get_param( 'target' ),
 			'classes'   => $request->get_param( 'classes' ),
 		);
+
+		if ( array_key_exists( 'type', $request->get_params() ) ) {
+			$data['type'] = $request->get_param( 'type' );
+		}
 
 		$result = $this->manager->update_menu_item( $menu_id, $item_id, $data );
 

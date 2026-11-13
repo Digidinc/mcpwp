@@ -166,6 +166,8 @@ final class StagedStatusValueAuditTest extends TestCase {
 		// record is stored through the approvals store (Mcpwp_Approvals::
 		// insert_request() since #1042). The disposition is unchanged: a staging push's progress
 		// status, on a surface blanket-admin-gated for every method.
+		'pro/core/class-mcpwp-site-manager.php' => 'false positive: status literals describe HTTP validation and ' .
+			'creation error responses; update_option() stores site settings, not a caller-supplied post visibility status.',
 		'pro/core/class-mcpwp-theme-builder.php' => 'staged value is a theme-builder template\'s condition/assignment ' .
 			'status, not post_status — the file\'s actual post_status writes are hardcoded to \'publish\' with no caller ' .
 			'input at all (see PublishStatusHandlerAuditTest::AUDITED\'s disposition for this same file).',

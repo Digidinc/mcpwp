@@ -651,7 +651,11 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 			);
 		}
 
-		$type        = sanitize_text_field( (string) $request->get_param( 'type' ) );
+		$params = $this->gate_params( $request );
+		$type   = self::normalize_menu_item_type( array_key_exists( 'type', $params ) ? $params['type'] : 'custom' );
+		if ( is_wp_error( $type ) ) {
+			return $type;
+		}
 		$title       = sanitize_text_field( (string) $request->get_param( 'title' ) );
 		$url         = esc_url_raw( (string) $request->get_param( 'url' ) );
 		$object      = sanitize_key( (string) $request->get_param( 'object' ) );
@@ -661,6 +665,9 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 		$classes     = (array) $request->get_param( 'classes' );
 		$target      = $request->get_param( 'target' );
 		$description = $request->get_param( 'description' );
+
+		$object = '' !== $object ? $object : $type['object'];
+		$type   = $type['type'];
 
 		if ( '' === $title ) {
 			return $this->error_response(
@@ -689,7 +696,7 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 			$item_data['menu-item-position'] = absint( $position );
 		}
 
-		if ( 'custom' === $type || '' === $type ) {
+		if ( 'custom' === $type ) {
 			if ( '' === $url ) {
 				return $this->error_response(
 					'missing_url',
@@ -751,6 +758,13 @@ class Mcpwp_REST_Menus extends Mcpwp_REST_API {
 	 * @return WP_REST_Response|WP_Error Response.
 	 */
 	public function update_menu_item( $request ) {
+		$params = $this->gate_params( $request );
+		if ( array_key_exists( 'type', $params ) ) {
+			$type = self::normalize_menu_item_type( $params['type'] );
+			if ( is_wp_error( $type ) ) {
+				return $type;
+			}
+		}
 		$this->log_activity( 'update_menu_item', $request );
 
 		$menu_id = absint( $request->get_param( 'menu_id' ) );

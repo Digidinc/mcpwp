@@ -411,19 +411,25 @@ final class PostMetaIdRefs1121Test extends TestCase {
 	// ── nav menu object type, compared the way the handler reads it ──────
 
 	public function test_a_case_variant_menu_item_type_still_names_a_post(): void {
+		// #1112 refuses an inexact type outright (invalid_menu_item_type) where #1121
+		// had it judged as the post type it folds to. The invariant both protect: a
+		// variant never gets past the gate with an ambiguous post id, and never
+		// lands as anything but a refusal. The gate's own classifier still reads
+		// the folded spelling as a post (the second assertion of each pair).
 		foreach ( array( 'Page', 'PAGE', ' page ', 'Post_Type', 'POST', "post_type\n" ) as $type ) {
 			$admin = $this->bot( array( 'read', 'write', 'admin' ) ); // One key per type: the per-key rate limit is not under test.
 			$label = json_encode( $type );
-			$this->assertSame( 'invalid_post_ref/400', $this->code( $this->check( 'POST', '/menus/5/items', array( 'type' => $type, 'object_id' => -self::DRAFT, 'title' => 'x' ), $admin ) ), "item $label, negative id" );
-			$this->assertSame( 'invalid_post_ref/400', $this->code( $this->check( 'POST', '/menus', array( 'name' => 'm', 'items' => array( array( 'type' => $type, 'object_id' => '-' . self::DRAFT ) ) ), $admin ) ), "menu item $label, negative id" );
-			// A variant is judged exactly like the canonical 'post_type' (here: a post that
-			// is not there), whatever that verdict is for this principal.
-			$this->assertSame( $this->code( $this->check( 'POST', '/menus/5/items', array( 'type' => 'post_type', 'object_id' => 9699, 'title' => 'x' ), $admin ) ), $this->code( $this->check( 'POST', '/menus/5/items', array( 'type' => $type, 'object_id' => 9699, 'title' => 'x' ), $admin ) ), "item $label, missing post" );
-			$this->assertSame( $this->code( $this->check( 'POST', '/menus', array( 'name' => 'm', 'items' => array( array( 'type' => 'post_type', 'object_id' => 9699 ) ) ), $admin ) ), $this->code( $this->check( 'POST', '/menus', array( 'name' => 'm', 'items' => array( array( 'type' => $type, 'object_id' => 9699 ) ) ), $admin ) ), "menu item $label, missing post" );
+			$this->assertSame( 'invalid_menu_item_type/400', $this->code( $this->check( 'POST', '/menus/5/items', array( 'type' => $type, 'object_id' => -self::DRAFT, 'title' => 'x' ), $admin ) ), "item $label, negative id" );
+			$this->assertSame( 'invalid_menu_item_type/400', $this->code( $this->check( 'POST', '/menus', array( 'name' => 'm', 'items' => array( array( 'type' => $type, 'object_id' => '-' . self::DRAFT ) ) ), $admin ) ), "menu item $label, negative id" );
+			$this->assertTrue( Mcpwp_REST_API::menu_item_type_names_post( array( 'type' => $type ) ), "classifier still reads $label as a post type" );
+			// Never judged more leniently than the canonical type for a missing post.
+			$this->assertNotTrue( $this->check( 'POST', '/menus/5/items', array( 'type' => $type, 'object_id' => 9699, 'title' => 'x' ), $admin ), "item $label, missing post" );
+			$this->assertNotTrue( $this->check( 'POST', '/menus', array( 'name' => 'm', 'items' => array( array( 'type' => $type, 'object_id' => 9699 ) ) ), $admin ), "menu item $label, missing post" );
 		}
 		$admin = $this->bot( array( 'read', 'write', 'admin' ) );
-		foreach ( array( 'Custom', 'TAXONOMY', 'category' ) as $type ) {
-			$this->assertTrue( $this->check( 'POST', '/menus/5/items', array( 'type' => $type, 'object_id' => -1, 'title' => 'x', 'url' => 'https://example.test' ), $admin ), "$type is not a post type: untouched." );
+		$this->assertTrue( $this->check( 'POST', '/menus/5/items', array( 'type' => 'category', 'object_id' => -1, 'title' => 'x', 'url' => 'https://example.test' ), $admin ), 'category is not a post type: untouched.' );
+		foreach ( array( 'Custom', 'TAXONOMY' ) as $type ) {
+			$this->assertSame( 'invalid_menu_item_type/400', $this->code( $this->check( 'POST', '/menus/5/items', array( 'type' => $type, 'object_id' => -1, 'title' => 'x', 'url' => 'https://example.test' ), $admin ) ), "$type is inexact (#1112): refused, never read as a post." );
 		}
 	}
 

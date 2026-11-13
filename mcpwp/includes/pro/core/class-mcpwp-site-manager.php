@@ -97,47 +97,87 @@ class Mcpwp_Site_Manager {
 	 */
 	public function create_menu( $data ) {
 		$name = isset( $data['name'] ) ? sanitize_text_field( $data['name'] ) : '';
-
 		if ( empty( $name ) ) {
 			return new WP_Error( 'missing_name', __( 'Menu name is required.', 'mcpwp' ) );
 		}
 
-		$menu_id = wp_create_nav_menu( $name );
+		$items = isset( $data['items'] ) ? $data['items'] : array();
+		if ( ! is_array( $items ) ) {
+			return new WP_Error( 'invalid_menu_item', __( 'Menu items must be an array of objects.', 'mcpwp' ), array( 'status' => 400 ) );
+		}
+		$object_visible = isset( $data['item_object_visible'] ) && is_callable( $data['item_object_visible'] ) ? $data['item_object_visible'] : null;
+		$prepared       = array();
+		$item_errors    = array();
+		foreach ( array_values( $items ) as $index => $item ) {
+			try {
+				$result = $this->prepare_menu_item( $item, $object_visible );
+			} catch ( Throwable $error ) {
+				$result = new WP_Error( 'invalid_menu_item', __( 'Menu item could not be prepared.', 'mcpwp' ) );
+			}
+			if ( is_wp_error( $result ) ) {
+				$item_errors[] = array( 'index' => (int) $index, 'code' => $result->get_error_code(), 'message' => $result->get_error_message() );
+			} else {
+				$prepared[] = $result;
+			}
+		}
+		if ( ! empty( $item_errors ) ) {
+			return new WP_Error( $item_errors[0]['code'], $item_errors[0]['message'], array( 'status' => 400, 'item_errors' => $item_errors ) );
+		}
 
+		$menu_id = wp_create_nav_menu( $name );
 		if ( is_wp_error( $menu_id ) ) {
 			return $menu_id;
 		}
-
-		// Assign to location if specified.
-		if ( ! empty( $data['location'] ) ) {
-			$locations = get_nav_menu_locations();
-			$locations[ sanitize_key( $data['location'] ) ] = $menu_id;
-			set_theme_mod( 'nav_menu_locations', $locations );
-		}
-
-		// Add items if provided, collecting item-level failures so the caller
-		// can detect a partially-built menu instead of a silent success.
-		$item_errors = array();
-		if ( ! empty( $data['items'] ) && is_array( $data['items'] ) ) {
-			$object_visible = isset( $data['item_object_visible'] ) && is_callable( $data['item_object_visible'] ) ? $data['item_object_visible'] : null;
-			foreach ( array_values( $data['items'] ) as $index => $item ) {
-				$result = $this->add_menu_item( $menu_id, $item, $object_visible );
+		$original_locations = null;
+		try {
+			$written = 0;
+			foreach ( $prepared as $index => $item_data ) {
+				$result = wp_update_nav_menu_item( $menu_id, 0, $item_data );
+				if ( ! is_wp_error( $result ) && ( ! is_int( $result ) || $result <= 0 ) ) {
+					$result = new WP_Error( 'menu_item_create_failed', __( 'Menu item could not be created.', 'mcpwp' ) );
+				}
 				if ( is_wp_error( $result ) ) {
-					$item_errors[] = array(
-						'index'   => (int) $index,
-						'code'    => $result->get_error_code(),
-						'message' => $result->get_error_message(),
-					);
+					$item_errors[] = array( 'index' => (int) $index, 'code' => $result->get_error_code(), 'message' => $result->get_error_message() );
+				} else {
+					++$written;
 				}
 			}
+			if ( ! empty( $prepared ) && 0 === $written ) {
+				return $this->rollback_created_menu( $menu_id, new WP_Error( 'menu_create_failed', __( 'Menu items could not be created.', 'mcpwp' ), array( 'status' => 500, 'item_errors' => $item_errors ) ) );
+			}
+			if ( ! empty( $data['location'] ) ) {
+				$original_locations = get_nav_menu_locations();
+				$locations = $original_locations;
+				$locations[ sanitize_key( $data['location'] ) ] = $menu_id;
+				set_theme_mod( 'nav_menu_locations', $locations );
+			}
+			$menu = $this->get_menu( $menu_id );
+			if ( is_wp_error( $menu ) ) {
+				return $this->rollback_created_menu( $menu_id, $menu, $original_locations );
+			}
+			if ( ! empty( $item_errors ) ) {
+				$menu['item_errors'] = $item_errors;
+			}
+			return $menu;
+		} catch ( Throwable $error ) {
+			return $this->rollback_created_menu( $menu_id, new WP_Error( 'menu_create_failed', __( 'Menu could not be created.', 'mcpwp' ), array( 'status' => 500 ) ), $original_locations );
 		}
+	}
 
-		$menu = $this->get_menu( $menu_id );
-		if ( ! empty( $item_errors ) && is_array( $menu ) ) {
-			$menu['item_errors'] = $item_errors;
+	/** Remove the menu and its items when creation cannot complete. */
+	private function rollback_created_menu( $menu_id, $error, $original_locations = null ) {
+		try {
+			$deleted = wp_delete_nav_menu( $menu_id );
+			if ( null !== $original_locations ) {
+				set_theme_mod( 'nav_menu_locations', $original_locations );
+			}
+			if ( ! is_wp_error( $deleted ) && $deleted ) {
+				return $error;
+			}
+		} catch ( Throwable $cleanup_error ) {
+			// Report cleanup failure separately so it cannot read as success.
 		}
-
-		return $menu;
+		return new WP_Error( 'menu_rollback_failed', __( 'Menu cleanup failed.', 'mcpwp' ), array( 'status' => 500, 'menu_id' => (int) $menu_id, 'cause' => $error->get_error_code() ) );
 	}
 
 	/**
@@ -219,10 +259,35 @@ class Mcpwp_Site_Manager {
 	 * @return int|WP_Error Item ID.
 	 */
 	public function add_menu_item( $menu_id, $data, $object_visible = null ) {
-		$menu = wp_get_nav_menu_object( $menu_id );
-
-		if ( ! $menu ) {
+		if ( ! is_array( $data ) ) {
+			return Mcpwp_REST_API::validate_menu_item_shape( $data );
+		}
+		$item_data = $this->prepare_menu_item( $data, $object_visible );
+		if ( is_wp_error( $item_data ) ) {
+			return $item_data;
+		}
+		if ( ! wp_get_nav_menu_object( $menu_id ) ) {
 			return new WP_Error( 'not_found', __( 'Menu not found.', 'mcpwp' ) );
+		}
+		return wp_update_nav_menu_item( $menu_id, 0, $item_data );
+	}
+
+	/**
+	 * Validate and prepare item data before any menu is created or changed.
+	 *
+	 * @param mixed         $data Item payload.
+	 * @param callable|null $object_visible Optional visibility resolver.
+	 * @return array|WP_Error
+	 */
+	private function prepare_menu_item( $data, $object_visible = null ) {
+		$valid = Mcpwp_REST_API::validate_menu_item_shape( $data );
+		if ( is_wp_error( $valid ) ) {
+			return $valid;
+		}
+		foreach ( array( 'title', 'url', 'object', 'object_id', 'parent_id', 'position', 'target', 'classes', 'description' ) as $field ) {
+			if ( isset( $data[ $field ] ) && ! is_scalar( $data[ $field ] ) ) {
+				return new WP_Error( 'invalid_menu_item', __( 'Menu item fields must be scalar values.', 'mcpwp' ), array( 'status' => 400 ) );
+			}
 		}
 
 		$item_data = array(
@@ -236,26 +301,15 @@ class Mcpwp_Site_Manager {
 		// contract. Older callers passed the WordPress object directly as `type`
 		// (post|page|category|tag); keep those as back-compat aliases so existing
 		// integrations do not break.
-		$type      = isset( $data['type'] ) ? sanitize_key( (string) $data['type'] ) : 'custom';
+		$type = Mcpwp_REST_API::normalize_menu_item_type( array_key_exists( 'type', $data ) ? $data['type'] : 'custom' );
+		if ( is_wp_error( $type ) ) {
+			return $type;
+		}
 		$object    = isset( $data['object'] ) ? sanitize_key( (string) $data['object'] ) : '';
 		$object_id = isset( $data['object_id'] ) ? absint( $data['object_id'] ) : 0;
 
-		switch ( $type ) {
-			case 'post':
-			case 'page':
-				$object = '' !== $object ? $object : $type;
-				$type   = 'post_type';
-				break;
-			case 'category':
-				$object = '' !== $object ? $object : 'category';
-				$type   = 'taxonomy';
-				break;
-			case 'tag':
-			case 'post_tag':
-				$object = '' !== $object ? $object : 'post_tag';
-				$type   = 'taxonomy';
-				break;
-		}
+		$object = '' !== $object ? $object : $type['object'];
+		$type   = $type['type'];
 
 		switch ( $type ) {
 			case 'post_type':
@@ -280,7 +334,6 @@ class Mcpwp_Site_Manager {
 				break;
 
 			case 'custom':
-			default:
 				$item_data['menu-item-type'] = 'custom';
 				$item_data['menu-item-url']  = isset( $data['url'] ) ? esc_url_raw( $data['url'] ) : '';
 				break;
@@ -297,13 +350,7 @@ class Mcpwp_Site_Manager {
 			$item_data['menu-item-description'] = sanitize_textarea_field( $data['description'] );
 		}
 
-		$item_id = wp_update_nav_menu_item( $menu_id, 0, $item_data );
-
-		if ( is_wp_error( $item_id ) ) {
-			return $item_id;
-		}
-
-		return $item_id;
+		return $item_data;
 	}
 
 	/**
@@ -315,6 +362,12 @@ class Mcpwp_Site_Manager {
 	 * @return int|WP_Error Item ID.
 	 */
 	public function update_menu_item( $menu_id, $item_id, $data ) {
+		if ( array_key_exists( 'type', $data ) ) {
+			$type = Mcpwp_REST_API::normalize_menu_item_type( $data['type'] );
+			if ( is_wp_error( $type ) ) {
+				return $type;
+			}
+		}
 		$item_data = array();
 
 		if ( isset( $data['title'] ) ) {

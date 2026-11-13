@@ -171,7 +171,7 @@ class SiteManagerMenuItemTest extends PHPUnit\Framework\TestCase {
 
 	// ── create_menu reports item-level failures ────────────────
 
-	public function test_create_menu_reports_item_level_failures() {
+	public function test_create_menu_reports_validation_errors_before_creating_a_menu() {
 		$menu = $this->manager->create_menu( array(
 			'name'  => 'Launch',
 			'items' => array(
@@ -180,10 +180,12 @@ class SiteManagerMenuItemTest extends PHPUnit\Framework\TestCase {
 			),
 		) );
 
-		$this->assertIsArray( $menu );
-		$this->assertArrayHasKey( 'item_errors', $menu, 'create_menu must surface item-level failures.' );
-		$this->assertCount( 1, $menu['item_errors'] );
-		$this->assertSame( 'missing_object', $menu['item_errors'][0]['code'] );
-		$this->assertSame( 1, $menu['item_errors'][0]['index'] );
+		$this->assertInstanceOf( WP_Error::class, $menu );
+		$errors = $menu->get_error_data()['item_errors'];
+		$this->assertCount( 1, $errors );
+		$this->assertSame( 'missing_object', $errors[0]['code'] );
+		$this->assertSame( 1, $errors[0]['index'] );
+		$this->assertCount( 1, $GLOBALS['_mcpwp_test_nav_menus'] );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_nav_menu_item_writes'] );
 	}
 }

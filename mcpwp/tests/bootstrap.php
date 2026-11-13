@@ -4678,6 +4678,17 @@ function wp_create_nav_menu($name)
     return $id;
 }
 
+// Match core's menu removal; record cleanup for menu-creation failure tests.
+function wp_delete_nav_menu($menu_id)
+{
+    $GLOBALS['_mcpwp_test_nav_menu_deletions'][] = (int) $menu_id;
+    if (! isset($GLOBALS['_mcpwp_test_nav_menus'][$menu_id])) {
+        return false;
+    }
+    unset($GLOBALS['_mcpwp_test_nav_menus'][$menu_id]);
+    return true;
+}
+
 // A nav menu exists only when registered in $GLOBALS['_mcpwp_test_nav_menus'].
 function wp_get_nav_menu_object($menu)
 {
@@ -4697,6 +4708,9 @@ function wp_update_nav_menu_item($menu_id, $item_id, $item_data)
         'item_id' => (int) $item_id,
         'data'    => $item_data,
     );
+    if (isset($GLOBALS['_mcpwp_test_nav_menu_item_write_result'])) {
+        return call_user_func($GLOBALS['_mcpwp_test_nav_menu_item_write_result']);
+    }
     return 1000 + count($GLOBALS['_mcpwp_test_nav_menu_item_writes']);
 }
 
