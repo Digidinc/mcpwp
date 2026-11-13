@@ -515,6 +515,23 @@ class WP_REST_Server
     public const EDITABLE  = 'POST,PUT,PATCH';
     public const DELETABLE = 'DELETE';
 
+    // Core's WP_REST_Server::error_to_response(): the response a route that
+    // answers WP_Error becomes (code/message/data body, data.status as HTTP
+    // status), before rest_post_dispatch filters see it.
+    public function error_to_response($error)
+    {
+        $data   = $error->get_error_data();
+        $status = is_array($data) && isset($data['status']) ? (int) $data['status'] : 500;
+        return new WP_REST_Response(
+            array(
+                'code'    => $error->get_error_code(),
+                'message' => $error->get_error_message(),
+                'data'    => $data,
+            ),
+            $status
+        );
+    }
+
     // Reconstruct core's route table from the registration spy. Registrations
     // append endpoint arrays; they must never overwrite an earlier handler.
     public function get_routes()

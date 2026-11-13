@@ -201,7 +201,7 @@ curl "https://your-site.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_api_key_here
 |------|--------|-------------|
 | `missing_api_key` | 401 | API key not provided |
 | `invalid_api_key` | 401 | API key is incorrect |
-| `invalid_token` | 401 | An OAuth access token (`mcpwp_at_`) is expired, revoked or unknown: reconnect (see docs/OAUTH-CONNECT.md) |
+| `invalid_token` | 401 | An OAuth access token (`mcpwp_at_`, or legacy `spai_at_`) is expired, revoked or unknown: reconnect (see docs/OAUTH-CONNECT.md) |
 | `api_not_configured` | 500 | API key not set up in WordPress |
 | `not_found` | 404 | Resource not found |
 | `invalid_param` | 400 | Invalid parameter value |
