@@ -731,7 +731,11 @@ anything else — the handshake never fails on version. Every later request foll
 malformed value is an HTTP 400 JSON-RPC error listing the supported versions (the value is not echoed).
 An `initialize` in the same JSON-RPC batch wins over the header. The npm proxy (`mcp-server/`) runs its
 own `initialize` against WordPress with the version its host negotiated and forwards the answer as the
-header on every request after that.
+header on every request after that. Both proxies also pass WordPress's `initialize` `instructions`
+(the "Finding Tools" guidance) on to the client (#1074): the npm proxy patches them into the SDK's
+`initialize` response; the agency gateway (`mcpwp-agency-proxy/`) sends the selected site's (the only
+site, or the `_site` / `X-Mcpwp-Site` hint) plus a `_site` note, or a short generic version when none
+is selected, and forwards the client's `MCP-Protocol-Version` on every upstream call.
 
 Under `2025-06-18`+ tools carry top-level `title`, and tools with a stable result shape
 (`wp_site_info`, `wp_list_pages`, `wp_list_posts`, `wp_get_page_by_slug`) declare an `outputSchema`

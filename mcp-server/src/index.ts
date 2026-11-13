@@ -14,8 +14,10 @@ import { join } from "path";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CallToolRequestSchema,
+  type JSONRPCMessage,
   LATEST_PROTOCOL_VERSION,
   SUPPORTED_PROTOCOL_VERSIONS,
   ListToolsRequestSchema,
@@ -24,6 +26,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { loadConfig, getActiveSite } from "./config.js";
+import { withUpstreamInstructions } from "./initialize.js";
 import { McpProxy } from "./proxy.js";
 import { runSetup } from "./setup.js";
 
@@ -376,9 +379,29 @@ async function main() {
     // Observe (never alter) inbound messages through the public Transport
     // interface, to learn the host's requested protocol version.
     const deliver = transport.onmessage;
+    let initializeId: unknown;
     transport.onmessage = (message) => {
       noteHostInitialize(message);
+      if ((message as { method?: unknown }).method === "initialize") {
+        initializeId = (message as { id?: unknown }).id;
+      }
       deliver?.(message);
+    };
+    // #1074: the SDK answers `initialize` without instructions. Add the ones
+    // WordPress sent (the "Finding Tools" guidance) to that one response.
+    // Typed through the Transport interface, whose send() takes the options.
+    const out: Transport = transport;
+    const deliverOut = out.send.bind(out);
+    out.send = async (message: JSONRPCMessage, options?: TransportSendOptions) => {
+      const id = "id" in message ? message.id : undefined;
+      if (initializeId !== undefined && id === initializeId) {
+        // Any response to that id ends the wait, an error included (#1074).
+        initializeId = undefined;
+        if ("result" in message) {
+          return deliverOut(withUpstreamInstructions(message, await activeProxy.getInstructions()), options);
+        }
+      }
+      return deliverOut(message, options);
     };
     log("info", `MCPWP Server v${VERSION} running as "${serverName}" (proxy mode)`);
     log("info", `Proxying to: ${site.url} | session: ${sessionId}`);
