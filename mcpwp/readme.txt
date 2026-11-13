@@ -157,6 +157,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.12 =
+* fix: **approvals:** age-gated, fail-closed shrink of the pre_3149 backup option ([#1053](https://github.com/Digidinc/mcpwp/issues/1053)) ([#1160](https://github.com/Digidinc/mcpwp/issues/1160))
+* fix: **license:** update vendored Freemius SDK 2.13.4 -&gt; 2.13.5 ([#1169](https://github.com/Digidinc/mcpwp/issues/1169))
+
 = 3.14.11 =
 * feat: **oauth:** connected AI apps — persistent hashed tokens, client list and per-user revoke ([#1101](https://github.com/Digidinc/mcpwp/issues/1101)) ([#1117](https://github.com/Digidinc/mcpwp/issues/1117))
 * feat: **oauth:** the site is its own OAuth authorization server — DCR, PKCE, WP-login consent, run-as-user, aud binding, default-on discovery ([#1099](https://github.com/Digidinc/mcpwp/issues/1099))
