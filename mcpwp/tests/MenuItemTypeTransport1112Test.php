@@ -298,7 +298,7 @@ final class MenuItemTypeTransport1112Test extends TestCase {
 		update_option( 'mcpwp_settings', array( 'oauth_enabled' => true ) );
 		update_option( Mcpwp_OAuth_Well_Known::MIN_ROLE_OPTION, 'author' );
 		$auth  = $this->gate();
-		$token = $auth->issue_oauth_access_token( array( 'read', 'write', 'admin' ), HOUR_IN_SECONDS, array( 'user_id' => $user_id, 'client_id' => 'menu-test' ) )['access_token'];
+		$token = $auth->issue_oauth_access_token( array( 'read', 'write', 'admin' ), HOUR_IN_SECONDS, array( 'client_id' => 'menu-test' ) )['access_token']; // A user-bound token never carries admin (#1149), so it is refused on scope before the type gate: use a client-bound one to reach the gate.
 		$request = new WP_REST_Request(
 			'POST',
 			'/mcpwp/v1/menus/16/items',
@@ -310,7 +310,7 @@ final class MenuItemTypeTransport1112Test extends TestCase {
 		// post-naming gate as its final permission step.
 		$result = $auth->verify_api_key( $request );
 		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'invalid_menu_item_type', $result->get_error_code() );
+		$this->assertSame( 'invalid_menu_item_type', $result->get_error_code(), $result->get_error_message() );
 		$this->assertSame( 400, $result->get_error_data()['status'] );
 		$this->assertEmpty( $GLOBALS['_mcpwp_test_nav_menu_item_writes'] );
 	}

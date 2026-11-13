@@ -123,4 +123,22 @@ final class MenuItemTypeNormalization1112Test extends TestCase {
 			$this->assertSame( 'post_type' === end( $writes )['data']['menu-item-type'], Mcpwp_REST_API::menu_item_type_names_post( array( 'type' => $type ) ) );
 		}
 	}
+
+	public function test_gate_is_never_looser_than_the_exact_parse_or_the_1121_folded_reading(): void {
+		// Exact vocabulary: the handler writes a post_type item for these.
+		foreach ( array( 'post_type', 'post', 'page' ) as $type ) {
+			$this->assertTrue( Mcpwp_REST_API::menu_item_type_names_post( array( 'type' => $type ) ), $type );
+		}
+		// Folded spellings (#1121): the handler refuses them outright, but the
+		// gate still treats them as naming a post rather than rely on that.
+		foreach ( array( 'Page', 'PAGE', ' page ', 'Post_Type', "post_type\n" ) as $type ) {
+			$this->assertTrue( Mcpwp_REST_API::menu_item_type_names_post( array( 'type' => $type ) ), json_encode( $type ) );
+			$this->assertInstanceOf( WP_Error::class, Mcpwp_REST_API::normalize_menu_item_type( $type ), json_encode( $type ) );
+		}
+		// Non-post types, omitted type (custom default) and non-strings stay false.
+		foreach ( array( 'custom', 'taxonomy', 'category', 'Tag', 'nonsense', '', 7, array( 'page' ) ) as $type ) {
+			$this->assertFalse( Mcpwp_REST_API::menu_item_type_names_post( array( 'type' => $type ) ), json_encode( $type ) );
+		}
+		$this->assertFalse( Mcpwp_REST_API::menu_item_type_names_post( array() ) );
+	}
 }
