@@ -5,6 +5,14 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.12](https://github.com/Digidinc/mcpwp/compare/v3.14.11...v3.14.12) (2026-11-13)
+
+
+### Bug Fixes
+
+* **approvals:** age-gated, fail-closed shrink of the pre_3149 backup option ([#1053](https://github.com/Digidinc/mcpwp/issues/1053)) ([#1160](https://github.com/Digidinc/mcpwp/issues/1160)) ([027cf07](https://github.com/Digidinc/mcpwp/commit/027cf07748f73fabf7bed34421a94a779f65b5c3))
+* **license:** update vendored Freemius SDK 2.13.4 -&gt; 2.13.5 ([#1169](https://github.com/Digidinc/mcpwp/issues/1169)) ([f6519d6](https://github.com/Digidinc/mcpwp/commit/f6519d68d2c06895049669b1d0c8cc21378756c1))
+
 ## [3.14.11](https://github.com/Digidinc/mcpwp/compare/v3.14.10...v3.14.11) (2026-11-13)
 
 
