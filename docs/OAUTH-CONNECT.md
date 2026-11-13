@@ -17,6 +17,10 @@ API-key authentication (`X-API-Key`, `Authorization: Bearer`, or `?api_key=`) wo
 | Cursor, Windsurf, Claude Code, any config-file client | Send the key in an `X-API-Key` header (or via the `mcp-remote` bridge). | API key |
 | Machine to machine | API key, or the `client_credentials` grant (see below). | API key / OAuth |
 
+Scope of this guide: everything about the site is taken from the plugin code. How claude.ai, ChatGPT
+and other clients behave (their menus, what they cache, when they register) is external client
+behaviour and can change; the steps for them are the usual ones, not a guarantee.
+
 MCP URL (the protected resource): `https://YOUR-SITE/wp-json/mcpwp/v1/mcp`. On a site without pretty
 permalinks it is `https://YOUR-SITE/?rest_route=/mcpwp/v1/mcp`.
 
@@ -27,7 +31,7 @@ What a client discovers on its own (nothing here is typed in by hand):
 
 | URL | What it is |
 |-----|------------|
-| `/.well-known/oauth-protected-resource` | RFC 9728 metadata naming the MCP endpoint and this site as the authorization server |
+| `/.well-known/oauth-protected-resource` | RFC 9728 metadata naming the MCP endpoint and this site as the authorization server (it names mumcp.com instead when the site is broker-enrolled and local OAuth is off) |
 | `/.well-known/oauth-authorization-server` | RFC 8414 metadata listing the endpoints below |
 | `/wp-json/mcpwp/v1/oauth/register` | Dynamic Client Registration |
 | `/mcpwp-oauth/authorize` | Consent screen (browser) |
@@ -56,8 +60,9 @@ instead of a consent screen.
 
 - **A user, for their own apps:** WP Admin -> Users -> Profile -> **Connected AI apps**. Each app shows
   its access (Read only, or Read and write), when it connected and when it was last used. **Revoke**
-  cuts one app off at once; **Disconnect all AI apps for this user** cuts all of them. An
-  administrator can do the same on another user's profile.
+  cuts one app off at once. An administrator can do the same on another user's profile.
+- **An administrator, for one user:** on that user's profile, **Disconnect all AI apps for this user**
+  cuts all of that user's apps (the button is not shown to non-administrators).
 - **An administrator, for the whole site:** MCPWP -> Setup -> **Advanced** -> **AI apps**. Every
   registered app, with its active token count. **Remove** stops that app for every user.
 - **The app itself** can call `/oauth/revoke` (RFC 7009).
@@ -84,10 +89,10 @@ The errors below are the ones this plugin emits. OAuth errors are JSON `{"error"
 |-----------------|-------|-----|
 | `invalid_scope` at sign-in (claude.ai or ChatGPT), mentioning `admin` | Not emitted by this plugin: the site narrows an `admin` request to `write` and ignores unknown scopes. It comes from the **mumcp.com broker** when a client requests `admin`. The broker-side clamp fix is merged; whether it is deployed is outside the plugin and cannot be checked from the site. | Remove the connector and add it again after updating MCPWP so discovery points at the site (the site is the authorization server unless the broker is enrolled and local OAuth is off). If it persists on a broker-enrolled site, use the local server (turn it on under Setup -> Advanced) or an API key. |
 | `501 server_error`, "OAuth is not enabled on this site." | The Setup -> Advanced switch is off. | Turn it on. Nothing was revoked; unexpired tokens work again. |
-| `invalid_client`, "Unknown or missing client_id." (consent page), or `401 invalid_client`, "Invalid client_id." (token/revoke) | The `client_id` was never registered, was removed under AI apps, or was registered but not authorized within 1 hour (then it expires). | The client registers again. If it caches a registration, clear it (remove and re-add the connector). |
-| `invalid_request`, "redirect_uri is not registered for this client." | The `redirect_uri` is not an exact match of one registered for that client. | Register the exact callback URL (no wildcards). Re-add the connector. |
-| `invalid_redirect_uri` (HTTP 400 from `/oauth/register`) | A registered redirect URI is not `https` (or `http` on `localhost`, `127.0.0.1`, `[::1]`), has a fragment or user info, is over 2000 characters, or there are more than 5. | Fix the client's callback URL list. |
-| `invalid_client_metadata` (400 from `/oauth/register`) | The body is not a JSON object, or `grant_types`, `response_types` or `client_name` are malformed (grant types must include `authorization_code`, and may add only `refresh_token`; response type only `code`). | Fix the registration request. |
+| `invalid_client`, "Unknown or missing client_id." (consent page), or `401 invalid_client`, "Invalid client_id." (token/revoke) | The `client_id` was never registered, was removed under AI apps, or was registered but never authorized and has since been purged (an unused registration older than 1 hour is purged lazily, when another registration runs). | The client registers again. If it caches a registration, clear it (remove and re-add the connector). |
+| `invalid_request`, "redirect_uri is not registered for this client." | The `redirect_uri` is not an exact match of one (port ignored for `http` loopback) registered for that client. | Register the exact callback URL (no wildcards). Re-add the connector. |
+| `invalid_redirect_uri` (HTTP 400 from `/oauth/register`) | For example: not `https` (or `http` on `localhost`, `127.0.0.1`, `[::1]`), a fragment or user info, non-printable-ASCII characters, over 2000 characters, not an absolute URL with a host, an invalid host or port, characters WordPress would rewrite, `redirect_uris` empty or not a JSON array of strings, or more than 5. The `error_description` names which. | Fix the client's callback URL list. |
+| `invalid_client_metadata` (400 from `/oauth/register`) | For example: the body is not a JSON object, or `token_endpoint_auth_method`, `grant_types`, `response_types` or `client_name` is malformed (grant types must include `authorization_code` and may add only `refresh_token`; response types only `code`). The `error_description` names which. | Fix the registration request. |
 | `429 temporarily_unavailable` from `/oauth/register`, "Too many app registrations right now" | A per-address, per-site or per-minute registration limit. Honour `Retry-After`. | Wait, or register as an administrator (exempt). |
 | `429`, "This site has reached its limit of registered apps." | 500 stored apps; no `Retry-After`. | An administrator removes unused apps under Setup -> Advanced -> AI apps. |
 | `503 temporarily_unavailable` ("busy" or "could not be saved") | Store lock contention. | Retry. |
@@ -102,8 +107,8 @@ The errors below are the ones this plugin emits. OAuth errors are JSON `{"error"
 | `400 invalid_request`, "The consent form was altered or has expired." | The consent page sat open too long, or the form was changed. | Start the connection again. |
 | `access_denied` in the redirect | The user pressed Deny. | Approve, if intended. |
 | Consent page: "Your WordPress role can't connect AI apps on this site; ask an administrator." | The signed-in user is below the minimum role (Editor by default). | An administrator signs in, or changes the minimum role on the Setup page. |
-| `401`, `invalid_api_key` "Invalid API key." on a Bearer call | The access token is unknown, **expired** (default 1 hour), or revoked at the token row, or OAuth is off. The client should use its refresh token. | Refresh the token; if that fails, reconnect. |
-| `401`, `invalid_token`, "This access token has been revoked." | Its app was removed, or the user revoked it, or its refresh family was killed. | Reconnect. |
+| `401`, `invalid_api_key` "Invalid API key." on a Bearer call | The access token is unknown, expired (default 1 hour), or **revoked** (app removed, user revoke, revoked refresh family, `/oauth/revoke`), or local OAuth is off. All of these look the same on the wire. | Try the refresh token; if that is refused, reconnect. |
+| `401`, `invalid_token`, "This access token has been revoked." | Rarer: the token row is still active but its client or user was revoked at or after it was issued. | Reconnect. |
 | `401`, `invalid_token`, "This access token was issued for a different resource." | Token minted for another site address. | Reconnect. |
 | `401`, `invalid_token`, "The WordPress user who approved this connection can no longer connect AI apps on this site." | User deleted or demoted. | Restore the user, or connect as someone else. |
 | `401 missing_api_key` when sending an OAuth token | Access tokens are accepted only in `Authorization: Bearer`, never in `X-API-Key` or `?api_key=`. | Move it to the Bearer header. |
@@ -121,9 +126,12 @@ The sections below are the detail behind the steps above.
 
 OAuth is **on by default**: it is on whenever the `oauth_enabled` setting was never stored. The
 on/off switch is under **MCPWP → Setup → Advanced**; saving it stores an explicit value. While it is
-off the authorization-server and protected-resource metadata are not served (404) and the
-`WWW-Authenticate` header is not sent, `/oauth/*` REST routes answer `501 server_error`, the
-front-channel `/mcpwp-oauth/authorize` answers 404, and an access token is not accepted. Turning it off does not revoke anything, so a token that has not
+off, the authorization-server metadata is not served (404), `/oauth/*` REST routes answer `501
+server_error`, the front-channel authorize endpoint is not served (the pretty `/mcpwp-oauth/authorize`
+URL answers 404; `/?mcpwp_oauth=authorize` falls through to the normal page), and an access token is
+not accepted (`401 invalid_api_key`). The protected-resource metadata and the `WWW-Authenticate` header
+are still served while the site is enrolled with the mumcp.com broker (they then name the broker); on a
+site that is neither enrolled nor local-OAuth-on they are not sent. Turning it off does not revoke anything, so a token that has not
 expired works again if OAuth is switched back on.
 
 ### Endpoints (reference)
@@ -150,7 +158,7 @@ discovers the flow on its own. The protected-resource document advertises
    issued. Redirect URIs must be `https`, or `http` on a loopback host, with no fragment and no
    userinfo.
 2. **Authorization.** The client sends the user to `/mcpwp-oauth/authorize` with `response_type=code`,
-   `client_id`, `redirect_uri` (exact match against the registered list), `code_challenge`,
+   `client_id`, `redirect_uri` (exact match against the registered list; for an `http` loopback URI on `localhost`, `127.0.0.1` or `[::1]` the port is ignored, RFC 8252), `code_challenge`,
    `code_challenge_method=S256`, and optionally `state` (echoed back byte for byte when sent), `scope` and
    `resource`.
    - PKCE is mandatory: `plain` and a missing challenge are refused. The challenge must be 43 to 128
@@ -191,7 +199,7 @@ Every token-endpoint answer, success or error, carries `Cache-Control: no-store`
   consent, at code redemption, at every refresh and on every request, so deleting or demoting the
   user stops their tokens.
 - **Audience.** Tokens are bound to the MCP endpoint URL (RFC 8707). A `resource` parameter, when
-  sent, must name that URL. If the site address changes, connected apps must reconnect.
+  sent, must name that URL (the bare site origin, the older identifier, is also accepted in the request; a token's stored audience must be the MCP URL). If the site address changes, connected apps must reconnect.
 
 ### Token lifetimes
 
@@ -224,7 +232,16 @@ A token stops working at once when any of these happens:
   within 10 seconds of it: a client that submits its callback twice in parallel gets `invalid_grant` for
   the loser and keeps the winner's tokens.
 
-`/oauth/revoke` answers `200` for any token it does not know, and `503 temporarily_unavailable` (with
+What the client sees afterwards: a token revoked this way (app removed, user revoke, revoked refresh
+family, `/oauth/revoke`) has its row marked revoked, and the next call with it answers
+`401 invalid_api_key` ("Invalid API key.") like an unknown or expired token. The `invalid_token`
+("This access token has been revoked.") answer is only reached when the token's row is still active
+but a revocation epoch (client or user revoked at or after it was issued) covers it. Either way the
+fix is to refresh, or reconnect if refresh fails.
+
+`/oauth/revoke` is rate-limited per address (`429`, checked first). It answers `400 invalid_request`
+without `token` or `client_id`, `401 invalid_client` for an unknown client (or a wrong secret), `200`
+for a token it does not know from a valid client, and `503 temporarily_unavailable` (with
 `Retry-After`) when a revocation could not be saved, so a client can retry.
 
 ### Limits on registration
@@ -233,7 +250,8 @@ Registration is unauthenticated by design, so it is bounded. Nothing is ever dis
 `client_id` a `201` hands out stays valid until it expires.
 
 - A client that is **never used to complete an authorization** expires after **1 hour** and stops
-  counting. A client that has been authorized is kept until it is deleted.
+  counting. The expiry is lazy: stale clients are purged only when another registration runs, and a
+  lookup does not check age, so an unused `client_id` can keep working past the hour until then. A client that has been authorized is kept until it is deleted.
 - Per address (IPv4, or an IPv6 /64): at most **20** such pending registrations at once and 10 per hour
   per set of redirect hosts. The address is the plugin's trusted resolution: `REMOTE_ADDR`, and the
   `CF-Connecting-IP`, `X-Forwarded-For` and `X-Real-IP` headers only when `MCPWP_TRUST_PROXY_HEADERS`
@@ -294,7 +312,7 @@ write and never `admin`.
 
 - PKCE `S256` is mandatory; the challenge and verifier are shape-checked.
 - Authorization codes are single use, short-lived and bound to client, redirect URI, challenge and user.
-- Redirect URIs are matched exactly against the client's registered list.
+- Redirect URIs are matched exactly against the client's registered list (the port is ignored only for `http` loopback hosts, RFC 8252).
 - Refresh tokens are bound to their client, rotate on use, and are revoked as a family on reuse.
 - The metadata origin comes from the site's configured URL, not the `Host` header;
   `X-Forwarded-Proto` is honored only behind `MCPWP_TRUST_PROXY_HEADERS`.
@@ -308,7 +326,8 @@ write and never `admin`.
   authorize (`invalid_request`).
 - A client that registered but never completed an authorization now expires after **1 hour** (it was
   24 hours). A client that caches its registration and first authorizes more than an hour later gets
-  `invalid_client` and must register again.
+  `invalid_client` once the stale client has been purged (purging happens during a later registration, so it is not
+  at the one-hour mark exactly) and must register again.
 - An OAuth access token is accepted only in `Authorization: Bearer`; in `X-API-Key` or `?api_key=` it
   is refused (`401 missing_api_key`).
 

@@ -44,7 +44,7 @@ See `docs/squad/VERSIONING-AND-ROADMAP.md`.
 > **Revenue = taxing flows:** marketplace cut (addons + snapshots) + performance-ranked snapshot premium +
 > infra rent + cheap adoption toll (MCPWP Pro). Never compute. **Moat:** marketplace + attractor + learning +
 > observability — none forks with the code. **Cold-start solved by being the first player:** our own dogfood
-> dropship store. **Keystone build:** OAuth 2.1 + DCR (v2.9) opens the ChatGPT Business + Claude Managed fleet.
+> dropship store. **Keystone build (shipped, #1099):** OAuth 2.1 + DCR opened the ChatGPT Business + Claude Managed fleet.
 
 ---
 
@@ -150,7 +150,7 @@ NOW ─ MVP PILOT (no version bump, runs on current builds) ──────�
 
 PHASE A — Foundation & Distribution ──────────────────────────────────────────────────────
   M1  Launch-Ready              v2.8.x   free plugin + Pro; beachhead entry   ← Hadi gates (T87 pricing)
-  M2  Auth Keystone (PULLED ▲)  v2.9     OAuth 2.1 + DCR on the bus/MCP — the funnel-opener. Bearer
+  M2  Auth Keystone (PULLED ▲)  v2.9     [shipped, #1099] OAuth 2.1 + DCR on the bus/MCP — the funnel-opener. Bearer
                                          runtimes (Hermes·openclaw·Codex·Claude-remote) connect NOW;
                                          OAuth+DCR adds the BIG doors: ChatGPT Business + Claude Managed.
   M3  Distribution              v2.9     WP.org · MCP registries · ChatGPT GPT/App · Claude Connector
@@ -175,6 +175,8 @@ PHASE C — Platform & THE FULL VISION ─────────────�
 hosted agent → M7 generalizes it into reusable vertical snapshots → M8 sells/resells them at scale (the
 GHL model). The full vision lands at **v6.0–v6.x**, gated behind M2 (auth) + M4 (hosted agent) + M6
 (platform hardening). **The MVP pilot is doable NOW on current builds** — don't wait for v3 to prove it.
+
+> Superseded (#1099): DCR and OAuth 2.1 are built and on by default; see `docs/OAUTH-CONNECT.md`.
 
 **Why auth moved up (M3→M2, v3.0→v2.9):** OAuth 2.1 + **DCR** is not a wall someone else holds — it's a
 build *we* control, and it's the single highest-leverage one. Bearer runtimes already connect with no new
@@ -340,7 +342,7 @@ MCPWP becomes a platform runtime. Third-party plugins (Digid, WooCommerce extens
 
 | # | GH | Task | Notes |
 |---|-----|------|-------|
-| T60 | #408 | OAuth 2.1 + **DCR** authorization server (CF Worker, auth.mcpwp.net) | **DCR (Dynamic Client Registration) is mandatory for ChatGPT Business connectors** — no bearer accepted. Also unlocks Claude Managed (OAuth Vaults), ChatGPT App, Claude Connector, YouTube, GHL. Add PKCE. |
+| T60 | #408 | ✅ superseded by #1099 (the plugin is its own OAuth + DCR server) — OAuth 2.1 + **DCR** authorization server (CF Worker, auth.mcpwp.net) | **DCR (Dynamic Client Registration) is mandatory for ChatGPT Business connectors** — no bearer accepted. Also unlocks Claude Managed (OAuth Vaults), ChatGPT App, Claude Connector, YouTube, GHL. Add PKCE. |
 | T60b | — | Wire OAuth 2.1 + DCR into the mupot bus flock plane | Same auth server admits OAuth runtimes (ChatGPT Business, Claude Managed) into a pot's flock, not just MCPWP-on-WP. |
 | T61 | — | ChatGPT App Directory + Workspace-Agent connector submission | Needs T60 (OAuth 2.1 + DCR) |
 | T62 | — | Claude Connector directory submission | Needs T60 |
