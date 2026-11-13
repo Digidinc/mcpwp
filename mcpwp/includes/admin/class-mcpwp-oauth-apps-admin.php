@@ -215,17 +215,22 @@ class Mcpwp_OAuth_Apps_Admin {
 		$out  = array();
 		foreach ( $rows as $row ) {
 			$user_id = (int) $row['user_id'];
-			if ( $user_id <= 0 || ( $user_id !== $current && ! self::is_apps_admin() ) ) {
+			$machine = $user_id <= 0;
+			// Machine (client-secret) tokens belong to no user: administrators only.
+			if ( $machine ? ! self::is_apps_admin() : ( $user_id !== $current && ! self::is_apps_admin() ) ) {
 				continue;
 			}
 			$client_id = '' === (string) $row['client_id'] ? Mcpwp_OAuth_Token_Store::LEGACY_APP : (string) $row['client_id'];
 			$key       = $user_id . '|' . $client_id;
 			if ( ! isset( $out[ $key ] ) ) {
 				$record = Mcpwp_OAuth_Token_Store::LEGACY_APP === $client_id ? null : Mcpwp_OAuth_Clients::find( $client_id );
-				$user   = get_userdata( $user_id );
+				$user   = $machine ? false : get_userdata( $user_id );
 				$out[ $key ] = array(
-					'user_id'      => $user_id,
-					'user_login'   => is_object( $user ) && isset( $user->user_login ) ? (string) $user->user_login : '#' . $user_id,
+					'user_id'      => max( 0, $user_id ),
+					'machine'      => $machine,
+					'user_login'   => $machine
+						? __( 'No user (client secret)', 'mcpwp' )
+						: ( is_object( $user ) && isset( $user->user_login ) ? (string) $user->user_login : '#' . $user_id ),
 					'client_id'    => $client_id,
 					'client_name'  => Mcpwp_OAuth_Token_Store::LEGACY_APP === $client_id
 						? __( 'App connected before this update', 'mcpwp' )
@@ -269,7 +274,7 @@ class Mcpwp_OAuth_Apps_Admin {
 		if ( ! $ok ) {
 			return array( 'type' => 'error', 'message' => __( 'Some AI apps could not be disconnected because the site was busy. Try again.', 'mcpwp' ) );
 		}
-		return array( 'type' => 'updated', 'message' => __( 'AI apps were disconnected. They lost access immediately; each will need to be connected again. API keys and ChatGPT links are not affected.', 'mcpwp' ) );
+		return array( 'type' => 'updated', 'message' => __( 'Signed-in AI apps lost access immediately and will need to sign in again. The OAuth client secret still works until you rotate it, connections enrolled through the mumcp.com broker are managed at the broker, and API keys (including the one-link Add to ChatGPT connection) are not affected.', 'mcpwp' ) );
 	}
 
 	/**
@@ -320,7 +325,7 @@ class Mcpwp_OAuth_Apps_Admin {
 			<?php if ( empty( $connections ) ) : ?>
 				<p><?php esc_html_e( 'No connected AI apps are listed.', 'mcpwp' ); ?></p>
 				<?php if ( $legacy_window ) : ?>
-					<p class="description"><?php esc_html_e( 'An app connected before the last update appears here only after it next signs in, so it may be connected without being listed. Disconnect all also cuts those.', 'mcpwp' ); ?></p>
+					<?php self::render_legacy_hint(); ?>
 					<?php self::render_disconnect_all_form( $is_admin, $current ); ?>
 				<?php endif; ?>
 			<?php else : ?>
@@ -348,16 +353,36 @@ class Mcpwp_OAuth_Apps_Admin {
 							<tr>
 								<td><?php echo esc_html( $conn['client_name'] ); ?></td>
 								<td><?php echo esc_html( $conn['user_login'] ); ?></td>
-								<td><?php echo esc_html( in_array( 'write', $conn['scopes'], true ) ? __( 'Read and write', 'mcpwp' ) : __( 'Read only', 'mcpwp' ) ); ?></td>
+								<td><?php echo esc_html( ( ! empty( $conn['machine'] ) ? __( 'Client secret: ', 'mcpwp' ) : '' ) . ( in_array( 'write', $conn['scopes'], true ) ? __( 'Read and write', 'mcpwp' ) : __( 'Read only', 'mcpwp' ) ) ); ?></td>
 								<td><?php echo esc_html( self::format_time( (int) $conn['last_used_at'] ) ); ?></td>
-								<td><a class="button button-small" href="<?php echo esc_url( self::revoke_url( (int) $conn['user_id'], $conn['client_id'] ) ); ?>"><?php esc_html_e( 'Revoke', 'mcpwp' ); ?></a></td>
+								<td>
+									<?php if ( ! empty( $conn['machine'] ) ) : ?>
+										<span class="description"><?php esc_html_e( 'Rotate the OAuth client secret to stop it', 'mcpwp' ); ?></span>
+									<?php else : ?>
+										<a class="button button-small" href="<?php echo esc_url( self::revoke_url( (int) $conn['user_id'], $conn['client_id'] ) ); ?>"><?php esc_html_e( 'Revoke', 'mcpwp' ); ?></a>
+									<?php endif; ?>
+								</td>
 							</tr>
 						<?php endforeach; ?>
 					</tbody>
 				</table>
-				<?php self::render_disconnect_all_form( $is_admin, $current ); ?>
+				<?php
+				if ( $legacy_window ) {
+					self::render_legacy_hint();
+				}
+				self::render_disconnect_all_form( $is_admin, $current );
+				?>
 			<?php endif; ?>
 		</div>
+		<?php
+	}
+
+	/**
+	 * Why the list can be shorter than reality for a month after the update.
+	 */
+	private static function render_legacy_hint() {
+		?>
+		<p class="description"><?php esc_html_e( 'An app connected before the last update is listed only after its next API call or refresh, so it may be connected without being listed. Disconnect all also cuts those.', 'mcpwp' ); ?></p>
 		<?php
 	}
 

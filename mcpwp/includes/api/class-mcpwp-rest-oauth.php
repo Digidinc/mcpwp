@@ -1472,7 +1472,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			? '<li>' . esc_html__( 'Write access also lets it create, edit and delete content as you. Untick the box above to give read access only.', 'mcpwp' ) . '</li>'
 			: '<li>' . esc_html__( 'This connection is read only: the app cannot create, edit or delete anything.', 'mcpwp' ) . '</li>';
 		$plain .= '<li>' . esc_html__( 'It can never do more than your own WordPress account is allowed to do. The access listed above is already capped to what your account may do.', 'mcpwp' ) . '</li>';
-		$plain .= '<li>' . esc_html__( 'You can disconnect the app at any time under Users, Profile, Connected AI apps. Administrators can also use MCPWP, Setup, Connect an AI app.', 'mcpwp' ) . '</li>';
+		$plain .= '<li>' . esc_html__( 'You can disconnect the app at any time under Users, Profile, Connected AI apps.', 'mcpwp' ) . '</li>';
 		$plain_words = '<div class="scope-help" style="font-size:.9em;margin:0 0 16px">'
 			. '<p style="margin:0 0 6px"><strong>' . esc_html__( 'In plain words', 'mcpwp' ) . '</strong></p>'
 			. '<ul style="margin:0;padding-left:18px">' . $plain . '</ul></div>';

@@ -13,6 +13,7 @@ require_once dirname( __DIR__ ) . '/includes/class-mcpwp-oauth-well-known.php';
 require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-oauth-apps-admin.php';
 require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-chatgpt-connector.php';
 require_once __DIR__ . '/ApiAuthTest.php';
+require_once dirname( __DIR__ ) . '/includes/class-mcpwp-uninstaller.php';
 
 if ( ! function_exists( 'wp_die' ) ) {
 	function wp_die( $message = '', $title = '', $args = array() ) {
@@ -317,6 +318,107 @@ final class OAuthConnectCardTest extends TestCase {
 		$this->assertStringNotContainsString( 'admin_post_nopriv_', substr( $src, (int) strpos( $src, 'DISCONNECT_ALL_ACTION' ) - 60, 200 ) );
 	}
 
+	// ── round 2 ───────────────────────────────────────────────────────────
+
+	public function test_a_never_used_old_storage_access_token_is_refused_after_disconnect_all(): void {
+		$access = $this->legacy_access( self::BOB ); // Never presented: it is not in the table.
+		$this->assertNull( mcpwp_test_oauth_row( $access ) );
+		$this->as_user( self::ADMIN );
+		Mcpwp_OAuth_Apps_Admin::process_disconnect_all( array( Mcpwp_OAuth_Apps_Admin::NONCE_FIELD => $this->nonce_for( self::ADMIN ) ) );
+		usleep( 20 );
+		$this->assertFalse( $this->bearer_works( $access ), 'Only the site epoch can stop it: there is no row to revoke.' );
+	}
+
+	public function test_the_site_epoch_boundary_is_inclusive_and_fails_closed(): void {
+		$epoch = 1700000000123456;
+		update_option( Mcpwp_OAuth_Revocation::SITE_EPOCH_OPTION, array( 'site' => $epoch ), false );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'issued_at' => $epoch ) ), 'issued_at == epoch is revoked.' );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'issued_at' => $epoch - 1 ) ) );
+		$this->assertFalse( Mcpwp_OAuth_Revocation::is_revoked( array( 'issued_at' => $epoch + 1 ) ), 'One microsecond later is valid.' );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array() ), 'No issued_at: revoked.' );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'issued_at' => 0 ) ) );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( array( 'issued_at' => -5 ) ) );
+	}
+
+	public function test_the_per_site_user_epoch_boundary_is_inclusive_and_fails_closed(): void {
+		$epoch = 1700000000123456;
+		update_option( Mcpwp_OAuth_Revocation::SITE_USERS_OPTION, array( (string) self::ALICE => $epoch ), false );
+		$rec = array( 'user_id' => self::ALICE );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( $rec + array( 'issued_at' => $epoch ) ) );
+		$this->assertFalse( Mcpwp_OAuth_Revocation::is_revoked( $rec + array( 'issued_at' => $epoch + 1 ) ) );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( $rec ), 'No issued_at: revoked.' );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( $rec + array( 'issued_at' => 0 ) ) );
+		$this->assertTrue( Mcpwp_OAuth_Revocation::is_revoked( $rec + array( 'issued_at' => -5 ) ) );
+		$this->assertFalse( Mcpwp_OAuth_Revocation::is_revoked( array( 'user_id' => self::BOB, 'issued_at' => $epoch ) ), 'Another user is not caught.' );
+	}
+
+	private function machine_token(): string {
+		$token = 'mcpwp_at_' . bin2hex( random_bytes( 24 ) );
+		Mcpwp_OAuth_Token_Store::insert( $token, Mcpwp_OAuth_Token_Store::TYPE_ACCESS, array( 'client_id' => 'test_client', 'scopes' => array( 'read' ), 'issued_at' => Mcpwp_OAuth_Revocation::now(), 'expires_at' => time() + 600, 'family_id' => 'm', 'aud' => Mcpwp_OAuth_Well_Known::get_canonical_resource() ) );
+		return $token;
+	}
+
+	public function test_machine_tokens_are_listed_for_admins_only_and_keep_the_button_after_the_window(): void {
+		update_option( Mcpwp_OAuth_Token_Store::GRACE_OPTION, time() - 1, false );
+		$this->machine_token();
+		$this->as_user( self::ADMIN );
+		$html = $this->card();
+		$this->assertStringContainsString( 'No user (client secret)', $html );
+		$this->assertStringContainsString( 'Client secret: Read only', $html );
+		$this->assertStringContainsString( 'Rotate the OAuth client secret to stop it', $html );
+		$this->assertStringContainsString( '>Disconnect all AI apps<', $html, 'Button stays while a machine token is live.' );
+		$this->assertStringNotContainsString( 'action=' . Mcpwp_OAuth_Apps_Admin::REVOKE_ACTION . '&user_id=0', $html, 'No per-user revoke link for a machine token.' );
+		$this->as_user( self::ALICE );
+		$this->assertStringNotContainsString( 'No user (client secret)', $this->card(), 'Non-admins never see machine tokens.' );
+	}
+
+	public function test_the_success_message_does_not_overclaim_for_client_secret_and_broker(): void {
+		$this->as_user( self::ADMIN );
+		$result = Mcpwp_OAuth_Apps_Admin::process_disconnect_all( array( Mcpwp_OAuth_Apps_Admin::NONCE_FIELD => $this->nonce_for( self::ADMIN ) ) );
+		$this->assertSame( 'updated', $result['type'] );
+		$this->assertStringContainsString( 'client secret still works until you rotate it', $result['message'] );
+		$this->assertStringContainsString( 'managed at the broker', $result['message'] );
+		$this->assertStringContainsString( 'one-link Add to ChatGPT connection', $result['message'] );
+		$this->assertStringNotContainsString( 'ChatGPT links are not affected', $result['message'] );
+	}
+
+	public function test_the_legacy_hint_also_shows_when_the_list_is_not_empty(): void {
+		$this->grant( self::ALICE );
+		$this->as_user( self::ADMIN );
+		$html = $this->card();
+		$this->assertStringContainsString( 'after its next API call or refresh', $html );
+		$this->assertStringNotContainsString( 'next signs in', $html );
+	}
+
+	public function test_uninstall_drops_exactly_the_two_site_epoch_options(): void {
+		foreach ( array( 'mcpwp_oauth_site_epoch', 'mcpwp_oauth_site_user_epochs' ) as $option ) {
+			$this->assertContains( $option, Mcpwp_Uninstaller::APPROVALS_OPTIONS, $option );
+			update_option( $option, array( 'site' => 1 ) );
+		}
+		update_option( 'mcpwp_oauth_site_unrelated', 'keep' );
+		Mcpwp_Uninstaller::drop_approvals_data_for_current_site();
+		$this->assertFalse( get_option( 'mcpwp_oauth_site_epoch', false ) );
+		$this->assertFalse( get_option( 'mcpwp_oauth_site_user_epochs', false ) );
+		$this->assertSame( 'keep', get_option( 'mcpwp_oauth_site_unrelated' ), 'Exact names only, no wildcard.' );
+		foreach ( Mcpwp_Uninstaller::APPROVALS_OPTIONS as $option ) {
+			$this->assertDoesNotMatchRegularExpression( '/[*%?]/', $option );
+		}
+	}
+
+	private function redeem_code_without_issued_at( int $expires ): WP_REST_Response {
+		$code = 'code_' . bin2hex( random_bytes( 8 ) );
+		set_transient( 'mcpwp_oauth_code_' . $code, array( 'client_id' => 'test_client', 'redirect_uri' => 'https://client.example.com/cb', 'code_challenge' => ( new Mcpwp_REST_OAuth() )->compute_pkce_challenge( self::VERIFIER ), 'scope' => 'read write', 'user_id' => self::BOB, 'expires' => $expires ), 60 );
+		return ( new Mcpwp_REST_OAuth() )->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'authorization_code', 'code' => $code, 'client_id' => 'test_client', 'redirect_uri' => 'https://client.example.com/cb', 'code_verifier' => self::VERIFIER ) ) );
+	}
+
+	public function test_an_auth_code_without_issued_at_is_dated_from_its_expiry(): void {
+		// Issued 20 s ago (expires - 60), epoch 10 s ago: revoked.  Epoch 100 s ago: valid.
+		update_option( Mcpwp_OAuth_Revocation::SITE_EPOCH_OPTION, array( 'site' => Mcpwp_OAuth_Revocation::now() - 10 * 1000000 ), false );
+		$this->assertSame( 400, $this->redeem_code_without_issued_at( time() + 40 )->get_status(), 'Issued before the epoch.' );
+		update_option( Mcpwp_OAuth_Revocation::SITE_EPOCH_OPTION, array( 'site' => Mcpwp_OAuth_Revocation::now() - 100 * 1000000 ), false );
+		$this->assertSame( 200, $this->redeem_code_without_issued_at( time() + 40 )->get_status(), 'Issued after the epoch: valid.' );
+	}
+
 	public function test_each_surface_prints_only_its_own_notice(): void {
 		$this->as_user( self::ADMIN );
 		$remember = new ReflectionMethod( 'Mcpwp_OAuth_Apps_Admin', 'remember_notice' );
@@ -378,7 +480,7 @@ final class OAuthConnectCardTest extends TestCase {
 		$this->assertStringContainsString( '<li>Read access lets the app view your site&#039;s content.</li>', $html );
 		$this->assertStringContainsString( '<li>Write access also lets it create, edit and delete content as you. Untick the box above to give read access only.</li>', $html );
 		$this->assertStringContainsString( '<li>It can never do more than your own WordPress account is allowed to do. The access listed above is already capped to what your account may do.</li>', $html );
-		$this->assertStringContainsString( '<li>You can disconnect the app at any time under Users, Profile, Connected AI apps. Administrators can also use MCPWP, Setup, Connect an AI app.</li>', $html );
+		$this->assertStringContainsString( '<li>You can disconnect the app at any time under Users, Profile, Connected AI apps.</li>', $html );
 		$this->assertStringContainsString( 'Never administrator access', $html );
 		$this->assertStringNotContainsString( 'cannot change anything', $html );
 	}
