@@ -508,14 +508,15 @@ final class RefusalReporting1106Test extends TestCase {
 
 	public function test_an_invalid_oauth_shaped_token_carries_the_hint(): void {
 		// An OAuth access token is a bearer credential: presented as one, an
-		// invalid token is refused as an invalid key and carries the hint.
+		// invalid token is refused as invalid_token (reconnect) and carries its hint.
 		foreach ( array( 'mcpwp_at_', 'spai_at_' ) as $prefix ) {
 			Mcpwp_REST_MCP::reset_verdict_memo();
 			$request = new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'Authorization' => 'Bearer ' . $prefix . str_repeat( 'b', 48 ) ), array() );
 			$verdict = ( new Mcpwp_REST_MCP() )->verify_api_key( $request );
 			$this->assertInstanceOf( WP_Error::class, $verdict, $prefix );
-			$this->assertSame( 'invalid_api_key', $verdict->get_error_code(), $prefix );
-			$this->assertSame( Mcpwp_REST_MCP::invalid_api_key_hint(), $verdict->get_error_data()['hint'], $prefix );
+			$this->assertSame( 'invalid_token', $verdict->get_error_code(), $prefix );
+			$this->assertSame( Mcpwp_REST_MCP::oauth_reconnect_hint(), $verdict->get_error_data()['hint'], $prefix );
+			$this->assertSame( Mcpwp_Error_Hints::get_hint_for_code( 'invalid_token' )['hint'], $verdict->get_error_data()['hint'], $prefix );
 		}
 	}
 

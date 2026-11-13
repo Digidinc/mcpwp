@@ -125,13 +125,27 @@ class Mcpwp_OAuth_Well_Known {
 			return $response;
 		}
 
-		if ( ! self::is_legacy_oauth_enabled() && ! self::is_broker_enrolled() ) {
+		// RFC 6750 §3.1: an expired/revoked/unknown OAuth token is answered
+		// with error="invalid_token", so an MCP client re-runs discovery and
+		// auth instead of retrying. Same challenge for every cause.
+		$data          = method_exists( $response, 'get_data' ) ? $response->get_data() : null;
+		$invalid_token = is_array( $data ) && isset( $data['code'] ) && 'invalid_token' === $data['code'];
+
+		$discoverable = self::is_legacy_oauth_enabled() || self::is_broker_enrolled();
+		if ( ! $discoverable && ! $invalid_token ) {
 			return $response;
 		}
 
 		// D12: point at the RFC 9728 path-insertion URL for the MCP resource —
 		// the same URL a strictly compliant client would derive by itself.
-		$response->header( 'WWW-Authenticate', 'Bearer resource_metadata="' . self::get_protected_resource_metadata_url() . '"' );
+		$params = array();
+		if ( $invalid_token ) {
+			$params[] = 'error="invalid_token"';
+		}
+		if ( $discoverable ) {
+			$params[] = 'resource_metadata="' . self::get_protected_resource_metadata_url() . '"';
+		}
+		$response->header( 'WWW-Authenticate', 'Bearer ' . implode( ', ', $params ) );
 
 		return $response;
 	}

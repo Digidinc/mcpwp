@@ -4547,14 +4547,7 @@ trait Mcpwp_Api_Auth {
 	protected function authenticate_oauth_access_token( $token, $request, $metered = true ) {
 		$oauth_settings = $this->get_oauth_settings();
 		if ( empty( $oauth_settings['oauth_enabled'] ) ) {
-			return new WP_Error(
-				'invalid_api_key',
-				__( 'Invalid API key.', 'mcpwp' ),
-				array(
-					'status' => 401,
-					'hint'   => self::invalid_api_key_hint(),
-				)
-			);
+			return self::oauth_reconnect_error();
 		}
 
 		// #1101 PR-3b: access tokens live in the hashed token table.  A
@@ -4585,14 +4578,7 @@ trait Mcpwp_Api_Auth {
 
 		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
 			$this->log_auth_failure( $request );
-			return new WP_Error(
-				'invalid_api_key',
-				__( 'Invalid API key.', 'mcpwp' ),
-				array(
-					'status' => 401,
-					'hint'   => self::invalid_api_key_hint(),
-				)
-			);
+			return self::oauth_reconnect_error();
 		}
 
 		// RFC 8707 audience binding (PR-2 D2).  Every token issued since PR-2
@@ -4619,11 +4605,7 @@ trait Mcpwp_Api_Auth {
 		// the moment it was issued.
 		if ( Mcpwp_OAuth_Revocation::is_revoked( $record ) ) {
 			$this->log_auth_failure( $request );
-			return new WP_Error(
-				'invalid_token',
-				__( 'This access token has been revoked.', 'mcpwp' ),
-				array( 'status' => 401 )
-			);
+			return self::oauth_reconnect_error();
 		}
 
 		// PR-2 P0: a token minted for a user ACTS AS that user.  So the user
@@ -6052,6 +6034,43 @@ trait Mcpwp_Api_Auth {
 		}
 
 		return 'read';
+	}
+
+	/**
+	 * The one answer for an OAuth access token that is not valid: expired,
+	 * unknown, never issued, malformed, revoked (app removed, user revoke,
+	 * revoked refresh family, /oauth/revoke, Disconnect all), covered by a
+	 * revocation epoch, or local OAuth switched off. Identical for every
+	 * cause, so it is no oracle for whether a string was once a real token.
+	 * It never carries the token. The WWW-Authenticate challenge
+	 * (error="invalid_token" plus resource_metadata) is added to the 401 by
+	 * Mcpwp_OAuth_Well_Known::add_www_authenticate_header().
+	 *
+	 * @return WP_Error
+	 */
+	public static function oauth_reconnect_error() {
+		return new WP_Error(
+			'invalid_token',
+			self::oauth_reconnect_message(),
+			array(
+				'status' => 401,
+				'hint'   => self::oauth_reconnect_hint(),
+			)
+		);
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function oauth_reconnect_message() {
+		return __( 'This connection has expired or was revoked. Reconnect (sign in again) to continue.', 'mcpwp' );
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function oauth_reconnect_hint() {
+		return 'The access token is expired, revoked, or not recognised. Try the refresh token, and if that is refused, reconnect: remove and re-add the connector, or sign in again.';
 	}
 
 	/**

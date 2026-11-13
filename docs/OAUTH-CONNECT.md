@@ -107,8 +107,8 @@ The errors below are the ones this plugin emits. OAuth errors are JSON `{"error"
 | `400 invalid_request`, "The consent form was altered or has expired." | The consent page sat open too long, or the form was changed. | Start the connection again. |
 | `access_denied` in the redirect | The user pressed Deny. | Approve, if intended. |
 | Consent page: "Your WordPress role can't connect AI apps on this site; ask an administrator." | The signed-in user is below the minimum role (Editor by default). | An administrator signs in, or changes the minimum role on the Setup page. |
-| `401`, `invalid_api_key` "Invalid API key." on a Bearer call | The access token is unknown, expired (default 1 hour), or **revoked** (app removed, user revoke, revoked refresh family, `/oauth/revoke`), or local OAuth is off. All of these look the same on the wire. | Try the refresh token; if that is refused, reconnect. |
-| `401`, `invalid_token`, "This access token has been revoked." | Rarer: the token row is still active but a revocation epoch covers it: its client was revoked, its user was revoked, or its **user was deleted** (deleting a user writes an epoch, and that check runs before the live-user check). | Reconnect (as an existing user if the old one was deleted). |
+| `401`, `invalid_token`, "This connection has expired or was revoked. Reconnect (sign in again) to continue." on a Bearer call, with `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="..."` | The access token (an `mcpwp_at_` bearer) is unknown, expired (default 1 hour), or **revoked** (app removed, user revoke, revoked refresh family, `/oauth/revoke`, Disconnect all, a revocation epoch covering its client, user or the whole site, a deleted user), or local OAuth is off. All of these answer identically on purpose, so the response says nothing about whether a string was ever a real token. | Try the refresh token; if that is refused, reconnect (remove and re-add the connector, or sign in again). MCP clients re-run discovery from the challenge. |
+| `401`, `invalid_api_key` "Invalid API key." | A wrong or revoked **API key**, or a token that is not OAuth-shaped (no `mcpwp_at_` prefix). This is not an OAuth reconnect problem. | Create or paste a valid API key under MCPWP -> Setup. |
 | `401`, `invalid_token`, "This access token was issued for a different resource." | Token minted for another site address. | Reconnect. |
 | `401`, `invalid_token`, "The WordPress user who approved this connection can no longer connect AI apps on this site." | The user still exists but no longer holds the minimum role (a *deleted* user gets "This access token has been revoked." above instead). | Restore the role, or connect as someone else. |
 | `401 missing_api_key` when sending an OAuth token | Access tokens are accepted only in `Authorization: Bearer`, never in `X-API-Key` or `?api_key=`. | Move it to the Bearer header. |
@@ -129,7 +129,7 @@ on/off switch is under **MCPWP → Setup → Advanced**; saving it stores an exp
 off, the authorization-server metadata is not served (404), `/oauth/*` REST routes answer `501
 server_error`, the front-channel authorize endpoint is not served (the pretty `/mcpwp-oauth/authorize`
 URL answers 404; `/?mcpwp_oauth=authorize` falls through to the normal page), and an access token is
-not accepted (`401 invalid_api_key`). The protected-resource metadata and the `WWW-Authenticate` header
+not accepted (the same `401 invalid_token` "reconnect" answer as an expired one). The protected-resource metadata and the `WWW-Authenticate` header
 are still served while the site is enrolled with the mumcp.com broker (they then name the broker); on a
 site that is neither enrolled nor local-OAuth-on they are not sent. Turning it off does not revoke anything, so a token that has not
 expired works again if OAuth is switched back on.
@@ -233,11 +233,12 @@ A token stops working at once when any of these happens:
   the loser and keeps the winner's tokens.
 
 What the client sees afterwards: a token revoked this way (app removed, user revoke, revoked refresh
-family, `/oauth/revoke`) has its row marked revoked, and the next call with it answers
-`401 invalid_api_key` ("Invalid API key.") like an unknown or expired token. The `invalid_token`
-("This access token has been revoked.") answer is only reached when the token's row is still active
-but a revocation epoch (its client or user was revoked, or its user was deleted, at or after it was issued) covers it. Either way the
-fix is to refresh, or reconnect if refresh fails.
+family, `/oauth/revoke`, Disconnect all) is answered `401 invalid_token` ("This connection has expired or
+was revoked. Reconnect (sign in again) to continue.") with an RFC 6750 `WWW-Authenticate: Bearer
+error="invalid_token"` challenge, exactly like an expired, unknown or malformed `mcpwp_at_` token. Whether the row is
+marked revoked or a revocation epoch covers it, the answer is the same, so it never tells a caller which
+it was. The fix is to refresh, or reconnect if refresh fails. A wrong API key, or a bearer that is not an
+access token, stays `401 invalid_api_key`.
 
 `/oauth/revoke` is rate-limited per address (`429`, checked first). It answers `400 invalid_request`
 without `token` or `client_id`, `401 invalid_client` for an unknown client (or a wrong secret), `200`

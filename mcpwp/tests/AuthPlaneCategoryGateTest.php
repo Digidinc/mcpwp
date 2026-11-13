@@ -139,7 +139,7 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 		);
 
 		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'invalid_api_key', $result->get_error_code() );
+		$this->assertSame( 'invalid_token', $result->get_error_code() );
 		$this->assertSame( 401, $result->get_error_data()['status'] );
 	}
 

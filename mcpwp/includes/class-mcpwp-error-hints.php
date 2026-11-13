@@ -136,6 +136,10 @@ class Mcpwp_Error_Hints {
 				'hint'  => 'The key is not valid: it may be mistyped, revoked, or a retired first-activation key. Create a new key under MCPWP -> Setup.',
 				'guide' => '',
 			),
+			'invalid_token'       => array(
+				'hint'  => 'The access token is expired, revoked, or not recognised. Try the refresh token, and if that is refused, reconnect: remove and re-add the connector, or sign in again.',
+				'guide' => '',
+			),
 			'api_not_configured'  => array(
 				'hint'  => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Setup to generate an API key.',
 				'guide' => '',
