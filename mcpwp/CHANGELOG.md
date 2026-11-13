@@ -5,6 +5,48 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.11](https://github.com/Digidinc/mcpwp/compare/v3.14.10...v3.14.11) (2026-11-13)
+
+
+### ⚠ BREAKING CHANGES
+
+* **auth:** close the scope-only route class — admin-scope stop-gaps now, a route→capability map for user-run principals ([#1103](https://github.com/Digidinc/mcpwp/issues/1103))
+
+### Features
+
+* **oauth:** connected AI apps — persistent hashed tokens, client list and per-user revoke ([#1101](https://github.com/Digidinc/mcpwp/issues/1101)) ([#1117](https://github.com/Digidinc/mcpwp/issues/1117)) ([25d4683](https://github.com/Digidinc/mcpwp/commit/25d468357eef7e369dde4d1df7de7132bc6b637b))
+* **oauth:** the site is its own OAuth authorization server — DCR, PKCE, WP-login consent, run-as-user, aud binding, default-on discovery ([#1099](https://github.com/Digidinc/mcpwp/issues/1099)) ([1357c5a](https://github.com/Digidinc/mcpwp/commit/1357c5a2e2ff78f26510a3d93d46482b1f9b13a9))
+* **setup:** "Add to ChatGPT" — one link, no account, never admin ([#1090](https://github.com/Digidinc/mcpwp/issues/1090)) ([466cc9f](https://github.com/Digidinc/mcpwp/commit/466cc9f3ba8eef343c9d3bf09eed80f3cb69c054))
+
+
+### Bug Fixes
+
+* **audit:** complete WooCommerce write logging ([#1126](https://github.com/Digidinc/mcpwp/issues/1126)) ([2d1c80a](https://github.com/Digidinc/mcpwp/commit/2d1c80a2ec09b6eba69615d2d8856de446790c25))
+* **auth:** a revoked primary key stays revoked ([#1097](https://github.com/Digidinc/mcpwp/issues/1097)) ([b7b7f7b](https://github.com/Digidinc/mcpwp/commit/b7b7f7ba711e70730e6dd9424015c5a466a528a7))
+* **auth:** capability map follow-ups from the [#1103](https://github.com/Digidinc/mcpwp/issues/1103) gates ([#1108](https://github.com/Digidinc/mcpwp/issues/1108)) ([#1165](https://github.com/Digidinc/mcpwp/issues/1165)) ([df3140d](https://github.com/Digidinc/mcpwp/commit/df3140d300d8e7a44456b8e7425ba0658366280c))
+* **auth:** close the scope-only route class — admin-scope stop-gaps now, a route→capability map for user-run principals ([#1103](https://github.com/Digidinc/mcpwp/issues/1103)) ([2baccce](https://github.com/Digidinc/mcpwp/commit/2baccceea15c2341a71005e02eaf8fbfac28f9bf))
+* **auth:** one compare-and-swap write path for the scoped key store; truthful busy answers; prune and document the last-used map ([#1096](https://github.com/Digidinc/mcpwp/issues/1096)) ([#1166](https://github.com/Digidinc/mcpwp/issues/1166)) ([5b0444d](https://github.com/Digidinc/mcpwp/commit/5b0444da77694858ba507540fc75904d29436587))
+* **auth:** per-post map covers every post reference; read-only refs need read_post ([#1101](https://github.com/Digidinc/mcpwp/issues/1101)) ([#1118](https://github.com/Digidinc/mcpwp/issues/1118)) ([1fcbd88](https://github.com/Digidinc/mcpwp/commit/1fcbd88619dc564bfc660a93afad9ef498a81d28))
+* **auth:** post-meta id-meta values are post refs; key lowercased, handler's own decoder ([#1121](https://github.com/Digidinc/mcpwp/issues/1121)) ([#1162](https://github.com/Digidinc/mcpwp/issues/1162)) ([9b7626e](https://github.com/Digidinc/mcpwp/commit/9b7626ed3b8c2be99c93fff8c457a3491a5c5bdb))
+* **auth:** say what is true when a call is refused, and list only what a key can call ([#1106](https://github.com/Digidinc/mcpwp/issues/1106)) ([#1150](https://github.com/Digidinc/mcpwp/issues/1150)) ([3019fbc](https://github.com/Digidinc/mcpwp/commit/3019fbc23008255722d24b92d2b8b0a1a326675e))
+* **auth:** the gate reads lists through get_param(), matching the handlers ([#1110](https://github.com/Digidinc/mcpwp/issues/1110)) ([#1111](https://github.com/Digidinc/mcpwp/issues/1111)) ([7228d0e](https://github.com/Digidinc/mcpwp/commit/7228d0e81b870c6f57d98877be3e0261fc1eae5c))
+* **content:** read back created pages by ID ([#1127](https://github.com/Digidinc/mcpwp/issues/1127)) ([0fd85c3](https://github.com/Digidinc/mcpwp/commit/0fd85c31b8d7cd0a13de339a755509b447c21d8d)), closes [#1039](https://github.com/Digidinc/mcpwp/issues/1039)
+* **elementor:** honor theme template dry runs ([#1130](https://github.com/Digidinc/mcpwp/issues/1130)) ([7376d14](https://github.com/Digidinc/mcpwp/commit/7376d14062593a7df1d07dee0d0cd7243684d00b))
+* **elementor:** repair Custom Code conditions ([#1131](https://github.com/Digidinc/mcpwp/issues/1131)) ([fb2662e](https://github.com/Digidinc/mcpwp/commit/fb2662e86af5975465f41f62ff9d8e448d879d2b))
+* **elementor:** verify underscore widget renders ([#1129](https://github.com/Digidinc/mcpwp/issues/1129)) ([31fb48d](https://github.com/Digidinc/mcpwp/commit/31fb48d11db26afdf51adad9b26a0b58864a0a13))
+* **graph:** single-segment link permalink check; filter resolver fallback to covered types ([#1137](https://github.com/Digidinc/mcpwp/issues/1137)) ([e3079f1](https://github.com/Digidinc/mcpwp/commit/e3079f18bed1f494a3cdf74bf85d199019924422))
+* **guardrails:** copy-key segment matching; per-representation advisory tracking ([#996](https://github.com/Digidinc/mcpwp/issues/996)) ([#1158](https://github.com/Digidinc/mcpwp/issues/1158)) ([f8187d6](https://github.com/Digidinc/mcpwp/commit/f8187d623b19a2b1864ca0c4c1758af771fdf13c))
+* **integrations:** preserve saved provider fields ([#1128](https://github.com/Digidinc/mcpwp/issues/1128)) ([6f2710a](https://github.com/Digidinc/mcpwp/commit/6f2710ae16c5d72075ae3d1b26ce4bd637cfa544))
+* **menus:** share menu item type parsing ([#1133](https://github.com/Digidinc/mcpwp/issues/1133)) ([e8554ad](https://github.com/Digidinc/mcpwp/commit/e8554adaf2312bf44bcb2bce7e591334c0994f44))
+* **oauth:** bind refresh tokens to their client, revoke per client and user, RFC 7009 ([#1101](https://github.com/Digidinc/mcpwp/issues/1101)) ([#1113](https://github.com/Digidinc/mcpwp/issues/1113)) ([4960484](https://github.com/Digidinc/mcpwp/commit/49604849c4feee51fa9ed9d722094167645cde8a))
+* **oauth:** harden the self-hosted OAuth server (scope cap, registration limits, bearer-only tokens, PKCE shape, code replay, uninstall) ([#1149](https://github.com/Digidinc/mcpwp/issues/1149)) ([a9759e2](https://github.com/Digidinc/mcpwp/commit/a9759e2f86b7300fb27b1c097687ce7e6bfb9dc3))
+* **oauth:** regression tests for the [#1115](https://github.com/Digidinc/mcpwp/issues/1115) follow-ups; derive a missing refresh family from the token ([#1164](https://github.com/Digidinc/mcpwp/issues/1164)) ([6b2af94](https://github.com/Digidinc/mcpwp/commit/6b2af9421f574e0a6f6950e6f95505d940dc3742))
+* **proxy:** pass the server's initialize instructions and protocol version through both proxies ([#1074](https://github.com/Digidinc/mcpwp/issues/1074)) ([#1157](https://github.com/Digidinc/mcpwp/issues/1157)) ([4523d81](https://github.com/Digidinc/mcpwp/commit/4523d812fdc6a282c5aaf26547658f3eb9744b55))
+* **release:** attach only the Free and Freemius ZIPs; PHP &lt; 8.2 test guard; checklist for working Actions ([#1081](https://github.com/Digidinc/mcpwp/issues/1081)) ([16b0af6](https://github.com/Digidinc/mcpwp/commit/16b0af6629b58de59343d7196121e46ac931712c))
+* **rest:** return errors with failure status ([#1125](https://github.com/Digidinc/mcpwp/issues/1125)) ([4a1352d](https://github.com/Digidinc/mcpwp/commit/4a1352d908857f4ba30854cc89728ce130b912f7))
+* **routing:** remove shadowed REST handlers ([#1132](https://github.com/Digidinc/mcpwp/issues/1132)) ([5034cd1](https://github.com/Digidinc/mcpwp/commit/5034cd16d83f7620faa5c830d5c56bcc521c29a4)), closes [#1107](https://github.com/Digidinc/mcpwp/issues/1107)
+* **uninstall:** drop the older tables and options on every build ([#995](https://github.com/Digidinc/mcpwp/issues/995)) ([#1159](https://github.com/Digidinc/mcpwp/issues/1159)) ([099122d](https://github.com/Digidinc/mcpwp/commit/099122d86ff79deb9fdd244ad2b3ed5a52aa87df))
+
 ## [3.14.10](https://github.com/Digidinc/mcpwp/compare/v3.14.9...v3.14.10) (2026-09-30)
 
 
