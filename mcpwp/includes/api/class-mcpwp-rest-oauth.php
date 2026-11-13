@@ -879,9 +879,12 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->oauth_error_response( 'invalid_grant', 'Refresh token has been revoked.', 400 );
 		}
 
-		// #1101: a family is one grant's chain of refresh tokens; a migrated
-		// pre-release record starts one now.
-		$family_id = '' !== (string) ( $record['family_id'] ?? '' ) ? (string) $record['family_id'] : Mcpwp_OAuth_Revocation::new_family_id();
+		// #1101: a family is one grant's chain of refresh tokens.  A record
+		// without one (#1115) takes the family derived from the token itself,
+		// never a random one: concurrent refreshes of the same token must
+		// agree on it, so the claim's tombstone names the chain that really
+		// received tokens.
+		$family_id = '' !== (string) ( $record['family_id'] ?? '' ) ? (string) $record['family_id'] : Mcpwp_OAuth_Token_Store::legacy_family_id( $refresh_token );
 
 		// P0-B parity with the authorization_code path: resolve the stored scope
 		// list with parse_oauth_scope_string(), which falls back to array( 'read' )
