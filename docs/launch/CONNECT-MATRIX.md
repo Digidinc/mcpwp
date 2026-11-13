@@ -82,7 +82,7 @@ Protocol round-trip is ~3 seconds. The "<10 min first tool call" claim holds: th
 
 | Test | HTTP status | Code | Message |
 |------|-------------|------|---------|
-| Bad key (`mcpwp_thisisafakebadkey123`) | **401** | `invalid_api_key` | "Invalid API key. Check for typos or whitespace. Keys start with mcpwp_." |
+| Bad key (`mcpwp_thisisafakebadkey123`) | **401** | `invalid_api_key` | "Invalid API key." with the hint "The key is not valid: it may be mistyped, revoked, or a retired first-activation key. Create a new key under MCPWP -> Setup." |
 | No key (header absent) | **401** | `missing_api_key` | "API key is required. Include your API key in the X-API-Key header or Authorization: Bearer header." |
 
 RESULT: PASS — both gate correctly at 401, error codes and hints are user-actionable.

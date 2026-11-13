@@ -178,6 +178,42 @@ Response:
 }
 ```
 
+#### A refused call is a tool result, not an HTTP error (#936)
+
+A `tools/call` the key's scope does not cover — and the same call wrapped in
+`mcpwp_call` — comes back as an ordinary `200` JSON-RPC response carrying a tool
+result with `isError: true`, so the model can read why. Programmatic clients read
+`result.structuredContent.error`: `code` is `insufficient_scope`, `status` is
+`403`, and `required_scope`, `granted_scopes`, `message` and `hint` say what is
+missing. In a JSON-RPC batch each call is judged on its own: the allowed calls
+run and the refused one reports its error. REST routes keep their HTTP `403`.
+
+For an action that needs admin scope, a key whose role is not Admin (editor,
+author, designer, custom) is told that it needs an Admin-role key with the admin
+scope, created by the site owner under MCPWP -> Setup; those roles are capped at
+read and write and can never hold admin scope. Where the action is also outside
+the key's tool categories, the category is named too.
+
+`tools/list`, `mcpwp_find_tools` and `/introspect` list only the tools the
+caller can call: the key's role and categories, the scope the call needs, and for
+a principal that acts as a WordPress user, the capability the route requires.
+
+Notes on what changed from earlier releases: a malformed `mcpwp_call` wrapper from a
+key without the scope it is classified at still gets `insufficient_scope`, ahead of
+`invalid_arguments`, as before (now as an in-protocol result, not HTTP 403). A refusal
+is HTTP `200` with `isError` for every protocol version, and a JSON-RPC batch is
+answered per member instead of one whole-body 403. An unsupported
+`MCP-Protocol-Version` header answers HTTP 400 even on a call that would have been
+refused for scope (it was 403).
+
+Known gaps in the listing, unchanged from before: a read-scope admin-role key still
+lists `wp_describe_image` and `wp_text_to_speech` (named read, route needs write);
+a Pro-enabled key lists `wp_get_elementor_globals`, which answers `pro_required`; and
+an admin key lists `wp_create_translation`/`wp_get_translations`, which answer
+`rest_no_route` when no translation plugin is active. The `initialize` instructions
+are not filtered by scope, and for an admin-role read or read+write key the scope
+hint still suggests `wp_create_api_key`, which needs admin scope.
+
 ### 4. Ping
 
 ```json

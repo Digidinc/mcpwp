@@ -152,6 +152,34 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * The capability a user-run principal lacks for a route, or '' when it
+	 * holds every capability the route's row requires. The single decision
+	 * check_user_run_capability() makes on a dispatch and the tool listing
+	 * (principal_may_call_tool()) asks to hide what a call would refuse.
+	 *
+	 * A row may require several capabilities at once ('a+b'); every one
+	 * must be held. Used only where one action spans two post types
+	 * (DELETE /drafts/delete-all: others' posts AND others' pages).
+	 *
+	 * @param string $method HTTP method.
+	 * @param string $route  Route.
+	 * @return string The required capability string when one is missing; ''.
+	 */
+	protected function user_run_capability_shortfall( $method, $route ) {
+		if ( ! class_exists( 'Mcpwp_Route_Capability_Map' ) ) {
+			return 'manage_options';
+		}
+		$capability = Mcpwp_Route_Capability_Map::required_capability( $method, $route );
+		foreach ( '' === $capability ? array() : explode( '+', $capability ) as $one ) {
+			if ( ! current_user_can( $one ) ) {
+				return $capability;
+			}
+		}
+
+		return '';
+	}
+
+	/**
 	 * Enforce the route's WordPress capability on a user-run principal.
 	 *
 	 * Unknown routes and undecided (TODO) rows are admin-only until decided
@@ -173,20 +201,15 @@ trait Mcpwp_Api_Auth {
 		$method     = method_exists( $request, 'get_method' ) ? (string) $request->get_method() : 'GET';
 		$route      = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
 		$capability = Mcpwp_Route_Capability_Map::required_capability( $method, $route );
-		// A row may require several capabilities at once ('a+b'); every one
-		// must be held. Used only where one action spans two post types
-		// (DELETE /drafts/delete-all: others' posts AND others' pages).
-		foreach ( '' === $capability ? array() : explode( '+', $capability ) as $one ) {
-			if ( ! current_user_can( $one ) ) {
-				return new WP_Error(
-					'rest_forbidden_capability',
-					__( 'Your WordPress account is not allowed to do this.', 'mcpwp' ),
-					array(
-						'status'              => 403,
-						'required_capability' => $capability,
-					)
-				);
-			}
+		if ( '' !== $this->user_run_capability_shortfall( $method, $route ) ) {
+			return new WP_Error(
+				'rest_forbidden_capability',
+				__( 'Your WordPress account is not allowed to do this.', 'mcpwp' ),
+				array(
+					'status'              => 403,
+					'required_capability' => $capability,
+				)
+			);
 		}
 
 		return true;
@@ -1318,7 +1341,7 @@ trait Mcpwp_Api_Auth {
 				__( 'API key is required.', 'mcpwp' ),
 				array(
 					'status' => 401,
-					'hint'   => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Settings, or call wp_create_api_key if you have admin access.',
+					'hint'   => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Setup, or call wp_create_api_key if you have admin access.',
 				)
 			);
 		}
@@ -1390,7 +1413,7 @@ trait Mcpwp_Api_Auth {
 					__( 'API key not configured. Please visit the MCPWP settings.', 'mcpwp' ),
 					array(
 						'status' => 500,
-						'hint'   => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Settings to generate an API key.',
+						'hint'   => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Setup to generate an API key.',
 					)
 				);
 			}
@@ -1402,7 +1425,7 @@ trait Mcpwp_Api_Auth {
 				__( 'Invalid API key.', 'mcpwp' ),
 				array(
 					'status' => 401,
-					'hint'   => 'The provided API key is not valid. Check for typos or whitespace. Keys start with "mcpwp_". Generate a new key in WP Admin > MCPWP > Settings.',
+					'hint'   => self::invalid_api_key_hint(),
 				)
 			);
 		}
@@ -1421,26 +1444,8 @@ trait Mcpwp_Api_Auth {
 
 		$this->mcpwp_audit_key_id = isset( $matched_key['id'] ) ? (string) $matched_key['id'] : '';
 		$required_scope = $this->get_required_scope_for_request( $request );
-		if ( ! $this->key_has_scope( $matched_key, $required_scope ) ) {
-			$granted = isset( $matched_key['scopes'] ) ? $matched_key['scopes'] : array();
-			return new WP_Error(
-				'insufficient_scope',
-				sprintf(
-					/* translators: %s: scope name */
-					__( 'API key lacks required scope: %s', 'mcpwp' ),
-					$required_scope
-				),
-				array(
-					'status'         => 403,
-					'required_scope' => $required_scope,
-					'granted_scopes' => $granted,
-					'hint'           => sprintf(
-						'This API key has scopes [%s] but needs "%s". Request a key with the required scope from the site admin, or use wp_create_api_key to create one with appropriate scopes.',
-						implode( ', ', $granted ),
-						$required_scope
-					),
-				)
-			);
+		if ( ! $this->key_has_scope( $matched_key, $required_scope ) && ! $this->mcp_scope_refusal_is_per_call( $request, $matched_key ) ) {
+			return $this->build_insufficient_scope_error( $matched_key, $required_scope, $this->route_category_for_refusal( $request ) );
 		}
 
 		// Store the matched key for downstream use (MCP tool filtering, etc.).
@@ -4268,22 +4273,17 @@ trait Mcpwp_Api_Auth {
 			return new WP_Error(
 				'invalid_api_key',
 				__( 'Invalid API key.', 'mcpwp' ),
-				array( 'status' => 401 )
+				array(
+					'status' => 401,
+					'hint'   => self::invalid_api_key_hint(),
+				)
 			);
 		}
 
 		$this->mcpwp_audit_key_id = isset( $matched_key['id'] ) ? (string) $matched_key['id'] : '';
 		$required_scope = $this->get_required_scope_for_request( $request );
 		if ( ! $this->key_has_scope( $matched_key, $required_scope ) ) {
-			return new WP_Error(
-				'insufficient_scope',
-				sprintf(
-					/* translators: %s: scope name */
-					__( 'API key lacks required scope: %s', 'mcpwp' ),
-					$required_scope
-				),
-				array( 'status' => 403 )
-			);
+			return $this->build_insufficient_scope_error( $matched_key, $required_scope, $this->route_category_for_refusal( $request ) );
 		}
 
 		// Persist the matched key so downstream identity/role checks (self-approval,
@@ -4550,7 +4550,10 @@ trait Mcpwp_Api_Auth {
 			return new WP_Error(
 				'invalid_api_key',
 				__( 'Invalid API key.', 'mcpwp' ),
-				array( 'status' => 401 )
+				array(
+					'status' => 401,
+					'hint'   => self::invalid_api_key_hint(),
+				)
 			);
 		}
 
@@ -4585,7 +4588,10 @@ trait Mcpwp_Api_Auth {
 			return new WP_Error(
 				'invalid_api_key',
 				__( 'Invalid API key.', 'mcpwp' ),
-				array( 'status' => 401 )
+				array(
+					'status' => 401,
+					'hint'   => self::invalid_api_key_hint(),
+				)
 			);
 		}
 
@@ -5989,38 +5995,7 @@ trait Mcpwp_Api_Auth {
 				continue;
 			}
 
-			$method = isset( $message['method'] ) ? (string) $message['method'] : '';
-			$scope  = 'read';
-
-			if ( 'tools/call' === $method ) {
-				// #907 BLOCK-1: classify the EFFECTIVE tool — mcpwp_call
-				// unwrapped to the tool it names — never the raw outer
-				// name, or a wrapped admin/write tool is misclassified as
-				// whatever "mcpwp_call" itself would require (nothing).
-				// #1016: pass the raw value through, unconverted — a
-				// premature (string) cast turns an array/object `name`
-				// into the literal string "Array" (a PHP "Array to string
-				// conversion" warning, not caught here) instead of the ''
-				// effective_mcp_tool_call() itself already normalizes a
-				// non-string name to.
-				$outer_name = isset( $message['params']['name'] ) ? $message['params']['name'] : '';
-				$outer_args = isset( $message['params']['arguments'] ) && is_array( $message['params']['arguments'] ) ? $message['params']['arguments'] : array();
-				$effective  = $this->effective_mcp_tool_call( $outer_name, $outer_args );
-				$tool_name  = $effective['name'];
-				$scope = $this->get_required_scope_for_tool_name( $tool_name );
-
-				// The same rule the REST route table applies: a wide
-				// find/replace is admin whichever door it comes through —
-				// including wrapped in mcpwp_call, so this reads the
-				// EFFECTIVE arguments, not the outer wrapper's.
-				if ( 'wp_bulk_find_replace' === $tool_name && class_exists( 'Mcpwp_REST_Elementor' ) ) {
-					if ( Mcpwp_REST_Elementor::find_replace_is_wide( $effective['arguments'] ) ) {
-						$scope = 'admin';
-					}
-				}
-			} elseif ( ! in_array( $method, array( 'initialize', 'tools/list', 'resources/list', 'resources/read', 'ping', 'notifications/initialized' ), true ) ) {
-				$scope = 'write';
-			}
+			$scope = $this->get_required_scope_for_mcp_message( $message );
 
 			if ( $this->scope_rank( $scope ) > $this->scope_rank( $highest ) ) {
 				$highest = $scope;
@@ -6028,6 +6003,261 @@ trait Mcpwp_Api_Auth {
 		}
 
 		return $highest;
+	}
+
+	/**
+	 * Scope one JSON-RPC message needs. The single derivation: the outer
+	 * request check (get_required_scope_for_mcp_request()) and the per-call
+	 * check inside /mcp (tool_call_scope_refusal()) both read it, so the
+	 * two cannot disagree about what a call requires.
+	 *
+	 * @param array $message JSON-RPC message.
+	 * @return string Scope.
+	 */
+	protected function get_required_scope_for_mcp_message( array $message ) {
+		$method = isset( $message['method'] ) ? (string) $message['method'] : '';
+
+		if ( 'tools/call' === $method ) {
+			// #907 BLOCK-1: classify the EFFECTIVE tool — mcpwp_call
+			// unwrapped to the tool it names — never the raw outer
+			// name, or a wrapped admin/write tool is misclassified as
+			// whatever "mcpwp_call" itself would require (nothing).
+			// #1016: pass the raw value through, unconverted — a
+			// premature (string) cast turns an array/object `name`
+			// into the literal string "Array" (a PHP "Array to string
+			// conversion" warning, not caught here) instead of the ''
+			// effective_mcp_tool_call() itself already normalizes a
+			// non-string name to.
+			$outer_name = isset( $message['params']['name'] ) ? $message['params']['name'] : '';
+			$outer_args = isset( $message['params']['arguments'] ) && is_array( $message['params']['arguments'] ) ? $message['params']['arguments'] : array();
+			$effective  = $this->effective_mcp_tool_call( $outer_name, $outer_args );
+			$tool_name  = $effective['name'];
+			$scope      = $this->get_required_scope_for_tool_name( $tool_name );
+
+			// The same rule the REST route table applies: a wide
+			// find/replace is admin whichever door it comes through —
+			// including wrapped in mcpwp_call, so this reads the
+			// EFFECTIVE arguments, not the outer wrapper's.
+			if ( 'wp_bulk_find_replace' === $tool_name && class_exists( 'Mcpwp_REST_Elementor' ) ) {
+				if ( Mcpwp_REST_Elementor::find_replace_is_wide( $effective['arguments'] ) ) {
+					$scope = 'admin';
+				}
+			}
+
+			return $scope;
+		}
+
+		if ( ! in_array( $method, array( 'initialize', 'tools/list', 'resources/list', 'resources/read', 'ping', 'notifications/initialized' ), true ) ) {
+			return 'write';
+		}
+
+		return 'read';
+	}
+
+	/**
+	 * The hint every invalid-key 401 carries. One text for every cause
+	 * (mistyped, revoked, retired first-activation key, never valid), so the
+	 * answer is never an oracle for whether a string was once a real key.
+	 * Mcpwp_Error_Hints holds the same text for paths that add a hint late.
+	 *
+	 * @return string
+	 */
+	public static function invalid_api_key_hint() {
+		return 'The key is not valid: it may be mistyped, revoked, or a retired first-activation key. Create a new key under MCPWP -> Setup.';
+	}
+
+	/**
+	 * Whether an insufficient-scope refusal on this request is reported
+	 * per call, inside /mcp, instead of as one HTTP 403 for the whole body.
+	 *
+	 * True only for a POST /mcp body whose scope shortfall is confined to
+	 * tools/call messages: every other message in it (initialize, tools/list,
+	 * resources/*, prompts/*, unknown methods) must already be within the
+	 * key's scope. Each tools/call is then judged on its own by
+	 * tool_call_scope_refusal() before it dispatches, with the same scope
+	 * derivation (get_required_scope_for_mcp_message()), so no call that was
+	 * refused is allowed: the refusal moves from the envelope to the call.
+	 * The result is an isError tools/call result (#936) the model can read,
+	 * and the allowed calls of a JSON-RPC batch still run.
+	 *
+	 * @param WP_REST_Request $request    Request.
+	 * @param array           $key_record Matched key record.
+	 * @return bool
+	 */
+	protected function mcp_scope_refusal_is_per_call( $request, $key_record ) {
+		$route = $this->normalize_route_for_authorization( method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '' );
+		if ( 0 !== strpos( $route, '/mcpwp/v1/mcp' ) ) {
+			return false;
+		}
+		$http_method = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'POST';
+		if ( 'POST' !== $http_method ) {
+			return false;
+		}
+		$payload = method_exists( $request, 'get_json_params' ) ? $request->get_json_params() : null;
+		if ( empty( $payload ) || ! is_array( $payload ) ) {
+			return false;
+		}
+
+		$messages  = isset( $payload[0] ) ? $payload : array( $payload );
+		$any_calls = false;
+		foreach ( $messages as $message ) {
+			if ( ! is_array( $message ) ) {
+				continue;
+			}
+			if ( isset( $message['method'] ) && 'tools/call' === $message['method'] ) {
+				$any_calls = true;
+				continue;
+			}
+			if ( ! $this->key_has_scope( $key_record, $this->get_required_scope_for_mcp_message( $message ) ) ) {
+				return false;
+			}
+		}
+
+		return $any_calls;
+	}
+
+	/**
+	 * The scope refusal for ONE tools/call, or null when the caller's scope
+	 * covers it. Reads the message the same way the outer request check does,
+	 * from the params as the client sent them.
+	 *
+	 * @param mixed $params tools/call params.
+	 * @return array{required_scope:string,tool:string}|null
+	 */
+	protected function tool_call_scope_refusal( $params ) {
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) ) {
+			return null; // Trusted admin-AJAX context: no key to hold a scope.
+		}
+
+		$message  = array(
+			'method' => 'tools/call',
+			'params' => is_array( $params ) ? $params : array(),
+		);
+		$required = $this->get_required_scope_for_mcp_message( $message );
+		if ( $this->key_has_scope( $key_record, $required ) ) {
+			return null;
+		}
+
+		$outer_name = isset( $message['params']['name'] ) ? $message['params']['name'] : '';
+		$outer_args = isset( $message['params']['arguments'] ) && is_array( $message['params']['arguments'] ) ? $message['params']['arguments'] : array();
+		$effective  = $this->effective_mcp_tool_call( $outer_name, $outer_args );
+
+		return array(
+			'required_scope' => $required,
+			'tool'           => $effective['name'],
+		);
+	}
+
+	/**
+	 * Whether the record's role can ever be granted a scope. Only the Admin
+	 * role (and a legacy record with no role at all) can hold admin scope:
+	 * create_scoped_api_key() caps every other role (editor, author,
+	 * designer, custom, ...) at read + write.
+	 *
+	 * @param array  $key_record Key record.
+	 * @param string $scope      read|write|admin.
+	 * @return bool
+	 */
+	public static function key_role_can_hold_scope( $key_record, $scope ) {
+		if ( 'admin' !== $scope || ! is_array( $key_record ) ) {
+			return true;
+		}
+		if ( ! array_key_exists( 'role', $key_record ) ) {
+			return true;
+		}
+
+		return 'admin' === (string) $key_record['role'];
+	}
+
+	/**
+	 * The insufficient_scope refusal for an API key, worded for what is true
+	 * and what the caller can do about it. The decision is made by the
+	 * caller; this only describes it.
+	 *
+	 * A key whose role can never hold the required scope (an Admin-only
+	 * action asked of an editor, author, designer or custom key) is told so,
+	 * and told who can fix it: the site owner, with an Admin-role key from
+	 * MCPWP > Setup. Where the action is also outside the key's tool
+	 * categories, that category is named too, as the category refusal did
+	 * before the scope check ran first. The code stays insufficient_scope.
+	 *
+	 * @param array  $key_record     Key record.
+	 * @param string $required_scope Scope the action needs.
+	 * @param string $category       Tool category of the route or tool, '' if none.
+	 * @return WP_Error
+	 */
+	protected function build_insufficient_scope_error( $key_record, $required_scope, $category = '' ) {
+		$key_record = is_array( $key_record ) ? $key_record : array();
+		$granted    = isset( $key_record['scopes'] ) ? (array) $key_record['scopes'] : array();
+		$role       = isset( $key_record['role'] ) ? self::describe_role_for_message( (string) $key_record['role'] ) : '';
+		$can_hold   = self::key_role_can_hold_scope( $key_record, $required_scope );
+
+		$data = array(
+			'status'         => 403,
+			'required_scope' => $required_scope,
+			'granted_scopes' => $granted,
+		);
+
+		$message = sprintf(
+			/* translators: %s: scope name */
+			__( 'API key lacks required scope: %s', 'mcpwp' ),
+			$required_scope
+		);
+
+		if ( $can_hold ) {
+			$hint = sprintf(
+				'This API key has scopes [%s] but needs "%s". Request a key with the required scope from the site admin, or use wp_create_api_key to create one with appropriate scopes.',
+				implode( ', ', $granted ),
+				$required_scope
+			);
+		} else {
+			$message .= sprintf(
+				/* translators: %s: key role */
+				__( '. This key (role: %s) can never hold admin scope: this action needs an Admin-role key with the admin scope.', 'mcpwp' ),
+				'' !== $role ? $role : 'unknown'
+			);
+			$hint = sprintf(
+				'This action needs an Admin-role API key with the admin scope. Keys with the %s role are limited to read and write scope and cannot be upgraded. Ask the site owner to create an Admin-role key under MCPWP -> Setup (WP Admin > MCPWP > Setup) and use that key for this action.',
+				'' !== $role ? '"' . $role . '"' : 'this'
+			);
+			$data['role']              = $role;
+			$data['needs_admin_role']  = true;
+		}
+
+		$allowed = $this->resolve_key_tool_categories( $key_record );
+		if ( '' !== $category && ! empty( $allowed ) && ! in_array( $category, $allowed, true ) ) {
+			$allowed_text = self::describe_allowed_categories_for_message( $allowed );
+			$message     .= sprintf(
+				/* translators: 1: tool category, 2: comma-separated allowed categories */
+				__( ' It is also outside this key\'s tool categories: it is in the "%1$s" category and this key allows: %2$s.', 'mcpwp' ),
+				$category,
+				$allowed_text
+			);
+			$hint                     .= sprintf( ' The new key must also include the "%s" category.', $category );
+			$data['category']           = $category;
+			$data['allowed_categories'] = self::present_tool_categories( $allowed );
+		}
+
+		$data['hint'] = $hint;
+
+		return new WP_Error( 'insufficient_scope', $message, $data );
+	}
+
+	/**
+	 * The tool category of the request's route, for describing a refusal.
+	 * '' for /mcp and /batch (envelopes, not category surfaces).
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return string
+	 */
+	protected function route_category_for_refusal( $request ) {
+		$route = $this->normalize_route_for_authorization( method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '' );
+		if ( $this->route_matches( $route, '/mcpwp/v1/batch' ) || 0 === strpos( $route, '/mcpwp/v1/mcp' ) ) {
+			return '';
+		}
+
+		return (string) $this->get_category_for_route( $route );
 	}
 
 	/**

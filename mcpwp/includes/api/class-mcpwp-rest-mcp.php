@@ -1842,12 +1842,29 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	private function handle_audited_tool_call( $id, $params, $request ) {
 		$params = is_array( $params ) ? $params : array();
 		$callback = function ( $audit_context = null ) use ( $id, $params, $request ) {
+			// mcpwp_call (#907) is rewritten to an ordinary tools/call on the tool
+			// it names — one rewrite point, before anything else sees $params — so
+			// every downstream gate runs against the INNER tool.
 			$resolved = $this->resolve_mcpwp_call( $params );
 			if ( null !== $resolved['error'] ) {
+				// A malformed wrapper still answers to the key's scope first: the
+				// scope refusal wins over invalid_arguments for a key that could
+				// not have called it anyway.
+				$wrapper_refusal = $this->tool_call_scope_refusal( $params );
+				if ( null !== $wrapper_refusal ) {
+					return $this->scope_refusal_result( $id, $wrapper_refusal );
+				}
 				$this->fire_tool_called( 'mcpwp_call', microtime( true ), $this->analytics_code_for_client_code( $resolved['error']['code'] ) );
 				return $this->tool_error_result( $id, $resolved['error']['code'], $resolved['error']['message'], $resolved['error']['data'] );
 			}
 			$params = $resolved['params'];
+			// A call the key's scope does not cover is refused HERE, per call, as an
+			// in-protocol tool result (#936), before dispatch and the idempotent
+			// replay. Same derivation as the envelope check.
+			$scope_refusal = $this->tool_call_scope_refusal( $params );
+			if ( null !== $scope_refusal ) {
+				return $this->scope_refusal_result( $id, $scope_refusal );
+			}
 			return $this->conform_tool_call_result(
 				$this->handle_tools_call_idempotent( $id, $params, $request, 0, $audit_context ),
 				isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '',
@@ -1896,6 +1913,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->handle_tools_list( $id, $params );
 
 			case 'tools/call':
+				// Everything for a tools/call (the mcpwp_call rewrite, the per-call
+				// scope refusal, dispatch) runs inside the audit wrapper, handed the
+				// ORIGINAL params: Mcpwp_WooCommerce_Audit::target() unwraps
+				// mcpwp_call, so the attempt is logged against the inner tool even
+				// when the wrapper is malformed or the key's scope refuses it.
 				return $this->handle_audited_tool_call( $id, $params, $request );
 
 			case 'resources/list':
@@ -2705,33 +2727,84 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $tools; // No key context (shouldn't happen), return all.
 		}
 
-		$allowed_categories = $this->resolve_key_tool_categories( $key_record );
-
-		// Empty = unrestricted (admin role, or legacy/migrated key). A custom
-		// role with nothing granted resolves to the deny-all sentinel, never a
-		// bare array() (#1041), so it always falls through to the per-tool
-		// filter below, which lists only the discovery-exempt tools for it.
-		if ( empty( $allowed_categories ) ) {
-			return $tools;
-		}
-
 		$all_categories = $this->get_all_tool_categories();
+		$tool_map       = $this->get_all_tool_map();
 
 		return array_values(
 			array_filter(
 				$tools,
-				function ( $tool ) use ( $all_categories, $key_record ) {
+				function ( $tool ) use ( $all_categories, $key_record, $tool_map ) {
 					$name = isset( $tool['name'] ) ? $tool['name'] : '';
 					// The single per-key decision (#1064 review round 2):
 					// the discovery allowlist (#1007 WARN-2) and the two meta
 					// tools by NAME pass; everything else needs its category
 					// granted, and an uncategorised tool is denied (#802
 					// round 6) — the handler's own gate is the same call.
+					// An unrestricted key (admin role, legacy) has no
+					// category restriction at all; a custom role with
+					// nothing granted resolves to the deny-all sentinel
+					// (#1041) and so lists only the discovery-exempt tools.
 					$category = isset( $all_categories[ $name ] ) ? (string) $all_categories[ $name ] : '';
-					return $this->key_role_permits_tool( $name, $category, $key_record );
+					return $this->principal_may_call_tool( $name, $category, $key_record, isset( $tool_map[ $name ] ) ? $tool_map[ $name ] : null );
 				}
 			)
 		);
+	}
+
+	/**
+	 * Whether the current principal can call a tool right now — the one
+	 * predicate tools/list, mcpwp_find_tools, introspection and the
+	 * next-step hints list by (#1106). Each part asks the same function the
+	 * call path asks, so a listed tool is one the call path does not refuse
+	 * for the principal itself:
+	 *
+	 *  - the key's role/category gate (key_role_permits_tool());
+	 *  - the scope the call needs (get_required_scope_for_mcp_message(), the
+	 *    derivation the /mcp envelope check and the per-call refusal use);
+	 *  - for a user-run principal (OAuth user, WebMCP, admin chat), the
+	 *    route's WordPress capability (user_run_capability_shortfall(), the
+	 *    function check_user_run_capability() uses on the dispatch).
+	 *
+	 * The two meta tools are gateways: what they wrap is judged when it is
+	 * named, so they are never hidden by scope.
+	 *
+	 * @param string     $tool_name     Tool.
+	 * @param string     $tool_category Its enforced category ('' if none).
+	 * @param array      $key_record    The caller's key record.
+	 * @param array|null $mapping       The tool's map entry, if it has one.
+	 * @return bool
+	 */
+	private function principal_may_call_tool( $tool_name, $tool_category, $key_record, $mapping = null ) {
+		if ( ! $this->key_role_permits_tool( $tool_name, $tool_category, $key_record ) ) {
+			return false;
+		}
+
+		if ( in_array( $tool_name, self::get_key_exempt_tool_names(), true ) ) {
+			return true;
+		}
+
+		$required = $this->get_required_scope_for_mcp_message(
+			array(
+				'method' => 'tools/call',
+				'params' => array( 'name' => $tool_name ),
+			)
+		);
+		if ( ! $this->key_has_scope( $key_record, $required ) ) {
+			return false;
+		}
+
+		if ( is_array( $mapping ) && $this->requester_acts_as_user() && ! isset( $mapping['callback'] ) ) {
+			$route = isset( $mapping['route'] ) ? (string) $mapping['route'] : ( isset( $mapping['rest_path'] ) ? (string) $mapping['rest_path'] : '' );
+			if ( '' !== $route ) {
+				$route = str_replace( '{type}', 'post', $route );
+				$route = (string) preg_replace( '/\{[A-Za-z0-9_]+\}/', '1', $route );
+				if ( '' !== $this->user_run_capability_shortfall( isset( $mapping['method'] ) ? (string) $mapping['method'] : 'GET', $route ) ) {
+					return false;
+				}
+			}
+		}
+
+		return true;
 	}
 
 	/**
@@ -4123,6 +4196,20 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 
 		return null;
+	}
+
+	/**
+	 * The in-protocol insufficient_scope tool result for a refused call.
+	 *
+	 * @param mixed $id      JSON-RPC id.
+	 * @param array $refusal tool_call_scope_refusal() result.
+	 * @return array
+	 */
+	private function scope_refusal_result( $id, array $refusal ) {
+		$this->fire_tool_called( $refusal['tool'], microtime( true ), 'scope_denied' );
+		$category = in_array( $refusal['tool'], self::get_discovery_allowlist_tool_names(), true ) ? '' : $this->tool_category_for( $refusal['tool'] );
+		$error    = $this->build_insufficient_scope_error( $this->get_current_api_key_record(), $refusal['required_scope'], $category );
+		return $this->tool_error_result( $id, 'insufficient_scope', $error->get_error_message(), (array) $error->get_error_data() );
 	}
 
 	/**

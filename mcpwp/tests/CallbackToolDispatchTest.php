@@ -162,10 +162,13 @@ final class CallbackToolDispatchTest extends TestCase {
 			)
 		);
 
-		$result = $controller->check_permission( $request );
+		// The envelope admits the message; the call itself is refused, per
+		// call, as an isError result (#936) — and the callback never runs.
+		$this->assertTrue( $controller->check_permission( $request ) );
+		$data = $controller->handle_mcp( $request )->get_data();
 
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'insufficient_scope', $data['result']['structuredContent']['error']['code'] );
 		$this->assertFalse( $called );
 	}
 
