@@ -203,7 +203,7 @@ sell flows + recipes + rent, never compute.
 | **M1** | v2.8.x | **On-ramp launch** | Free plugin + cheap Pro (adoption toll). Admin UI ✅. Gates on Hadi: pricing (T87), privacy, install test, WAF. |
 | **M1.3** | v2.9 | **Agent representation & Fleet** | Connect-time MCP questionnaire (`identity·represents·scope·goal`) → owner-facing admin Fleet page → scope-as-enforcement **second security layer** + audit. (§4b — sensitive surface: adversarial-gate the build.) |
 | **M1.5** | v2.9 | **Distribution + feedback build** | News sitemap + NewsArticle schema + image/E-E-A-T emitters; GSC/PostHog/Woo ingestion; Cloudflare edge A/B engine; blocking originality gate; two-speed agent cadence (§4b). |
-| **M2** | v2.9 | **Auth keystone** (broker OAuth, not per-site DCR; superseded by #1099, see §12 note) | Opens the OAuth fleet — ChatGPT Business + Claude Managed. Bearer fleet (Hermes/openclaw/Codex) connects now. **Built, not yet shipped** — see §12. |
+| **M2** | v2.9 | **Auth keystone** (broker OAuth, not per-site DCR; superseded by #1099, see §12 note) | Opens the OAuth fleet — ChatGPT Business + Claude Managed. Bearer fleet (Hermes/openclaw/Codex) connects now. Shipped (broker 3.7.0; own server #1099) — see §12. |
 | **M3** | v2.9 | **Distribution channels** | WP.org · MCP registries · ChatGPT GPT/App · Claude Connector. |
 | **M4** | v3.x | **The marketplace** | Storefront for addons + snapshots; the cut; performance-ranking from observability; `mcpwp_register_tools` + `register_skill` made first-class. **This is the revenue engine.** |
 | **M5** | v4.0 | **Composition layer** | Snapshots as curated addon-mixes; the recipe builder; data-validated loadouts. |
@@ -227,7 +227,7 @@ store.** Everything else is supporting cast until that happens.
 | On-brand content, SEO, content-graph, images, approvals/rollback, brand-crystal, Woo SEO, blueprints, keyword research, PostHog (outbound) | ✅ built | now |
 | Metered/capped/gated loop, squad-packs, harness-pack contract, MCP ResourceRef seam, `mcpwp_register_tools`, bus `register_skill` | ✅ built | now |
 | News sitemap + NewsArticle schema, image/E-E-A-T emitters, GSC/PostHog ingestion, edge A/B, blocking originality gate | 🔶 to build | v2.9 |
-| Broker OAuth sign-in (claude.ai/ChatGPT → mumcp.com → any site), streamable-http on the bus | ✅ shipped (3.7.0); the site is also its own OAuth server since #1099 | now (pending human ship) |
+| Broker OAuth sign-in (claude.ai/ChatGPT → mumcp.com → any site), streamable-http on the bus | ✅ shipped (3.7.0); the site is also its own OAuth server since #1099 | shipped |
 | Marketplace storefront + cut + performance-ranking · snapshot composition layer | 🔶 primitives exist, not productized | v3.x–v4.0 |
 
 Launch each promise on what is built. Later-phase items are "included as they ship," never live today.

@@ -108,9 +108,9 @@ The errors below are the ones this plugin emits. OAuth errors are JSON `{"error"
 | `access_denied` in the redirect | The user pressed Deny. | Approve, if intended. |
 | Consent page: "Your WordPress role can't connect AI apps on this site; ask an administrator." | The signed-in user is below the minimum role (Editor by default). | An administrator signs in, or changes the minimum role on the Setup page. |
 | `401`, `invalid_api_key` "Invalid API key." on a Bearer call | The access token is unknown, expired (default 1 hour), or **revoked** (app removed, user revoke, revoked refresh family, `/oauth/revoke`), or local OAuth is off. All of these look the same on the wire. | Try the refresh token; if that is refused, reconnect. |
-| `401`, `invalid_token`, "This access token has been revoked." | Rarer: the token row is still active but its client or user was revoked at or after it was issued. | Reconnect. |
+| `401`, `invalid_token`, "This access token has been revoked." | Rarer: the token row is still active but a revocation epoch covers it: its client was revoked, its user was revoked, or its **user was deleted** (deleting a user writes an epoch, and that check runs before the live-user check). | Reconnect (as an existing user if the old one was deleted). |
 | `401`, `invalid_token`, "This access token was issued for a different resource." | Token minted for another site address. | Reconnect. |
-| `401`, `invalid_token`, "The WordPress user who approved this connection can no longer connect AI apps on this site." | User deleted or demoted. | Restore the user, or connect as someone else. |
+| `401`, `invalid_token`, "The WordPress user who approved this connection can no longer connect AI apps on this site." | The user still exists but no longer holds the minimum role (a *deleted* user gets "This access token has been revoked." above instead). | Restore the role, or connect as someone else. |
 | `401 missing_api_key` when sending an OAuth token | Access tokens are accepted only in `Authorization: Bearer`, never in `X-API-Key` or `?api_key=`. | Move it to the Bearer header. |
 | `403 insufficient_scope`, "API key lacks required scope: write/admin" | The token was approved as read only (or `write` was unticked), or the tool needs `admin`, which OAuth never grants. | Reconnect and keep "Create and edit content" ticked, or use an Admin-role API key for admin actions. A user token can also be refused on a particular post by WordPress's own capability check. |
 | `429` from the token endpoint (`client_credentials` or revoke) | Per-address rate limit. | Back off. |
@@ -236,7 +236,7 @@ What the client sees afterwards: a token revoked this way (app removed, user rev
 family, `/oauth/revoke`) has its row marked revoked, and the next call with it answers
 `401 invalid_api_key` ("Invalid API key.") like an unknown or expired token. The `invalid_token`
 ("This access token has been revoked.") answer is only reached when the token's row is still active
-but a revocation epoch (client or user revoked at or after it was issued) covers it. Either way the
+but a revocation epoch (its client or user was revoked, or its user was deleted, at or after it was issued) covers it. Either way the
 fix is to refresh, or reconnect if refresh fails.
 
 `/oauth/revoke` is rate-limited per address (`429`, checked first). It answers `400 invalid_request`
