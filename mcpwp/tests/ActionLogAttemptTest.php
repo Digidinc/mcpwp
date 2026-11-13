@@ -138,28 +138,71 @@ final class ActionLogAttemptTest extends TestCase {
 	}
 	public static function refusal_provider(): array { return array( array( 'missing' ), array( 'read' ), array( 'disabled' ) ); }
 
-	public function test_a_scope_refused_mcpwp_call_is_audited_as_the_inner_tool(): void {
-		// mcpwp_call is rewritten onto the tool it names before the audit wrapper
-		// opens its attempt, and the per-call scope refusal then runs inside it.
-		$this->call( 'mcpwp_call', array(), array( 'read' ) );
-		$this->assertSame( 0, count( $this->rows() ), 'A malformed wrapper names no tool: nothing to audit.' );
-		$GLOBALS['mcpwp_test_wpdb_rows']['wp_mcpwp_action_log'] = array();
+	/** Send a tools/call whose params are exactly $params, as a key with $scopes; returns [response data, controller, key]. */
+	private function raw_call( array $params, array $scopes ): array {
 		$controller = new Mcpwp_REST_MCP();
 		$caps = new ReflectionProperty( Mcpwp_REST_MCP::class, 'active_capabilities' );
 		$caps->setAccessible( true );
 		$caps->setValue( $controller, array( 'woocommerce' => true ) );
-		$key = $controller->create_scoped_api_key( 'wrapped', array( 'read' ) );
-		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => $key['key'] ), array(
-			'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/call',
-			'params' => array( 'name' => 'mcpwp_call', 'arguments' => array( 'name' => 'wc_update_product', 'arguments' => array( 'id' => 41, 'name' => 'Changed' ) ) ),
-		) );
+		$key = $controller->create_scoped_api_key( 'raw', $scopes );
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => $key['key'] ), array( 'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/call', 'params' => $params ) );
 		$this->assertTrue( $controller->verify_api_key( $request ) );
-		$data = $controller->handle_mcp( $request )->get_data();
+		return array( $controller->handle_mcp( $request )->get_data(), $controller, $request );
+	}
+
+	public function test_a_scope_refused_mcpwp_call_is_audited_as_the_inner_tool(): void {
+		$wrapped = array( 'name' => 'mcpwp_call', 'arguments' => array( 'name' => 'wc_update_product', 'arguments' => array( 'id' => 41, 'name' => 'Changed' ) ) );
+		list( $data ) = $this->raw_call( $wrapped, array( 'read' ) );
 		$this->assertTrue( $data['result']['isError'] );
 		$rows = $this->rows();
 		$this->assertCount( 1, $rows );
 		$this->assertSame( 'wc_update_product', $rows[0]['tool_name'] );
 		$this->assertSame( 0, $rows[0]['success'] );
+	}
+
+	public function test_a_malformed_mcpwp_call_wrapper_is_still_audited_against_the_named_tool(): void {
+		// Stray top-level key inside the wrapper (the model put `id` beside `name`).
+		$stray = array( 'name' => 'mcpwp_call', 'arguments' => array( 'name' => 'wc_update_product', 'id' => 41, 'arguments' => array( 'id' => 41 ) ) );
+		// A read key is refused on scope first.
+		list( $data ) = $this->raw_call( $stray, array( 'read' ) );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'insufficient_scope', $data['result']['structuredContent']['error']['code'] );
+		$rows = $this->rows();
+		$this->assertCount( 1, $rows, 'read key, stray key: one attempt row.' );
+		$this->assertSame( 'wc_update_product', $rows[0]['tool_name'] );
+		$this->assertSame( 0, $rows[0]['success'] );
+
+		// A read+write key passes scope and gets the wrapper's own invalid_params.
+		$GLOBALS['mcpwp_test_wpdb_rows']['wp_mcpwp_action_log'] = array();
+		list( $data ) = $this->raw_call( $stray, array( 'read', 'write' ) );
+		$this->assertTrue( $data['result']['isError'] );
+		$this->assertSame( 'invalid_params', $data['result']['structuredContent']['error']['code'] );
+		$rows = $this->rows();
+		$this->assertCount( 1, $rows, 'read+write key, stray key: one attempt row.' );
+		$this->assertSame( 'wc_update_product', $rows[0]['tool_name'] );
+		$this->assertSame( 0, $rows[0]['success'] );
+	}
+
+	public function test_a_scope_refusal_precedes_an_idempotent_replay(): void {
+		$params = array( 'name' => 'wp_create_page', 'arguments' => array( 'title' => 'Test' ), '_meta' => array( 'request_id' => 'scope-before-replay' ) );
+		list( $first, $controller, $request ) = $this->raw_call( $params, array( 'admin' ) );
+		$pages = count( $GLOBALS['_mcpwp_test_posts'] ?? array() );
+		// The same principal, now holding read scope only (as after a scope change).
+		$controller = new Mcpwp_REST_MCP();
+		$caps = new ReflectionProperty( Mcpwp_REST_MCP::class, 'active_capabilities' );
+		$caps->setAccessible( true );
+		$caps->setValue( $controller, array( 'woocommerce' => true ) );
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+		$record = new ReflectionProperty( $controller, 'current_api_key_record' );
+		$record->setAccessible( true );
+		$narrowed           = $record->getValue( $controller );
+		$narrowed['scopes'] = array( 'read' );
+		$record->setValue( $controller, $narrowed );
+		$second = $controller->handle_mcp( $request )->get_data();
+		$this->assertTrue( $second['result']['isError'] );
+		$this->assertSame( 'insufficient_scope', $second['result']['structuredContent']['error']['code'] );
+		$this->assertArrayNotHasKey( 'replayed', $second['result']['_meta'] ?? array() );
+		$this->assertSame( $pages, count( $GLOBALS['_mcpwp_test_posts'] ?? array() ) );
 	}
 
 	public function test_a_replay_gets_a_receipt_without_a_second_mutation(): void {

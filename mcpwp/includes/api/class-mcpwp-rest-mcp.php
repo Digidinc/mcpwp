@@ -1835,16 +1835,27 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 	/** Audit outside idempotency and validation so every attempt has an outcome. */
 	private function handle_audited_tool_call( $id, $params, $request ) {
-		// $params is the tools/call message AFTER mcpwp_call was rewritten onto
-		// the tool it names (process_single_request).
 		$params = is_array( $params ) ? $params : array();
 		$callback = function ( $audit_context = null ) use ( $id, $params, $request ) {
-			// A call the key's scope does not cover is refused HERE, per call, as
-			// an in-protocol tool result (#936 convention): the /mcp envelope no
-			// longer answers one HTTP 403 for a whole body when the shortfall is
-			// confined to tools/call messages (mcp_scope_refusal_is_per_call()).
-			// Same derivation as the envelope check; runs before dispatch, the
-			// idempotent replay and every other gate, as the envelope check did.
+			// mcpwp_call (#907) is rewritten to an ordinary tools/call on the tool
+			// it names — one rewrite point, before anything else sees $params — so
+			// every downstream gate runs against the INNER tool.
+			$resolved = $this->resolve_mcpwp_call( $params );
+			if ( null !== $resolved['error'] ) {
+				// A malformed wrapper still answers to the key's scope first: the
+				// scope refusal wins over invalid_arguments for a key that could
+				// not have called it anyway.
+				$wrapper_refusal = $this->tool_call_scope_refusal( $params );
+				if ( null !== $wrapper_refusal ) {
+					return $this->scope_refusal_result( $id, $wrapper_refusal );
+				}
+				$this->fire_tool_called( 'mcpwp_call', microtime( true ), $this->analytics_code_for_client_code( $resolved['error']['code'] ) );
+				return $this->tool_error_result( $id, $resolved['error']['code'], $resolved['error']['message'], $resolved['error']['data'] );
+			}
+			$params = $resolved['params'];
+			// A call the key's scope does not cover is refused HERE, per call, as an
+			// in-protocol tool result (#936), before dispatch and the idempotent
+			// replay. Same derivation as the envelope check.
 			$scope_refusal = $this->tool_call_scope_refusal( $params );
 			if ( null !== $scope_refusal ) {
 				return $this->scope_refusal_result( $id, $scope_refusal );
@@ -1897,32 +1908,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->handle_tools_list( $id, $params );
 
 			case 'tools/call':
-				// mcpwp_call (#907) is rewritten to an ordinary tools/call on
-				// the tool it names — one rewrite point, before anything
-				// else sees `$params` — so every downstream gate (category,
-				// role, Pro, spend, idempotency) and conform_tool_call_result's
-				// outputSchema lookup runs against the INNER tool, exactly as
-				// a direct call to it would, never against "mcpwp_call".
-				$resolved = $this->resolve_mcpwp_call( is_array( $params ) ? $params : array() );
-				if ( null !== $resolved['error'] ) {
-					// A malformed wrapper still answers to the key's scope
-					// first, as it did when the envelope judged it: the
-					// scope refusal wins over invalid_arguments for a key
-					// that could not have called it anyway.
-					$wrapper_refusal = $this->tool_call_scope_refusal( $params );
-					if ( null !== $wrapper_refusal ) {
-						return $this->scope_refusal_result( $id, $wrapper_refusal );
-					}
-					$this->fire_tool_called( 'mcpwp_call', microtime( true ), $this->analytics_code_for_client_code( $resolved['error']['code'] ) );
-					return $this->tool_error_result( $id, $resolved['error']['code'], $resolved['error']['message'], $resolved['error']['data'] );
-				}
-				$params = $resolved['params'];
-
-				// Audited and dispatched with the params already rewritten, so the
-				// audit wrapper (Mcpwp_WooCommerce_Audit::run_call()) sees the INNER
-				// tool, not "mcpwp_call". The per-call scope refusal is the first
-				// thing inside that wrapper (handle_audited_tool_call()), so a
-				// refused write is still logged as a failed attempt.
+				// Everything for a tools/call (the mcpwp_call rewrite, the per-call
+				// scope refusal, dispatch) runs inside the audit wrapper, handed the
+				// ORIGINAL params: Mcpwp_WooCommerce_Audit::target() unwraps
+				// mcpwp_call, so the attempt is logged against the inner tool even
+				// when the wrapper is malformed or the key's scope refuses it.
 				return $this->handle_audited_tool_call( $id, $params, $request );
 
 			case 'resources/list':
