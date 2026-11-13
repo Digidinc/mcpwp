@@ -86,12 +86,31 @@ class Mcpwp_Integrations_Admin {
 		// Multi-field providers (e.g. screenshot worker: URL + token).
 		if ( $manager->is_multi_field_provider( $provider ) ) {
 			$config = isset( $_POST['config'] ) ? array_map( 'sanitize_text_field', wp_unslash( (array) $_POST['config'] ) ) : array();
+			// Admin inputs are blank placeholders. Only an explicit clear control
+			// clears a saved value; REST/MCP keep their explicit-empty semantics.
+			$config = array_filter(
+				$config,
+				static function ( $value ) {
+					return '' !== $value;
+				}
+			);
+			$fields = Mcpwp_Integration_Manager::PROVIDERS[ $provider ]['fields'];
+			$clear_fields = isset( $_POST['clear_fields'] ) ? wp_unslash( (array) $_POST['clear_fields'] ) : array();
+			foreach ( $clear_fields as $field ) {
+				if ( ! is_string( $field ) || ! isset( $fields[ $field ] ) ) {
+					wp_send_json_error( array( 'message' => __( 'The field selected for clearing is not available.', 'mcpwp' ) ) );
+				}
+				$config[ $field ] = '';
+			}
+
 			if ( empty( $config ) ) {
 				wp_send_json_error( array( 'message' => __( 'Configuration fields are required.', 'mcpwp' ) ) );
 			}
-			// Sanitize URL field specifically.
-			if ( isset( $config['url'] ) ) {
-				$config['url'] = esc_url_raw( $config['url'] );
+			// Sanitize configured URL fields.
+			foreach ( $fields as $field => $definition ) {
+				if ( 'url' === $definition['type'] && isset( $config[ $field ] ) ) {
+					$config[ $field ] = esc_url_raw( $config[ $field ] );
+				}
 			}
 			$result = $manager->set_provider_config( $provider, $config );
 		} else {

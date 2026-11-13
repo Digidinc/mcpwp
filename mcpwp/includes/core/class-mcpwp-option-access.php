@@ -773,6 +773,11 @@ class Mcpwp_Option_Access {
 	 * @return mixed
 	 */
 	public static function redact_for_log( $data, array $keys, $under_secret = false, $depth = 0 ) {
+		// Secret-key classification wins before decoding, including empty containers.
+		if ( $under_secret ) {
+			return '[redacted]';
+		}
+
 		if ( is_object( $data ) ) {
 			$data = (array) $data;
 		}
@@ -781,7 +786,7 @@ class Mcpwp_Option_Access {
 			$form    = null;
 			$decoded = self::decode_leaf( $data, $form );
 			if ( null === $decoded ) {
-				return ( $under_secret && self::looks_like_secret_value( $data ) ) || self::looks_like_credential( $data ) || self::is_opaque_serialized( $data ) ? '[redacted]' : $data;
+				return self::looks_like_credential( $data ) || self::is_opaque_serialized( $data ) ? '[redacted]' : $data;
 			}
 			$decoded = $decoded instanceof stdClass ? (array) $decoded : $decoded;
 			$walked  = self::redact_for_log( $decoded, $keys, $under_secret, $depth + 1 );
@@ -796,18 +801,10 @@ class Mcpwp_Option_Access {
 		// says the value is a secret even when the value's own shape does not.
 		$value_is_secret = isset( $data['key'] ) && is_string( $data['key'] ) && self::is_secret_field( $data['key'] );
 
-		// In a {key, value} row — the REST body, an MCP tool's arguments, a
-		// batch item — `key` is the option NAME, the thing an audit needs to
-		// see. It stays only when it is shaped like an option name and not
-		// like a credential (#800 rounds 5–6).
-		$names_an_option = isset( $data['key'] ) && is_string( $data['key'] ) && array_key_exists( 'value', $data )
-			&& self::is_option_name_shaped( $data['key'] )
-			&& ! ( $under_secret && self::looks_like_secret_value( $data['key'] ) );
-
 		$out = array();
 		foreach ( $data as $k => $v ) {
 			if ( $value_is_secret && 'value' === $k ) {
-				$out[ $k ] = is_array( $v ) || is_object( $v ) ? self::redact_for_log( $v, $keys, true, $depth + 1 ) : '[redacted]';
+				$out[ $k ] = '[redacted]';
 				continue;
 			}
 
@@ -817,14 +814,9 @@ class Mcpwp_Option_Access {
 				continue;
 			}
 
-			if ( $names_an_option && 'key' === $k ) {
-				$out[ $k ] = $v;
-				continue;
-			}
-
 			$secret = $under_secret || ( is_string( $k ) && self::is_secret_field( $k ) );
 
-			if ( ( is_int( $v ) || is_float( $v ) ) && $secret ) {
+			if ( $secret ) {
 				$out[ $k ] = '[redacted]';
 				continue;
 			}

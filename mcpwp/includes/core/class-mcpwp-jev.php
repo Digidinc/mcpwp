@@ -192,7 +192,7 @@ class Mcpwp_Jev {
 		$config = self::jev_config();
 
 		$setting = self::transport_setting( $config );
-		if ( 'off' === $setting ) {
+		if ( in_array( $setting, array( 'off', 'invalid' ), true ) ) {
 			return '';
 		}
 
@@ -231,18 +231,18 @@ class Mcpwp_Jev {
 	/**
 	 * The stored transport setting, normalised. Empty means 'auto'. A value
 	 * outside TRANSPORT_SETTINGS cannot be saved through the configure paths;
-	 * one found in storage anyway (hand-edited option) is treated as 'off'
-	 * — an unreadable choice must not send anything.
+	 * one found in storage anyway (hand-edited option) is invalid and must
+	 * not send anything.
 	 *
 	 * @param array $config Jev config.
-	 * @return string One of TRANSPORT_SETTINGS.
+	 * @return string One of TRANSPORT_SETTINGS, or invalid.
 	 */
 	private static function transport_setting( array $config ) {
 		$setting = isset( $config['transport'] ) ? strtolower( trim( (string) $config['transport'] ) ) : '';
 		if ( '' === $setting ) {
 			return 'auto';
 		}
-		return in_array( $setting, self::TRANSPORT_SETTINGS, true ) ? $setting : 'off';
+		return in_array( $setting, self::TRANSPORT_SETTINGS, true ) ? $setting : 'invalid';
 	}
 
 	/**
@@ -304,6 +304,9 @@ class Mcpwp_Jev {
 		}
 
 		$setting = self::transport_setting( self::jev_config() );
+		if ( 'invalid' === $setting ) {
+			return array( 'transport' => '', 'reason' => 'transport_invalid' );
+		}
 		if ( 'off' === $setting ) {
 			return array( 'transport' => '', 'reason' => 'disabled_by_admin' );
 		}
@@ -456,6 +459,8 @@ class Mcpwp_Jev {
 				return __( 'Jev is set to use TypeSafe, but no TypeSafe API key is saved.', 'mcpwp' );
 			case 'override_cloudflare_not_configured':
 				return __( 'Jev is set to use Cloudflare Workers AI, but the Jev integration is missing its Workers AI API token or a valid 32-character account ID.', 'mcpwp' );
+			case 'transport_invalid':
+				return __( 'The stored Jev transport is invalid. Save a valid transport in the Jev integration. Nothing is sent.', 'mcpwp' );
 			case 'disabled_by_admin':
 				return __( 'Jev is turned off (transport set to "off"). Nothing is sent.', 'mcpwp' );
 			default:

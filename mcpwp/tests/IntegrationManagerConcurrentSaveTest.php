@@ -46,6 +46,7 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
 
     protected function tearDown(): void
     {
+        remove_filter('sanitize_option_' . self::OPTION, array(Mcpwp_Integration_Manager::class, 'reject_raw_option_write'));
         $this->resetState();
     }
 
@@ -103,6 +104,7 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
             $value = $GLOBALS['mcpwp_test_options'][ self::OPTION ] ?? array();
         }
 
+        if (is_array($value)) { unset($value[Mcpwp_Integration_Manager::GENERATIONS_KEY]); }
         return is_array($value) ? $value : array();
     }
 
@@ -138,6 +140,381 @@ final class IntegrationManagerConcurrentSaveTest extends TestCase
                 $once();
             }
         };
+    }
+
+    public function test_legacy_import_cannot_replace_a_concurrent_configure(): void
+    {
+        require_once dirname(__DIR__) . '/includes/class-mcpwp-migrate.php';
+        update_option('spai_settings', array());
+        update_option('spai_integrations', array('openai' => $this->record('legacy-fixture')));
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $fired = false;
+        $configure = function () use ($manager, &$fired): void {
+            if (!$fired) {
+                $fired = true;
+                $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'new-fixture')));
+            }
+        };
+        $GLOBALS['mcpwp_test_option_store_hook'] = function ($name, $value) use ($configure) {
+            if (self::OPTION === $name) { $configure(); }
+            return $value;
+        };
+        $GLOBALS['mcpwp_test_wpdb_before_insert'] = function ($name) use ($configure): void {
+            if (self::OPTION === $name) { $configure(); }
+        };
+        $this->assertTrue(Mcpwp_Migrate::run());
+        $this->assertTrue($fired);
+        $config = $manager->get_provider_config('figma');
+        $this->assertTrue(is_array($config) && 'new-fixture' === ($config['access_token'] ?? null), 'concurrent configure wins over legacy import');
+        $this->assertArrayNotHasKey('openai', $this->records());
+    }
+
+    public function test_raw_backup_replacement_cannot_replay_a_live_oauth_version(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'old-fixture')));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $backup = $this->records();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'new-fixture')));
+        Mcpwp_Integration_Manager::register_option_guard();
+        $blocked = false;
+        try {
+            update_option(self::OPTION, $backup);
+        } catch (RuntimeException $error) {
+            $blocked = true;
+        }
+        $this->assertTrue($blocked, 'raw option restoration is refused; use the CAS restore API');
+        $this->assertFalse($manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot), 'backup replacement must not make an old snapshot eligible');
+    }
+
+    public function test_explicit_restore_mints_an_incarnation_and_advances_the_live_counter(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'old-fixture')));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $backup = $this->records();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'new-fixture')));
+        $live = $manager->get_provider_snapshot('figma');
+        $this->assertTrue($manager->restore_provider_records($backup));
+        $restored = $manager->get_provider_snapshot('figma');
+        $this->assertGreaterThan($live['generation'], $restored['generation']);
+        $this->assertNotSame($snapshot['record_id'], $restored['record_id']);
+        $this->assertFalse($manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot));
+        $this->assertTrue('old-fixture' === $manager->get_provider_config('figma')['access_token']);
+    }
+
+    public function test_restore_after_removal_keeps_the_live_high_water_counter(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'old-fixture')));
+        $backup = $this->records();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'new-fixture')));
+        $live = $manager->get_provider_snapshot('figma');
+        $this->assertSame(Mcpwp_Integration_Manager::WRITE_STORED, $manager->remove_provider_record('figma'));
+        $backup[Mcpwp_Integration_Manager::GENERATIONS_KEY] = array('figma' => PHP_INT_MAX);
+        $this->assertTrue($manager->restore_provider_records($backup));
+        $restored = $manager->get_provider_snapshot('figma');
+        $this->assertSame($live['generation'] + 2, $restored['generation'], 'removal and restore both advance the live counter; backup map is ignored');
+        $this->assertNotSame($live['record_id'], $restored['record_id']);
+    }
+
+    public function test_raw_option_add_cannot_recreate_a_saved_snapshot(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'old-fixture')));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $backup = $this->records();
+        unset($GLOBALS['mcpwp_test_wpdb_options'][self::OPTION], $GLOBALS['mcpwp_test_options'][self::OPTION]);
+        Mcpwp_Integration_Manager::register_option_guard();
+        $blocked = false;
+        try {
+            add_option(self::OPTION, $backup);
+        } catch (RuntimeException $error) {
+            $blocked = true;
+        }
+        $this->assertTrue($blocked);
+        $this->assertFalse($manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot));
+    }
+
+    public function test_action_log_provider_restore_uses_the_versioned_restore_api(): void
+    {
+        require_once dirname(__DIR__) . '/includes/core/class-mcpwp-action-log.php';
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'old-fixture')));
+        $backup = $this->records();
+        $snapshot = $manager->get_provider_snapshot('figma');
+        Mcpwp_Integration_Manager::register_option_guard();
+        $apply = new ReflectionMethod(Mcpwp_Action_Log::class, 'apply_snapshot');
+        $apply->setAccessible(true);
+        $this->assertTrue($apply->invoke(null, 'option', array('option_key' => self::OPTION, 'value' => $backup)));
+        $after = $manager->get_provider_snapshot('figma');
+        $this->assertSame($snapshot['generation'] + 1, $after['generation']);
+        $this->assertNotSame($snapshot['record_id'], $after['record_id']);
+    }
+
+    /** @dataProvider destinationChanges */
+    public function test_destination_updates_require_the_bound_credential_in_the_same_patch(string $provider, string $field, string $old, string $new, array $secrets): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $config = array_fill_keys($secrets, 'bound-fixture');
+        $config[$field] = $old;
+        $this->assertTrue($manager->set_provider_config($provider, $config));
+        $this->assertTrue($manager->set_provider_config($provider, array($field => $old)));
+        foreach ($secrets as $secret) {
+            $this->assertTrue('bound-fixture' === ($manager->get_provider_config($provider)[$secret] ?? null), 'unchanged destination preserves credentials');
+        }
+        $this->assertTrue($manager->set_provider_config($provider, array($field => $new)));
+        foreach ($secrets as $secret) {
+            $this->assertTrue(empty($manager->get_provider_config($provider)[$secret]), 'a different destination has no inherited credential');
+        }
+        $patch = array_fill_keys($secrets, 'replacement-fixture');
+        $patch[$field] = $old;
+        $this->assertTrue($manager->set_provider_config($provider, $patch));
+        foreach ($secrets as $secret) {
+            $this->assertTrue('replacement-fixture' === $manager->get_provider_config($provider)[$secret], 'same-request credentials are retained');
+        }
+    }
+
+    public function destinationChanges(): array
+    {
+        return array(
+            'screenshot' => array('screenshot', 'url', 'https://a.example', 'https://b.example', array('token')),
+            'jev endpoint' => array('jev', 'endpoint', 'https://a.example', 'https://b.example', array('api_key')),
+            'jev default endpoint' => array('jev', 'endpoint', '', 'https://b.example', array('api_key')),
+            'posthog default host' => array('posthog', 'host', '', 'https://b.example', array('token')),
+            'jev account' => array('jev', 'cf_account_id', str_repeat('a', 32), str_repeat('b', 32), array('cf_api_token')),
+            'posthog' => array('posthog', 'host', 'https://a.example', 'https://b.example', array('token')),
+            'figma client' => array('figma', 'oauth_client_id', 'old-client', 'new-client', array('oauth_client_secret', 'access_token', 'refresh_token', 'token_type', 'expires_at')),
+            'cloudflare' => array('cloudflare', 'zone_id', 'old-zone', 'new-zone', array('api_token')),
+            'wpengine' => array('wpengine_staging', 'install_id', 'old-install', 'new-install', array('api_token')),
+            'kinsta' => array('kinsta_staging', 'site_id', 'old-site', 'new-site', array('api_key')),
+            'pressable' => array('pressable_staging', 'site_id', 'old-site', 'new-site', array('api_token')),
+            'dataforseo account' => array('dataforseo', 'login', 'old@example.test', 'new@example.test', array('password')),
+        );
+    }
+
+    /** @dataProvider equivalentDestinations */
+    public function test_effectively_unchanged_destinations_preserve_their_credentials(string $provider, string $field, string $old, string $new, string $secret): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $config = array($secret => 'same-destination-fixture');
+        if ('' !== $old) { $config[$field] = $old; }
+        $this->assertTrue($manager->set_provider_config($provider, $config));
+        $this->assertTrue($manager->set_provider_config($provider, array($field => $new)));
+        $this->assertTrue('same-destination-fixture' === ($manager->get_provider_config($provider)[$secret] ?? null), 'equivalent effective destinations retain the credential');
+    }
+
+    public function equivalentDestinations(): array
+    {
+        return array(
+            array('posthog', 'host', '', 'https://us.i.posthog.com', 'token'),
+            array('posthog', 'host', 'https://a.example', 'https://a.example/', 'token'),
+            array('screenshot', 'url', 'https://a.example', 'https://a.example/', 'token'),
+            array('jev', 'endpoint', '', 'https://api.typesafe.ai/v1/systemone', 'api_key'),
+        );
+    }
+
+    public function test_destination_binding_is_applied_again_after_a_cas_conflict(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://a.example', 'token' => 'old-fixture')));
+        $this->between_read_and_write(function () use ($manager): void {
+            $this->assertTrue($manager->set_provider_config('screenshot', array('token' => 'rotated-fixture')));
+        });
+        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://b.example')));
+        $this->assertTrue(empty($manager->get_provider_config('screenshot')['token']), 'retry cannot carry a concurrent credential to the new destination');
+    }
+
+    public function test_jev_binding_keeps_the_other_transport_and_normalizes_account_ids(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('jev', array('endpoint' => 'https://a.example', 'api_key' => 'api-fixture', 'cf_account_id' => str_repeat('a', 32), 'cf_api_token' => 'cf-fixture')));
+        $this->assertTrue($manager->set_provider_config('jev', array('cf_account_id' => str_repeat('A', 32))));
+        $this->assertTrue('cf-fixture' === $manager->get_provider_config('jev')['cf_api_token'], 'same normalized account retains its credential');
+        $this->assertTrue($manager->set_provider_config('jev', array('endpoint' => 'https://b.example')));
+        $config = $manager->get_provider_config('jev');
+        $this->assertTrue(empty($config['api_key']));
+        $this->assertTrue('cf-fixture' === $config['cf_api_token'], 'only the changed destination loses its credential');
+    }
+
+    /** @dataProvider unsafeRestoreGenerations */
+    public function test_restore_rejects_generation_values_that_cannot_advance_safely($generation): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'fixture')));
+        $before = $this->records();
+        $backup = $before;
+        $backup['figma']['generation'] = $generation;
+        $this->assertFalse($manager->restore_provider_records($backup));
+        $this->assertTrue($before === $this->records(), 'invalid backup metadata is refused without writing');
+    }
+
+    public function unsafeRestoreGenerations(): array
+    {
+        return array(array(PHP_INT_MAX), array(PHP_INT_MAX - 1), array(42.0), array('42'), array(-1));
+    }
+
+    /** @dataProvider versionConflictCases */
+    public function test_version_is_rechecked_inside_every_cas_attempt(string $mutation): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'initial-fixture')));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $this->assertSame(1, $snapshot['generation']);
+        $this->assertNotSame('', $snapshot['record_id']);
+        $this->between_read_and_write(function () use ($manager, $mutation): void {
+            if ('unrelated' === $mutation) {
+                $this->assertTrue($manager->set_provider_key('openai', 'other-fixture'));
+            } elseif ('status' === $mutation) {
+                $status = new ReflectionMethod(Mcpwp_Integration_Manager::class, 'record_test_status');
+                $status->setAccessible(true);
+                $this->assertTrue($status->invoke($manager, 'figma', true));
+            } elseif ('remove' === $mutation || 'recreate' === $mutation) {
+                $this->assertSame(Mcpwp_Integration_Manager::WRITE_STORED, $manager->remove_provider_record('figma'));
+                if ('recreate' === $mutation) {
+                    $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'recreated-fixture')));
+                }
+            } else {
+                $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'rotated-fixture')));
+            }
+        });
+        $saved = $manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot);
+        if ('unrelated' === $mutation) {
+            $this->assertTrue($saved, 'unrelated writes may retry');
+            $after = $manager->get_provider_snapshot('figma');
+            $this->assertSame(2, $after['generation']);
+            $this->assertSame($snapshot['record_id'], $after['record_id']);
+            $this->assertTrue($manager->has_provider_key('openai'));
+        } else {
+            $this->assertFalse($saved, 'same-provider changes invalidate the captured version');
+            $this->assertSame('generation_conflict', $manager->get_last_save_error());
+            $after = $manager->get_provider_snapshot('figma');
+            if ('remove' === $mutation) {
+                $this->assertFalse($after);
+            } else {
+                $expected = 'recreate' === $mutation ? 'recreated-fixture' : ('status' === $mutation ? 'initial-fixture' : 'rotated-fixture');
+                $this->assertTrue($expected === $after['config']['access_token'], 'late credentials never land');
+                if ('recreate' === $mutation) {
+                    $this->assertGreaterThan($snapshot['generation'], $after['generation'], 'deletion retains a counter high-water mark');
+                    $this->assertNotSame($snapshot['record_id'], $after['record_id']);
+                }
+            }
+        }
+    }
+
+    public function versionConflictCases(): array
+    {
+        return array(array('rotation'), array('remove'), array('recreate'), array('unrelated'), array('status'));
+    }
+
+    public function test_legacy_generation_zero_and_key_writes_use_the_same_version_rules(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $blob = Mcpwp_Encryption::get_instance()->encrypt(wp_json_encode(array('access_token' => 'legacy-fixture')));
+        $this->seed(array('figma' => $this->record($blob) + array('multi_field' => true)));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $this->assertSame(0, $snapshot['generation']);
+        $this->assertTrue($manager->set_provider_config('figma', array('access_token' => 'new-fixture'), $snapshot));
+        $after = $manager->get_provider_snapshot('figma');
+        $this->assertSame(1, $after['generation']);
+        $this->assertNotSame('', $after['record_id']);
+        $this->assertFalse($manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot));
+        $this->assertTrue($manager->set_provider_key('openai', 'first-fixture'));
+        $key = $manager->get_provider_snapshot('openai');
+        $this->assertTrue($manager->set_provider_key('openai', 'second-fixture'));
+        $next = $manager->get_provider_snapshot('openai');
+        $this->assertSame($key['generation'] + 1, $next['generation']);
+        $this->assertSame($key['record_id'], $next['record_id']);
+    }
+
+    public function test_a_removed_legacy_generation_zero_cannot_be_recreated_by_completion(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $blob = Mcpwp_Encryption::get_instance()->encrypt(wp_json_encode(array('access_token' => 'legacy-fixture')));
+        $this->seed(array('figma' => $this->record($blob) + array('multi_field' => true)));
+        $snapshot = $manager->get_provider_snapshot('figma');
+        $this->assertSame(0, $snapshot['generation']);
+        $this->assertSame('', $snapshot['record_id']);
+        $this->assertSame(Mcpwp_Integration_Manager::WRITE_STORED, $manager->remove_provider_record('figma'));
+        $this->assertFalse($manager->set_provider_config('figma', array('access_token' => 'late-fixture'), $snapshot));
+        $this->assertSame('generation_conflict', $manager->get_last_save_error());
+        $this->assertFalse($manager->has_provider_key('figma'));
+    }
+
+    /** #1004: a key-only write must never replace a structured record. */
+    public function test_key_only_writes_refuse_every_multi_field_provider(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        foreach (Mcpwp_Integration_Manager::PROVIDERS as $provider => $definition) {
+            if (!isset($definition['fields'])) {
+                continue;
+            }
+            $this->assertTrue($manager->set_provider_config($provider, array('token' => 'fixture-token')));
+            $before = $this->records();
+            $this->assertFalse($manager->set_provider_key($provider, 'replacement'), $provider);
+            $this->assertSame('invalid_config', $manager->get_last_save_error());
+            $this->assertTrue($before === $this->records(), 'refused write leaves ciphertext unchanged');
+        }
+    }
+
+    public function test_partial_config_saves_preserve_omitted_fields_and_allow_explicit_clearing(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('default_file_key' => 'OLD', 'oauth_client_secret' => 'fixture-token')));
+        $this->assertTrue($manager->set_provider_config('figma', array('default_file_key' => 'NEW')));
+        $config = $manager->get_provider_config('figma');
+        $this->assertTrue('fixture-token' === ($config['oauth_client_secret'] ?? null), 'omitted token survives');
+        $this->assertSame('NEW', $config['default_file_key']);
+        $this->assertTrue($manager->set_provider_config('figma', array('oauth_client_secret' => '')));
+        $config = $manager->get_provider_config('figma');
+        $this->assertSame('', $config['oauth_client_secret']);
+        $this->assertSame('NEW', $config['default_file_key']);
+    }
+
+    public function test_partial_config_merge_is_reapplied_after_a_conflict(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('default_file_key' => 'OLD', 'oauth_client_secret' => 'old-fixture')));
+        $this->between_read_and_write(function () use ($manager): void {
+            $this->assertTrue($manager->set_provider_config('figma', array('oauth_client_secret' => 'new-fixture')));
+        });
+        $this->assertTrue($manager->set_provider_config('figma', array('default_file_key' => 'NEW')));
+        $config = $manager->get_provider_config('figma');
+        $this->assertTrue('new-fixture' === ($config['oauth_client_secret'] ?? null), 'concurrent field update survives retry');
+        $this->assertSame('NEW', $config['default_file_key']);
+    }
+
+    public function test_single_field_provider_config_keeps_its_existing_save_behavior(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_key('gemini', 'old-fixture'));
+        $this->assertTrue($manager->set_provider_config('gemini', array('api_key' => 'new-fixture')));
+        $config = $manager->get_provider_config('gemini');
+        $this->assertTrue('new-fixture' === ($config['api_key'] ?? null), 'single-field config saves remain supported');
+    }
+
+    public function test_partial_jev_config_is_validated_after_merging_and_stays_encrypted(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('jev', array('api_key' => 'jev-fixture-token', 'transport' => 'off')));
+        $this->assertTrue($manager->set_provider_config('jev', array('transport' => 'off')));
+        $config = $manager->get_provider_config('jev');
+        $this->assertSame('off', $config['transport']);
+        $this->assertTrue('jev-fixture-token' === ($config['api_key'] ?? null), 'omitted Jev key survives');
+        $before = $this->records();
+        $this->assertFalse(str_contains(serialize($before), 'jev-fixture-token'), 'stored record contains no plaintext key');
+        $this->assertFalse($manager->set_provider_config('jev', array('transport' => 'invalid')));
+        $this->assertSame('invalid_config', $manager->get_last_save_error());
+        $this->assertTrue($before === $this->records(), 'validation failure preserves ciphertext');
+    }
+
+    public function test_partial_config_refuses_unreadable_stored_ciphertext(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->seed(array('screenshot' => $this->record('v2:invalid-ciphertext') + array('multi_field' => true)));
+        $before = $this->records();
+        $this->assertFalse($manager->set_provider_config('screenshot', array('url' => 'https://new.example')));
+        $this->assertTrue($before === $this->records(), 'unreadable credentials are never discarded');
     }
 
     public function test_two_interleaved_saves_of_different_providers_both_survive(): void

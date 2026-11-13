@@ -315,6 +315,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption-migration.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-integration-manager.php';
+	Mcpwp_Integration_Manager::register_option_guard();
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-design-references.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-event-store.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-site-state.php';

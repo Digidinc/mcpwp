@@ -343,6 +343,9 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		$result  = $manager->set_provider_key( $provider, $key );
 
 		if ( ! $result ) {
+			if ( 'invalid_config' === $manager->get_last_save_error() ) {
+				return $this->error_response( 'invalid_config', $manager->get_last_save_error_message(), 400 );
+			}
 			if ( 'integration_write_failed' === $manager->get_last_save_error() ) {
 				return $this->integration_write_failed( __( 'The API key could not be saved: the stored integrations changed or could not be read while saving, so nothing was written. Try again.', 'mcpwp' ) );
 			}

@@ -915,6 +915,12 @@ class Mcpwp_Action_Log {
 				if ( '' === $name ) {
 					return new WP_Error( 'invalid_snap', __( 'Snapshot option_key is not a usable option name.', 'mcpwp' ), array( 'status' => 500 ) );
 				}
+				if ( 'mcpwp_integrations' === $name ) {
+					if ( ! is_array( $snap['value'] ) || ! Mcpwp_Integration_Manager::get_instance()->restore_provider_records( $snap['value'] ) ) {
+						return new WP_Error( 'restore_failed', __( 'Provider records could not be restored.', 'mcpwp' ), array( 'status' => 503 ) );
+					}
+					return true;
+				}
 				update_option( $name, $snap['value'] );
 				return true;
 

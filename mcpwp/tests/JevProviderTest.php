@@ -486,11 +486,22 @@ final class JevProviderTest extends TestCase
 
     public function test_a_hand_stored_unknown_transport_sends_nothing(): void
     {
-        // Bypasses validation (a hand-edited option): an unreadable choice is 'off'.
+        // Bypasses validation (a hand-edited option): an unreadable choice sends nothing.
         $enc = Mcpwp_Encryption::get_instance()->encrypt(wp_json_encode(array('api_key' => 'k', 'transport' => 'weird')));
         update_option(Mcpwp_Integration_Manager::OPTION_NAME, array('jev' => array('key_encrypted' => $enc, 'multi_field' => true)));
 
         $this->assertSame('', Mcpwp_Jev::transport());
+    }
+
+    public function test_corrupt_stored_transport_has_a_distinct_reason_and_sends_nothing(): void
+    {
+        $this->configure();
+        $records = get_option('mcpwp_integrations');
+        $records['jev']['key_encrypted'] = Mcpwp_Encryption::get_instance()->encrypt(wp_json_encode(array('transport' => 'corrupt', 'api_key' => 'fixture-key')));
+        update_option('mcpwp_integrations', $records);
+        $this->assertSame('', Mcpwp_Jev::transport());
+        $this->assertFalse(Mcpwp_Jev::for_site());
+        $this->assertSame(array('transport' => '', 'reason' => 'transport_invalid'), Mcpwp_Jev::status());
     }
 
     public function test_transport_off_resolves_to_nothing_with_reason_disabled_by_admin(): void

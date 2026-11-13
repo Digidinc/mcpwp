@@ -201,6 +201,7 @@ if ( ! function_exists( 'mcpwp_integration_stored_select_value' ) ) {
 								<?php endif; ?>
 								<?php if ( $is_multi_field ) : ?>
 									<div class="mcpwp-multi-field-inputs is-hidden">
+										<p class="description"><?php esc_html_e( 'Leave fields blank to keep saved values. When changing a destination or account, also enter its credential.', 'mcpwp' ); ?></p>
 										<?php foreach ( $provider['fields'] as $field_key => $field_info ) : ?>
 											<div class="mcpwp-field-row">
 												<label class="mcpwp-field-label"><?php echo esc_html( $field_info['label'] ); ?></label>
@@ -216,6 +217,7 @@ if ( ! function_exists( 'mcpwp_integration_stored_select_value' ) ) {
 													data-field="<?php echo esc_attr( $field_key ); ?>"
 													placeholder="<?php echo esc_attr( isset( $field_info['placeholder'] ) ? $field_info['placeholder'] : '' ); ?>" />
 												<?php endif; ?>
+												<label><input type="checkbox" class="mcpwp-clear-config-field" data-field="<?php echo esc_attr( $field_key ); ?>" /> <?php esc_html_e( 'Clear saved value', 'mcpwp' ); ?></label>
 											</div>
 										<?php endforeach; ?>
 									</div>

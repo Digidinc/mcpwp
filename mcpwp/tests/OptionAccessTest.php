@@ -790,7 +790,7 @@ final class OptionAccessTest extends TestCase {
 
 		$out = Mcpwp_Option_Access::redact_for_log( array( 'key' => 'elementor_probe', 'value' => '{"api_key":"LEAKCANARY_abc123456789xyz"}' ), $keys );
 		$this->assertStringNotContainsString( 'LEAKCANARY', wp_json_encode( $out ) );
-		$this->assertSame( 'elementor_probe', $out['key'] );
+		$this->assertSame( '[redacted]', $out['key'] );
 
 		$out = Mcpwp_Option_Access::redact_for_log( array( 'value' => serialize( array( 'cfg' => '{"password":"Hunter2LivePassword"}', 'host' => 'smtp.example' ) ) ), $keys ); // phpcs:ignore
 		$this->assertStringNotContainsString( 'Hunter2LivePassword', wp_json_encode( $out ) );
@@ -1001,16 +1001,25 @@ final class OptionAccessTest extends TestCase {
 		$this->assertFalse( Mcpwp_Option_Access::is_opaque_serialized( 'O:8:"stdClass":1:{s:3:"pin";s:8:"12345678";}' ) );
 	}
 
+	public function test_log_secret_keys_mask_every_value_type_before_decoding(): void {
+		foreach ( array( '[]', '{}', 'a:0:{}', 'O:8:"stdClass":0:{}', array(), (object) array(), null, false, true, 0, 1, '' ) as $value ) {
+			foreach ( array( 'oauth_client_secret', 'key', 'access_token' ) as $key ) {
+				$out = Mcpwp_Option_Access::redact_for_log( array( $key => $value ), array() );
+				$this->assertSame( '[redacted]', $out[ $key ], 'A secret key always has one fixed placeholder.' );
+			}
+		}
+	}
+
 	public function test_a_nested_field_called_key_is_redacted_like_any_other(): void {
 		// Round-5 P1-1: the option-name exemption applied at any depth.
 		$keys = array();
 		$out  = Mcpwp_Option_Access::redact_for_log( array( 'credentials' => array( 'key' => 'sk-live-AbCd1234EfGh5678IjKl', 'value' => 1 ) ), $keys );
-		$this->assertSame( '[redacted]', $out['credentials']['key'] );
+		$this->assertSame( '[redacted]', $out['credentials'] );
 		$out = Mcpwp_Option_Access::redact_for_log( array( 'headers' => array( array( 'key' => 'ghp_AbCd1234EfGh5678IjKlMnOp', 'value' => 'x' ) ) ), $keys );
 		$this->assertSame( '[redacted]', $out['headers'][0]['key'] );
 
-		// The top row keeps the option name — unless the "name" is itself a credential.
-		$this->assertSame( 'woocommerce_api_key', Mcpwp_Option_Access::redact_for_log( array( 'key' => 'woocommerce_api_key', 'value' => 'x' ), $keys )['key'] );
+		// Secret key names are masked even when used as option-name arguments.
+		$this->assertSame( '[redacted]', Mcpwp_Option_Access::redact_for_log( array( 'key' => 'woocommerce_api_key', 'value' => 'x' ), $keys )['key'] );
 		$this->assertSame( '[redacted]', Mcpwp_Option_Access::redact_for_log( array( 'key' => 'sk-live-AbCd1234EfGh5678IjKl', 'value' => 'x' ), $keys )['key'] );
 	}
 
@@ -1119,19 +1128,19 @@ final class OptionAccessTest extends TestCase {
 		$this->assertStringContainsString( 'elementor_probe', $rows, 'The option NAME is still on the record.' );
 	}
 
-	public function test_the_option_name_is_kept_in_nested_key_value_rows_and_credentials_are_not(): void {
+	public function test_secret_key_names_are_masked_in_nested_key_value_rows(): void {
 		// Round-6 P2-1 with round-5 P1-1 still holding.
 		$keys = array();
 		$out  = Mcpwp_Option_Access::redact_for_log( array( 'params' => array( 'arguments' => array( 'key' => 'woocommerce_smtp_password', 'value' => 'Hunter2LivePassword' ) ) ), $keys );
-		$this->assertSame( 'woocommerce_smtp_password', $out['params']['arguments']['key'] );
+		$this->assertSame( '[redacted]', $out['params']['arguments']['key'] );
 		$this->assertSame( '[redacted]', $out['params']['arguments']['value'] );
 
 		$out = Mcpwp_Option_Access::redact_for_log( array( 'requests' => array( array( 'key' => 'elementor_probe', 'value' => array( 'api_key' => 'sk_live_AbCdEf12345678' ) ) ) ), $keys );
-		$this->assertSame( 'elementor_probe', $out['requests'][0]['key'] );
+		$this->assertSame( '[redacted]', $out['requests'][0]['key'] );
 		$this->assertSame( '[redacted]', $out['requests'][0]['value']['api_key'] );
 
 		$out = Mcpwp_Option_Access::redact_for_log( array( 'credentials' => array( 'key' => 'sk-live-AbCd1234EfGh5678IjKl', 'value' => 1 ) ), $keys );
-		$this->assertSame( '[redacted]', $out['credentials']['key'], 'A credential-shaped "name" is not a name.' );
+		$this->assertSame( '[redacted]', $out['credentials'], 'A credential-shaped "name" is not a name.' );
 		$out = Mcpwp_Option_Access::redact_for_log( array( 'headers' => array( array( 'key' => 'ghp_AbCd1234EfGh5678IjKlMnOp', 'value' => 'x' ) ) ), $keys );
 		$this->assertSame( '[redacted]', $out['headers'][0]['key'] );
 	}

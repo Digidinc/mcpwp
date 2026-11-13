@@ -31,6 +31,9 @@ class Mcpwp_Integration_Manager {
 	 */
 	const OPTION_NAME = 'mcpwp_integrations';
 
+	/** Live high-water counters, retained when a provider is removed. */
+	const GENERATIONS_KEY = '_mcpwp_generations';
+
 	/**
 	 * How many times a provider write reads the records again after another
 	 * writer changed them between its read and its write (#845).
@@ -47,7 +50,7 @@ class Mcpwp_Integration_Manager {
 	/**
 	 * Why the last set_provider_key() / set_provider_config() returned false:
 	 * 'unknown_provider', 'encryption_failed', 'integration_write_failed' or
-	 * 'invalid_config' ('' after a save that succeeded).
+	 * 'invalid_config' or 'generation_conflict' ('' after a save that succeeded).
 	 *
 	 * @var string
 	 */
@@ -96,6 +99,10 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'free',
 			'description' => 'Cloudflare Browser Rendering for high-quality headless Chromium screenshots. Without this, screenshots use WordPress mshots (lower quality, delayed).',
+			'destination_rules' => array( 'url' => array( 'rtrim_slash' => true ) ),
+			'secret_bindings' => array(
+				'url' => array( 'token' ),
+			),
 			'fields'      => array(
 				'url'   => array(
 					'label'       => 'Worker URL',
@@ -129,6 +136,9 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'pro',
 			'description' => 'Read Figma design context into MCPWP so models can inspect approved frames and then turn them into archetypes, parts, and site briefs. Supports either a personal access token or a Figma OAuth app.',
+			'secret_bindings' => array(
+				'oauth_client_id' => array( 'oauth_client_secret', 'access_token', 'refresh_token', 'token_type', 'expires_at' ),
+			),
 			'fields'      => array(
 				'personal_access_token' => array(
 					'label'       => 'Personal Access Token',
@@ -157,6 +167,10 @@ class Mcpwp_Integration_Manager {
 			'url'         => 'https://us.posthog.com/settings/project-details',
 			'tier'        => 'free',
 			'description' => 'Product analytics for the MCPWP admin interface. Tracks key admin actions (API key copy, connection test, upgrade clicks) to help understand plugin adoption.',
+			'destination_rules' => array( 'host' => array( 'default' => 'https://us.i.posthog.com', 'default_constant' => 'MCPWP_POSTHOG_DEFAULT_HOST', 'empty_default' => true, 'rtrim_slash' => true ) ),
+			'secret_bindings' => array(
+				'host' => array( 'token' ),
+			),
 			'fields'      => array(
 				'token' => array(
 					'label'       => 'Project API Key',
@@ -175,6 +189,9 @@ class Mcpwp_Integration_Manager {
 			'url'         => 'https://app.dataforseo.com/api-access',
 			'tier'        => 'pro',
 			'description' => 'Keyword search volume, difficulty and search visibility. You bring your own DataForSEO account; usage is billed to you directly.',
+			'secret_bindings' => array(
+				'login' => array( 'password' ),
+			),
 			'fields'      => array(
 				'login'    => array(
 					'label'       => 'API Login',
@@ -194,6 +211,9 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'pro',
 			'description' => 'Enables staging push/pull via the WP Engine Installs API. Only needed on WP Engine hosted sites.',
+			'secret_bindings' => array(
+				'install_id' => array( 'api_token' ),
+			),
 			'fields'      => array(
 				'install_id' => array(
 					'label'       => 'Install ID',
@@ -213,6 +233,9 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'pro',
 			'description' => 'Enables staging push/pull via the Kinsta Environments API. Only needed on Kinsta hosted sites.',
+			'secret_bindings' => array(
+				'site_id' => array( 'api_key' ),
+			),
 			'fields'      => array(
 				'site_id' => array(
 					'label'       => 'Site ID',
@@ -232,6 +255,9 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'pro',
 			'description' => 'Enables staging push/pull via the Pressable Site API. Only needed on Pressable hosted sites.',
+			'secret_bindings' => array(
+				'site_id' => array( 'api_token' ),
+			),
 			'fields'      => array(
 				'site_id'   => array(
 					'label'       => 'Site ID',
@@ -251,6 +277,9 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'free',
 			'description' => 'Connect this site\'s Cloudflare zone to fix Bot Fight Mode/Security Level blocking MCP requests, purge cache after content edits, and manage Speed settings (Early Hints, HTTP/3, Rocket Loader, Polish) that affect Core Web Vitals. Use a scoped API Token (Zone Settings: Edit, Zone WAF: Edit, Cache Purge: Purge) — not the Global API Key.',
+			'secret_bindings' => array(
+				'zone_id' => array( 'api_token' ),
+			),
 			'fields'      => array(
 				'api_token' => array(
 					'label'       => 'API Token',
@@ -270,6 +299,11 @@ class Mcpwp_Integration_Manager {
 			'key_prefix'  => '',
 			'tier'        => 'free',
 			'description' => 'Optional: TypeSafe\'s Jev evaluation model ranks the approval queue by priority so the most urgent pending changes surface first. Either bring your own TypeSafe API key (billed to you directly, input tokens only, $0.042/1M), or run the same model through Cloudflare Workers AI: enter your Cloudflare account ID and create a Workers AI token with Workers AI:Read permission for your account (same pricing, https://developers.cloudflare.com/ai/models/typesafe/jev/). Jev never uses the Cloudflare integration\'s zone token. A TypeSafe key is preferred when both are set; the transport setting forces one, or "off" stops all sending. Removing this integration deletes every Jev credential. Jev only routes — it never approves, rejects, applies, or blocks anything, and it has no say over scope checks or safety reports.',
+			'destination_rules' => array( 'endpoint' => array( 'default' => 'https://api.typesafe.ai/v1/systemone', 'default_constant' => 'Mcpwp_Jev::DEFAULT_ENDPOINT', 'trim' => true ) ),
+			'secret_bindings' => array(
+				'endpoint' => array( 'api_key' ),
+				'cf_account_id' => array( 'cf_api_token' ),
+			),
 			'fields'      => array(
 				'api_key'       => array(
 					'label'       => 'API Key (TypeSafe)',
@@ -335,6 +369,87 @@ class Mcpwp_Integration_Manager {
 		return self::$instance;
 	}
 
+	/** Register the guard for WordPress option imports and WP-CLI option writes. */
+	public static function register_option_guard() {
+		add_filter( 'sanitize_option_' . self::OPTION_NAME, array( __CLASS__, 'reject_raw_option_write' ) );
+	}
+
+	/** Raw replacement can replay version metadata; restore through CAS instead. */
+	public static function reject_raw_option_write( $value ) {
+		throw new RuntimeException( 'Provider records require Mcpwp_Integration_Manager::restore_provider_records(); raw option replacement is not supported.' );
+	}
+
+	/** Whether a generation can be advanced without integer overflow. */
+	private static function generation_can_advance( $generation ) {
+		return is_int( $generation ) && $generation >= 0 && $generation < PHP_INT_MAX - 1;
+	}
+
+	/**
+	 * Assign a version for any provider mutation, including ciphertext migration.
+	 * Backup versions are a floor only; their incarnation is never trusted.
+	 *
+	 * @return array|WP_Error Versioned record, or unsafe generation metadata.
+	 */
+	public static function advance_record_version( $current, array $next, $floor = 0, $restore = false ) {
+		$live   = is_array( $current ) && array_key_exists( 'generation', $current ) ? $current['generation'] : 0;
+		$saved  = $restore && array_key_exists( 'generation', $next ) ? $next['generation'] : 0;
+		foreach ( array( $live, $saved, $floor ) as $value ) {
+			if ( ! self::generation_can_advance( $value ) ) {
+				return new WP_Error( 'invalid_generation', __( 'Provider generation metadata cannot be advanced safely.', 'mcpwp' ) );
+			}
+		}
+		$generation = max( $live, $saved, $floor );
+		$record_id  = is_array( $current ) && isset( $current['record_id'] ) ? $current['record_id'] : '';
+		$next['generation'] = $generation + 1;
+		$next['record_id']  = ! $restore && '' !== $record_id ? $record_id : bin2hex( random_bytes( 16 ) );
+		return $next;
+	}
+
+	/**
+	 * Restore encrypted records atomically. Live counters survive deletion and
+	 * override backup metadata; every restored provider gets a fresh incarnation.
+	 * Internal restore API only: no generic option endpoint may write this state.
+	 *
+	 * @param array $backup Encrypted provider records from a trusted backup.
+	 * @return bool Whether the restored records committed.
+	 */
+	public function restore_provider_records( array $backup ) {
+		unset( $backup[ self::GENERATIONS_KEY ] );
+		foreach ( $backup as $provider => $record ) {
+			if ( ! is_array( $record ) || ! isset( $record['key_encrypted'] ) || ! is_string( $record['key_encrypted'] )
+				|| ( array_key_exists( 'generation', $record ) && ! self::generation_can_advance( $record['generation'] ) ) ) {
+				$this->last_save_error = 'invalid_config';
+				return false;
+			}
+		}
+		$outcome = $this->write_records(
+			static function ( array $records ) use ( $backup ) {
+				$counters = isset( $records[ self::GENERATIONS_KEY ] ) && is_array( $records[ self::GENERATIONS_KEY ] ) ? $records[ self::GENERATIONS_KEY ] : array();
+				$restored = array();
+				foreach ( $records as $provider => $record ) {
+					if ( self::GENERATIONS_KEY !== $provider && is_array( $record ) && ! isset( $backup[ $provider ] ) ) {
+						$removed = self::advance_record_version( $record, array(), $counters[ $provider ] ?? 0 );
+						if ( is_wp_error( $removed ) ) {
+							return $removed;
+						}
+						$counters[ $provider ] = $removed['generation'];
+					}
+				}
+				foreach ( $backup as $provider => $record ) {
+					$restored[ $provider ] = self::advance_record_version( $records[ $provider ] ?? null, $record, $counters[ $provider ] ?? 0, true );
+					if ( is_wp_error( $restored[ $provider ] ) ) {
+						return $restored[ $provider ];
+					}
+					$counters[ $provider ] = $restored[ $provider ]['generation'];
+				}
+				$restored[ self::GENERATIONS_KEY ] = $counters;
+				return $restored;
+			}
+		);
+		$this->last_save_error = self::WRITE_STORED === $outcome ? '' : 'integration_write_failed';
+		return self::WRITE_STORED === $outcome;
+	}
+
 	/**
 	 * Check if a provider uses multi-field config (e.g. URL + token).
 	 *
@@ -360,6 +475,12 @@ class Mcpwp_Integration_Manager {
 			return false;
 		}
 
+		if ( $this->is_multi_field_provider( $provider ) ) {
+			$this->last_save_error         = 'invalid_config';
+			$this->last_save_error_message = __( 'This provider requires named config fields. Use /integrations/configure to update its configuration.', 'mcpwp' );
+			return false;
+		}
+
 		$encryption = Mcpwp_Encryption::get_instance();
 		$encrypted  = $encryption->encrypt( $key );
 		if ( false === $encrypted ) {
@@ -379,13 +500,14 @@ class Mcpwp_Integration_Manager {
 	}
 
 	/**
-	 * Store multi-field config for a provider (e.g. screenshot worker URL + token).
+	 * Merge multi-field config for a provider (e.g. screenshot worker URL + token).
 	 *
 	 * @param string $provider Provider slug.
-	 * @param array  $config   Associative array of field values.
+	 * @param array      $config   Associative array of field values.
+	 * @param array|null $expected Internal snapshot for a conditional completion.
 	 * @return bool True on success.
 	 */
-	public function set_provider_config( $provider, $config ) {
+	public function set_provider_config( $provider, $config, $expected = null ) {
 		$this->last_save_error = '';
 
 		if ( ! isset( self::PROVIDERS[ $provider ] ) ) {
@@ -394,30 +516,82 @@ class Mcpwp_Integration_Manager {
 		}
 
 		$this->last_save_error_message = '';
-		$config = $this->validate_provider_config( $provider, is_array( $config ) ? $config : array() );
-		if ( is_wp_error( $config ) ) {
-			$this->last_save_error         = 'invalid_config';
-			$this->last_save_error_message = $config->get_error_message();
-			return false;
-		}
 
+		$config     = is_array( $config ) ? $config : array();
+		$error      = null;
 		$encryption = Mcpwp_Encryption::get_instance();
-		$encrypted  = $encryption->encrypt( wp_json_encode( $config ) );
-		if ( false === $encrypted ) {
-			$this->last_save_error = 'encryption_failed';
+		$outcome    = $this->write_provider_record(
+			$provider,
+			function ( $record ) use ( $provider, $config, $encryption, &$error ) {
+				$stored = array();
+				if ( $this->is_multi_field_provider( $provider ) && null !== $record ) {
+					$decrypted = is_array( $record ) && ! empty( $record['key_encrypted'] ) ? $encryption->decrypt( $record['key_encrypted'] ) : false;
+					$stored    = false !== $decrypted && ! empty( $record['multi_field'] ) ? json_decode( $decrypted, true ) : false;
+					if ( ! is_array( $stored ) ) {
+						$error = new WP_Error( 'invalid_config', __( 'The stored provider configuration could not be read. Remove it explicitly before configuring it again.', 'mcpwp' ) );
+						return $error;
+					}
+				}
+
+				// Merge inside each compare-and-swap attempt, so a retry keeps
+				// concurrent field changes too. Explicit empty values clear fields.
+				$merged = $this->validate_provider_config( $provider, array_merge( $stored, $config ) );
+				if ( is_wp_error( $merged ) ) {
+					$error = new WP_Error( 'invalid_config', $merged->get_error_message() );
+					return $error;
+				}
+
+				foreach ( self::PROVIDERS[ $provider ]['secret_bindings'] ?? array() as $destination => $secrets ) {
+					if ( array_key_exists( $destination, $config ) && $this->binding_destination( $provider, $destination, $stored ) !== $this->binding_destination( $provider, $destination, $merged ) ) {
+						foreach ( $secrets as $secret ) {
+							if ( ! array_key_exists( $secret, $config ) ) {
+								unset( $merged[ $secret ] );
+							}
+						}
+					}
+				}
+
+				$encrypted = $encryption->encrypt( wp_json_encode( $merged ) );
+				if ( false === $encrypted ) {
+					$error = new WP_Error( 'encryption_failed' );
+					return $error;
+				}
+
+				return array(
+					'key_encrypted' => $encrypted,
+					'configured_at' => current_time( 'mysql' ),
+					'last_tested'   => null,
+					'test_status'   => null,
+					'multi_field'   => true,
+				);
+			},
+			$expected
+		);
+
+		if ( self::WRITE_STORED !== $outcome ) {
+			$this->last_save_error         = $error ? $error->get_error_code() : ( 'generation_conflict' === $this->last_save_error ? 'generation_conflict' : 'integration_write_failed' );
+			$this->last_save_error_message = $error ? $error->get_error_message() : '';
 			return false;
 		}
 
-		return $this->save_provider_record(
-			$provider,
-			array(
-				'key_encrypted' => $encrypted,
-				'configured_at' => current_time( 'mysql' ),
-				'last_tested'   => null,
-				'test_status'   => null,
-				'multi_field'   => true,
-			)
-		);
+		if ( class_exists( 'Mcpwp_Encryption_Migration' ) ) {
+			Mcpwp_Encryption_Migration::clear_provider_failure( $provider );
+		}
+		return true;
+	}
+
+	/** Compare the effective destination using its provider-declared send rules. */
+	private function binding_destination( $provider, $field, array $config ) {
+		$value = (string) ( $config[ $field ] ?? '' );
+		$rules = self::PROVIDERS[ $provider ]['destination_rules'][ $field ] ?? array();
+		if ( ! empty( $rules['trim'] ) ) {
+			$value = trim( $value );
+		}
+		if ( '' === $value || ( ! empty( $rules['empty_default'] ) && empty( $value ) ) ) {
+			$value = isset( $rules['default_constant'] ) && defined( $rules['default_constant'] )
+				? constant( $rules['default_constant'] ) : ( $rules['default'] ?? '' );
+		}
+		return ! empty( $rules['rtrim_slash'] ) ? rtrim( $value, '/' ) : $value;
 	}
 
 	/**
@@ -451,25 +625,36 @@ class Mcpwp_Integration_Manager {
 	 * @return array|false Config array or false.
 	 */
 	public function get_provider_config( $provider ) {
+		$snapshot = $this->get_provider_snapshot( $provider );
+		return false === $snapshot ? false : $snapshot['config'];
+	}
+
+	/**
+	 * Read config and its version from the same record, before external work.
+	 * Legacy records start at generation zero and acquire an incarnation on write.
+	 *
+	 * @param string $provider Provider slug.
+	 * @return array|false Internal snapshot; never return it through an API.
+	 */
+	public function get_provider_snapshot( $provider ) {
 		$data = get_option( self::OPTION_NAME, array() );
 		if ( ! is_array( $data ) || empty( $data[ $provider ]['key_encrypted'] ) ) {
 			return false;
 		}
-
-		$encryption = Mcpwp_Encryption::get_instance();
-		$decrypted  = $encryption->decrypt( $data[ $provider ]['key_encrypted'] );
+		$record    = $data[ $provider ];
+		$decrypted = Mcpwp_Encryption::get_instance()->decrypt( $record['key_encrypted'] );
 		if ( false === $decrypted ) {
 			return false;
 		}
-
-		// Multi-field providers store JSON.
-		if ( ! empty( $data[ $provider ]['multi_field'] ) ) {
-			$config = json_decode( $decrypted, true );
-			return is_array( $config ) ? $config : false;
+		$config = ! empty( $record['multi_field'] ) ? json_decode( $decrypted, true ) : array( 'key' => $decrypted );
+		if ( ! is_array( $config ) ) {
+			return false;
 		}
-
-		// Single-key fallback.
-		return array( 'key' => $decrypted );
+		return array(
+			'config'     => $config,
+			'generation' => isset( $record['generation'] ) ? (int) $record['generation'] : 0,
+			'record_id'  => isset( $record['record_id'] ) ? $record['record_id'] : '',
+		);
 	}
 
 	/**
@@ -526,7 +711,16 @@ class Mcpwp_Integration_Manager {
 	 *                stored for it) or WRITE_FAILED (it is still stored).
 	 */
 	public function remove_provider_record( $provider ) {
-		return $this->write_provider_record( $provider, null );
+		$outcome = $this->write_provider_record(
+			$provider,
+			static function () {
+				return null;
+			}
+		);
+		if ( self::WRITE_STORED === $outcome && class_exists( 'Mcpwp_Encryption_Migration' ) ) {
+			Mcpwp_Encryption_Migration::clear_provider_failure( $provider );
+		}
+		return $outcome;
 	}
 
 	/**
@@ -558,7 +752,16 @@ class Mcpwp_Integration_Manager {
 	 *              not be made, or there was no such provider to remove.
 	 */
 	private function save_provider_record( $provider, $record ) {
-		$saved = self::WRITE_STORED === $this->write_provider_record( $provider, $record );
+		$saved = self::WRITE_STORED === $this->write_provider_record(
+			$provider,
+			static function () use ( $record ) {
+				return $record;
+			}
+		);
+
+		if ( $saved && class_exists( 'Mcpwp_Encryption_Migration' ) ) {
+			Mcpwp_Encryption_Migration::clear_provider_failure( $provider );
+		}
 
 		$this->last_save_error = $saved ? '' : 'integration_write_failed';
 
@@ -566,42 +769,69 @@ class Mcpwp_Integration_Manager {
 	}
 
 	/**
-	 * Write one provider's record (null removes it) and return the outcome.
+	 * The single provider-write chokepoint (configure, key, remove, OAuth, status).
+	 *
+	 * The options-row CAS is the optimistic lock: version checks and mutation
+	 * are evaluated against the same row on every attempt. Any successful write
+	 * to this provider invalidates older OAuth work; unrelated providers may retry.
+	 * A new incarnation prevents remove/recreate from matching an old generation.
 	 *
 	 * @param string     $provider Provider slug.
-	 * @param array|null $record   The provider's new record, or null to remove it.
+	 * @param callable   $change   Current record -> record, null removes, false skips.
+	 * @param array|null $expected Snapshot version; null for an operator write.
 	 * @return string WRITE_STORED, WRITE_UNCHANGED or WRITE_FAILED.
 	 */
-	private function write_provider_record( $provider, $record ) {
+	private function write_provider_record( $provider, callable $change, $expected = null ) {
+		$conflict = false;
 		$outcome = $this->write_records(
-			static function ( array $records ) use ( $provider, $record ) {
-				if ( null === $record ) {
-					if ( ! array_key_exists( $provider, $records ) ) {
-						return null;
-					}
-
-					unset( $records[ $provider ] );
-
-					return $records;
+			function ( array $records ) use ( $provider, $change, $expected, &$conflict ) {
+				$counters   = isset( $records[ self::GENERATIONS_KEY ] ) && is_array( $records[ self::GENERATIONS_KEY ] ) ? $records[ self::GENERATIONS_KEY ] : array();
+				$current    = isset( $records[ $provider ] ) ? $records[ $provider ] : null;
+				$generation = is_array( $current ) && isset( $current['generation'] ) ? (int) $current['generation'] : 0;
+				$record_id  = is_array( $current ) && isset( $current['record_id'] ) ? $current['record_id'] : '';
+				if ( null !== $expected && ( null === $current || $generation !== $expected['generation'] || $record_id !== $expected['record_id'] ) ) {
+					$conflict = true;
+					return new WP_Error( 'generation_conflict' );
 				}
 
-				$records[ $provider ] = $record;
-
+				$next = call_user_func( $change, $current );
+				if ( is_wp_error( $next ) ) {
+					return $next;
+				}
+				if ( false === $next ) {
+					return null;
+				}
+				if ( null === $next ) {
+					if ( null === $current ) {
+						return null;
+					}
+					unset( $records[ $provider ] );
+					$removed = self::advance_record_version( $current, array(), $counters[ $provider ] ?? 0 );
+					if ( is_wp_error( $removed ) ) {
+						return $removed;
+					}
+					$counters[ $provider ] = $removed['generation'];
+				} else {
+					$next = self::advance_record_version( $current, $next, $counters[ $provider ] ?? 0 );
+					if ( is_wp_error( $next ) ) {
+						return $next;
+					}
+					$counters[ $provider ] = $next['generation'];
+					$records[ $provider ] = $next;
+				}
+				$records[ self::GENERATIONS_KEY ] = $counters;
 				return $records;
 			}
 		);
 
-		if ( self::WRITE_STORED === $outcome && class_exists( 'Mcpwp_Encryption_Migration' ) ) {
-			Mcpwp_Encryption_Migration::clear_provider_failure( $provider );
-		}
-
+		$this->last_save_error = $conflict ? 'generation_conflict' : ( self::WRITE_FAILED === $outcome ? 'integration_write_failed' : '' );
 		return $outcome;
 	}
 
 	/**
 	 * Record a connection test's outcome on the provider's record.
 	 *
-	 * Only the two status fields change. A provider with no record — removed
+	 * Only the two status fields and record version change. A provider with no record — removed
 	 * while its test ran, or never stored — has nothing to record, and a stale
 	 * copy must not bring it back.
 	 *
@@ -613,16 +843,15 @@ class Mcpwp_Integration_Manager {
 	private function record_test_status( $provider, $success ) {
 		$tested_at = current_time( 'mysql' );
 
-		$outcome = $this->write_records(
-			static function ( array $records ) use ( $provider, $success, $tested_at ) {
-				if ( ! isset( $records[ $provider ] ) || ! is_array( $records[ $provider ] ) ) {
-					return null;
+		$outcome = $this->write_provider_record(
+			$provider,
+			static function ( $record ) use ( $success, $tested_at ) {
+				if ( ! is_array( $record ) ) {
+					return false;
 				}
-
-				$records[ $provider ]['last_tested'] = $tested_at;
-				$records[ $provider ]['test_status'] = $success ? 'ok' : 'failed';
-
-				return $records;
+				$record['last_tested'] = $tested_at;
+				$record['test_status'] = $success ? 'ok' : 'failed';
+				return $record;
 			}
 		);
 
@@ -671,7 +900,8 @@ class Mcpwp_Integration_Manager {
 	 * INSERT, so two first saves cannot overwrite each other either.
 	 *
 	 * @param callable $change Receives the current records; returns the new
-	 *                         records, or null when there is nothing to write.
+	 *                         records, null when there is nothing to write, or
+	 *                         WP_Error to abort.
 	 * @return string WRITE_STORED, WRITE_UNCHANGED or WRITE_FAILED.
 	 */
 	private function write_records( callable $change ) {
@@ -687,6 +917,10 @@ class Mcpwp_Integration_Manager {
 			$present = Mcpwp_Encryption::ROW_PRESENT === $row['state'];
 			$records = $present ? maybe_unserialize( $row['value'] ) : array();
 			$next    = call_user_func( $change, is_array( $records ) ? $records : array() );
+
+			if ( is_wp_error( $next ) ) {
+				return self::WRITE_FAILED;
+			}
 
 			if ( null === $next ) {
 				return self::WRITE_UNCHANGED;
