@@ -201,6 +201,12 @@ write and never `admin`.
   `X-Forwarded-Proto` is honored only behind `MCPWP_TRUST_PROXY_HEADERS`.
 - The public feedback relay (`POST /feedback/relay`) has its own per-address and site-wide limits.
 
+## Reconnecting an existing ChatGPT connector
+
+The discovery documents advertise only the `read` and `write` scopes; `admin` is never offered over OAuth (admin-level actions stay on the deliberate `X-API-Key` path). A connector added before that was the case may have cached the old registration or the old scope request, and ChatGPT can then fail at sign-in with `invalid_scope`.
+
+After updating MCPWP, remove the connector in ChatGPT and add it again. It fetches the current metadata and registers fresh. Nothing needs changing on the site. API keys are unaffected.
+
 ## Which auth to use
 
 | Client | Auth |
