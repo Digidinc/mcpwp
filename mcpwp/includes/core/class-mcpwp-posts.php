@@ -501,7 +501,12 @@ class Mcpwp_Posts {
 		$meta_deleted  = array();
 		$meta_applied  = Mcpwp_Post_Fields::apply_meta( $post_id, $post_type, $clean_meta, $meta_deleted );
 
-		$created = $this->get_post( $post_id );
+		// Read back any supported type, including pages, and revalidate after insert hooks.
+		$post = get_post( $post_id );
+		if ( ! $post || is_wp_error( $this->validate_post_type( $post->post_type ) ) ) {
+			return $this->get_post( $post_id );
+		}
+		$created = $this->format_post( $post, true );
 		if ( is_array( $created ) ) {
 			if ( ! empty( $terms_applied ) ) {
 				$created['terms'] = $terms_applied;
