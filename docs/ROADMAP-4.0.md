@@ -64,6 +64,10 @@ define or missing constant fails the gate.
 Goal: a non-technical WordPress owner connects claude.ai (or any MCP client) in
 under 2 minutes with no Cloudflare surgery and no pasted keys.
 
+> **Superseded (#1099): the site is now its own OAuth authorization server** (DCR, PKCE, WP-login
+> consent, default on) and the broker is an optional second path. Current behaviour:
+> [`OAUTH-CONNECT.md`](OAUTH-CONNECT.md). The note below is the 2026-07 history.
+>
 > **Status update (2026-07-21): B1 DELIVERED — via a hosted broker, not per-site OAuth.**
 > The original B1 plan (a full OAuth 2.1 authorization server *inside each plugin*)
 > was rejected (PR #598) — it puts a browser-driven, security-critical AS on every

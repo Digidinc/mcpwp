@@ -1,15 +1,123 @@
-# OAuth connector sign-in
+# Connecting AI clients to your site (OAuth and API keys)
 
-This describes what the plugin does today on `main` (unreleased builds after v3.14.10). Version
-3.14.10 and earlier shipped an older, opt-in OAuth server; the differences are called out under
-[Upgrading from 3.14.10 or earlier](#upgrading-from-31410-or-earlier).
+Applies to builds after v3.14.10 (the 3.14.11 line and later). Version 3.14.10 and earlier shipped an
+older, opt-in OAuth server; see [Upgrading from 3.14.10 or earlier](#upgrading-from-31410-or-earlier).
 
-The site is its own OAuth 2.1 authorization server. An MCP client such as the claude.ai web
-connector or ChatGPT connects by **signing in** to WordPress instead of pasting an API key. API-key
-authentication (`X-API-Key`, `Authorization: Bearer`, or `?api_key=`) still works exactly as before
-for config-file clients (Claude Desktop, Cursor, Windsurf, Claude Code).
+The site is its own OAuth 2.1 authorization server. An MCP client such as the claude.ai web connector
+or ChatGPT connects by **signing in to WordPress** instead of pasting an API key. Clients register
+themselves (Dynamic Client Registration, RFC 7591), so there is no client id to configure by hand.
+API-key authentication (`X-API-Key`, `Authorization: Bearer`, or `?api_key=`) works exactly as before.
 
-## Turning it on and off
+## Connect a client
+
+| Client | How | Auth |
+|--------|-----|------|
+| claude.ai (web, Desktop custom connector) | Add a custom connector with the MCP URL below, then sign in to WordPress when prompted. | OAuth |
+| ChatGPT | Add a connector with the MCP URL and OAuth, sign in to WordPress when prompted. Or use the one-link **Add to ChatGPT** on the Setup page (an API key, not OAuth; see below). | OAuth, or scoped key |
+| Cursor, Windsurf, Claude Code, any config-file client | Send the key in an `X-API-Key` header (or via the `mcp-remote` bridge). | API key |
+| Machine to machine | API key, or the `client_credentials` grant (see below). | API key / OAuth |
+
+MCP URL (the protected resource): `https://YOUR-SITE/wp-json/mcpwp/v1/mcp`. On a site without pretty
+permalinks it is `https://YOUR-SITE/?rest_route=/mcpwp/v1/mcp`.
+
+To connect with OAuth you do not need to change a setting: OAuth is on by default. The person who
+signs in must be a WordPress user at or above the site's minimum role (Editor by default).
+
+What a client discovers on its own (nothing here is typed in by hand):
+
+| URL | What it is |
+|-----|------------|
+| `/.well-known/oauth-protected-resource` | RFC 9728 metadata naming the MCP endpoint and this site as the authorization server |
+| `/.well-known/oauth-authorization-server` | RFC 8414 metadata listing the endpoints below |
+| `/wp-json/mcpwp/v1/oauth/register` | Dynamic Client Registration |
+| `/mcpwp-oauth/authorize` | Consent screen (browser) |
+| `/wp-json/mcpwp/v1/oauth/token` | Token endpoint |
+| `/wp-json/mcpwp/v1/oauth/revoke` | RFC 7009 revocation |
+
+An unauthenticated call to the MCP endpoint answers `401` with a `WWW-Authenticate: Bearer
+resource_metadata="..."` header, which is how a client finds the metadata.
+
+## What the consent screen grants
+
+The user sees the app's name (the app's own claim, not a verified identity), the host the approval is
+sent to, and what it will be able to do:
+
+- **Read your site's content**: always on, cannot be unticked.
+- **Create and edit content** (drafts, pages, posts, media, SEO, Elementor): shown only when the
+  requested scope includes `write` and the user can `edit_posts`; the user can untick it.
+- A fixed note: never administrator access. Settings, API keys and approvals stay out of reach.
+
+The token runs **as the user who approved it**, so WordPress's own capability and per-post checks apply
+on top of the scope. Anything that needs the `admin` scope stays on a deliberately created API key.
+**Deny** returns the client `access_denied`. A user below the minimum role gets a plain refusal page
+instead of a consent screen.
+
+## See and revoke connections
+
+- **A user, for their own apps:** WP Admin -> Users -> Profile -> **Connected AI apps**. Each app shows
+  its access (Read only, or Read and write), when it connected and when it was last used. **Revoke**
+  cuts one app off at once; **Disconnect all AI apps for this user** cuts all of them. An
+  administrator can do the same on another user's profile.
+- **An administrator, for the whole site:** MCPWP -> Setup -> **Advanced** -> **AI apps**. Every
+  registered app, with its active token count. **Remove** stops that app for every user.
+- **The app itself** can call `/oauth/revoke` (RFC 7009).
+
+A revoked app has to be connected again (it signs in again; no site change is needed).
+
+## Reconnecting an existing ChatGPT connector
+
+The discovery documents advertise only the `read` and `write` scopes; `admin` is never offered over OAuth
+(admin-level actions stay on the deliberate `X-API-Key` path). A connector added before that was the
+case, or one that was set up against the mumcp.com broker, may hold a cached registration or scope
+request and can fail at sign-in with `invalid_scope`.
+
+After updating MCPWP, remove the connector in ChatGPT and add it again. It fetches the current
+metadata and registers fresh. Nothing needs changing on the site. API keys are unaffected. A site
+address change also needs this, because tokens are bound to the MCP URL.
+
+## Troubleshooting
+
+The errors below are the ones this plugin emits. OAuth errors are JSON `{"error": "...",
+"error_description": "..."}` unless noted.
+
+| Symptom or code | Cause | Fix |
+|-----------------|-------|-----|
+| `invalid_scope` at sign-in (claude.ai or ChatGPT), mentioning `admin` | Not emitted by this plugin: the site narrows an `admin` request to `write` and ignores unknown scopes. It comes from the **mumcp.com broker** when a client requests `admin`. The broker-side clamp fix is merged; whether it is deployed is outside the plugin and cannot be checked from the site. | Remove the connector and add it again after updating MCPWP so discovery points at the site (the site is the authorization server unless the broker is enrolled and local OAuth is off). If it persists on a broker-enrolled site, use the local server (turn it on under Setup -> Advanced) or an API key. |
+| `501 server_error`, "OAuth is not enabled on this site." | The Setup -> Advanced switch is off. | Turn it on. Nothing was revoked; unexpired tokens work again. |
+| `invalid_client`, "Unknown or missing client_id." (consent page), or `401 invalid_client`, "Invalid client_id." (token/revoke) | The `client_id` was never registered, was removed under AI apps, or was registered but not authorized within 1 hour (then it expires). | The client registers again. If it caches a registration, clear it (remove and re-add the connector). |
+| `invalid_request`, "redirect_uri is not registered for this client." | The `redirect_uri` is not an exact match of one registered for that client. | Register the exact callback URL (no wildcards). Re-add the connector. |
+| `invalid_redirect_uri` (HTTP 400 from `/oauth/register`) | A registered redirect URI is not `https` (or `http` on `localhost`, `127.0.0.1`, `[::1]`), has a fragment or user info, is over 2000 characters, or there are more than 5. | Fix the client's callback URL list. |
+| `invalid_client_metadata` (400 from `/oauth/register`) | The body is not a JSON object, or `grant_types`, `response_types` or `client_name` are malformed (grant types must include `authorization_code`, and may add only `refresh_token`; response type only `code`). | Fix the registration request. |
+| `429 temporarily_unavailable` from `/oauth/register`, "Too many app registrations right now" | A per-address, per-site or per-minute registration limit. Honour `Retry-After`. | Wait, or register as an administrator (exempt). |
+| `429`, "This site has reached its limit of registered apps." | 500 stored apps; no `Retry-After`. | An administrator removes unused apps under Setup -> Advanced -> AI apps. |
+| `503 temporarily_unavailable` ("busy" or "could not be saved") | Store lock contention. | Retry. |
+| `invalid_request`, "code_challenge_method must be S256." / "code_challenge is required." / "code_challenge must be 43 to 128 characters of A-Z a-z 0-9 - . _ ~." | PKCE is mandatory, S256 only, RFC 7636 shape. | Fix the client; `plain` is never accepted. |
+| `invalid_request`, "code_verifier is required (PKCE mandatory)." | Token request has no verifier. | Send `code_verifier`. |
+| `invalid_grant`, "code_verifier must be 43 to 128 characters ..." or "PKCE verification failed." | Verifier has the wrong shape (for example base64 with `+ / =`) or does not match the challenge. | Use a base64url verifier of 43-128 characters, and the one that produced the challenge. |
+| `invalid_grant`, "Authorization code is invalid or has expired." / "has expired." / "has been revoked." | Codes last 60 seconds and are single use. A second presentation of the same code also revokes the tokens its first use created. | Start the connection again; do not retry a code. |
+| `invalid_grant`, "redirect_uri mismatch." / "client_id mismatch." | The token request differs from the authorize request. | Send the same `redirect_uri` and `client_id`. |
+| `invalid_grant`, "The approving user can no longer connect AI apps on this site." | The user was deleted or no longer holds the minimum role. | Restore the role (Setup -> minimum role) or connect as another user. |
+| `invalid_grant`, "Refresh token is invalid or has expired." / "has been revoked." / "was issued to a different client." / "issued for a different resource." | Refresh tokens last up to 30 days, rotate on every use and are bound to client and resource. Presenting an already-rotated token revokes the whole family. | Connect again. |
+| `invalid_target`, "resource must be this site's MCP endpoint URL." | The `resource` parameter names another URL (for example after a site address change). | Send the current MCP URL, or re-add the connector. |
+| `400 invalid_request`, "The consent form was altered or has expired." | The consent page sat open too long, or the form was changed. | Start the connection again. |
+| `access_denied` in the redirect | The user pressed Deny. | Approve, if intended. |
+| Consent page: "Your WordPress role can't connect AI apps on this site; ask an administrator." | The signed-in user is below the minimum role (Editor by default). | An administrator signs in, or changes the minimum role on the Setup page. |
+| `401`, `invalid_api_key` "Invalid API key." on a Bearer call | The access token is unknown, **expired** (default 1 hour), or revoked at the token row, or OAuth is off. The client should use its refresh token. | Refresh the token; if that fails, reconnect. |
+| `401`, `invalid_token`, "This access token has been revoked." | Its app was removed, or the user revoked it, or its refresh family was killed. | Reconnect. |
+| `401`, `invalid_token`, "This access token was issued for a different resource." | Token minted for another site address. | Reconnect. |
+| `401`, `invalid_token`, "The WordPress user who approved this connection can no longer connect AI apps on this site." | User deleted or demoted. | Restore the user, or connect as someone else. |
+| `401 missing_api_key` when sending an OAuth token | Access tokens are accepted only in `Authorization: Bearer`, never in `X-API-Key` or `?api_key=`. | Move it to the Bearer header. |
+| `403 insufficient_scope`, "API key lacks required scope: write/admin" | The token was approved as read only (or `write` was unticked), or the tool needs `admin`, which OAuth never grants. | Reconnect and keep "Create and edit content" ticked, or use an Admin-role API key for admin actions. A user token can also be refused on a particular post by WordPress's own capability check. |
+| `429` from the token endpoint (`client_credentials` or revoke) | Per-address rate limit. | Back off. |
+
+Behind a proxy or CDN, set `MCPWP_TRUST_PROXY_HEADERS` only when the proxy overwrites the forwarding
+headers; otherwise all callers share one address and hit the registration limits sooner.
+
+## Reference
+
+The sections below are the detail behind the steps above.
+
+### Turning it on and off
 
 OAuth is **on by default**: it is on whenever the `oauth_enabled` setting was never stored. The
 on/off switch is under **MCPWP → Setup → Advanced**; saving it stores an explicit value. While it is
@@ -18,7 +126,7 @@ off the authorization-server and protected-resource metadata are not served (404
 front-channel `/mcpwp-oauth/authorize` answers 404, and an access token is not accepted. Turning it off does not revoke anything, so a token that has not
 expired works again if OAuth is switched back on.
 
-## Endpoints
+### Endpoints (reference)
 
 | Endpoint | Purpose |
 |----------|---------|
@@ -35,7 +143,7 @@ An unauthenticated request to `/mcp` answers `401` with
 discovers the flow on its own. The protected-resource document advertises
 `bearer_methods_supported: ["header"]`.
 
-## The flow
+### The flow (for client authors)
 
 1. **Registration.** The client registers itself (`POST /oauth/register`) with a name and one to five
    redirect URIs and receives a public `client_id` (prefix `mcpwpc_`). No client secret is ever
@@ -64,7 +172,7 @@ discovers the flow on its own. The protected-resource document advertises
 Every token-endpoint answer, success or error, carries `Cache-Control: no-store` and
 `Pragma: no-cache`.
 
-## Scope, identity and the minimum role
+### Scope, identity and the minimum role
 
 - **A token that belongs to a user is never `admin`.** The scopes of the interactive flow are `read` and
   `write`. (The machine-to-machine `client_credentials` grant has no user; its ceiling is a site setting
@@ -85,7 +193,7 @@ Every token-endpoint answer, success or error, carries `Cache-Control: no-store`
 - **Audience.** Tokens are bound to the MCP endpoint URL (RFC 8707). A `resource` parameter, when
   sent, must name that URL. If the site address changes, connected apps must reconnect.
 
-## Token lifetimes
+### Token lifetimes
 
 | Token | Lifetime |
 |-------|----------|
@@ -95,11 +203,11 @@ Every token-endpoint answer, success or error, carries `Cache-Control: no-store`
 
 Tokens are stored only as SHA-256 hashes in the `mcpwp_oauth_tokens` table.
 
-## Revocation and reuse detection
+### Revocation and reuse detection
 
 A token stops working at once when any of these happens:
 
-- the app is **deleted** (MCPWP → Setup → Advanced → AI apps, administrators);
+- the app is **removed** (MCPWP → Setup → Advanced → AI apps, administrators);
 - the user **revokes** it from their profile (**Connected AI apps**), or an administrator disconnects
   all of a user's apps;
 - the user is deleted, loses the minimum role, or an administrator revokes the user's apps;
@@ -119,16 +227,7 @@ A token stops working at once when any of these happens:
 `/oauth/revoke` answers `200` for any token it does not know, and `503 temporarily_unavailable` (with
 `Retry-After`) when a revocation could not be saved, so a client can retry.
 
-## Connected apps screen
-
-- **Profile → Connected AI apps**: the apps holding live tokens for that user, each with a Revoke
-  (a user may revoke their own; an administrator anyone's).
-- **MCPWP → Setup → Advanced → AI apps**: every registered app, with Delete (administrators).
-
-App names come from registration, which is anonymous, so they are shown escaped and should be read as
-the app's claim, not a verified identity.
-
-## Limits on registration
+### Limits on registration
 
 Registration is unauthenticated by design, so it is bounded. Nothing is ever displaced: every
 `client_id` a `201` hands out stays valid until it expires.
@@ -167,7 +266,7 @@ Registration is unauthenticated by design, so it is bounded. Nothing is ever dis
 `client_credentials` and `/oauth/revoke` are rate-limited per address; the limiter's answer is an OAuth
 error body (`429`).
 
-## The `client_credentials` grant
+### The `client_credentials` grant
 
 For machine-to-machine use, a site can configure a confidential client in `mcpwp_settings`
 (`oauth_client_id`, plus a client secret saved as a hash on the Settings page and optionally
@@ -176,7 +275,7 @@ For machine-to-machine use, a site can configure a confidential client in `mcpwp
 `oauth_client_credentials_max_scope` (default `write`). Only an administrator can raise that ceiling
 to `admin`; the request cannot.
 
-## The broker path (mumcp.com)
+### The broker path (mumcp.com)
 
 A site can instead enroll with the mumcp.com broker (MCPWP → Setup → Advanced: OAuth sign-in via mumcp.com → Connect to mumcp.com). The
 broker issues opaque Bearer tokens that the plugin validates by cached, authenticated introspection;
@@ -185,13 +284,13 @@ are on. Broker tokens are mapped to `read` or `write`, never `admin`, and **Disc
 broker token at once without a network call. The design is in
 `docs/superpowers/specs/2026-07-20-mumcp-oauth-broker-design.md`.
 
-## "Add to ChatGPT"
+### "Add to ChatGPT"
 
 The one-link ChatGPT connector on the Setup page is not OAuth: it is an ordinary scoped API key carried
 in the URL (`?api_key=`) with ChatGPT's authentication set to "No authentication". Its key is read +
 write and never `admin`.
 
-## Security model
+### Security model
 
 - PKCE `S256` is mandatory; the challenge and verifier are shape-checked.
 - Authorization codes are single use, short-lived and bound to client, redirect URI, challenge and user.
@@ -201,22 +300,7 @@ write and never `admin`.
   `X-Forwarded-Proto` is honored only behind `MCPWP_TRUST_PROXY_HEADERS`.
 - The public feedback relay (`POST /feedback/relay`) has its own per-address and site-wide limits.
 
-## Reconnecting an existing ChatGPT connector
-
-The discovery documents advertise only the `read` and `write` scopes; `admin` is never offered over OAuth (admin-level actions stay on the deliberate `X-API-Key` path). A connector added before that was the case may have cached the old registration or the old scope request, and ChatGPT can then fail at sign-in with `invalid_scope`.
-
-After updating MCPWP, remove the connector in ChatGPT and add it again. It fetches the current metadata and registers fresh. Nothing needs changing on the site. API keys are unaffected.
-
-## Which auth to use
-
-| Client | Auth |
-|--------|------|
-| Claude Desktop / Code / Cursor / Windsurf | `X-API-Key` header (config file), the simplest |
-| claude.ai web | OAuth |
-| ChatGPT | OAuth, or the "Add to ChatGPT" link |
-| Machine-to-machine | `client_credentials`, or an API key |
-
-## Compatibility changes (release note)
+### Compatibility changes (release note)
 
 - A PKCE `code_verifier` that is not 43 to 128 characters of `A-Z a-z 0-9 - . _ ~` is now refused with
   `400 invalid_grant` (RFC 7636 §4.1). Verifiers of 42 or 129 characters, or standard-base64 verifiers
@@ -228,7 +312,7 @@ After updating MCPWP, remove the connector in ChatGPT and add it again. It fetch
 - An OAuth access token is accepted only in `Authorization: Bearer`; in `X-API-Key` or `?api_key=` it
   is refused (`401 missing_api_key`).
 
-## Upgrading from 3.14.10 or earlier
+### Upgrading from 3.14.10 or earlier
 
 - Tokens issued by the older build are carried over once, for the length of their remaining life (the
   grace window is at most 31 days). One that belongs to a user and was granted `admin` is capped to
