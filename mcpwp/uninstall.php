@@ -20,15 +20,12 @@
  * no Freemius SDK loaded at all, so this static file is the only uninstall
  * mechanism available to them.
  *
- * Scope: the site graph tables — nodes, edges, signals, queue — plus their
- * options and cron/Action-Scheduler schedules, and the approvals table
- * (#1042) with its options and cron, for single site and, on multisite,
- * every blog in the network. The plugin's OLDER tables (activity
- * log, webhooks, webhook logs, feedback, action log) are deliberately left
- * untouched here: on a self-hosted/agency install those were previously
- * cleaned up only via the Freemius `after_uninstall` action, which — see
- * above — never runs on a Free or Agency build at all. That is a
- * pre-existing gap tracked separately (#995) rather than expanded here.
+ * Scope: every table, option and schedule the plugin owns, for single site
+ * and, on multisite, every blog in the network — the site graph tables, the
+ * approvals/OAuth tables, and (#995) the older tables (activity log,
+ * webhooks, webhook logs, feedback, action log) with the core options.
+ * The Freemius build runs the same Mcpwp_Uninstaller methods from
+ * `mcpwp_fs_uninstall_cleanup_site()`, so the lists cannot diverge.
  *
  * @package MCPWP
  */
@@ -37,9 +34,30 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 	exit;
 }
 
-require_once __DIR__ . '/includes/class-mcpwp-uninstaller.php';
+if ( ! class_exists( 'Mcpwp_Uninstaller' ) ) {
+	// Not loaded when no other copy is active in this request.
+	require_once __DIR__ . '/includes/class-mcpwp-uninstaller.php';
+} elseif ( ! method_exists( 'Mcpwp_Uninstaller', 'other_copy_present' ) ) {
+	// An OLDER copy of the plugin is active and its class (without the
+	// copy guard) is the one in memory. Fail safe: another copy is live and
+	// shares these tables, so clean up nothing.
+	return;
+}
+
+// Another copy of MCPWP (e.g. `mcpwp-old/`, or one loaded from mu-plugins)
+// shares these tables and options; deleting this copy must not wipe the
+// other's data.
+// A copy loaded from mu-plugins never shows up in get_plugins(); it does
+// define MCPWP_PLUGIN_DIR, which is then not this folder.
+$mcpwp_loaded_dir = defined( 'MCPWP_PLUGIN_DIR' ) ? MCPWP_PLUGIN_DIR : '';
+if ( Mcpwp_Uninstaller::other_copy_present( defined( 'WP_UNINSTALL_PLUGIN' ) ? WP_UNINSTALL_PLUGIN : '', __DIR__, $mcpwp_loaded_dir ) ) {
+	return;
+}
 
 Mcpwp_Uninstaller::drop_graph_data();
 
 // The approvals table (#1042) and its options.
 Mcpwp_Uninstaller::drop_approvals_data();
+
+// The older tables, core options, transients and cron (#995).
+Mcpwp_Uninstaller::drop_legacy_data();

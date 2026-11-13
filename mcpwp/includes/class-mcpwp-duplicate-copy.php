@@ -100,9 +100,9 @@ class Mcpwp_Duplicate_Copy {
 
 		$name = trim( $m[1] );
 
-		// "MCPWP" and "MCPWP Premium" are copies. "MCPWP Addon for Forms" is
+		// "MCPWP", "MCPWP Premium" and "MCPWP (Premium)" (the Freemius suffix form) are copies. "MCPWP Addon for Forms" is
 		// an add-on that depends on us, not a second us.
-		return (bool) preg_match( '/^MCPWP(\s+Premium)?$/i', $name );
+		return (bool) preg_match( '/^MCPWP(\s+\(?Premium\)?)?$/i', $name );
 	}
 
 	/**
