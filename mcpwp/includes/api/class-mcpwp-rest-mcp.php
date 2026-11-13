@@ -1836,9 +1836,19 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	/** Audit outside idempotency and validation so every attempt has an outcome. */
 	private function handle_audited_tool_call( $id, $params, $request ) {
 		// $params is the tools/call message AFTER mcpwp_call was rewritten onto
-		// the tool it names and the per-call scope refusal ran (process_single_request).
+		// the tool it names (process_single_request).
 		$params = is_array( $params ) ? $params : array();
 		$callback = function ( $audit_context = null ) use ( $id, $params, $request ) {
+			// A call the key's scope does not cover is refused HERE, per call, as
+			// an in-protocol tool result (#936 convention): the /mcp envelope no
+			// longer answers one HTTP 403 for a whole body when the shortfall is
+			// confined to tools/call messages (mcp_scope_refusal_is_per_call()).
+			// Same derivation as the envelope check; runs before dispatch, the
+			// idempotent replay and every other gate, as the envelope check did.
+			$scope_refusal = $this->tool_call_scope_refusal( $params );
+			if ( null !== $scope_refusal ) {
+				return $this->scope_refusal_result( $id, $scope_refusal );
+			}
 			return $this->conform_tool_call_result(
 				$this->handle_tools_call_idempotent( $id, $params, $request, 0, $audit_context ),
 				isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '',
@@ -1908,21 +1918,11 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				}
 				$params = $resolved['params'];
 
-				// A call the key's scope does not cover is refused HERE, per
-				// call, as an in-protocol tool result (#936 convention): the
-				// /mcp envelope no longer answers one HTTP 403 for a whole
-				// body when the shortfall is confined to tools/call messages
-				// (mcp_scope_refusal_is_per_call()). Same derivation as the
-				// envelope check; runs before dispatch, the idempotent
-				// replay and every other gate, as the envelope check did.
-				$scope_refusal = $this->tool_call_scope_refusal( $params );
-				if ( null !== $scope_refusal ) {
-					return $this->scope_refusal_result( $id, $scope_refusal );
-				}
-				// Only now is the call audited and dispatched, and with the
-				// params already rewritten: the audit wrapper
-				// (Mcpwp_WooCommerce_Audit::run_call()) sees the INNER tool, not
-				// "mcpwp_call", and a refused call never opens an audit attempt.
+				// Audited and dispatched with the params already rewritten, so the
+				// audit wrapper (Mcpwp_WooCommerce_Audit::run_call()) sees the INNER
+				// tool, not "mcpwp_call". The per-call scope refusal is the first
+				// thing inside that wrapper (handle_audited_tool_call()), so a
+				// refused write is still logged as a failed attempt.
 				return $this->handle_audited_tool_call( $id, $params, $request );
 
 			case 'resources/list':

@@ -138,6 +138,30 @@ final class ActionLogAttemptTest extends TestCase {
 	}
 	public static function refusal_provider(): array { return array( array( 'missing' ), array( 'read' ), array( 'disabled' ) ); }
 
+	public function test_a_scope_refused_mcpwp_call_is_audited_as_the_inner_tool(): void {
+		// mcpwp_call is rewritten onto the tool it names before the audit wrapper
+		// opens its attempt, and the per-call scope refusal then runs inside it.
+		$this->call( 'mcpwp_call', array(), array( 'read' ) );
+		$this->assertSame( 0, count( $this->rows() ), 'A malformed wrapper names no tool: nothing to audit.' );
+		$GLOBALS['mcpwp_test_wpdb_rows']['wp_mcpwp_action_log'] = array();
+		$controller = new Mcpwp_REST_MCP();
+		$caps = new ReflectionProperty( Mcpwp_REST_MCP::class, 'active_capabilities' );
+		$caps->setAccessible( true );
+		$caps->setValue( $controller, array( 'woocommerce' => true ) );
+		$key = $controller->create_scoped_api_key( 'wrapped', array( 'read' ) );
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => $key['key'] ), array(
+			'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/call',
+			'params' => array( 'name' => 'mcpwp_call', 'arguments' => array( 'name' => 'wc_update_product', 'arguments' => array( 'id' => 41, 'name' => 'Changed' ) ) ),
+		) );
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+		$data = $controller->handle_mcp( $request )->get_data();
+		$this->assertTrue( $data['result']['isError'] );
+		$rows = $this->rows();
+		$this->assertCount( 1, $rows );
+		$this->assertSame( 'wc_update_product', $rows[0]['tool_name'] );
+		$this->assertSame( 0, $rows[0]['success'] );
+	}
+
 	public function test_a_replay_gets_a_receipt_without_a_second_mutation(): void {
 		// Same principal must be reused for the request_id cache.
 		$controller = new Mcpwp_REST_MCP();
