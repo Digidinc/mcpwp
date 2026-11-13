@@ -407,6 +407,7 @@ split_resp "$(token_post -d grant_type=authorization_code -d "code=$(qparam "$LO
 RA=$(jq -r .access_token <<<"$RESP_BODY"); RR=$(jq -r .refresh_token <<<"$RESP_BODY")
 R=$(call_tool "$RA" wp_site_info)
 check "(i) fresh token works before revocation" "$(jq -r '.result.isError // false' <<<"$R")" false
+# secret-scan: allow RFC 7009 form field "token" carrying a runtime shell variable, not a literal
 split_resp "$(curl -s -w '\n%{http_code}' -X POST "$REV_EP" -d "token=$RR" -d token_type_hint=refresh_token -d "client_id=$CLIENT_ID")"
 check "(i) revoke refresh token -> 200" "$RESP_CODE" 200
 R=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$MCP" -H "Authorization: Bearer $RA" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
@@ -422,6 +423,7 @@ new_pkce; V=$VERIFIER
 do_consent "$JAR_ADMIN" "$CLIENT_ID" "read" st-rev2 untick || bad "(i) consent 2" "http=$CONSENT_CODE"
 split_resp "$(token_post -d grant_type=authorization_code -d "code=$(qparam "$LOCATION" code)" -d "redirect_uri=$REDIRECT" -d "client_id=$CLIENT_ID" -d "code_verifier=$V")"
 RA2=$(jq -r .access_token <<<"$RESP_BODY")
+# secret-scan: allow RFC 7009 form field "token" carrying a runtime shell variable, not a literal
 curl -s -o /dev/null -X POST "$REV_EP" -d "token=$RA2" -d token_type_hint=access_token -d "client_id=$CLIENT_ID"
 R=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$MCP" -H "Authorization: Bearer $RA2" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
 check "(i) a revoked access token fails (401)" "$R" 401
