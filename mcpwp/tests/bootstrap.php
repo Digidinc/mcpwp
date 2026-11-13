@@ -687,6 +687,24 @@ function absint($value)
     return abs((int) $value);
 }
 
+if (! function_exists('esc_url')) {
+    /**
+     * Lenient by default (what several older tests were written against).
+     * A test that asserts escaping sets $GLOBALS['mcpwp_test_strict_esc_url']
+     * for its duration: then, like WordPress, it removes the characters that
+     * can break out of an attribute and encodes "&" as "&#038;".
+     */
+    function esc_url($url)
+    {
+        $clean = filter_var((string) $url, FILTER_SANITIZE_URL);
+        if (! empty($GLOBALS['mcpwp_test_strict_esc_url'])) {
+            $clean = str_replace(array( '<', '>', '"', "'" ), '', $clean);
+            $clean = str_replace('&', '&#038;', $clean);
+        }
+        return $clean;
+    }
+}
+
 function esc_url_raw($value)
 {
     return filter_var((string) $value, FILTER_SANITIZE_URL);

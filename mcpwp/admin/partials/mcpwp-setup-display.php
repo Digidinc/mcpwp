@@ -203,6 +203,9 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 
 		<?php Mcpwp_OAuth_Local_Admin::render_address_notice(); ?>
 
+		<!-- ============================= CONNECT AN AI APP ============================= -->
+		<?php Mcpwp_OAuth_Apps_Admin::render_connect_card( ! empty( $local_oauth_enabled ) ); ?>
+
 		<!-- ============================= ADD TO CHATGPT ============================= -->
 		<div class="mcpwp-card" id="mcpwp-add-to-chatgpt">
 			<h2>

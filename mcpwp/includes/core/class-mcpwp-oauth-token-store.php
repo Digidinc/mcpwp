@@ -337,6 +337,22 @@ class Mcpwp_OAuth_Token_Store {
 	}
 
 	/**
+	 * Mark every live row revoked (admin "Disconnect all").
+	 *
+	 * @return bool False when the UPDATE failed (0 rows is success).
+	 */
+	public static function revoke_all_rows() {
+		global $wpdb;
+		$affected = $wpdb->query(
+			$wpdb->prepare(
+				'UPDATE ' . self::table() . ' SET revoked_at = %d WHERE revoked_at IS NULL', // phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- see claim_refresh().
+				Mcpwp_OAuth_Revocation::now()
+			)
+		);
+		return false !== $affected;
+	}
+
+	/**
 	 * Mark live rows of one user revoked: every client (null), one client,
 	 * or only the client-less rows a pre-#1101 token migrated into ('').
 	 *
