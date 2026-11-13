@@ -54,7 +54,7 @@ Syncs automatically from a connected server. Already satisfied: every tool in 3.
 **Description text (paste-ready, 1,010 chars):**
 
 > MCPWP turns your WordPress site into an MCP server. Install the plugin, generate an API key
-> (or turn on OAuth), and Claude can build Elementor pages, publish posts, run SEO audits,
+> (or sign in with OAuth, on by default), and Claude can build Elementor pages, publish posts, run SEO audits,
 > manage menus and media, and more — through natural language.
 >
 > 180+ tools free, 290+ with Pro, across 21 categories: content, Elementor read/write, media,
@@ -79,7 +79,7 @@ Syncs automatically from a connected server. Already satisfied: every tool in 3.
   applying fixes through the approval gate, bulk content operations, WooCommerce management
   (Pro), menu and media management.
 - **What users need before connecting**: a WordPress site with MCPWP installed and an API key
-  generated in WP Admin → MCPWP → Setup (or OAuth turned on).
+  generated in WP Admin → MCPWP → Setup (or OAuth sign-in, which is on by default).
 - **Reads or writes data**: both — reads (site info, content, SEO signals) and writes (posts,
   pages, Elementor data, media, settings), gated by key scope and, optionally, the approval
   queue.
@@ -95,8 +95,8 @@ Two real options exist on the product today — present both, since the portal's
 says "URL pattern" rules out Anthropic-held OAuth credentials:
 1. **X-API-Key header** — user pastes their own per-site key at connect time (fits "custom
    connection: users supply their own URL or credentials").
-2. **OAuth 2.0 via the mumcp.com broker** — the plugin's `oauth_enabled` setting turns this on;
-   Claude opens the site's own WordPress login to authorize (PKCE, RFC 8414/9728 discovery, no
+2. **OAuth 2.0 sign-in** — on by default; the site is its own authorization server (Dynamic
+   Client Registration, #1099), with the mumcp.com broker as an optional second path. Claude opens the site's own WordPress login to authorize (PKCE, RFC 8414/9728 discovery, no
    key stored in the client). This is the path the portal's "Authentication works for Claude's
    client... OAuth 2.0" language is written for.
 

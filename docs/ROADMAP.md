@@ -241,7 +241,7 @@ velocity is **Q4 2026**, and that estimate is only honest if the two gates below
 | **C — Gateway architecture** | #663 | ADR 0001's Gateway + Modular Monolith changes internal structure and the addon contract. That *is* the major-version event. |
 
 Already delivered and no longer gating: **B — Zero-Touch Connect** (#662) landed as a
-hosted broker rather than per-site OAuth.
+hosted broker rather than per-site OAuth (since #1099 the site is also its own authorization server; see `docs/OAUTH-CONNECT.md`).
 
 Adjacent but not gating 4.0: **T — Mumega Motion** (#664), **wp.org round 5** (#665),
 **agency gateway custody** (#549), **accessibility** (#671).

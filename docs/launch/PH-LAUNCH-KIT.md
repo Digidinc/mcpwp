@@ -74,7 +74,7 @@ cloud-only SaaS.
 
 MCPWP is that surface.
 
-Install the plugin on your WordPress site. Generate an API key, or turn on OAuth and sign
+Install the plugin on your WordPress site. Generate an API key, or use OAuth (on by default) and sign
 in with your WordPress login. Add one config block to your AI client. Your AI — Claude
 Desktop, Claude Code, Cursor, or any MCP-compatible client — can now operate your site in
 natural language: build Elementor pages, publish posts, run SEO audits, manage menus,
@@ -269,9 +269,9 @@ publish. You decide which agents can ship, and you decide which changes need a s
 look.
 
 ### Q3: "Claude already has a Connector directory. Why isn't MCPWP there?"
-It can connect today: turn on OAuth in the plugin's settings, use Claude's "Add custom
-connector," and Claude opens your WordPress login to authorize — no API key stored in the
-client. The OAuth broker runs at mumcp.com. What we haven't done is submit MCPWP to
+It can connect today: use Claude's "Add custom
+connector" (OAuth sign-in is on by default), and Claude opens your WordPress login to authorize — no API key stored in the
+client. The site is its own OAuth server; a mumcp.com broker is an optional second path. What we haven't done is submit MCPWP to
 Claude's public connector directory listing; that's a separate step we haven't completed.
 API-key auth also works in Claude Desktop, Claude Code, and Cursor via manual MCP config.
 

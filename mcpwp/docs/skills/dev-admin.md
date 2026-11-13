@@ -53,7 +53,7 @@ Multisite gets an additional `add_menu_page()` call in `add_network_admin_menu()
 | `log_redaction_keys` | array of sensitive key names | Keys whose values are scrubbed |
 | `analytics_enabled` | `false` | PostHog server-side MCP analytics opt-in |
 | `alerts_enabled` | `false` | Error-spike email alerts |
-| `oauth_enabled` | `false` | OAuth 2.0 token auth |
+| `oauth_enabled` | on when never stored | OAuth sign-in for AI apps. On by default; saving the Setup -> Advanced switch stores an explicit value. See `docs/OAUTH-CONNECT.md` |
 | `oauth_client_credentials_max_scope` | `'write'` | Ceiling for machine (client_credentials) tokens; a request for a higher scope is downgraded, never honoured. Allowed: `read`, `write`, `admin` |
 | `allowed_origins` | `''` | CORS origin allowlist |
 

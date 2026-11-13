@@ -66,7 +66,7 @@ The WordPress.org package is the free core: API keys, scoped access, activity lo
 
 = MCP Server Setup =
 
-**Claude Desktop** (Settings → Connectors → Add custom connector) — enable OAuth in the plugin settings and paste the plain MCP URL; Claude opens your WordPress login to authorize, so no key is stored in the client:
+**Claude Desktop** (Settings → Connectors → Add custom connector) — paste the plain MCP URL (OAuth sign-in is on by default); Claude opens your WordPress login to authorize, so no key is stored in the client:
 
 `https://yoursite.com/wp-json/mcpwp/v1/mcp`
 

@@ -52,7 +52,7 @@ Activate `mcpwp/` **alongside** the still-active `site-pilot-ai/`. The migration
 - [ ] Integrations decrypt: WP Admin → MCPWP → Integrations → each configured provider reads back / test-connection passes. If `encryption_warning` was true or `AUTH_SALT` was undefined → re-enter the provider API keys here.
 
 ### 5. OAuth note (only if the site uses OAuth)
-- [ ] `wp option get mcpwp_settings --format=json` → `oauth_enabled: true` (carried by the settings deep-merge). If false, the migration didn't see it enabled — re-enable in settings.
+- [ ] `wp option get mcpwp_settings --format=json` → `oauth_enabled: true`, or no `oauth_enabled` key at all (OAuth is on whenever the setting was never stored). The plugin removes a stored `oauth_enabled: false` once on first load (`migrate_default_on()` runs after the bridge migration in the same load), so a `false` that survives means OAuth was switched off explicitly after the upgrade (Setup → Advanced). Re-enable it there if the site should use OAuth.
 - [ ] Migrated `spai_at_` tokens authenticate only within their original TTL (default 1h, up to 24h). For a cutover that outlasts the TTL, tell the customer to **re-connect** their Claude Desktop / ChatGPT OAuth connection after cutover.
 
 ### 6. Deactivate the old plugin

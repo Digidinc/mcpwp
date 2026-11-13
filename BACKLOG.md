@@ -44,7 +44,7 @@ See `docs/squad/VERSIONING-AND-ROADMAP.md`.
 > **Revenue = taxing flows:** marketplace cut (addons + snapshots) + performance-ranked snapshot premium +
 > infra rent + cheap adoption toll (MCPWP Pro). Never compute. **Moat:** marketplace + attractor + learning +
 > observability — none forks with the code. **Cold-start solved by being the first player:** our own dogfood
-> dropship store. **Keystone build:** OAuth 2.1 + DCR (v2.9) opens the ChatGPT Business + Claude Managed fleet.
+> dropship store. **Keystone build (shipped, #1099):** OAuth 2.1 + DCR opened the ChatGPT Business + Claude Managed fleet.
 
 ---
 
@@ -120,7 +120,7 @@ A real DME (digitalmarketingexperts.ca) template-library build surfaced 6 issues
 Origin: `mumcp.com` domain bought for the wp.org `mumega-mcp` free listing. Discussed extending it past "MCP for WordPress" into a broader MCP-server shop (mumcp.com = MCP delivery/marketplace, mcpwp.net stays the WP-specific authority/content hub). Bardia's FormFlow-for-Strapi (already has traction) floated as a first anchor listing. Researched submission requirements for 4 adjacent agentic products (Codex, Claude Cowork, Copilot Cowork, Perplexity/Comet) — verdict: **Claude Cowork is the real competitive pressure**, not the other three — same non-technical business-owner persona MCPWP targets, same jobs-to-be-done (delegate business ops to AI). Two ways that resolves: MCPWP becomes a listed Cowork connector (ride Anthropic's distribution) or an independent MCP shop gets squeezed into a thin reseller layer if Anthropic's own directory becomes the default store for that buyer.
 
 **Directory submission — researched, none of the reachable paths need Dynamic Client Registration:**
-- MCPWP already has OAuth 2.1 authorize+token flow and RFC 8414/9728 well-known discovery built (v3.2.0+). DCR (RFC 7591) is genuinely NOT built yet — confirmed by code check, not stale memory.
+- MCPWP already has OAuth 2.1 authorize+token flow and RFC 8414/9728 well-known discovery built (v3.2.0+). DCR (RFC 7591) was not built at the time of this note; **it has since shipped (#1099)** — see `docs/OAUTH-CONNECT.md`.
 - **Live today, zero backend work:** any Claude user can add MCPWP right now as a custom connector by URL — static OAuth client supported, no submission, no review. Push this as the immediate channel before anything else.
 - **Claude Cowork Connectors Directory** — submit via `oauth_anthropic_creds` (email existing static client_id/secret to `mcp-review@anthropic.com`), skips DCR entirely, reuses the OAuth flow already built. Requires a public privacy policy page (missing = instant rejection) — verify `mcpwp.net`/`mumcp.com` has one before applying.
 - **OpenAI Codex/ChatGPT plugin marketplace** — separate program, `platform.openai.com/plugins`, also accepts a "predefined OAuth client" (no DCR needed). Multi-section form: server URL + auth, skills bundle, 3-5 example prompts, 5 positive/3 negative test cases, domain-verification token at `/.well-known/openai-apps-challenge`.
@@ -150,7 +150,7 @@ NOW ─ MVP PILOT (no version bump, runs on current builds) ──────�
 
 PHASE A — Foundation & Distribution ──────────────────────────────────────────────────────
   M1  Launch-Ready              v2.8.x   free plugin + Pro; beachhead entry   ← Hadi gates (T87 pricing)
-  M2  Auth Keystone (PULLED ▲)  v2.9     OAuth 2.1 + DCR on the bus/MCP — the funnel-opener. Bearer
+  M2  Auth Keystone (PULLED ▲)  v2.9     [shipped, #1099] OAuth 2.1 + DCR on the bus/MCP — the funnel-opener. Bearer
                                          runtimes (Hermes·openclaw·Codex·Claude-remote) connect NOW;
                                          OAuth+DCR adds the BIG doors: ChatGPT Business + Claude Managed.
   M3  Distribution              v2.9     WP.org · MCP registries · ChatGPT GPT/App · Claude Connector
@@ -175,6 +175,8 @@ PHASE C — Platform & THE FULL VISION ─────────────�
 hosted agent → M7 generalizes it into reusable vertical snapshots → M8 sells/resells them at scale (the
 GHL model). The full vision lands at **v6.0–v6.x**, gated behind M2 (auth) + M4 (hosted agent) + M6
 (platform hardening). **The MVP pilot is doable NOW on current builds** — don't wait for v3 to prove it.
+
+> Superseded (#1099): DCR and OAuth 2.1 are built and on by default; see `docs/OAUTH-CONNECT.md`.
 
 **Why auth moved up (M3→M2, v3.0→v2.9):** OAuth 2.1 + **DCR** is not a wall someone else holds — it's a
 build *we* control, and it's the single highest-leverage one. Bearer runtimes already connect with no new
@@ -340,7 +342,7 @@ MCPWP becomes a platform runtime. Third-party plugins (Digid, WooCommerce extens
 
 | # | GH | Task | Notes |
 |---|-----|------|-------|
-| T60 | #408 | OAuth 2.1 + **DCR** authorization server (CF Worker, auth.mcpwp.net) | **DCR (Dynamic Client Registration) is mandatory for ChatGPT Business connectors** — no bearer accepted. Also unlocks Claude Managed (OAuth Vaults), ChatGPT App, Claude Connector, YouTube, GHL. Add PKCE. |
+| T60 | #408 | ✅ superseded by #1099 (the plugin is its own OAuth + DCR server) — OAuth 2.1 + **DCR** authorization server (CF Worker, auth.mcpwp.net) | **DCR (Dynamic Client Registration) is mandatory for ChatGPT Business connectors** — no bearer accepted. Also unlocks Claude Managed (OAuth Vaults), ChatGPT App, Claude Connector, YouTube, GHL. Add PKCE. |
 | T60b | — | Wire OAuth 2.1 + DCR into the mupot bus flock plane | Same auth server admits OAuth runtimes (ChatGPT Business, Claude Managed) into a pot's flock, not just MCPWP-on-WP. |
 | T61 | — | ChatGPT App Directory + Workspace-Agent connector submission | Needs T60 (OAuth 2.1 + DCR) |
 | T62 | — | Claude Connector directory submission | Needs T60 |

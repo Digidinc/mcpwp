@@ -1,5 +1,7 @@
 # mumcp.com Auth Broker — Design Spec
 
+> **Historical.** The plugin has since become its own OAuth authorization server with DCR (#1099); the "no DCR" statements below describe 3.6.2. Current behaviour: `docs/OAUTH-CONNECT.md`.
+
 **Date:** 2026-07-20 (rev. 2026-07-20 — build on `cloudflare/workers-oauth-provider`)
 **Status:** Draft (awaiting user review)
 **Supersedes:** PR #598 (per-site OAuth authorization server) — stripped to a token-validator; see §9.
