@@ -96,7 +96,8 @@ namespace Elementor {
 
 			if ( ! empty( $GLOBALS['mcpwp_test_normalize_default_fields'] ) ) {
 				$normalized = $this->normalize_default_element_fields( $data['elements'] );
-				\update_post_meta( $GLOBALS['mcpwp_test_corrupt_page_id'], '_elementor_data', \wp_json_encode( $normalized ) );
+				// Elementor slashes its JSON before WordPress unslashes meta on write.
+				\update_post_meta( $GLOBALS['mcpwp_test_corrupt_page_id'], '_elementor_data', \wp_slash( \wp_json_encode( $normalized ) ) );
 				$GLOBALS['mcpwp_test_rendered_root_ids'] = array_column( $normalized, 'id' );
 			}
 
