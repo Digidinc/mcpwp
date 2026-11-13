@@ -3820,13 +3820,6 @@ if (! function_exists('wp_schedule_single_event')) {
     }
 }
 
-if (! function_exists('wp_cache_set')) {
-    function wp_cache_set($key, $value, $group = '', $expire = 0) {
-        $GLOBALS['mcpwp_test_object_cache'][(string) $group . ':' . (string) $key] = array('value'=>$value,'expires'=>(int)$expire>0?time()+(int)$expire:0,'ttl'=>(int)$expire);
-        return true;
-    }
-}
-
 if (! function_exists('wp_cache_delete')) {
     function wp_cache_delete($key, $group = '')
     {
