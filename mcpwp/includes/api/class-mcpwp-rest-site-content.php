@@ -673,6 +673,13 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			return $clean;
 		}
 
+		// #1108: the shared user-run meta authorization (WordPress's
+		// edit_post_meta), the same one every post/page write door applies.
+		$refused = Mcpwp_Post_Fields::meta_write_refusal( $post_id, $clean, (string) $post->post_type );
+		if ( is_wp_error( $refused ) ) {
+			return $this->error_response_from_wp_error( $refused );
+		}
+
 		$deleted = array();
 		$written = Mcpwp_Post_Fields::apply_meta( $post_id, $post->post_type, $clean, $deleted );
 		$stored  = get_post_meta( $post_id, $key, true );

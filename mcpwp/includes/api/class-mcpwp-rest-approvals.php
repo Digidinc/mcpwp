@@ -146,7 +146,8 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 			$this->requester_can_see_non_public(),
 			(string) $request->get_param( 'order' ),
 			array( $this, 'caller_may_read_category' ),
-			$this->requester_is_unrestricted()
+			$this->requester_is_unrestricted(),
+			$this->approvals_need_per_post_filter() ? array( $this, 'caller_may_read_approval_posts' ) : null
 		);
 		if ( is_wp_error( $approvals ) ) {
 			return $approvals;
@@ -209,11 +210,46 @@ class Mcpwp_REST_Approvals extends Mcpwp_REST_API {
 			return $record;
 		}
 
-		if ( Mcpwp_Approvals::is_approval_visible_to( $record, array( $this, 'caller_may_read_category' ) ) ) {
+		if ( Mcpwp_Approvals::is_approval_visible_to( $record, array( $this, 'caller_may_read_category' ) ) && $this->caller_may_read_approval_posts( $record ) ) {
 			return $record;
 		}
 
 		return Mcpwp_Approvals::not_found_error();
+	}
+
+	/**
+	 * Whether this caller's approval reads are judged per post: only a
+	 * non-administrator principal acting as a real user. Everyone else is
+	 * unfiltered, including damaged-record stubs.
+	 *
+	 * @return bool
+	 */
+	private function approvals_need_per_post_filter() {
+		return $this->requester_acts_as_user() && ! current_user_can( 'manage_options' );
+	}
+
+	/**
+	 * #1108: a principal acting as a real WordPress user sees an approval only
+	 * if WordPress lets that user read every post the approval names — the
+	 * id, title and status of another user's draft are not theirs to list.
+	 * An administrator and every bot-run principal are unchanged (scope and
+	 * category are their gates). A named post that no longer exists cannot be
+	 * judged, so it is hidden from a non-administrator user (fail closed).
+	 *
+	 * @param array $record Public approval record.
+	 * @return bool
+	 */
+	public function caller_may_read_approval_posts( $record ) {
+		if ( ! is_array( $record ) || ! $this->approvals_need_per_post_filter() ) {
+			return true;
+		}
+		foreach ( Mcpwp_Approvals::post_ids_for_record( $record ) as $post_id ) {
+			$post = get_post( $post_id );
+			if ( ! $post instanceof WP_Post || ! $this->requester_can_read_post( $post ) ) {
+				return false;
+			}
+		}
+		return true;
 	}
 
 	/**

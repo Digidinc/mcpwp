@@ -760,6 +760,14 @@ function current_user_can($capability, ...$args)
         return false;
     }
 
+    // A post that does not exist yet (id 0): WordPress resolves it to the
+    // global $post, which the create path sets to a prospective post (#1108).
+    // Answered by mcpwp_test_prospective_cap(), which mirrors map_meta_cap()
+    // for that case, including a key's auth filters for edit_post_meta.
+    if (in_array($capability, array( 'edit_post', 'read_post', 'delete_post', 'edit_post_meta' ), true) && isset($args[0]) && 0 === (int) $args[0] && ! isset($GLOBALS['mcpwp_test_post_caps'][ $user_id ][ $capability ][0])) {
+        return mcpwp_test_prospective_cap($capability, $user_id, isset($args[1]) ? (string) $args[1] : '');
+    }
+
     // Per-object meta caps (edit_post / delete_post / read_post with a post
     // id), when a test seeds them: $GLOBALS['mcpwp_test_post_caps'][user][cap][post_id].
     // Absent entries fall through to the per-user map below, so no existing
@@ -797,6 +805,38 @@ function current_user_can($capability, ...$args)
  * before these filters existed. It is what lets a test observe a *scoped*
  * capability grant actually taking effect rather than merely being registered.
  */
+function mcpwp_test_prospective_cap($capability, $user_id, $key)
+{
+    $post = $GLOBALS['post'] ?? null;
+    if (! $post instanceof WP_Post || (int) $post->post_author !== (int) $user_id) {
+        return false; // no post to judge, or not the user's own: core says no.
+    }
+    $caps = $GLOBALS['mcpwp_test_user_caps'][ $user_id ] ?? array();
+    if (empty($caps['edit_posts'])) {
+        return false;
+    }
+    if ('edit_post_meta' !== $capability) {
+        return true;
+    }
+    $allowed = '_' !== substr($key, 0, 1);
+    $subtype = 'auth_post_meta_' . $key . '_for_' . $post->post_type;
+    $tag     = has_filter($subtype) ? $subtype : 'auth_post_meta_' . $key;
+    $allowed = (bool) apply_filters($tag, $allowed, $key, 0, $user_id, 'edit_post_meta', array());
+    $old     = 'auth_post_' . $post->post_type . '_meta_' . $key;
+    if ($allowed && has_filter($old)) {
+        $allowed = (bool) apply_filters($old, $allowed, $key, 0, $user_id, 'edit_post_meta', array());
+    }
+    if (! $allowed) {
+        return false;
+    }
+    foreach ((array) apply_filters('map_meta_cap', array( 'edit_posts' ), 'edit_post_meta', $user_id, array( 0, $key )) as $cap) {
+        if ('do_not_allow' === $cap || empty($caps[ $cap ])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 function mcpwp_test_cap_filters_grant($capability, $user_id)
 {
     $caps = apply_filters('map_meta_cap', array( $capability ), $capability, $user_id, array());
@@ -922,6 +962,12 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
             // Elementor "active" for later tests. 'init' is re-seeded before
             // every test by Mcpwp_Test_Approvals_Table_Reset.
             $GLOBALS['mcpwp_test_did_action'] = array();
+            // The meta-write helper's per-request principal flag (#1108): the
+            // permission chokepoint sets it on every request in production; a
+            // test that left it on must not decide another test's outcome.
+            if (class_exists('Mcpwp_Post_Fields', false)) {
+                Mcpwp_Post_Fields::set_user_run_principal(false);
+            }
         }
     }
 }
@@ -3403,9 +3449,9 @@ if (! class_exists('WP_Post')) {
         public $post_author       = 0;
         public $post_password     = '';
 
-        public function __construct(array $data = array())
+        public function __construct($data = array())
         {
-            foreach ($data as $key => $value) {
+            foreach ((array) $data as $key => $value) {
                 $this->{$key} = $value;
             }
         }
@@ -3424,6 +3470,10 @@ function get_post($id)
     // post" — off unless a test explicitly sets it.
     if (isset($GLOBALS['mcpwp_test_throw_for_post_id']) && (int) $GLOBALS['mcpwp_test_throw_for_post_id'] === $id) {
         throw new \RuntimeException('seeded test throw for post ' . $id);
+    }
+    // Like core: an empty id answers the global $post (the loop's post).
+    if (0 === $id && isset($GLOBALS['post']) && $GLOBALS['post'] instanceof WP_Post) {
+        return $GLOBALS['post'];
     }
     return isset($GLOBALS['_mcpwp_test_posts'][ $id ]) ? $GLOBALS['_mcpwp_test_posts'][ $id ] : null;
 }

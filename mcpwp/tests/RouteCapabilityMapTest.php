@@ -101,6 +101,13 @@ class Mcpwp_Route_Capability_Map_Harness {
 	}
 }
 
+/** The chokepoint as a build or load order that never loaded the map class would see it (#1108). */
+class Mcpwp_Route_Capability_Map_Absent_Harness extends Mcpwp_Route_Capability_Map_Harness {
+	protected function route_capability_map_available() {
+		return false;
+	}
+}
+
 final class RouteCapabilityMapTest extends TestCase {
 
 	/** WordPress core's Editor role (populate_roles()), as far as this map cares. */
@@ -113,8 +120,14 @@ final class RouteCapabilityMapTest extends TestCase {
 		'upload_files', 'unfiltered_html',
 	);
 
-	const EDITOR = 7;
-	const ADMIN  = 1;
+	/** Core's Contributor and Subscriber roles (populate_roles()). */
+	const CONTRIBUTOR_CAPS = array( 'read', 'edit_posts', 'delete_posts' );
+	const SUBSCRIBER_CAPS  = array( 'read' );
+
+	const EDITOR      = 7;
+	const ADMIN       = 1;
+	const CONTRIBUTOR = 8;
+	const SUBSCRIBER  = 9;
 
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options']            = array();
@@ -126,6 +139,8 @@ final class RouteCapabilityMapTest extends TestCase {
 		$GLOBALS['mcpwp_test_user_caps']          = array(
 			self::EDITOR => array_fill_keys( self::EDITOR_CAPS, true ),
 			self::ADMIN  => array( 'manage_options' => true ),
+			self::CONTRIBUTOR => array_fill_keys( self::CONTRIBUTOR_CAPS, true ),
+			self::SUBSCRIBER  => array_fill_keys( self::SUBSCRIBER_CAPS, true ),
 		);
 
 		// Mcpwp_Webhooks::get_instance() creates a DB table as a side effect
@@ -565,6 +580,94 @@ final class RouteCapabilityMapTest extends TestCase {
 	public function test_bot_run_admin_key_is_never_capability_checked( string $key, string $capability ): void {
 		$GLOBALS['mcpwp_test_user_caps'][2] = array(); // the service account holds none of these caps
 		$this->assertTrue( $this->check_as( 2, $key, array( 'id' => 'k1', 'type' => 'scoped', 'scopes' => array( 'read', 'write', 'admin' ), 'role' => 'admin' ) ), "$key: bots are gated by scope only" );
+	}
+
+	// ── #1108: principals that FAIL the edit_posts rows ────────────────────
+
+	/** Every (role, row) pair; the Editor fixture above holds edit_posts, so it can never fail those rows. */
+	public static function lower_role_row_provider(): array {
+		$out = array();
+		foreach ( array( 'contributor' => self::CONTRIBUTOR_CAPS, 'subscriber' => self::SUBSCRIBER_CAPS ) as $role => $caps ) {
+			foreach ( Mcpwp_Route_Capability_Map::rows() as $key => $row ) {
+				$out[ $role . ' ' . $key ] = array( $role, $caps, $key, $row[1] );
+			}
+		}
+		return $out;
+	}
+
+	/**
+	 * @dataProvider lower_role_row_provider
+	 */
+	public function test_contributor_and_subscriber_get_what_their_role_gets_in_wp_admin( string $role, array $role_caps, string $key, string $capability ): void {
+		$id     = 'contributor' === $role ? self::CONTRIBUTOR : self::SUBSCRIBER;
+		$result = $this->check_as( $id, $key, array( 'id' => 'oauth-user:' . $id, 'type' => 'oauth', 'scopes' => array( 'read', 'write' ), 'acts_as_user' => $id ) );
+
+		$holds_all = 'TODO' !== $capability && 0 !== strpos( $capability, 'forms:' ) && array() === array_diff( explode( '+', $capability ), $role_caps );
+		if ( 'none' === $capability || $holds_all ) {
+			$this->assertTrue( $result, "$key ($capability): a $role can do this in wp-admin" );
+			return;
+		}
+		$this->assertInstanceOf( WP_Error::class, $result, "$key ($capability): a $role cannot do this in wp-admin" );
+		$this->assertSame( 'rest_forbidden_capability', $result->get_error_code() );
+		$this->assertSame( 403, $result->get_error_data()['status'] );
+	}
+
+	/**
+	 * Hand-written, not derived from the map, so removing an edit_posts check
+	 * from the chokepoint cannot move the expectation with it (mutation M25).
+	 */
+	public function test_edit_posts_rows_refuse_a_principal_without_edit_posts(): void {
+		$subscriber  = array( 'id' => 'oauth-user:9', 'type' => 'oauth', 'scopes' => array( 'read', 'write' ), 'acts_as_user' => self::SUBSCRIBER );
+		$contributor = array( 'id' => 'oauth-user:8', 'type' => 'oauth', 'scopes' => array( 'read', 'write' ), 'acts_as_user' => self::CONTRIBUTOR );
+
+		$edit_posts_rows = array( 'GET /approvals', 'GET /seo/(?P<id>\\d+)', 'POST /seo/(?P<id>\\d+)', 'POST /posts' );
+		foreach ( $edit_posts_rows as $key ) {
+			$this->assertSame( 'edit_posts', Mcpwp_Route_Capability_Map::rows()[ $key ][1], "$key requires edit_posts" );
+
+			$refused = $this->check_as( self::SUBSCRIBER, $key, $subscriber );
+			$this->assertInstanceOf( WP_Error::class, $refused, "$key: a Subscriber has no edit_posts" );
+			$this->assertSame( 'edit_posts', $refused->get_error_data()['required_capability'], $key );
+			$this->assertTrue( $this->check_as( self::CONTRIBUTOR, $key, $contributor ), "$key: a Contributor holds edit_posts" );
+		}
+
+		// A Contributor fails the rows one step above edit_posts.
+		foreach ( array( 'POST /pages' => 'edit_pages', 'POST /media/from-url' => 'upload_files', 'POST /terms' => 'manage_categories' ) as $key => $needs ) {
+			$this->assertSame( $needs, Mcpwp_Route_Capability_Map::rows()[ $key ][1], $key );
+			$refused = $this->check_as( self::CONTRIBUTOR, $key, $contributor );
+			$this->assertInstanceOf( WP_Error::class, $refused, "$key: a Contributor lacks $needs" );
+			$this->assertSame( $needs, $refused->get_error_data()['required_capability'], $key );
+		}
+	}
+
+	public function test_a_missing_capability_map_fails_closed_for_a_user_run_principal(): void {
+		$auth = new Mcpwp_Route_Capability_Map_Absent_Harness();
+		$GLOBALS['mcpwp_test_current_user'] = self::ADMIN;
+		$GLOBALS['mcpwp_test_user_caps'][ self::ADMIN ] = array_fill_keys( array_merge( self::EDITOR_CAPS, array( 'manage_options' ) ), true );
+
+		foreach ( array( array( 'GET', '/mcpwp/v1/site-info' ), array( 'POST', '/mcpwp/v1/posts' ), array( 'GET', '/mcpwp/v1/mcp' ) ) as list( $method, $route ) ) {
+			foreach ( array(
+				'oauth user (admin)' => array( 'id' => 'oauth-user:1', 'type' => 'oauth', 'scopes' => array( 'read', 'write' ), 'acts_as_user' => self::ADMIN ),
+				'webmcp'             => Mcpwp_WebMCP::principal_record( self::ADMIN ),
+			) as $who => $record ) {
+				$auth->act_as( $record );
+				$result = $auth->check_user_run_capability( new WP_REST_Request( $method, $route, array() ) );
+				$this->assertInstanceOf( WP_Error::class, $result, "$who $method $route: no map, no pass-through" );
+				$this->assertSame( 'rest_forbidden_capability', $result->get_error_code() );
+				$this->assertSame( 403, $result->get_error_data()['status'] );
+			}
+		}
+
+		// A bot principal is gated by scope alone, map or no map.
+		$auth->act_as( array( 'id' => 'k1', 'type' => 'scoped', 'scopes' => array( 'read', 'write', 'admin' ), 'role' => 'admin' ) );
+		$this->assertTrue( $auth->check_user_run_capability( new WP_REST_Request( 'POST', '/mcpwp/v1/posts', array() ) ) );
+
+		// And the shipped seam answers true while the class is loaded.
+		$real = new class() extends Mcpwp_Route_Capability_Map_Harness {
+			public function loaded() {
+				return $this->route_capability_map_available();
+			}
+		};
+		$this->assertTrue( $real->loaded() );
 	}
 
 	public function test_undecided_rows_are_admin_only_until_decided(): void {

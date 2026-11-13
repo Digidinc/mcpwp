@@ -165,7 +165,9 @@ trait Mcpwp_Api_Auth {
 		if ( ! $this->requester_acts_as_user() ) {
 			return true; // bots: scope is their gate (and see check_generic_post_type_access()).
 		}
-		if ( ! class_exists( 'Mcpwp_Route_Capability_Map' ) ) {
+		// Fail CLOSED when the map is not loaded (a pruned build, a load-order
+		// bug): a user-run principal is refused rather than passed through.
+		if ( ! $this->route_capability_map_available() ) {
 			return new WP_Error( 'rest_forbidden_capability', __( 'Your WordPress account is not allowed to do this.', 'mcpwp' ), array( 'status' => 403 ) );
 		}
 		$method     = method_exists( $request, 'get_method' ) ? (string) $request->get_method() : 'GET';
@@ -375,11 +377,27 @@ trait Mcpwp_Api_Auth {
 	 * @return true|WP_Error
 	 */
 	protected function check_gate_entry( $request ) {
+		// Tell the meta-write helper whether this request's principal acts as
+		// a real user (#1108); set on every request and sub-request.
+		if ( class_exists( 'Mcpwp_Post_Fields' ) ) {
+			Mcpwp_Post_Fields::set_user_run_principal( $this->requester_acts_as_user() );
+		}
 		$shape = $this->check_bulk_items_are_objects( $request );
 		if ( is_wp_error( $shape ) ) {
 			return $shape;
 		}
 		return $this->check_user_run_capability( $request );
+	}
+
+	/**
+	 * Whether the route capability map class is loaded. One seam, so the
+	 * fail-closed branch of check_user_run_capability() can be tested without
+	 * unloading a class (#1108).
+	 *
+	 * @return bool
+	 */
+	protected function route_capability_map_available() {
+		return class_exists( 'Mcpwp_Route_Capability_Map' );
 	}
 
 	/**
