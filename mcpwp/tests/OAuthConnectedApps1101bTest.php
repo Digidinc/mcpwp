@@ -272,7 +272,7 @@ final class OAuthConnectedApps1101bTest extends TestCase {
 		$result   = Mcpwp_OAuth_Apps_Admin::process_profile( self::ALICE, $this->profile_post( self::ALICE, array( Mcpwp_OAuth_Apps_Admin::FIELD_REVOKE => self::EVIL ) ) );
 		$remember = new ReflectionMethod( 'Mcpwp_OAuth_Apps_Admin', 'remember_notice' );
 		$remember->setAccessible( true );
-		$remember->invoke( null, $result );
+		$remember->invoke( null, $result, 'profile' );
 		$html = $this->html( function () { Mcpwp_OAuth_Apps_Admin::render_profile_section( (object) array( 'ID' => self::ALICE ) ); } );
 		$this->assertStringContainsString( '&lt;script&gt;alert(1)&lt;/script&gt; lost access immediately', $html );
 		$this->assertStringNotContainsString( '<script>', $html );

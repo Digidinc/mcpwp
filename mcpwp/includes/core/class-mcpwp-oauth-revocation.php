@@ -72,6 +72,16 @@ class Mcpwp_OAuth_Revocation {
 	/** "user_id|client_id" => epoch: one app's access for one user (#1101 PR-3b). */
 	const PAIRS_OPTION = 'mcpwp_oauth_revoked_pairs';
 
+	/**
+	 * 'site' => epoch: every token issued on THIS site at or before it is dead,
+	 * whoever holds it (admin "Disconnect all").  An option, so per site on a
+	 * network — unlike USER_META, which is network-wide.
+	 */
+	const SITE_EPOCH_OPTION = 'mcpwp_oauth_site_epoch';
+
+	/** user_id => epoch, per site: one user's grants on THIS site only. */
+	const SITE_USERS_OPTION = 'mcpwp_oauth_site_user_epochs';
+
 	/** family_id => epoch for revoked refresh families. */
 	const FAMILIES_OPTION = 'mcpwp_oauth_revoked_families';
 
@@ -151,8 +161,20 @@ class Mcpwp_OAuth_Revocation {
 	public static function is_revoked( array $record ) {
 		$at = self::issued_at( $record );
 
+		// Site-wide epoch: covers every record, including a pre-table token
+		// still in a transient and a record with no issued_at (0 <= epoch).
+		$site_epoch = self::site_epoch();
+		if ( $site_epoch > 0 && $at <= $site_epoch ) {
+			return true;
+		}
+
 		$user_id = isset( $record['user_id'] ) ? (int) $record['user_id'] : 0;
 		if ( $user_id > 0 ) {
+			$site_user = self::read_map( self::SITE_USERS_OPTION )[ (string) $user_id ] ?? 0;
+			if ( $site_user > 0 && $at <= $site_user ) {
+				return true;
+			}
+
 			$epoch = self::user_epoch( $user_id );
 			if ( $epoch > 0 && $at <= $epoch ) {
 				return true;
@@ -216,6 +238,13 @@ class Mcpwp_OAuth_Revocation {
 	}
 
 	/**
+	 * @return int Microseconds; 0 when never set.
+	 */
+	public static function site_epoch() {
+		return self::read_map( self::SITE_EPOCH_OPTION )['site'] ?? 0;
+	}
+
+	/**
 	 * @param string $client_id Client id.
 	 * @return int Microseconds.
 	 */
@@ -270,6 +299,47 @@ class Mcpwp_OAuth_Revocation {
 		update_user_meta( $user_id, self::USER_META, (string) $epoch );
 		$ok = self::user_epoch( $user_id ) >= $epoch;
 		// #1101 PR-3b: the user's rows too, so their list empties at once.
+		if ( class_exists( 'Mcpwp_OAuth_Token_Store' ) && ! Mcpwp_OAuth_Token_Store::revoke_user_rows( $user_id ) ) {
+			$ok = false;
+		}
+		if ( ! $ok ) {
+			self::report_write_failure( 'user', (string) $user_id );
+		}
+		return $ok;
+	}
+
+	/**
+	 * Revoke every OAuth token issued on this site so far, whoever holds it
+	 * (admin "Disconnect all").  One epoch checked by is_revoked(), so it also
+	 * reaches tokens still in pre-table transient storage and unused auth
+	 * codes.  Per site: API keys and other sites of a network are untouched.
+	 *
+	 * @return bool
+	 */
+	public static function revoke_site() {
+		$ok = self::write_map_entry( self::SITE_EPOCH_OPTION, 'site', self::now() );
+		if ( class_exists( 'Mcpwp_OAuth_Token_Store' ) && ! Mcpwp_OAuth_Token_Store::revoke_all_rows() ) {
+			$ok = false;
+		}
+		if ( ! $ok ) {
+			self::report_write_failure( 'site', 'site' );
+		}
+		return $ok;
+	}
+
+	/**
+	 * Revoke one user's OAuth tokens on THIS site only (revoke_user() writes
+	 * network-wide user meta).
+	 *
+	 * @param int $user_id User id.
+	 * @return bool
+	 */
+	public static function revoke_user_on_site( $user_id ) {
+		$user_id = (int) $user_id;
+		if ( $user_id <= 0 ) {
+			return false;
+		}
+		$ok = self::write_map_entry( self::SITE_USERS_OPTION, (string) $user_id, self::now() );
 		if ( class_exists( 'Mcpwp_OAuth_Token_Store' ) && ! Mcpwp_OAuth_Token_Store::revoke_user_rows( $user_id ) ) {
 			$ok = false;
 		}

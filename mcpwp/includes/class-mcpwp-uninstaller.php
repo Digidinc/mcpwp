@@ -98,6 +98,8 @@ class Mcpwp_Uninstaller {
 		'mcpwp_oauth_client_epochs',
 		'mcpwp_oauth_revoked_families',
 		'mcpwp_oauth_revoked_pairs',
+		'mcpwp_oauth_site_epoch',
+		'mcpwp_oauth_site_user_epochs',
 		'mcpwp_oauth_revocation_lock',
 		'mcpwp_oauth_default_migration_lock',
 		// Minimum role for AI connections, and the "Add to ChatGPT" key id.

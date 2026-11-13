@@ -126,7 +126,7 @@ class Mcpwp_OAuth_Apps_Admin {
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified in process_delete().
 		$result = self::process_delete( wp_unslash( $_POST ) );
 		if ( null !== $result ) {
-			self::remember_notice( $result );
+			self::remember_notice( $result, 'list' );
 		}
 		wp_safe_redirect( admin_url( 'admin.php?page=mcpwp#mcpwp-oauth-apps' ) );
 		exit;
@@ -151,7 +151,7 @@ class Mcpwp_OAuth_Apps_Admin {
 		?>
 		<div id="mcpwp-oauth-apps">
 			<h3><?php esc_html_e( 'AI apps', 'mcpwp' ); ?></h3>
-			<?php self::render_notice(); ?>
+			<?php self::render_notice( 'list' ); ?>
 			<p class="description"><?php esc_html_e( 'Apps that registered to connect with WordPress sign-in. Removing an app stops it at once for every user.', 'mcpwp' ); ?></p>
 			<?php if ( empty( $clients ) ) : ?>
 				<p><?php esc_html_e( 'No AI apps have registered yet.', 'mcpwp' ); ?></p>
@@ -260,19 +260,13 @@ class Mcpwp_OAuth_Apps_Admin {
 		if ( ! wp_verify_nonce( $nonce, self::DISCONNECT_ALL_ACTION . '|' . $current ) ) {
 			return array( 'type' => 'error', 'message' => __( 'The form expired. Reload the page and try again.', 'mcpwp' ) );
 		}
-		$users = array( $current );
-		if ( self::is_apps_admin() ) {
-			foreach ( Mcpwp_OAuth_Token_Store::live_rows() as $row ) {
-				$users[] = (int) $row['user_id'];
-			}
-		}
-		$failed = 0;
-		foreach ( array_unique( array_filter( $users ) ) as $user_id ) {
-			if ( ! Mcpwp_OAuth_Revocation::revoke_user( (int) $user_id ) ) {
-				++$failed;
-			}
-		}
-		if ( $failed > 0 ) {
+		// One chokepoint, scoped per site: an administrator cuts every OAuth
+		// token issued on this site (including ones with no row yet); anyone
+		// else only their own, on this site.  Never the request's say-so.
+		$ok = self::is_apps_admin()
+			? Mcpwp_OAuth_Revocation::revoke_site()
+			: Mcpwp_OAuth_Revocation::revoke_user_on_site( $current );
+		if ( ! $ok ) {
 			return array( 'type' => 'error', 'message' => __( 'Some AI apps could not be disconnected because the site was busy. Try again.', 'mcpwp' ) );
 		}
 		return array( 'type' => 'updated', 'message' => __( 'AI apps were disconnected. They lost access immediately; each will need to be connected again. API keys and ChatGPT links are not affected.', 'mcpwp' ) );
@@ -286,7 +280,7 @@ class Mcpwp_OAuth_Apps_Admin {
 			wp_die( esc_html__( 'You are not allowed to do this.', 'mcpwp' ), '', array( 'response' => 403 ) );
 		}
 		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- verified in process_disconnect_all().
-		self::remember_notice( self::process_disconnect_all( wp_unslash( $_POST ) ) );
+		self::remember_notice( self::process_disconnect_all( wp_unslash( $_POST ) ), 'card' );
 		wp_safe_redirect( admin_url( 'admin.php?page=mcpwp#mcpwp-connect-ai-app' ) );
 		exit;
 	}
@@ -307,7 +301,7 @@ class Mcpwp_OAuth_Apps_Admin {
 				<span class="dashicons dashicons-admin-links"></span>
 				<?php esc_html_e( 'Connect an AI app', 'mcpwp' ); ?>
 			</h2>
-			<?php self::render_notice(); ?>
+			<?php self::render_notice( 'card' ); ?>
 			<p class="description"><?php esc_html_e( 'Give your AI app this address. It will send you to this site\'s WordPress login, show what it is asking for, and connect only after you approve.', 'mcpwp' ); ?></p>
 			<?php if ( ! $oauth_enabled ) : ?>
 				<div class="notice notice-warning inline"><p><?php esc_html_e( 'Signing in with WordPress is switched off, so AI apps cannot connect this way. Turn it on under Advanced below.', 'mcpwp' ); ?></p></div>
@@ -316,14 +310,19 @@ class Mcpwp_OAuth_Apps_Admin {
 			<pre class="mcpwp-code-block" id="mcpwp-connect-endpoint"><?php echo esc_html( $endpoint ); ?></pre>
 			<p><button type="button" class="button button-primary mcpwp-copy-code-btn" data-target="mcpwp-connect-endpoint"><?php esc_html_e( 'Copy address', 'mcpwp' ); ?></button></p>
 			<ul class="ul-disc">
-				<li><strong>claude.ai</strong>: <?php esc_html_e( 'Settings, then Connectors, then Add custom connector. Paste the address and sign in with WordPress when asked.', 'mcpwp' ); ?></li>
+				<li><strong>claude.ai, Claude Desktop</strong>: <?php esc_html_e( 'Settings, then Connectors, then Add custom connector. Paste the address and sign in with WordPress when asked.', 'mcpwp' ); ?></li>
 				<li><strong>ChatGPT</strong>: <?php esc_html_e( 'chatgpt.com/plugins, then +, then Add custom MCP server. Paste the address and choose OAuth. A one-link option is in "Add to ChatGPT" below.', 'mcpwp' ); ?></li>
-				<li><strong>Cursor, Claude Desktop, Claude Code</strong>: <?php esc_html_e( 'add an MCP server of type HTTP with the address above (Claude Code: claude mcp add --transport http mcpwp followed by the address). Sign in with WordPress when prompted.', 'mcpwp' ); ?></li>
+				<li><strong>Cursor, Claude Code</strong>: <?php esc_html_e( 'add an MCP server of type HTTP with the address above (Claude Code: claude mcp add --transport http mcpwp followed by the address). Sign in with WordPress when prompted.', 'mcpwp' ); ?></li>
 			</ul>
 
 			<h3><?php esc_html_e( 'Connected now', 'mcpwp' ); ?></h3>
+			<?php $legacy_window = Mcpwp_OAuth_Token_Store::grace_open(); ?>
 			<?php if ( empty( $connections ) ) : ?>
-				<p><?php esc_html_e( 'No AI apps are connected.', 'mcpwp' ); ?></p>
+				<p><?php esc_html_e( 'No connected AI apps are listed.', 'mcpwp' ); ?></p>
+				<?php if ( $legacy_window ) : ?>
+					<p class="description"><?php esc_html_e( 'An app connected before the last update appears here only after it next signs in, so it may be connected without being listed. Disconnect all also cuts those.', 'mcpwp' ); ?></p>
+					<?php self::render_disconnect_all_form( $is_admin, $current ); ?>
+				<?php endif; ?>
 			<?php else : ?>
 				<p class="description">
 					<?php
@@ -356,15 +355,27 @@ class Mcpwp_OAuth_Apps_Admin {
 						<?php endforeach; ?>
 					</tbody>
 				</table>
-				<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-top:12px;"
-					data-confirm="<?php echo esc_attr( __( 'Disconnect all AI apps? They lose access immediately and must be connected again.', 'mcpwp' ) ); ?>"
-					onsubmit="return confirm(this.getAttribute('data-confirm'));">
-					<input type="hidden" name="action" value="<?php echo esc_attr( self::DISCONNECT_ALL_ACTION ); ?>" />
-					<?php wp_nonce_field( self::DISCONNECT_ALL_ACTION . '|' . $current, self::NONCE_FIELD, false ); ?>
-					<button type="submit" class="button"><?php echo esc_html( $is_admin ? __( 'Disconnect all AI apps', 'mcpwp' ) : __( 'Disconnect my AI apps', 'mcpwp' ) ); ?></button>
-				</form>
+				<?php self::render_disconnect_all_form( $is_admin, $current ); ?>
 			<?php endif; ?>
 		</div>
+		<?php
+	}
+
+	/**
+	 * The card's Disconnect all form.
+	 *
+	 * @param bool $is_admin Whether it cuts the whole site's grants.
+	 * @param int  $current  Acting user id (the nonce is bound to it).
+	 */
+	private static function render_disconnect_all_form( $is_admin, $current ) {
+		?>
+		<form method="post" action="<?php echo esc_url( admin_url( 'admin-post.php' ) ); ?>" style="margin-top:12px;"
+			data-confirm="<?php echo esc_attr( __( 'Disconnect all AI apps? They lose access immediately and must be connected again.', 'mcpwp' ) ); ?>"
+			onsubmit="return confirm(this.getAttribute('data-confirm'));">
+			<input type="hidden" name="action" value="<?php echo esc_attr( self::DISCONNECT_ALL_ACTION ); ?>" />
+			<?php wp_nonce_field( self::DISCONNECT_ALL_ACTION . '|' . $current, self::NONCE_FIELD, false ); ?>
+			<button type="submit" class="button"><?php echo esc_html( $is_admin ? __( 'Disconnect all AI apps', 'mcpwp' ) : __( 'Disconnect my AI apps', 'mcpwp' ) ); ?></button>
+		</form>
 		<?php
 	}
 
@@ -511,7 +522,7 @@ class Mcpwp_OAuth_Apps_Admin {
 		if ( null === $result || ( 'error' === $result['type'] && ! self::can_manage_apps_of( $user_id ) ) ) {
 			wp_die( esc_html__( 'You are not allowed to do this.', 'mcpwp' ), '', array( 'response' => 403 ) );
 		}
-		self::remember_notice( $result );
+		self::remember_notice( $result, 'profile' );
 		wp_safe_redirect( self::profile_url( $user_id ) . '#mcpwp-connected-apps' );
 		exit;
 	}
@@ -537,7 +548,7 @@ class Mcpwp_OAuth_Apps_Admin {
 		$apps = Mcpwp_OAuth_Token_Store::live_apps_for_user( $user_id );
 		?>
 		<h2 id="mcpwp-connected-apps"><?php esc_html_e( 'Connected AI apps', 'mcpwp' ); ?></h2>
-		<?php self::render_notice(); ?>
+		<?php self::render_notice( 'profile' ); ?>
 		<p class="description"><?php esc_html_e( 'Apps such as ChatGPT or Claude that were allowed to use this site as this user. Revoke: the app loses access immediately; it will need to be connected again.', 'mcpwp' ); ?></p>
 		<?php
 		// #1101 PR-3b round 2: links, never submit buttons.  This section is
@@ -581,17 +592,19 @@ class Mcpwp_OAuth_Apps_Admin {
 	// -------------------------------------------------------------------------
 
 	/**
-	 * @param array $notice {type, message}.
+	 * @param array  $notice  {type, message}.
+	 * @param string $surface 'card' | 'list' | 'profile': each surface prints
+	 *                        only its own, so one cannot swallow another's.
 	 */
-	private static function remember_notice( array $notice ) {
-		set_transient( self::NOTICE_PREFIX . (int) get_current_user_id(), $notice, 60 );
+	private static function remember_notice( array $notice, $surface ) {
+		set_transient( self::NOTICE_PREFIX . $surface . '_' . (int) get_current_user_id(), $notice, 60 );
 	}
 
 	/**
 	 * Print (and forget) the acting user's notice.  Plain text, escaped.
 	 */
-	private static function render_notice() {
-		$key    = self::NOTICE_PREFIX . (int) get_current_user_id();
+	private static function render_notice( $surface ) {
+		$key    = self::NOTICE_PREFIX . $surface . '_' . (int) get_current_user_id();
 		$notice = get_transient( $key );
 		if ( ! is_array( $notice ) || empty( $notice['message'] ) ) {
 			return;

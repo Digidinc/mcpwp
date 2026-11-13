@@ -12,6 +12,13 @@ require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-oauth.php';
 require_once dirname( __DIR__ ) . '/includes/class-mcpwp-oauth-well-known.php';
 require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-oauth-apps-admin.php';
 require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-chatgpt-connector.php';
+require_once __DIR__ . '/ApiAuthTest.php';
+
+if ( ! function_exists( 'wp_die' ) ) {
+	function wp_die( $message = '', $title = '', $args = array() ) {
+		throw new RuntimeException( is_string( $message ) ? $message : 'wp_die called' );
+	}
+}
 
 if ( ! function_exists( 'esc_url' ) ) {
 	function esc_url( $url ) {
@@ -102,7 +109,7 @@ final class OAuthConnectCardTest extends TestCase {
 		$this->assertStringContainsString( 'claude.ai', $html );
 		$this->assertStringContainsString( 'ChatGPT', $html );
 		$this->assertStringContainsString( 'Cursor', $html );
-		$this->assertStringContainsString( 'No AI apps are connected.', $html );
+		$this->assertStringContainsString( 'No connected AI apps are listed.', $html );
 	}
 
 	public function test_card_never_renders_token_material(): void {
@@ -198,25 +205,189 @@ final class OAuthConnectCardTest extends TestCase {
 		$this->assertSame( array( 'k' => array( 'hash' => 'x' ) ), get_option( 'mcpwp_api_keys' ) );
 	}
 
+
+	// ── review round: one chokepoint, per site ────────────────────────────
+
+	private function legacy_refresh( int $user ): string {
+		$token = 'mcpwp_rt_' . bin2hex( random_bytes( 32 ) );
+		set_transient( ( new Mcpwp_REST_OAuth() )->get_oauth_refresh_token_transient_key( $token ), array( 'scopes' => array( 'read', 'write' ), 'user_id' => $user, 'created_at' => time() - 10, 'expires_at' => time() + 3600 ), 3600 );
+		return $token;
+	}
+
+	private function legacy_access( int $user ): string {
+		$token = 'mcpwp_at_' . bin2hex( random_bytes( 24 ) );
+		set_transient( 'mcpwp_oauth_token_' . md5( $token ), array( 'scopes' => array( 'read' ), 'user_id' => $user, 'aud' => Mcpwp_OAuth_Well_Known::get_canonical_resource(), 'created_at' => time() - 10, 'expires_at' => time() + 600 ), 600 );
+		return $token;
+	}
+
+	private function refresh_with( string $token ): WP_REST_Response {
+		return ( new Mcpwp_REST_OAuth() )->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'refresh_token', 'refresh_token' => $token, 'client_id' => 'test_client' ) ) );
+	}
+
+	private function bearer_works( string $token ): bool {
+		return true === ( new Mcpwp_Api_Auth_Test_Harness() )->verify_api_key( new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'Authorization' => 'Bearer ' . $token ) ) );
+	}
+
+	public function test_admin_disconnect_all_kills_a_user_with_only_a_legacy_storage_token(): void {
+		$refresh = $this->legacy_refresh( self::BOB );
+		$access  = $this->legacy_access( self::BOB );
+		$this->assertTrue( $this->bearer_works( $access ), 'Precondition: the legacy access token works.' );
+		$this->as_user( self::ADMIN );
+		$result = Mcpwp_OAuth_Apps_Admin::process_disconnect_all( array( Mcpwp_OAuth_Apps_Admin::NONCE_FIELD => $this->nonce_for( self::ADMIN ) ) );
+		$this->assertSame( 'updated', $result['type'] );
+		usleep( 20 );
+		$this->assertFalse( $this->bearer_works( $access ), 'The legacy access token is refused.' );
+		$response = $this->refresh_with( $refresh );
+		$this->assertSame( 400, $response->get_status(), 'The unused pre-table refresh token cannot refresh.' );
+		$this->assertSame( 'invalid_grant', $response->get_data()['error'] );
+	}
+
+	public function test_admin_disconnect_all_kills_an_unused_auth_code(): void {
+		$code = 'code_' . bin2hex( random_bytes( 8 ) );
+		set_transient( 'mcpwp_oauth_code_' . $code, array( 'client_id' => 'test_client', 'redirect_uri' => 'https://client.example.com/cb', 'code_challenge' => ( new Mcpwp_REST_OAuth() )->compute_pkce_challenge( self::VERIFIER ), 'scope' => 'read write', 'user_id' => self::BOB, 'issued_at' => Mcpwp_OAuth_Revocation::now(), 'expires' => time() + 60 ), 60 );
+		$this->as_user( self::ADMIN );
+		Mcpwp_OAuth_Apps_Admin::process_disconnect_all( array( Mcpwp_OAuth_Apps_Admin::NONCE_FIELD => $this->nonce_for( self::ADMIN ) ) );
+		$response = ( new Mcpwp_REST_OAuth() )->handle_token( new WP_REST_Request( 'POST', '/mcpwp/v1/oauth/token', array( 'grant_type' => 'authorization_code', 'code' => $code, 'client_id' => 'test_client', 'redirect_uri' => 'https://client.example.com/cb', 'code_verifier' => self::VERIFIER ) ) );
+		$this->assertSame( 400, $response->get_status() );
+	}
+
+	public function test_a_grant_issued_after_disconnect_all_works(): void {
+		$this->as_user( self::ADMIN );
+		Mcpwp_OAuth_Apps_Admin::process_disconnect_all( array( Mcpwp_OAuth_Apps_Admin::NONCE_FIELD => $this->nonce_for( self::ADMIN ) ) );
+		usleep( 20 );
+		$data = $this->grant( self::ALICE );
+		$this->assertTrue( $this->bearer_works( $data['access_token'] ), 'Reconnecting works.' );
+	}
+
+	public function test_non_admin_disconnect_cuts_only_their_own_legacy_token(): void {
+		$mine   = $this->legacy_access( self::ALICE );
+		$theirs = $this->legacy_access( self::BOB );
+		$this->as_user( self::ALICE );
+		Mcpwp_OAuth_Apps_Admin::process_disconnect_all( array( Mcpwp_OAuth_Apps_Admin::NONCE_FIELD => $this->nonce_for( self::ALICE ) ) );
+		usleep( 20 );
+		$this->assertFalse( $this->bearer_works( $mine ) );
+		$this->assertTrue( $this->bearer_works( $theirs ) );
+	}
+
+	public function test_disconnect_all_is_per_site_and_writes_no_network_wide_user_meta(): void {
+		$this->as_user( self::ADMIN );
+		Mcpwp_OAuth_Apps_Admin::process_disconnect_all( array( Mcpwp_OAuth_Apps_Admin::NONCE_FIELD => $this->nonce_for( self::ADMIN ) ) );
+		$this->as_user( self::ALICE );
+		Mcpwp_OAuth_Apps_Admin::process_disconnect_all( array( Mcpwp_OAuth_Apps_Admin::NONCE_FIELD => $this->nonce_for( self::ALICE ) ) );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_user_meta'], 'No user meta: that is shared by every site of a network.' );
+		$this->assertGreaterThan( 0, Mcpwp_OAuth_Revocation::site_epoch(), 'The marker is a per-site option.' );
+	}
+
+	public function test_card_tells_the_truth_in_the_legacy_window_and_after_it(): void {
+		$this->as_user( self::ADMIN );
+		$html = $this->card();
+		$this->assertStringContainsString( 'may be connected without being listed', $html );
+		$this->assertStringContainsString( '>Disconnect all AI apps<', $html, 'The button is there even with no rows.' );
+		update_option( Mcpwp_OAuth_Token_Store::GRACE_OPTION, time() - 1, false );
+		$html = $this->card();
+		$this->assertStringNotContainsString( 'without being listed', $html );
+		$this->assertStringNotContainsString( '>Disconnect all AI apps<', $html );
+	}
+
+	public function test_a_failed_write_is_reported_as_failure_not_success(): void {
+		$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_OAuth_Revocation::LOCK_OPTION ] = ( time() + 60 ) . '|held';
+		$log = ini_set( 'error_log', '/dev/null' );
+		try {
+			$this->as_user( self::ADMIN );
+			$result = Mcpwp_OAuth_Apps_Admin::process_disconnect_all( array( Mcpwp_OAuth_Apps_Admin::NONCE_FIELD => $this->nonce_for( self::ADMIN ) ) );
+			$this->as_user( self::ALICE );
+			$own = Mcpwp_OAuth_Apps_Admin::process_disconnect_all( array( Mcpwp_OAuth_Apps_Admin::NONCE_FIELD => $this->nonce_for( self::ALICE ) ) );
+		} finally {
+			ini_set( 'error_log', (string) $log );
+		}
+		$this->assertSame( 'error', $result['type'] );
+		$this->assertSame( 'error', $own['type'] );
+		$this->assertStringContainsString( 'could not be disconnected', $result['message'] );
+	}
+
+	public function test_the_handler_refuses_a_logged_out_caller_before_anything_else(): void {
+		$this->as_user( 0 );
+		$this->expectException( RuntimeException::class );
+		Mcpwp_OAuth_Apps_Admin::handle_disconnect_all();
+	}
+
+	public function test_the_loader_registers_the_action_for_logged_in_users_only(): void {
+		$src = (string) file_get_contents( dirname( __DIR__ ) . '/includes/class-mcpwp-loader.php' );
+		$this->assertMatchesRegularExpression( "/add_action\( 'admin_post_' \. Mcpwp_OAuth_Apps_Admin::DISCONNECT_ALL_ACTION, 'Mcpwp_OAuth_Apps_Admin', 'handle_disconnect_all' \)/", $src );
+		$this->assertStringNotContainsString( 'admin_post_nopriv_', substr( $src, (int) strpos( $src, 'DISCONNECT_ALL_ACTION' ) - 60, 200 ) );
+	}
+
+	public function test_each_surface_prints_only_its_own_notice(): void {
+		$this->as_user( self::ADMIN );
+		$remember = new ReflectionMethod( 'Mcpwp_OAuth_Apps_Admin', 'remember_notice' );
+		$remember->setAccessible( true );
+		$remember->invoke( null, array( 'type' => 'error', 'message' => 'Delete failed.' ), 'list' );
+		$this->assertStringNotContainsString( 'Delete failed.', $this->card(), 'The card must not swallow the list\'s notice.' );
+		ob_start();
+		Mcpwp_OAuth_Apps_Admin::render_clients_list();
+		$this->assertStringContainsString( 'Delete failed.', (string) ob_get_clean() );
+	}
+
+	// ── review round: exact escaping ──────────────────────────────────────
+
+	public function test_user_login_app_name_url_and_endpoint_are_escaped_exactly(): void {
+		foreach ( $GLOBALS['mcpwp_test_users'] as $u ) {
+			if ( self::ALICE === (int) $u->ID ) {
+				$u->user_login = '<script>alert(2)</script>';
+			}
+		}
+		$token = 'mcpwp_at_' . bin2hex( random_bytes( 24 ) );
+		Mcpwp_OAuth_Token_Store::insert( $token, Mcpwp_OAuth_Token_Store::TYPE_ACCESS, array( 'client_id' => 'evil"><b>x', 'user_id' => self::ALICE, 'scopes' => array( 'read' ), 'issued_at' => Mcpwp_OAuth_Revocation::now(), 'expires_at' => time() + 600, 'family_id' => 'f', 'aud' => Mcpwp_OAuth_Well_Known::get_canonical_resource() ) );
+		$GLOBALS['mcpwp_test_rest_scheme']   = 'https://a<i>';
+		$GLOBALS['mcpwp_test_strict_esc_url'] = true;
+		try {
+			$this->as_user( self::ADMIN );
+			$html = $this->card();
+		} finally {
+			unset( $GLOBALS['mcpwp_test_rest_scheme'], $GLOBALS['mcpwp_test_strict_esc_url'] );
+		}
+		$this->assertStringContainsString( 'app=evilbx">Revoke</a>', str_replace( '&#038;', '&', $html ), 'The revoke href is escaped by esc_url().' );
+		$this->assertStringContainsString( '<td>&lt;script&gt;alert(2)&lt;/script&gt;</td>', $html );
+		$this->assertStringNotContainsString( '<script>', $html );
+		$this->assertStringContainsString( '<td>evil&quot;&gt;&lt;b&gt;x</td>', $html );
+		$this->assertStringContainsString( '&#038;user_id=', $html, 'The revoke href went through esc_url().' );
+		$this->assertStringNotContainsString( '"><b>', $html, 'Neither the name nor the revoke href breaks out of its attribute.' );
+		$this->assertStringNotContainsString( '<i>', $html );
+		$this->assertMatchesRegularExpression( '#<pre class="mcpwp-code-block" id="mcpwp-connect-endpoint">https://a&lt;i&gt;://example\.com/wp-json/mcpwp/v1/mcp</pre>#', $html );
+	}
+
 	// ── consent screen ────────────────────────────────────────────────────
 
-	public function test_consent_screen_states_access_name_host_and_where_to_revoke(): void {
-		$this->as_user( self::ALICE );
-		$html = ( new Mcpwp_REST_OAuth() )->build_consent_screen_html(
+	private function consent( string $scope ): string {
+		return ( new Mcpwp_REST_OAuth() )->build_consent_screen_html(
 			array(
 				'client_id'     => self::CLIENT,
 				'redirect_uri'  => self::REDIRECT,
-				'scope'         => 'read write',
+				'scope'         => $scope,
 				'response_type' => 'code',
 				'state'         => 's',
 			)
 		);
-		$this->assertStringContainsString( 'ChatGPT', $html );
-		$this->assertStringContainsString( 'chatgpt.com', $html );
-		$this->assertStringContainsString( 'Read: the app can look at', $html );
-		$this->assertStringContainsString( 'Write: the app can also create and edit', $html );
-		$this->assertStringContainsString( 'never do more than your own WordPress account', $html );
-		$this->assertStringContainsString( 'Connected AI apps', $html );
+	}
+
+	public function test_consent_screen_states_access_name_host_and_where_to_revoke(): void {
+		$this->as_user( self::ALICE );
+		$html = $this->consent( 'read write' );
+		$this->assertStringContainsString( '<strong>ChatGPT</strong>', $html );
+		$this->assertStringContainsString( '<strong>chatgpt.com</strong>', $html );
+		$this->assertStringContainsString( '<li>Read access lets the app view your site&#039;s content.</li>', $html );
+		$this->assertStringContainsString( '<li>Write access also lets it create, edit and delete content as you. Untick the box above to give read access only.</li>', $html );
+		$this->assertStringContainsString( '<li>It can never do more than your own WordPress account is allowed to do. The access listed above is already capped to what your account may do.</li>', $html );
+		$this->assertStringContainsString( '<li>You can disconnect the app at any time under Users, Profile, Connected AI apps. Administrators can also use MCPWP, Setup, Connect an AI app.</li>', $html );
 		$this->assertStringContainsString( 'Never administrator access', $html );
+		$this->assertStringNotContainsString( 'cannot change anything', $html );
+	}
+
+	public function test_consent_screen_does_not_explain_write_when_write_is_not_on_offer(): void {
+		$this->as_user( self::ALICE );
+		$html = $this->consent( 'read' );
+		$this->assertStringNotContainsString( 'Write access also lets it', $html );
+		$this->assertStringNotContainsString( 'name="scope_write"', $html );
+		$this->assertStringContainsString( '<li>This connection is read only: the app cannot create, edit or delete anything.</li>', $html );
 	}
 }

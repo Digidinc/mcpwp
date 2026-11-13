@@ -113,9 +113,8 @@ Two equivalent methods:
 
 **Method A — `claude mcp add` (command line):**
 ```bash
-claude mcp add mcpwp \
-  --transport http \
-  --url "https://YOUR-SITE.com/wp-json/mcpwp/v1/mcp" \
+claude mcp add --transport http mcpwp \
+  "https://YOUR-SITE.com/wp-json/mcpwp/v1/mcp" \
   --header "X-API-Key: mcpwp_YOUR_KEY"
 ```
 
