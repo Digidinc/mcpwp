@@ -323,8 +323,11 @@ class Mcpwp_REST_WebMCP extends Mcpwp_REST_API {
 		Mcpwp_WooCommerce_Audit::bind( $audit_context, $internal );
 		$previous = Mcpwp_WebMCP::begin_dispatch( $user_id );
 		try {
+			$this->forward_raw_parameter_bags( $request, $internal );
 			$response = rest_do_request( $internal );
 		} finally {
+			$this->forget_raw_parameter_sources( $request );
+			$this->forget_raw_parameter_bags( $internal );
 			Mcpwp_WebMCP::end_dispatch( $previous );
 		}
 

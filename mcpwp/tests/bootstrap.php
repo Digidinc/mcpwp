@@ -319,10 +319,29 @@ class WP_REST_Request
         return $this->route;
     }
 
+    /** Mirrors WP_REST_Request::get_content_type(), including parameter separation. */
+    public function get_content_type()
+    {
+        $value = $this->get_header('Content-Type');
+        if (empty($value)) {
+            return null;
+        }
+        $parameters = '';
+        if (strpos($value, ';')) {
+            list($value, $parameters) = explode(';', $value, 2);
+        }
+        $value = strtolower($value);
+        if (false === strpos($value, '/')) {
+            return null;
+        }
+        list($type, $subtype) = explode('/', $value, 2);
+        return array_map('trim', compact('value', 'type', 'subtype', 'parameters'));
+    }
+
     protected function is_json_content_type()
     {
-        $type = (string) $this->get_header('content-type');
-        return '' !== $type && false !== stripos($type, 'json');
+        $type = $this->get_content_type();
+        return isset($type['value']) && wp_is_json_media_type($type['value']);
     }
 
     /** Core's order (WP_REST_Request::get_parameter_order()), filter included. */
@@ -481,6 +500,12 @@ class WP_REST_Request
         return $this->body;
     }
 
+}
+
+// WordPress's JSON detector remains independent of PHP's POST body handler.
+function wp_is_json_media_type($media_type)
+{
+    return (bool) preg_match('/(^|\s|,)application\/([\w!#\$&-\^\.\+]+\+)?json(\+oembed)?($|\s|;|,)/i', $media_type);
 }
 
 class WP_REST_Server
@@ -1615,6 +1640,13 @@ function register_rest_route($namespace = '', $route = '', $args = array())
     );
 
     return true;
+}
+
+if (! function_exists('rest_ensure_response')) {
+    function rest_ensure_response($response)
+    {
+        return $response instanceof WP_REST_Response ? $response : new WP_REST_Response($response);
+    }
 }
 
 function rest_do_request($request = null)

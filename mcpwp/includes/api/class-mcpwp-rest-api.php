@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once dirname( __DIR__ ) . '/core/class-mcpwp-raw-parameter-source.php';
+
 /**
  * Base REST API controller.
  */
@@ -17,6 +19,147 @@ abstract class Mcpwp_REST_API {
 	use Mcpwp_Api_Auth;
 	use Mcpwp_Sanitization;
 	use Mcpwp_Logging;
+
+	/** @var SplObjectStorage|null Unmerged source bags on live internal requests. */
+	private static $raw_parameter_context;
+	/** @var SplObjectStorage|null Original wire sources, captured once per request. */
+	private static $raw_parameter_sources;
+	/** @var SplObjectStorage|null Current JSON-RPC message's body path. */
+	private static $raw_body_paths;
+
+	/**
+	 * Preserve source evidence without merging values or interpreting intent.
+	 * No envelope or value is interpreted here. Batch operation bodies are
+	 * carried separately by index so siblings keep their own evidence.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return array[] Raw parameter bags, including inherited outer sources.
+	 */
+	protected function raw_parameter_bags( $request ) {
+		$bags = self::$raw_parameter_context instanceof SplObjectStorage && self::$raw_parameter_context->contains( $request )
+			? self::$raw_parameter_context[ $request ] : array();
+		foreach ( array( 'get_query_params', 'get_body_params', 'get_json_params', 'get_url_params' ) as $method ) {
+			$bag = $request->$method();
+			if ( ! is_array( $bag ) ) {
+				continue;
+			}
+			$bags[] = $bag;
+			if ( 'get_json_params' === $method && self::$raw_body_paths instanceof SplObjectStorage && self::$raw_body_paths->contains( $request ) ) {
+				$selected = $bag;
+				foreach ( self::$raw_body_paths[ $request ] as $segment ) {
+					$selected = is_array( $selected ) && array_key_exists( $segment, $selected ) ? $selected[ $segment ] : null;
+				}
+				if ( is_array( $selected ) ) {
+					$bags[] = $selected;
+				}
+			}
+		}
+		if ( ! self::$raw_parameter_sources instanceof SplObjectStorage ) {
+			self::$raw_parameter_sources = new SplObjectStorage();
+		}
+		if ( ! self::$raw_parameter_sources->contains( $request ) ) {
+			$sources = array();
+			// Internal requests inherit the original query and media type.
+			$internal = self::$raw_parameter_context instanceof SplObjectStorage && self::$raw_parameter_context->contains( $request );
+			if ( ! $internal ) {
+				$query = isset( $_SERVER['QUERY_STRING'] ) ? (string) $_SERVER['QUERY_STRING'] : '';
+				if ( '' !== $query ) {
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'form', $query, 'query' );
+				}
+			}
+			$body = $request->get_body();
+			$parsed_body = $request->get_body_params();
+			$type = Mcpwp_Raw_Parameter_Source::php_media_type( $request->get_header( 'Content-Type' ) );
+			if ( 'multipart/form-data' === $type ) {
+				// Match the body handler PHP actually used, including headers
+				// whose WordPress media value still contains a comma or space.
+				$sources[] = new Mcpwp_Raw_Parameter_Source( 'multipart', $parsed_body, 'body' );
+			} elseif ( 'application/json' === $type || 'application/x-www-form-urlencoded' === $type ) {
+				if ( '' !== $body ) {
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'application/json' === $type ? 'json' : 'form', $body, 'body' );
+				} elseif ( ! $internal && ! empty( $parsed_body ) && 'application/x-www-form-urlencoded' === $type ) {
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'parsed-form', $parsed_body, 'body' );
+				}
+			} elseif ( ! $internal && ! empty( $parsed_body ) ) {
+				// Parsed SAPI input must never escape its input-limit guard by
+				// being filed as unknown. A consumed body uses multipart's
+				// history guard; available form bytes are also scanned in full.
+				if ( '' !== $body ) {
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'form', $body, 'body' );
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'parsed-form', $parsed_body, 'body' );
+				} else {
+					$sources[] = new Mcpwp_Raw_Parameter_Source( 'multipart', $parsed_body, 'body' );
+				}
+			} elseif ( '' !== $body && ( ! $internal || '' !== (string) $request->get_header( 'Content-Type' ) ) ) {
+				// No body means no unknown body format: query-only requests use
+				// the normal query rules, even when their header is absent.
+				$sources[] = new Mcpwp_Raw_Parameter_Source( 'unknown', $bags, 'body' );
+			}
+			// PHP can parse a form while WordPress also accepts a comma-listed
+			// JSON media type. Retain that independent decoder's raw view too.
+			$wordpress_type = $request->get_content_type();
+			if ( '' !== $body && 'application/json' !== $type && isset( $wordpress_type['value'] ) && wp_is_json_media_type( $wordpress_type['value'] ) ) {
+				$sources[] = new Mcpwp_Raw_Parameter_Source( 'json', $body, 'body' );
+			}
+			self::$raw_parameter_sources[ $request ] = $sources;
+		}
+		foreach ( self::$raw_parameter_sources[ $request ] as $source ) {
+			if ( 'body' === $source->channel && 'json' === $source->document->format && self::$raw_body_paths instanceof SplObjectStorage && self::$raw_body_paths->contains( $request ) ) {
+				$source = $source->at( self::$raw_body_paths[ $request ] );
+			}
+			$bags[] = $source;
+		}
+		return $bags;
+	}
+
+	/** Scope only the raw body, not the request-wide query, to one message. */
+	protected function with_raw_body_path( $request, $path, $callback ) {
+		if ( ! self::$raw_body_paths instanceof SplObjectStorage ) {
+			self::$raw_body_paths = new SplObjectStorage();
+		}
+		$previous = self::$raw_body_paths->contains( $request ) ? self::$raw_body_paths[ $request ] : null;
+		self::$raw_body_paths[ $request ] = $path;
+		try {
+			return call_user_func( $callback );
+		} finally {
+			if ( null === $previous ) {
+				self::$raw_body_paths->detach( $request );
+			} else {
+				self::$raw_body_paths[ $request ] = $previous;
+			}
+		}
+	}
+
+	/** Forget a root request's source cache without removing inherited bags. */
+	protected function forget_raw_parameter_sources( $request ) {
+		if ( self::$raw_parameter_sources instanceof SplObjectStorage ) {
+			self::$raw_parameter_sources->detach( $request );
+		}
+	}
+
+	/**
+	 * Carry raw sources on the request object, never in a client parameter.
+	 * Call forget_raw_parameter_bags() in the dispatch's finally block.
+	 *
+	 * @param WP_REST_Request $source Outer request.
+	 * @param WP_REST_Request $target Internal request.
+	 * @param array[]         $extra  Additional raw argument/operation bags.
+	 */
+	protected function forward_raw_parameter_bags( $source, $target, $extra = array() ) {
+		if ( ! self::$raw_parameter_context instanceof SplObjectStorage ) {
+			self::$raw_parameter_context = new SplObjectStorage();
+		}
+		self::$raw_parameter_context[ $target ] = array_merge( $this->raw_parameter_bags( $source ), $extra );
+	}
+
+	/** @param WP_REST_Request $request Completed internal request. */
+	protected function forget_raw_parameter_bags( $request ) {
+		$this->forget_raw_parameter_sources( $request );
+		if ( self::$raw_parameter_context instanceof SplObjectStorage ) {
+			self::$raw_parameter_context->detach( $request );
+		}
+	}
+
 
 	/**
 	 * REST namespace.

@@ -232,6 +232,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 
 			$spend = Mcpwp_Spend_Budget::report();
 		} finally {
+			$this->forget_raw_parameter_sources( $request );
 			Mcpwp_Spend_Budget::close( $spend_token );
 		}
 
@@ -504,13 +505,35 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		// still live. try/finally guarantees the restore even if the
 		// sub-request throws, so one failing operation cannot leave rate
 		// limiting switched off for the rest of the PHP process.
+		// Preserve only this operation's raw bodies from each outer source;
+		// never inherit another operation's preview intent.
+		$raw_bags = is_array( $body ) ? array( $body ) : array();
+		$sources = $this->raw_parameter_bags( $request );
+		if ( class_exists( 'Mcpwp_Theme_Builder' ) ) {
+			$sources = Mcpwp_Theme_Builder::intent_parameter_bags( $sources );
+		}
+		foreach ( $sources as $bag ) {
+			if ( $bag instanceof Mcpwp_Raw_Parameter_Source ) {
+				if ( class_exists( 'Mcpwp_Theme_Builder' ) ) {
+					foreach ( Mcpwp_Theme_Builder::INTENT_PARAMETER_PATHS as $path ) {
+						$raw_bags[] = $bag->at( array_merge( $path, array( 'operations', $index, 'body' ) ) );
+					}
+				}
+				continue;
+			}
+			if ( isset( $bag['operations'][ $index ]['body'] ) && is_array( $bag['operations'][ $index ]['body'] ) ) {
+				$raw_bags[] = $bag['operations'][ $index ]['body'];
+			}
+		}
 		$previous_sub_request       = self::$is_batch_sub_request;
 		self::$is_batch_sub_request = true;
 
 		try {
+			$this->forward_raw_parameter_bags( $request, $internal_request, $raw_bags );
 			$parent = Mcpwp_WooCommerce_Audit::begin_batch( $request, $this->get_audit_key_id() );
 			$response = Mcpwp_WooCommerce_Audit::dispatch_child( $parent, $index, $internal_request, static function () use ( $internal_request ) { return rest_do_request( $internal_request ); } );
 		} finally {
+			$this->forget_raw_parameter_bags( $internal_request );
 			self::$is_batch_sub_request = $previous_sub_request;
 		}
 
