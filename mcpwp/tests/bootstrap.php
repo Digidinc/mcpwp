@@ -1642,6 +1642,13 @@ function register_rest_route($namespace = '', $route = '', $args = array())
     return true;
 }
 
+if (! function_exists('rest_ensure_response')) {
+    function rest_ensure_response($response)
+    {
+        return $response instanceof WP_REST_Response ? $response : new WP_REST_Response($response);
+    }
+}
+
 function rest_do_request($request = null)
 {
     // Core's order in WP_REST_Server::respond_to_request(): match the route,
