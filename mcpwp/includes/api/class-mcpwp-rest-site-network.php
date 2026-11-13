@@ -256,7 +256,8 @@ class Mcpwp_REST_Site_Network extends Mcpwp_REST_API {
 
 		$topics = Mcpwp_Guides::get_topics();
 		return $this->success_response( array(
-			'description' => 'Available guide topics. Use wp_get_guide(topic="...") to get the full guide for a topic.',
+			'description' => 'Available guide topics. Use wp_get_guide(topic="...") to get the full guide for a topic. A topic with a docs_url has a full page on the docs site; docs_index lists every page.',
+			'docs_index'  => Mcpwp_Guides::DOCS_LLMS_URL,
 			'topics'      => $topics,
 		) );
 	}
