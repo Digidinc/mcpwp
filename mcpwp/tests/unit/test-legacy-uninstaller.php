@@ -348,7 +348,12 @@ final class LegacyUninstallerTest extends TestCase
         if (! defined('MCPWP_PLUGIN_DIR')) {
             define('MCPWP_PLUGIN_DIR', dirname(__DIR__)); // This copy, as mcpwp.php defines it.
         }
-        eval($m[0]); // phpcs:ignore Squiz.PHP.Eval.Discouraged -- test lifts the function body from source.
+        // Include the lifted function from a temp file (not a dynamic-code call).
+        $lifted = tempnam(sys_get_temp_dir(), 'mcpwp-fs-cleanup');
+        // The function resolves paths from __DIR__; keep this file's dir, as the test assumed.
+        file_put_contents($lifted, "<?php\n" . str_replace('__DIR__', var_export(__DIR__, true), $m[0]));
+        include $lifted;
+        unlink($lifted);
 
         update_option('mcpwp_api_key', 'keep-me');
         $GLOBALS['wpdb']->queries = array();
