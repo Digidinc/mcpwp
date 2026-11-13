@@ -120,6 +120,33 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertSame( 'page', $record['resource']['type'] );
 	}
 
+	/**
+	 * #1096 P2-1. A connector link carries its key as `?api_key=`; the gate
+	 * must drop it before the request is stored, or a credential would sit in
+	 * the approvals record where every reviewer (and the list endpoint) reads it.
+	 */
+	public function test_an_approval_record_never_contains_the_callers_api_key(): void {
+		$this->seed( 10 );
+
+		$controller = new Mcpwp_REST_Pages();
+		$request    = new WP_REST_Request(
+			'DELETE',
+			'/mcpwp/v1/pages/10',
+			array( 'id' => 10, 'force' => true, 'api_key' => $this->key['key'] )
+		);
+		$response   = $this->authed( $controller, $request )->delete_page( $request );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $response );
+		$this->assertSame( 202, $response->get_status(), 'Premise: the call was deferred to an approval.' );
+
+		$record = Mcpwp_Approvals::get_request( $response->get_data()['approval_id'] );
+		$this->assertIsArray( $record );
+		$stored = wp_json_encode( $record );
+		$this->assertStringNotContainsString( $this->key['key'], $stored, 'The plaintext key was persisted into the approval record.' );
+		$this->assertStringNotContainsString( 'api_key', $stored, 'No api_key field may be persisted into the approval record.' );
+		$this->assertStringNotContainsString( $this->key['key'], wp_json_encode( $response->get_data() ), 'Nor echoed in the 202 body.' );
+	}
+
 	public function test_trashing_is_not_gated(): void {
 		$this->seed( 10 );
 

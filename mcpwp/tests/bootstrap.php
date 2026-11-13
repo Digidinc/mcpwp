@@ -1389,7 +1389,10 @@ if (! function_exists('wp_list_pluck')) {
 
 function rest_url($path = '')
 {
-    return 'https://example.com/wp-json/' . ltrim($path, '/');
+    // A test can set $GLOBALS['mcpwp_test_rest_scheme'] = 'http' to model a
+    // site whose REST URL is not HTTPS; it must reset it in tearDown().
+    $scheme = isset($GLOBALS['mcpwp_test_rest_scheme']) ? (string) $GLOBALS['mcpwp_test_rest_scheme'] : 'https';
+    return $scheme . '://example.com/wp-json/' . ltrim($path, '/');
 }
 
 function get_bloginfo($show = '')

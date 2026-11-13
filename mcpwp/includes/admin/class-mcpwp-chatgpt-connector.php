@@ -11,10 +11,16 @@
  * This class mints no new kind of credential. The link's key is an ordinary
  * scoped key from create_scoped_api_key(): a custom role limited to
  * CATEGORIES, read + write scope, never admin. It is the Editor role minus
- * Elementor theme-builder and templates, whose write routes can publish
- * site-wide headers/footers and already-published templates without a
- * `status` param (adversarial review of #1090, P1-1). What remains is stated
- * on the Setup page claim by claim, and ChatGptConnectorTest pins each one.
+ * the Elementor theme-builder and template categories (elementor-theme,
+ * elementor-templates), whose write routes can publish site-wide
+ * headers/footers and already-published templates without a `status` param
+ * (adversarial review of #1090, P1-1). That is not "no template can be
+ * created": /elementor/save-section-as-template is classified under the
+ * allowed `elementor-build` category and stays reachable, and it creates a
+ * published `elementor_library` section template (#1096 P2-3). Whether to
+ * block it is an owner decision; this comment only records the behaviour.
+ * What remains is stated on the Setup page claim by claim, and
+ * ChatGptConnectorTest pins each one.
  * The only state kept here is which scoped key id is the ChatGPT one, so the
  * Setup page can show its status and rotate or revoke exactly that key.
  *

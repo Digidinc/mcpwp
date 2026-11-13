@@ -28,9 +28,11 @@ final class ChatGptConnectorTest extends TestCase {
 		$GLOBALS['mcpwp_test_filters']      = array();
 		$GLOBALS['mcpwp_test_user_caps']    = array();
 		$_GET                               = array();
+		unset( $GLOBALS['mcpwp_test_rest_scheme'] );
 	}
 
 	protected function tearDown(): void {
+		unset( $GLOBALS['mcpwp_test_rest_scheme'] );
 		$_GET                               = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 		$GLOBALS['mcpwp_test_user_caps']    = array();
@@ -68,6 +70,7 @@ final class ChatGptConnectorTest extends TestCase {
 			'manage categories'            => array( 'POST', '/mcpwp/v1/categories', array() ),
 			'set SEO fields'               => array( 'POST', '/mcpwp/v1/seo/5', array() ),
 			'edit an Elementor layout'     => array( 'POST', '/mcpwp/v1/elementor/5', array() ),
+			'save a section as a template (disclosed, #1096 P2-3)' => array( 'POST', '/mcpwp/v1/elementor/save-section-as-template', array() ),
 			'kit CSS (disclosed)'          => array( 'POST', '/mcpwp/v1/elementor/kit-css', array( 'mode' => 'replace' ) ),
 			'global styles (disclosed)'    => array( 'POST', '/mcpwp/v1/elementor/globals', array() ),
 		);
@@ -154,6 +157,45 @@ final class ChatGptConnectorTest extends TestCase {
 		$this->assertIsArray( $result );
 		$this->assertStringStartsWith( 'https://example.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_', $result['url'] );
 		$this->assertArrayNotHasKey( 'key', $result['key'], 'Plaintext key must only travel inside the URL.' );
+	}
+
+	/**
+	 * #1096 P2-1. The link carries the key in the query string, so a site
+	 * whose REST URL is plain http must not be given one at all.
+	 */
+	public function test_no_key_is_minted_when_the_rest_url_is_not_https(): void {
+		$this->assertNotSame( 'local', wp_get_environment_type(), 'Premise: local sites are exempt, so the test must not run as one.' );
+		$GLOBALS['mcpwp_test_rest_scheme'] = 'http';
+
+		$auth      = new Mcpwp_ChatGpt_Connector_Test_Auth();
+		$connector = new Mcpwp_ChatGPT_Connector( $auth );
+
+		$this->assertFalse( Mcpwp_ChatGPT_Connector::endpoint_is_secure() );
+
+		$result = $connector->create_or_rotate();
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'mcpwp_chatgpt_needs_https', $result->get_error_code() );
+		$this->assertSame( array(), $auth->list_scoped_api_keys( true ), 'No key may exist after a refused mint.' );
+		$this->assertNull( $connector->get_active_key() );
+
+		// The Setup-page handler reaches the same refusal and exposes no link.
+		$GLOBALS['mcpwp_test_current_user'] = 1;
+		$handled = $connector->handle_request( $this->admin_post( 'create' ) );
+		$this->assertSame( 'error', $handled['type'] );
+		$this->assertArrayNotHasKey( 'url', $handled );
+		$this->assertSame( array(), $auth->list_scoped_api_keys( true ) );
+	}
+
+	public function test_a_refused_https_mint_does_not_revoke_the_existing_link(): void {
+		$auth      = new Mcpwp_ChatGpt_Connector_Test_Auth();
+		$connector = new Mcpwp_ChatGPT_Connector( $auth );
+		$url       = $connector->create_or_rotate()['url'];
+
+		$GLOBALS['mcpwp_test_rest_scheme'] = 'http';
+		$this->assertInstanceOf( WP_Error::class, $connector->create_or_rotate() );
+		unset( $GLOBALS['mcpwp_test_rest_scheme'] );
+
+		$this->assertTrue( $this->verify_with_link( $auth, $url, 'POST', '/mcpwp/v1/posts' ), 'The refusal happens before the rotate revokes anything.' );
 	}
 
 	public function test_key_is_limited_categories_read_write_never_admin(): void {
