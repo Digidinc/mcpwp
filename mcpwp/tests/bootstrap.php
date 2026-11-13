@@ -489,6 +489,35 @@ class WP_REST_Server
     public const CREATABLE = 'POST';
     public const EDITABLE  = 'POST,PUT,PATCH';
     public const DELETABLE = 'DELETE';
+
+    // Reconstruct core's route table from the registration spy. Registrations
+    // append endpoint arrays; they must never overwrite an earlier handler.
+    public function get_routes()
+    {
+        $routes = array();
+        foreach ($GLOBALS['_mcpwp_test_registered_routes'] ?? array() as $registration) {
+            $route = '/' . trim($registration['namespace'], '/') . '/' . trim($registration['route'], '/');
+            $args = $registration['args'];
+            if (isset($args['callback'])) {
+                $args = array($args);
+            }
+            foreach ($args as $key => $endpoint) {
+                if (!is_int($key)) {
+                    continue;
+                }
+                $methods = $endpoint['methods'] ?? 'GET';
+                if (is_string($methods)) {
+                    $methods = explode(',', $methods);
+                }
+                $endpoint['methods'] = array();
+                foreach ($methods as $method) {
+                    $endpoint['methods'][strtoupper(trim($method))] = true;
+                }
+                $routes[$route][] = $endpoint;
+            }
+        }
+        return $routes;
+    }
 }
 
 function __($text, $domain = 'default')
@@ -1517,6 +1546,11 @@ function wp_parse_args($args, $defaults = array())
 function wp_parse_url($url, $component = -1)
 {
     return parse_url($url, $component);
+}
+
+function rest_get_server()
+{
+    return new WP_REST_Server();
 }
 
 function register_rest_route($namespace = '', $route = '', $args = array())

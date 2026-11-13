@@ -318,7 +318,6 @@ class Mcpwp_Loader {
 
 		// Content graph and internal links
 		$content_graph_controller = new Mcpwp_REST_Content_Graph();
-		$content_graph_controller->register_routes();
 
 		// Site graph read surface (#943 S2)
 		if ( class_exists( 'Mcpwp_REST_Graph' ) ) {
@@ -328,7 +327,6 @@ class Mcpwp_Loader {
 
 		// SEO audit
 		$seo_audit_controller = new Mcpwp_REST_SEO_Audit();
-		$seo_audit_controller->register_routes();
 
 		// SEO market data — visibility and opportunities
 		$seo_market = new Mcpwp_REST_SEO_Market();
@@ -340,7 +338,6 @@ class Mcpwp_Loader {
 
 		// Content quality
 		$content_quality_controller = new Mcpwp_REST_Content_Quality();
-		$content_quality_controller->register_routes();
 
 		// Posts
 		$posts_controller = new Mcpwp_REST_Posts();

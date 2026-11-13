@@ -42,6 +42,8 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/helpers/rest-route-uniqueness.php';
+
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-core.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-media.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-design-references.php';
@@ -217,71 +219,40 @@ final class AllRegisteredRoutesCategoryTest extends TestCase {
 	 * Register every REST controller this plugin ships, Free and Pro,
 	 * unconditionally — mirroring class-mcpwp-loader.php's
 	 * register_rest_routes() and class-mcpwp-pro-bootstrap.php's
-	 * register_routes(), but calling each controller directly instead of
-	 * going through Mcpwp_Loader (whose constructor wires unrelated
-	 * admin/locale hooks this test has no need of) or the
+	 * register_routes(), using the production Free loader and explicit Pro
+	 * controllers (including optional integrations), bypassing unrelated
+	 * loader setup and the
 	 * Mcpwp_License::is_pro() gate (irrelevant here: the point is every
 	 * route the CODE can register, not just the ones a particular license
 	 * state would activate).
 	 *
 	 * @return array<string,string> route pattern => concrete classifiable path.
 	 */
-	private function register_every_known_route(): array {
-		( new Mcpwp_REST_OpenAPI() )->register_routes();
-		( new Mcpwp_REST_Site_Info() )->register_routes();
-		( new Mcpwp_REST_Site_Settings() )->register_routes();
-		( new Mcpwp_REST_Site_Content() )->register_routes();
-		( new Mcpwp_REST_Site_Taxonomy() )->register_routes();
-		( new Mcpwp_REST_Site_Custom_Css() )->register_routes();
-		( new Mcpwp_REST_Site_Updates() )->register_routes();
-		( new Mcpwp_REST_Site_Library() )->register_routes();
-		( new Mcpwp_REST_Site_Network() )->register_routes();
-		( new Mcpwp_REST_Site_Cache() )->register_routes();
-		( new Mcpwp_REST_Content_Graph() )->register_routes();
-		( new Mcpwp_REST_Graph() )->register_routes();
-		( new Mcpwp_REST_SEO_Audit() )->register_routes();
-		( new Mcpwp_REST_SEO_Market() )->register_routes();
-		( new Mcpwp_REST_AI_Presence() )->register_routes();
-		( new Mcpwp_REST_Content_Quality() )->register_routes();
-		( new Mcpwp_REST_Posts() )->register_routes();
-		( new Mcpwp_REST_Pages() )->register_routes();
-		( new Mcpwp_REST_Media() )->register_routes();
-		( new Mcpwp_REST_Menus() )->register_routes();
-		( new Mcpwp_REST_Content() )->register_routes();
-		( new Mcpwp_REST_Elementor() )->register_routes();
-		( new Mcpwp_REST_Webhooks() )->register_routes();
-		( new Mcpwp_REST_Screenshot() )->register_routes();
-		( new Mcpwp_REST_Cloudflare() )->register_routes();
-		( new Mcpwp_REST_Feedback() )->register_routes();
-		( new Mcpwp_REST_Blocks() )->register_routes();
-		( new Mcpwp_REST_Approvals() )->register_routes();
-		( new Mcpwp_REST_Action_Log() )->register_routes();
-		( new Mcpwp_REST_Site_Memory() )->register_routes();
-		( new Mcpwp_REST_Signals() )->register_routes();
-		( new Mcpwp_REST_Site_Blueprints() )->register_routes();
-		( new Mcpwp_REST_MCP() )->register_routes();
-		( new Mcpwp_REST_OAuth() )->register_routes();
-		( new Mcpwp_REST_Broker() )->register_routes();
-		( new Mcpwp_REST_Batch() )->register_routes();
+	private function register_every_known_route( bool $pro = true ): array {
+		// Exercise the production chokepoint, including constructors that register
+		// their own routes. Only skip unrelated loader setup (admin hooks, etc.).
+		$loader = ( new ReflectionClass( 'Mcpwp_Loader' ) )->newInstanceWithoutConstructor();
+		$loader->register_rest_routes();
 		( new Mcpwp_REST_Integrations() )->register_routes();
 		( new Mcpwp_REST_Figma() )->register_routes();
-		( new Mcpwp_REST_WebMCP() )->register_routes();
 
-		// Pro — registered unconditionally (see method docblock).
-		( new Mcpwp_REST_Elementor_Pro( null ) )->register_routes();
-		( new Mcpwp_REST_SEO( null ) )->register_routes();
-		( new Mcpwp_REST_Forms( null ) )->register_routes();
-		( new Mcpwp_REST_Site_Manager( null ) )->register_routes();
-		( new Mcpwp_REST_Theme_Builder( null ) )->register_routes();
-		( new Mcpwp_REST_Users( null ) )->register_routes();
-		( new Mcpwp_REST_Widgets( null ) )->register_routes();
-		( new Mcpwp_REST_Themes( null ) )->register_routes();
-		( new Mcpwp_REST_WooCommerce( null ) )->register_routes();
-		( new Mcpwp_REST_Multilang( null ) )->register_routes();
-		( new Mcpwp_REST_Google_Indexing( null ) )->register_routes();
-		( new Mcpwp_REST_LearnPress( null ) )->register_routes();
-		( new Mcpwp_REST_Events( null ) )->register_routes();
-		( new Mcpwp_REST_Staging( new Mcpwp_Staging() ) )->register_routes();
+		if ( $pro ) {
+			// Pro — include optional integrations even without their plugins.
+			( new Mcpwp_REST_Elementor_Pro( null ) )->register_routes();
+			( new Mcpwp_REST_SEO( null ) )->register_routes();
+			( new Mcpwp_REST_Forms( null ) )->register_routes();
+			( new Mcpwp_REST_Site_Manager( null ) )->register_routes();
+			( new Mcpwp_REST_Theme_Builder( null ) )->register_routes();
+			( new Mcpwp_REST_Users( null ) )->register_routes();
+			( new Mcpwp_REST_Widgets( null ) )->register_routes();
+			( new Mcpwp_REST_Themes( null ) )->register_routes();
+			( new Mcpwp_REST_WooCommerce( null ) )->register_routes();
+			( new Mcpwp_REST_Multilang( null ) )->register_routes();
+			( new Mcpwp_REST_Google_Indexing( null ) )->register_routes();
+			( new Mcpwp_REST_LearnPress( null ) )->register_routes();
+			( new Mcpwp_REST_Events( null ) )->register_routes();
+			( new Mcpwp_REST_Staging( new Mcpwp_Staging() ) )->register_routes();
+		}
 
 		$out = array();
 		foreach ( $GLOBALS['_mcpwp_test_registered_routes'] as $r ) {
@@ -295,6 +266,41 @@ final class AllRegisteredRoutesCategoryTest extends TestCase {
 			$out[ $route ] = $this->concrete_path( '/mcpwp/v1' . $route );
 		}
 		return $out;
+	}
+
+	public static function editions(): array {
+		return array( 'Free' => array( false ), 'Pro' => array( true ) );
+	}
+
+	/** @dataProvider editions */
+	public function test_no_route_method_has_multiple_handlers( bool $pro ): void {
+		$this->register_every_known_route( $pro );
+		$routes = rest_get_server()->get_routes();
+		$this->assertGreaterThan( $pro ? 250 : 180, count( $routes ) );
+		$duplicates = mcpwp_test_duplicate_rest_handlers( $routes );
+		$this->assertSame( array(), $duplicates, implode( "\n", $duplicates ) );
+	}
+
+	/** @dataProvider editions */
+	public function test_event_routes_keep_their_handlers_and_permissions( bool $pro ): void {
+		$this->register_every_known_route( $pro );
+		$routes = rest_get_server()->get_routes();
+		$store = $routes['/mcpwp/v1/events'][0];
+		$this->assertSame( array( 'GET' => true ), $store['methods'] );
+		$this->assertInstanceOf( Mcpwp_REST_Webhooks::class, $store['callback'][0] );
+		$this->assertSame( 'list_events', $store['callback'][1] );
+		$this->assertSame( array( $store['callback'][0], 'check_permission' ), $store['permission_callback'] );
+		$this->assertSame( array( 'type', 'limit' ), array_keys( $store['args'] ) );
+		$this->assertArrayNotHasKey( '/mcpwp/v1/events/calendar', $routes );
+		if ( ! $pro ) {
+			return;
+		}
+		$this->assertSame( 'create_event', $routes['/mcpwp/v1/events'][1]['callback'][1] );
+		$this->assertSame( array( 'POST' => true ), $routes['/mcpwp/v1/events'][1]['methods'] );
+		$this->assertSame(
+			array( 'method' => 'GET', 'route' => '/events' ),
+			( new Mcpwp_MCP_Pro_Tools() )->get_tool_map()['wp_list_events']
+		);
 	}
 
 	public function test_every_registered_route_resolves_to_a_category_or_is_explicitly_exempt(): void {
