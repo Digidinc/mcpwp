@@ -22,12 +22,26 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once __DIR__ . '/helpers/trait-mcpwp-request-fixture-state.php';
+
 final class McpToolResourceLinkTest extends TestCase {
 
+	use Mcpwp_Test_Request_Fixture_State;
+
 	protected function setUp(): void {
+		$this->capture_request_fixture_state();
+		$GLOBALS['mcpwp_test_dispatched_requests'] = array();
 		$GLOBALS['mcpwp_test_options']           = array();
 		$GLOBALS['mcpwp_test_transients']        = array();
 		$GLOBALS['mcpwp_test_filters']           = array();
+		// #1114: the old-version test checks every content item. Always
+		// include the Elementor next-step hint instead of inheriting whether
+		// an earlier test defined the process-wide ELEMENTOR_VERSION.
+		add_filter( 'mcpwp_site_capabilities', static function ( $caps ) {
+			$caps['elementor'] = true;
+			return $caps;
+		} );
+		Mcpwp_Integration::clear_cache();
 		$GLOBALS['mcpwp_test_dispatched_routes'] = array();
 		$GLOBALS['_mcpwp_test_posts']            = array();
 		$GLOBALS['_mcpwp_test_meta']             = array();
@@ -56,8 +70,7 @@ final class McpToolResourceLinkTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
-		unset( $GLOBALS['mcpwp_test_rest_response_override'] );
-		$GLOBALS['mcpwp_test_filters'] = array();
+		$this->restore_request_fixture_state();
 	}
 
 	private function call_create_page( $version ) {
@@ -77,7 +90,9 @@ final class McpToolResourceLinkTest extends TestCase {
 				),
 			)
 		);
-		return ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
+		return $this->fixture_request( static function () use ( $request ) {
+			return ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
+		} );
 	}
 
 	private function resource_links( array $content ): array {
@@ -132,7 +147,9 @@ final class McpToolResourceLinkTest extends TestCase {
 				'params'  => array( 'name' => 'wp_site_info', 'arguments' => array() ),
 			)
 		);
-		$data = ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
+		$data = $this->fixture_request( static function () use ( $request ) {
+			return ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
+		} );
 
 		$this->assertArrayHasKey( 'result', $data );
 		foreach ( $data['result']['content'] as $item ) {
@@ -178,7 +195,9 @@ final class McpToolResourceLinkTest extends TestCase {
 				),
 			)
 		);
-		$data = ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
+		$data = $this->fixture_request( static function () use ( $request ) {
+			return ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
+		} );
 
 		$this->assertArrayHasKey( 'result', $data );
 		$this->assertEmpty( $this->resource_links( $data['result']['content'] ), 'wp_block is not page/post — no resource_link should be emitted.' );
@@ -213,7 +232,9 @@ final class McpToolResourceLinkTest extends TestCase {
 				),
 			)
 		);
-		$data  = ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
+		$data  = $this->fixture_request( static function () use ( $request ) {
+			return ( new Mcpwp_REST_MCP() )->handle_mcp( $request )->get_data();
+		} );
 		$links = $this->resource_links( $data['result']['content'] );
 
 		$this->assertCount( 1, $links );
@@ -238,7 +259,7 @@ final class McpToolResourceLinkTest extends TestCase {
 	 */
 	public function test_resource_link_does_not_survive_replay_to_an_older_protocol_version(): void {
 		$controller = new Mcpwp_REST_MCP();
-		$created    = $controller->create_scoped_api_key( 'k', array( 'admin' ) );
+		$created    = $this->fixture_api_key( $controller, 'k', array( 'admin' ) );
 
 		$fresh_request = new WP_REST_Request(
 			'POST',
@@ -259,8 +280,12 @@ final class McpToolResourceLinkTest extends TestCase {
 				),
 			)
 		);
-		$this->assertTrue( $controller->verify_api_key( $fresh_request ) );
-		$fresh = $controller->handle_mcp( $fresh_request )->get_data();
+		$this->assertTrue( $this->fixture_request( static function () use ( $controller, $fresh_request ) {
+			return $controller->verify_api_key( $fresh_request );
+		} ) );
+		$fresh = $this->fixture_request( static function () use ( $controller, $fresh_request ) {
+			return $controller->handle_mcp( $fresh_request )->get_data();
+		} );
 
 		$this->assertArrayHasKey( 'result', $fresh );
 		$this->assertNotEmpty( $this->resource_links( $fresh['result']['content'] ), 'Test premise: the fresh dispatch under 2025-06-18 carries a resource_link.' );
@@ -288,8 +313,12 @@ final class McpToolResourceLinkTest extends TestCase {
 				),
 			)
 		);
-		$this->assertTrue( $controller2->verify_api_key( $replay_request ) );
-		$replayed = $controller2->handle_mcp( $replay_request )->get_data();
+		$this->assertTrue( $this->fixture_request( static function () use ( $controller2, $replay_request ) {
+			return $controller2->verify_api_key( $replay_request );
+		} ) );
+		$replayed = $this->fixture_request( static function () use ( $controller2, $replay_request ) {
+			return $controller2->handle_mcp( $replay_request )->get_data();
+		} );
 
 		$this->assertArrayHasKey( 'result', $replayed );
 		$this->assertTrue( $replayed['result']['_meta']['replayed'], 'Test premise: this is a replay, not a second dispatch.' );
