@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/core/class-mcpwp-custom-code-conditions.php';
+
 // mcpwp_activate() (mcpwp.php) requires this file directly, without going
 // through plugins_loaded's own require order — so this file cannot assume
 // the trait is already loaded the way most of the codebase can. Idempotent.
@@ -865,6 +867,15 @@ class Mcpwp_Activator {
 	 */
 	const CUSTOM_CODE_REPAIR_BATCH_SIZE = 200;
 
+	const CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION = 'mcpwp_custom_code_conditions_repair_cursor';
+	const CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_OPTION   = 'mcpwp_custom_code_conditions_repair_lock';
+	const CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_TTL      = 30;
+	const CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION = 'mcpwp_custom_code_cache_backfill_v1_done';
+	const CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION = 'mcpwp_custom_code_cache_backfill_state';
+	const CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION = 'mcpwp_custom_code_cache_repair_failed_ids';
+	const CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION = 'mcpwp_custom_code_cache_repair_failure_state';
+	const CUSTOM_CODE_CACHE_REPAIR_MAX_ATTEMPTS = 5;
+
 	/**
 	 * Durable scan position for repair_custom_code_locations(): the highest
 	 * `elementor_snippet` post ID already repaired. Not autoloaded — like the
@@ -935,6 +946,356 @@ class Mcpwp_Activator {
 	 * is, not because a real site is expected to approach it.
 	 */
 	const CUSTOM_CODE_REPAIR_VERIFY_LIMIT = 1000000;
+
+	/**
+	 * Convert legacy Custom Code condition maps to Elementor Pro's string
+	 * form without widening a condition.
+	 *
+	 * @param array $conditions Stored condition values.
+	 * @return string[]|WP_Error
+	 */
+	public static function coerce_custom_code_conditions_to_strings( array $conditions ) {
+		return Mcpwp_Custom_Code_Conditions::convert( $conditions );
+	}
+
+	/**
+	 * Repair legacy condition maps in bounded, checkpointed batches.
+	 *
+	 * @param float|null $time_budget Per-request budget, used by tests.
+	 * @return true|WP_Error
+	 */
+	public static function repair_custom_code_conditions( ?float $time_budget = null, $rescan = false ) {
+		$done = get_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION );
+		$lock_token = self::acquire_migration_lock( self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_OPTION, self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_TTL );
+		if ( false === $lock_token ) {
+			return true;
+		}
+		try {
+			$start  = microtime( true );
+			$budget = null !== $time_budget ? $time_budget : self::migration_time_budget();
+			self::retry_due_custom_code_cache_failures_in_budget( $start, $budget );
+
+			if ( $done && ! $rescan ) {
+				return true;
+			}
+			if ( $done && $rescan ) {
+				delete_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION );
+				delete_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION );
+			}
+			return self::run_custom_code_conditions_repair_batches( $time_budget );
+		} finally {
+			self::release_migration_lock( self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_OPTION, $lock_token );
+		}
+	}
+
+	/** Cheap maintenance gate; cache backfill never runs on an API write. */
+	public static function custom_code_cache_maintenance_due() {
+		return self::custom_code_cache_full_rescan_due() || self::custom_code_cache_retry_due();
+	}
+
+	/** A full scan is independent from the failure retry queue. */
+	public static function custom_code_cache_full_rescan_due() {
+		if ( ! get_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION ) ) {
+			return true;
+		}
+		$state = get_option( self::CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION, array() );
+		return ! is_array( $state ) || ! isset( $state['marker'], $state['completed_at'] )
+			|| (string) $state['marker'] !== (string) get_option( Mcpwp_Custom_Code_Conditions::REPORT_MARKER, '' )
+			|| (int) $state['completed_at'] + Mcpwp_Custom_Code_Conditions::REPORT_TTL <= time();
+	}
+
+	/** True when at least one failed document has reached its retry time. */
+	public static function custom_code_cache_retry_due() {
+		foreach ( self::custom_code_cache_failure_state() as $state ) {
+			if ( isset( $state['next_retry'] ) && (int) $state['next_retry'] <= time() ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Schedule a corrupt cache row for bounded admin repair without a read-side write. */
+	public static function observe_custom_code_cache_entry_failure( $post_id ) {
+		$post_id = (int) $post_id;
+		if ( $post_id <= 0 ) {
+			return;
+		}
+		$states = self::custom_code_cache_failure_state();
+		if ( ! isset( $states[ $post_id ] ) ) {
+			$states[ $post_id ] = array( 'attempts' => 0, 'next_retry' => 0, 'parked' => false );
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, $states, false );
+		}
+		$failed = array_map( 'intval', (array) get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() ) );
+		if ( ! in_array( $post_id, $failed, true ) ) {
+			$failed[] = $post_id;
+			sort( $failed );
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, $failed, false );
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP Custom Code cache repair failed for snippet ' . $post_id . ': cache_entry_invalid' );
+		}
+	}
+
+	/** Reset a parked document when its source metadata changes. */
+	public static function reset_custom_code_cache_repair_failure( $post_id ) {
+		$post_id = (int) $post_id;
+		$states  = self::custom_code_cache_failure_state();
+		if ( isset( $states[ $post_id ] ) ) {
+			unset( $states[ $post_id ] );
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, $states, false );
+			self::remove_custom_code_cache_failure_id( $post_id );
+		}
+	}
+
+	/**
+	 * Guarantee legacy condition maps cannot reach Elementor Pro's global
+	 * cache rebuild. It intentionally scans even after the one-time flag:
+	 * old data may be imported after the upgrade completed.
+	 *
+	 * @return true|WP_Error
+	 */
+	public static function ensure_custom_code_conditions_repaired() {
+		// Request guards are idempotent per row and do not contend with the
+		// upgrade cursor lock. One administrator's repair cannot refuse a save.
+		$cursor = 0;
+		do {
+			$snippet_ids = self::custom_code_conditions_batch( $cursor, self::CUSTOM_CODE_REPAIR_BATCH_SIZE );
+			if ( is_wp_error( $snippet_ids ) ) {
+				return $snippet_ids;
+			}
+			foreach ( $snippet_ids as $post_id ) {
+				self::repair_one_custom_code_conditions( (int) $post_id );
+				$cursor = (int) $post_id;
+			}
+		} while ( count( $snippet_ids ) === self::CUSTOM_CODE_REPAIR_BATCH_SIZE );
+		return true;
+	}
+
+	/** @return true|WP_Error */
+	private static function run_custom_code_conditions_repair_batches( ?float $time_budget ) {
+		$start  = microtime( true );
+		$budget = null !== $time_budget ? $time_budget : self::migration_time_budget();
+		$cursor = (int) get_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION, 0 );
+
+		do {
+			$snippet_ids = self::custom_code_conditions_batch( $cursor, self::CUSTOM_CODE_REPAIR_BATCH_SIZE );
+			if ( is_wp_error( $snippet_ids ) ) {
+				return $snippet_ids;
+			}
+			if ( empty( $snippet_ids ) ) {
+				return self::finish_custom_code_conditions_repair();
+			}
+
+			if ( function_exists( '_prime_post_caches' ) ) {
+				_prime_post_caches( array_map( 'intval', $snippet_ids ), false, false );
+			}
+			foreach ( $snippet_ids as $post_id ) {
+				$result = self::repair_one_custom_code_conditions( (int) $post_id );
+				if ( is_wp_error( $result ) ) {
+					return $result;
+				}
+				$cursor = (int) $post_id;
+				if ( $budget > 0 && microtime( true ) - $start >= $budget ) {
+					update_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION, $cursor, false );
+					return true;
+				}
+			}
+			update_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION, $cursor, false );
+
+			if ( count( $snippet_ids ) < self::CUSTOM_CODE_REPAIR_BATCH_SIZE ) {
+				return self::finish_custom_code_conditions_repair();
+			}
+		} while ( ( microtime( true ) - $start ) <= $budget );
+
+		return true;
+	}
+
+	/** @return true|WP_Error */
+	private static function finish_custom_code_conditions_repair() {
+		$unrepaired = self::has_unrepaired_custom_code_conditions();
+		if ( is_wp_error( $unrepaired ) ) {
+			return $unrepaired;
+		}
+		if ( $unrepaired ) {
+			update_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION, 0, false );
+			return true;
+		}
+		delete_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION );
+		update_option( 'mcpwp_custom_code_conditions_repaired', 1, false );
+		update_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION, 1, false );
+		update_option( self::CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION, array(
+			'marker' => (string) get_option( Mcpwp_Custom_Code_Conditions::REPORT_MARKER, '' ),
+			'completed_at' => time(),
+		), false );
+		return true;
+	}
+
+	/** @return int[]|WP_Error */
+	private static function custom_code_conditions_batch( $cursor, $limit ) {
+		global $wpdb;
+
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'get_col' ) ) {
+			return new WP_Error( 'conditions_repair_failed', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
+		}
+
+		$wpdb->last_error = '';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- keyset pagination over core tables.
+		$ids = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND ID > %d ORDER BY ID ASC LIMIT %d",
+				'elementor_snippet',
+				(int) $cursor,
+				(int) $limit
+			)
+		);
+
+		if ( ! empty( $wpdb->last_error ) ) {
+			return new WP_Error( 'conditions_repair_failed', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
+		}
+
+		return is_array( $ids ) ? array_map( 'intval', $ids ) : new WP_Error( 'conditions_repair_failed', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
+	}
+
+	/** @return true|WP_Error */
+	private static function repair_one_custom_code_conditions( $post_id ) {
+		$inspection = Mcpwp_Custom_Code_Conditions::inspect( $post_id );
+		if ( is_wp_error( $inspection ) ) {
+			Mcpwp_Custom_Code_Conditions::quarantine_inspection( $post_id, $inspection );
+			self::record_custom_code_cache_repair_result( $post_id, true );
+			return true;
+		}
+		$raw     = $inspection['raw'];
+		$strings = $inspection['conditions'];
+		if ( $raw !== $strings ) {
+			// A concurrent editor wins. Re-read before deciding whether this
+			// record can enter the cache; never reject another snippet's save.
+			update_post_meta( $post_id, '_elementor_conditions', wp_slash( $strings ), $raw );
+			Mcpwp_Custom_Code_Conditions::invalidate_cache_view( $post_id );
+			$current = Mcpwp_Custom_Code_Conditions::inspect( $post_id );
+			if ( is_wp_error( $current ) ) {
+				Mcpwp_Custom_Code_Conditions::quarantine_inspection( $post_id, $current );
+				return true;
+			}
+			$strings = $current['conditions'];
+		}
+		Mcpwp_Custom_Code_Conditions::clear_quarantine( $post_id );
+		self::repair_custom_code_conditions_cache_entry( $post_id );
+		return true;
+	}
+
+	/** @return true */
+	private static function repair_custom_code_conditions_cache_entry( $post_id ) {
+		if ( 'publish' !== get_post_status( $post_id ) ) {
+			self::record_custom_code_cache_repair_result( $post_id, true );
+			return true;
+		}
+		require_once __DIR__ . '/core/class-mcpwp-encryption.php';
+		require_once __DIR__ . '/core/class-mcpwp-custom-code-cache-entry.php';
+		$inspection = Mcpwp_Custom_Code_Conditions::inspect( $post_id );
+		if ( is_wp_error( $inspection ) ) {
+			return true;
+		}
+		$strings = $inspection['conditions'];
+		$failures = self::custom_code_cache_failure_state();
+		if ( isset( $failures[ $post_id ] ) && (int) $failures[ $post_id ]['next_retry'] > time() ) {
+			return true;
+		}
+		$location = get_post_meta( $post_id, '_elementor_location', true );
+		$location = is_string( $location ) && '' !== $location ? $location : 'elementor_head';
+		$result = Mcpwp_Custom_Code_Cache_Entry::sync( $post_id, $location, $strings );
+		self::record_custom_code_cache_repair_result( $post_id, $result );
+		return true;
+	}
+
+	/** Retain failed IDs for a later bounded admin retry without aborting peers. */
+	private static function record_custom_code_cache_repair_result( $post_id, $result ) {
+		$post_id = (int) $post_id;
+		$failed  = array_values( array_unique( array_map( 'intval', (array) get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() ) ) ) );
+		$states  = self::custom_code_cache_failure_state();
+		if ( is_wp_error( $result ) ) {
+			$prior    = isset( $states[ $post_id ]['attempts'] ) ? (int) $states[ $post_id ]['attempts'] : 0;
+			$attempts = $prior + 1;
+			$parked   = $attempts >= self::CUSTOM_CODE_CACHE_REPAIR_MAX_ATTEMPTS;
+			$delay    = $parked
+				? Mcpwp_Custom_Code_Conditions::REPORT_TTL
+				: min( Mcpwp_Custom_Code_Conditions::REPORT_TTL, 5 * ( 2 ** max( 0, $attempts - 1 ) ) );
+			$states[ $post_id ] = array(
+				'attempts'   => $attempts,
+				'next_retry' => time() + $delay,
+				'parked'     => $parked,
+			);
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, $states, false );
+			if ( ! in_array( $post_id, $failed, true ) ) {
+				$failed[] = $post_id;
+				sort( $failed );
+				update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, $failed, false );
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				error_log( 'MCPWP Custom Code cache repair failed for snippet ' . (int) $post_id . ': ' . $result->get_error_code() );
+			}
+		} elseif ( isset( $states[ $post_id ] ) || in_array( $post_id, $failed, true ) ) {
+			unset( $states[ $post_id ] );
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, $states, false );
+			self::remove_custom_code_cache_failure_id( $post_id );
+		}
+	}
+
+	/** @return array<int,array{attempts:int,next_retry:int,parked:bool}> */
+	private static function custom_code_cache_failure_state() {
+		$stored = get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, array() );
+		$out    = array();
+		foreach ( is_array( $stored ) ? $stored : array() as $post_id => $state ) {
+			if ( is_array( $state ) && (int) $post_id > 0 ) {
+				$out[ (int) $post_id ] = array(
+					'attempts'   => max( 0, (int) ( $state['attempts'] ?? 0 ) ),
+					'next_retry' => max( 0, (int) ( $state['next_retry'] ?? 0 ) ),
+					'parked'     => ! empty( $state['parked'] ),
+				);
+			}
+		}
+		return $out;
+	}
+
+	private static function remove_custom_code_cache_failure_id( $post_id ) {
+		$failed = array_values( array_diff( array_map( 'intval', (array) get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() ) ), array( (int) $post_id ) ) );
+		update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, $failed, false );
+	}
+
+	/** Retry only failures whose backoff window has elapsed. */
+	public static function retry_due_custom_code_cache_failures( ?float $time_budget = null ) {
+		$budget = null !== $time_budget ? $time_budget : self::migration_time_budget();
+		self::retry_due_custom_code_cache_failures_in_budget( microtime( true ), $budget );
+	}
+
+	private static function retry_due_custom_code_cache_failures_in_budget( $start, $budget ) {
+		foreach ( self::custom_code_cache_failure_state() as $post_id => $state ) {
+			if ( (int) $state['next_retry'] > time() ) {
+				continue;
+			}
+			self::repair_one_custom_code_conditions( (int) $post_id );
+			if ( $budget > 0 && microtime( true ) - $start >= $budget ) {
+				return;
+			}
+		}
+	}
+
+	/** @return bool|WP_Error */
+	private static function has_unrepaired_custom_code_conditions() {
+		$cursor = 0;
+		do {
+			$snippet_ids = self::custom_code_conditions_batch( $cursor, self::CUSTOM_CODE_REPAIR_VERIFY_LIMIT );
+			if ( is_wp_error( $snippet_ids ) ) {
+				return $snippet_ids;
+			}
+			foreach ( $snippet_ids as $post_id ) {
+				$inspection = Mcpwp_Custom_Code_Conditions::inspect( (int) $post_id );
+				if ( is_wp_error( $inspection ) ) {
+					Mcpwp_Custom_Code_Conditions::quarantine_inspection( (int) $post_id, $inspection );
+				}
+				$cursor = (int) $post_id;
+			}
+		} while ( count( $snippet_ids ) === self::CUSTOM_CODE_REPAIR_VERIFY_LIMIT );
+
+		return false;
+	}
 
 	/**
 	 * Repair Elementor Custom Code snippets written under GH #871, once.

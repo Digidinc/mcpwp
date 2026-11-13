@@ -41,11 +41,11 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 		$GLOBALS['_mcpwp_test_posts']       = array();
 		$GLOBALS['_mcpwp_test_meta']        = array();
 		$GLOBALS['mcpwp_test_current_user'] = 1;
-		unset( $GLOBALS['mcpwp_test_option_store_after_hook'] );
+		unset( $GLOBALS['mcpwp_test_option_store_after_hook'], $GLOBALS['mcpwp_test_raw_option_after_write'] );
 	}
 
 	protected function tearDown(): void {
-		unset( $GLOBALS['mcpwp_test_option_store_after_hook'] );
+		unset( $GLOBALS['mcpwp_test_option_store_after_hook'], $GLOBALS['mcpwp_test_raw_option_after_write'] );
 	}
 
 	private function seed_template( int $id, string $status = 'publish' ): void {
@@ -58,23 +58,24 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 	}
 
 	/**
-	 * Runs $call() with a spy installed on update_option() (via
-	 * tests/bootstrap.php's mcpwp_test_option_store_after_hook, which fires
-	 * after every value that actually lands) and returns every value written
-	 * to elementor_pro_theme_builder_conditions, in write order.
+	 * Runs $call() with a spy on raw per-document cache-entry writes.
 	 *
 	 * @return array<int,array>
 	 */
-	private function record_condition_option_writes( callable $call ): array {
+	private function record_condition_entry_writes( callable $call ): array {
 		$writes = array();
 
-		$GLOBALS['mcpwp_test_option_store_after_hook'] = function ( $name, $value ) use ( &$writes ) {
-			if ( 'elementor_pro_theme_builder_conditions' === $name ) {
+		$GLOBALS['mcpwp_test_raw_option_after_write'] = function ( $name, $value ) use ( &$writes ) {
+			if ( 0 === strpos( (string) $name, Mcpwp_Custom_Code_Cache_Entry::OPTION_PREFIX ) ) {
 				$writes[] = $value;
 			}
 		};
 
-		$call();
+		try {
+			$call();
+		} finally {
+			unset( $GLOBALS['mcpwp_test_raw_option_after_write'] );
+		}
 
 		return $writes;
 	}
@@ -85,22 +86,8 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 	 * Builder location (e.g. "header") — the exact shape
 	 * update_global_conditions_index() used to write.
 	 */
-	private function assertNoWriteIsWrongAxis( array $writes ): void {
-		foreach ( $writes as $i => $write ) {
-			$this->assertIsArray( $write, sprintf( 'Write #%d must be an array.', $i ) );
-
-			foreach ( array_keys( $write ) as $key ) {
-				$this->assertStringNotContainsString(
-					'/',
-					(string) $key,
-					sprintf(
-						'Write #%d used a condition-string key ("%s") as a TOP-LEVEL key — the wrong axis. Elementor Pro\'s real option is { location => { template_id => [condition_strings] } }, location first.',
-						$i,
-						$key
-					)
-				);
-			}
-		}
+	private function assertLocationFirstView( array $view, int $id, string $location, array $conditions ): void {
+		$this->assertSame( $conditions, $view[ $location ][ $id ] ?? null );
 	}
 
 	/**
@@ -121,7 +108,7 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 
 		$builder = new Mcpwp_Theme_Builder();
 
-		$writes = $this->record_condition_option_writes(
+		$writes = $this->record_condition_entry_writes(
 			function () use ( $builder ) {
 				$result = $builder->set_template_conditions(
 					7,
@@ -140,11 +127,11 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 			}
 		);
 
-		$this->assertNotEmpty(
-			$writes,
-			'set_template_conditions() must actually write the option through Elementor Pro\'s own manager for this test to mean anything.'
-		);
-		$this->assertNoWriteIsWrongAxis( $writes );
+		$this->assertNotEmpty( $writes, 'A valid condition save must durably write this document entry.' );
+		$this->assertSame( 7, $writes[0]['id'] ?? null );
+		$this->assertSame( 'header', $writes[0]['location'] ?? null );
+		$this->assertSame( array( 'include/general' ), $writes[0]['conditions'] ?? null );
+		$this->assertLocationFirstView( Mcpwp_Custom_Code_Conditions::filter_conditions_cache( array() ), 7, 'header', array( 'include/general' ) );
 	}
 
 	/**
@@ -163,15 +150,18 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 
 		$this->seed_template( 9 );
 
-		$builder = new Mcpwp_Theme_Builder();
-
-		$writes = $this->record_condition_option_writes(
-			function () use ( $builder ) {
-				$builder->remove_from_locations( 9 );
+		Mcpwp_Custom_Code_Cache_Entry::sync( 9, 'header', array( 'include/general' ) );
+		$writes = $this->record_condition_entry_writes(
+			function () {
+				Mcpwp_Custom_Code_Cache_Entry::remove( 9 );
 			}
 		);
 
-		$this->assertNoWriteIsWrongAxis( $writes );
+		$this->assertNotEmpty( $writes );
+		$this->assertNotEmpty( array_filter( $writes, static function ( $write ) {
+			return ! empty( $write['deleted'] );
+		} ) );
+		$this->assertNull( Mcpwp_Custom_Code_Cache_Entry::entry( 9 ) );
 	}
 
 	/**
@@ -227,20 +217,22 @@ final class ElementorProConditionsIndexShapeTest extends TestCase {
 			)
 		);
 
-		$writes = $this->record_condition_option_writes(
-			function () use ( $controller, $request ) {
+		$snippet_id = 0;
+		$writes = $this->record_condition_entry_writes(
+			function () use ( $controller, $request, &$snippet_id ) {
 				$response = $controller->create_custom_code( $request );
 
 				$this->assertSame( 201, $response->get_status(), 'The happy path must still succeed.' );
-				$this->assertSame( 'elementor_pro_conditions_manager', $response->get_data()['snippet']['conditions_engine'] );
+				$this->assertSame( 'mcpwp_conditions_cache_entry', $response->get_data()['snippet']['conditions_engine'] );
+				$snippet_id = (int) $response->get_data()['id'];
 			}
 		);
 
-		$this->assertNotEmpty(
-			$writes,
-			'save_custom_code_conditions() must actually write the option through Elementor Pro\'s own manager for this test to mean anything.'
-		);
-		$this->assertNoWriteIsWrongAxis( $writes );
+		$this->assertNotEmpty( $writes, 'A Custom Code save must durably write its document entry.' );
+		$entry = Mcpwp_Custom_Code_Cache_Entry::entry( $snippet_id );
+		$this->assertSame( 'elementor_head', $entry['location'] ?? null );
+		$this->assertSame( array( 'include/general' ), $entry['conditions'] ?? null );
+		$this->assertLocationFirstView( Mcpwp_Custom_Code_Conditions::filter_conditions_cache( array() ), (int) $entry['id'], 'elementor_head', array( 'include/general' ) );
 	}
 
 	public function test_the_wrong_axis_custom_code_methods_no_longer_exist(): void {

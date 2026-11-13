@@ -223,6 +223,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		return;
 	}
 
+	if ( ! get_option( 'mcpwp_custom_code_cache_lock_retired' ) ) {
+		delete_option( 'mcpwp_custom_code_cache_write_lock' );
+		update_option( 'mcpwp_custom_code_cache_lock_retired', 1, true );
+	}
+
 	// Load traits first
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-state.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-store.php';
@@ -313,6 +318,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-workflows.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-feedback.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-custom-code-cache-entry.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-custom-code-conditions.php';
+	Mcpwp_Custom_Code_Conditions::initialize_legacy_cache_storage();
+	Mcpwp_Custom_Code_Conditions::register_hooks();
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption-migration.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-integration-manager.php';
 	Mcpwp_Integration_Manager::register_option_guard();
@@ -885,6 +894,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 		foreach ( $sites as $blog_id ) {
 			switch_to_blog( $blog_id );
 			Mcpwp_Activator::activate();
+			Mcpwp_Activator::repair_custom_code_conditions( 0.0 );
 			Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 			try {
 				Mcpwp_Migrate::run();
@@ -903,6 +913,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 		}
 	} else {
 		Mcpwp_Activator::activate();
+		Mcpwp_Activator::repair_custom_code_conditions( 0.0 );
 		Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 		try {
 			Mcpwp_Migrate::run();
@@ -986,3 +997,6 @@ register_deactivation_hook( __FILE__, 'mcpwp_deactivate' );
 
 // Load plugin after WordPress is loaded
 add_action( 'plugins_loaded', 'mcpwp_load_plugin' );
+
+// The administrator-only cached diagnostic refresh also advances bounded
+// metadata/cache backfill. API reads and writes do not run maintenance scans.

@@ -106,6 +106,7 @@ final class StagedStatusValueAuditTest extends TestCase {
 	 * value as admin-requiring).
 	 */
 	private const AUDITED = array(
+		'core/class-mcpwp-custom-code-conditions.php' => 'The status field is a Site Health result; stored options contain condition cache entries and skipped snippet IDs.',
 		// ── The actual finding this fix closes ──────────────────────────
 		'pro/api/class-mcpwp-rest-woocommerce.php' => 'WAS the gap: create_product_archetype()/update_product_archetype() ' .
 			'update_option() a record whose product_data[\'status\'] is later consumed by apply_product_archetype() -> ' .
