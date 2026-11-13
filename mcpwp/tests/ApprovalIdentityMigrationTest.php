@@ -46,7 +46,7 @@ final class ApprovalIdentityMigrationTest extends TestCase {
 
 		Mcpwp_Activator::migrate_identity_less_approvals();
 
-		$this->assertSame( 1, get_option( 'mcpwp_approvals_table_migrated' ), 'The queue was moved to the table first.' );
+		$this->assertGreaterThan( 1, (int) get_option( 'mcpwp_approvals_table_migrated' ), 'The queue was moved to the table first.' );
 		$items = mcpwp_test_approvals_all();
 
 		// Actionable (pending/approved) + empty requester are gone — both can be

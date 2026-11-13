@@ -841,7 +841,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 			Mcpwp_Approvals::LATE_IMPORT_CRON_HOOK,
 			static function () {
 				require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
-				Mcpwp_Activator::migrate_approvals_to_table();
+				// Migration / late import, then (only if it answered cleanly)
+				// the age-gated, fail-closed shrink of the pre-3.14.9
+				// recovery backup (#1053). Cron only, never a public request.
+				Mcpwp_Activator::run_approvals_late_import_tick();
 				// And retry any visibility categories still pending (#1042).
 				Mcpwp_Approvals::rederive_pending( 500 );
 			}

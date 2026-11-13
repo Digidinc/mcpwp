@@ -521,7 +521,8 @@ class Mcpwp_Activator {
 	 * table holds at least as many rows as were copyable; only then merge the
 	 * option into `mcpwp_approval_requests_pre_3149` (autoload off; ids
 	 * already in the backup win) — kept, not deleted, so a downgrade or a bad
-	 * migration can be recovered by hand; a later release removes it —
+	 * migration can be recovered by hand; cleanup_approvals_backup() (#1053)
+	 * removes it later, fail closed —
 	 * delete the option and set the flag.
 	 *
 	 * Late import (#1042 review round 1, W3): if the option exists again
@@ -668,11 +669,303 @@ class Mcpwp_Activator {
 			}
 
 			update_option( Mcpwp_Approvals::SCHEMA_OPTION, Mcpwp_Approvals::SCHEMA_VERSION );
-			update_option( $flag, 1 );
+			// The flag holds the time of the FIRST migration (the backup's age
+			// gate reads it); every other reader only tests truthiness. A
+			// late import must not move it.
+			if ( ! get_option( $flag ) ) {
+				update_option( $flag, time() );
+			}
 			return true;
 		} finally {
 			self::release_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, $lock_token );
 		}
+	}
+
+	/**
+	 * Transient (a day) holding the last outcome of the backup shrink, so
+	 * "why is it still full" has an answer (#1053). A transient, not an
+	 * option: nothing for the uninstaller to chase.
+	 */
+	const APPROVALS_BACKUP_CLEANUP_STATUS = 'mcpwp_approvals_backup_cleanup_status';
+
+	/** Ids checked per `WHERE id IN (...)` query by the backup shrink. */
+	const APPROVALS_BACKUP_CHECK_CHUNK = 200;
+
+	/**
+	 * The hourly late-import cron (Mcpwp_Approvals::LATE_IMPORT_CRON_HOOK):
+	 * the migration/late import, then the backup shrink — but only when the
+	 * migration answered cleanly, so a failed run never shrinks a backup it
+	 * could not reconcile.
+	 *
+	 * @return true|WP_Error The migration's answer.
+	 */
+	public static function run_approvals_late_import_tick() {
+		$migrated = self::migrate_approvals_to_table();
+		if ( ! is_wp_error( $migrated ) ) {
+			self::cleanup_approvals_backup();
+		}
+		return $migrated;
+	}
+
+	/**
+	 * Shrink `mcpwp_approval_requests_pre_3149` (#1053), the recovery copy
+	 * migrate_approvals_to_table() keeps of the old option.
+	 *
+	 * What it does: once the backup is old enough and the table demonstrably
+	 * holds (or legitimately no longer holds) every record in it, each full
+	 * record is replaced by `true`, leaving an `id => true` tombstone map.
+	 * The late import still needs that map: array_key_exists() on it is what
+	 * stops an already-decided id from being resurrected when an old-code
+	 * worker or a downgrade recreates `mcpwp_approval_requests`, and
+	 * `$backup + $items` keeps working. The map is only ids, so almost all of
+	 * the size goes away. The option itself is deleted only when it is an
+	 * empty array. The tombstone map is never age-deleted: deleting it would
+	 * re-open the resurrection hole for good, for a few KB.
+	 *
+	 * What it is NOT: one-time. A late import re-merges recovered records
+	 * into the backup, and the next tick shrinks those the same way (they
+	 * were verified present first; the recovery copy of late-imported
+	 * records is therefore short-lived).
+	 *
+	 * Gates, in order. Fail closed — each refusal leaves the option alone
+	 * and records its reason in APPROVALS_BACKUP_CLEANUP_STATUS:
+	 *  - `backup_unreadable`: the row exists but get_option() cannot read it
+	 *    (corrupt serialization).
+	 *  - `not_migrated`: the table flag is unset.
+	 *  - `too_recent`: the flag holds the time the site migrated (a `1` from
+	 *    an older release is stamped with now on this first pass), and the
+	 *    backup is younger than Mcpwp_Approvals::CLOSED_RETENTION_DAYS days —
+	 *    the rollback window for a site that just updated.
+	 *  - `busy`: the migration lock is held.
+	 *  - `late_import_pending` (legacy option present), `skipped_records`
+	 *    (the copy skipped a record, so the backup holds its only copy).
+	 *  - `backup_unrecognised`: not an array, or a record that is not an
+	 *    array.
+	 *  - `table_unreadable`, `rows_missing`: every full record id must be in
+	 *    the table, or legitimately gone (see approvals_backup_record_is_gone()).
+	 *    A table dropped and recreated with one new approval fails this.
+	 *
+	 * Per site (options and table are per blog; the hourly cron runs once per
+	 * site). Cron or admin context only, never a public request hook.
+	 *
+	 * @return string Outcome: shrunk | deleted | nothing_to_clean | the
+	 *                refusal codes above | delete_failed | shrink_failed.
+	 */
+	public static function cleanup_approvals_backup() {
+		global $wpdb;
+		if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
+			require_once __DIR__ . '/core/class-mcpwp-approvals.php';
+		}
+		$backup_option = Mcpwp_Approvals::LEGACY_BACKUP_OPTION;
+		$backup        = get_option( $backup_option, false );
+		if ( false === $backup ) {
+			// Gone, or present but unreadable (corrupt serialization makes
+			// get_option() answer false too): look at the row itself.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$row = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name = %s", $backup_option ) );
+			return (int) $row > 0 ? self::approvals_backup_refused( 'backup_unreadable' ) : 'nothing_to_clean';
+		}
+		if ( ! get_option( Mcpwp_Approvals::MIGRATED_FLAG ) ) {
+			return self::approvals_backup_refused( 'not_migrated' );
+		}
+
+		$lock_token = self::acquire_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, self::APPROVALS_TABLE_LOCK_TTL );
+		if ( false === $lock_token ) {
+			return self::approvals_backup_refused( 'busy' );
+		}
+
+		try {
+			if ( function_exists( 'wp_cache_delete' ) ) {
+				foreach ( array( $backup_option, Mcpwp_Approvals::OPTION_NAME, Mcpwp_Approvals::SKIPPED_OPTION, Mcpwp_Approvals::MIGRATED_FLAG, 'alloptions', 'notoptions' ) as $cached ) {
+					wp_cache_delete( $cached, 'options' );
+				}
+			}
+			$backup = get_option( $backup_option, false );
+			if ( false === $backup ) {
+				return 'nothing_to_clean';
+			}
+
+			// Age gate. The flag holds the migration time; a bare `1` (set by
+			// a release before this one) is stamped with now, so the window
+			// starts at the first pass rather than never.
+			$migrated_at = (int) get_option( Mcpwp_Approvals::MIGRATED_FLAG );
+			if ( $migrated_at <= 1 ) {
+				update_option( Mcpwp_Approvals::MIGRATED_FLAG, time() );
+				return self::approvals_backup_refused( 'too_recent' );
+			}
+			if ( time() - $migrated_at < (int) Mcpwp_Approvals::CLOSED_RETENTION_DAYS * DAY_IN_SECONDS ) {
+				return self::approvals_backup_refused( 'too_recent' );
+			}
+
+			if ( false !== get_option( Mcpwp_Approvals::OPTION_NAME, false ) ) {
+				return self::approvals_backup_refused( 'late_import_pending' );
+			}
+			if ( ! empty( get_option( Mcpwp_Approvals::SKIPPED_OPTION, array() ) ) ) {
+				// A skipped record exists nowhere but the backup.
+				return self::approvals_backup_refused( 'skipped_records' );
+			}
+			if ( ! is_array( $backup ) ) {
+				return self::approvals_backup_refused( 'backup_unrecognised' );
+			}
+			if ( array() === $backup ) {
+				delete_option( $backup_option );
+				if ( function_exists( 'wp_cache_delete' ) ) {
+					wp_cache_delete( $backup_option, 'options' );
+				}
+				if ( false !== get_option( $backup_option, false ) ) {
+					return self::approvals_backup_refused( 'delete_failed' );
+				}
+				return self::approvals_backup_done( 'deleted' );
+			}
+
+			$records = array();
+			foreach ( $backup as $id => $record ) {
+				if ( true === $record ) {
+					continue; // Already a tombstone.
+				}
+				if ( ! is_array( $record ) ) {
+					return self::approvals_backup_refused( 'backup_unrecognised' );
+				}
+				$records[ (string) $id ] = $record;
+			}
+			if ( empty( $records ) ) {
+				return 'nothing_to_clean';
+			}
+
+			$present = self::approvals_present_ids( array_keys( $records ) );
+			if ( null === $present ) {
+				return self::approvals_backup_refused( 'table_unreadable' );
+			}
+			foreach ( $records as $id => $record ) {
+				if ( ! isset( $present[ $id ] ) && ! self::approvals_backup_record_is_gone( $id, $record ) ) {
+					return self::approvals_backup_refused( 'rows_missing' );
+				}
+			}
+
+			$tombstones = array();
+			foreach ( $backup as $id => $record ) {
+				$tombstones[ $id ] = true;
+			}
+			update_option( $backup_option, $tombstones, false );
+			if ( function_exists( 'wp_cache_delete' ) ) {
+				wp_cache_delete( $backup_option, 'options' );
+			}
+			if ( get_option( $backup_option, null ) !== $tombstones ) {
+				return self::approvals_backup_refused( 'shrink_failed' );
+			}
+			return self::approvals_backup_done( 'shrunk' );
+		} finally {
+			self::release_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, $lock_token );
+		}
+	}
+
+	/**
+	 * Which of $ids are rows of the approvals table.
+	 *
+	 * @param array<int,string> $ids Approval ids.
+	 * @return array<string,true>|null Present ids, or null when the table cannot be read.
+	 */
+	private static function approvals_present_ids( array $ids ) {
+		global $wpdb;
+		$table   = Mcpwp_Approvals::table_name();
+		$present = array();
+		foreach ( array_chunk( $ids, self::APPROVALS_BACKUP_CHECK_CHUNK ) as $chunk ) {
+			$wpdb->last_error = '';
+			$in               = implode( ', ', array_fill( 0, count( $chunk ), '%s' ) );
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant; ids are bound.
+			$found = $wpdb->get_col( $wpdb->prepare( "SELECT id FROM {$table} WHERE id IN ({$in})", $chunk ) );
+			if ( ! is_array( $found ) || '' !== (string) $wpdb->last_error ) {
+				return null;
+			}
+			foreach ( $found as $id ) {
+				$present[ (string) $id ] = true;
+			}
+		}
+		return $present;
+	}
+
+	/**
+	 * A backup record that is not in the table and should not be. Three
+	 * things really remove a record, and only these count:
+	 *  - the migration's purge of an identity-less pending/approved record
+	 *    (also dropped by the late import) — no audit row, so it is matched
+	 *    by its shape;
+	 *  - retention and the closed-record purge, both through
+	 *    Mcpwp_Approvals::audited_delete(): the approval_record_removed audit
+	 *    row is written BEFORE the DELETE, so its presence proves the removal
+	 *    (checked for every record, open or closed);
+	 *  - for a record that was CLOSED in the backup, being older than the
+	 *    retention window, in case the audit row was pruned from the log.
+	 * An OPEN record (pending, approved, applying, rolling_back, apply_failed)
+	 * is never removed any other way — not even an expired-looking pending
+	 * post_content_update, which expire_stale_one() only re-labels `expired`
+	 * in place — so one missing from the table without an audit row is a
+	 * record the table lost. An unreadable audit log counts as "not logged"
+	 * (fail closed). A record with no usable date is never "gone" by age.
+	 *
+	 * @param string $id     Approval id.
+	 * @param array  $record A backup record.
+	 * @return bool
+	 */
+	private static function approvals_backup_record_is_gone( $id, array $record ) {
+		$status = isset( $record['status'] ) ? (string) $record['status'] : '';
+		$open   = in_array( $status, Mcpwp_Approvals::open_statuses(), true );
+		if ( in_array( $status, array( 'pending', 'approved' ), true ) && ( ! isset( $record['requested_by_key_id'] ) || '' === (string) $record['requested_by_key_id'] ) ) {
+			return true;
+		}
+		if ( ! class_exists( 'Mcpwp_Action_Log' ) ) {
+			$log_file = __DIR__ . '/core/class-mcpwp-action-log.php';
+			if ( is_readable( $log_file ) ) {
+				require_once $log_file;
+			}
+		}
+		if ( class_exists( 'Mcpwp_Action_Log' ) && method_exists( 'Mcpwp_Action_Log', 'approval_removal_logged' ) && true === Mcpwp_Action_Log::approval_removal_logged( $id ) ) {
+			return true;
+		}
+		if ( $open ) {
+			return false;
+		}
+		$days = (int) apply_filters( 'mcpwp_approvals_closed_retention_days', Mcpwp_Approvals::CLOSED_RETENTION_DAYS );
+		if ( $days < 1 ) {
+			return false; // Retention is off: nothing is ever deleted.
+		}
+		$last = 0;
+		foreach ( array( 'created_at', 'updated_at', 'decided_at', 'approved_at', 'rejected_at', 'applied_at', 'expired_at', 'rolled_back_at' ) as $key ) {
+			if ( ! empty( $record[ $key ] ) ) {
+				$time = strtotime( (string) $record[ $key ] );
+				$last = $time && $time > $last ? $time : $last;
+			}
+		}
+		if ( 0 === $last ) {
+			return false;
+		}
+		return $last < time() - $days * DAY_IN_SECONDS;
+	}
+
+	/**
+	 * Record a refusal.
+	 *
+	 * @param string $reason Outcome code.
+	 * @return string The same code.
+	 */
+	private static function approvals_backup_refused( $reason ) {
+		set_transient( self::APPROVALS_BACKUP_CLEANUP_STATUS, $reason, DAY_IN_SECONDS );
+		if ( 'not_migrated' !== $reason && 'too_recent' !== $reason && defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP approvals backup cleanup: left mcpwp_approval_requests_pre_3149 alone (' . $reason . ')' );
+		}
+		return $reason;
+	}
+
+	/**
+	 * Record a success.
+	 *
+	 * @param string $outcome Outcome code.
+	 * @return string The same code.
+	 */
+	private static function approvals_backup_done( $outcome ) {
+		set_transient( self::APPROVALS_BACKUP_CLEANUP_STATUS, $outcome, DAY_IN_SECONDS );
+		return $outcome;
 	}
 
 	/**
