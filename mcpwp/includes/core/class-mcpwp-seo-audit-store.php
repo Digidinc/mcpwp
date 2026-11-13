@@ -108,10 +108,22 @@ class Mcpwp_SEO_Audit_Store {
 			'seen_count'        => 0,
 		);
 
+		// The issue is keyed (post, category, code), so every representation
+		// that flags it must be remembered, not just the last one (#996).
+		// A legacy record carries only the single `representation`.
+		// A record that is not open starts afresh: its old representations
+		// were resolved and must not come back with the reopen.
+		$representations = 'open' === ( $record['status'] ?? 'open' ) ? self::issue_representations( $record ) : array();
+		$raised_by       = sanitize_key( (string) ( $issue['representation'] ?? '' ) );
+		if ( '' !== $raised_by && ! in_array( $raised_by, $representations, true ) ) {
+			$representations[] = $raised_by;
+		}
+
 		$record = array_merge(
 			$record,
 			array(
 				'status'            => 'open',
+				'representations'   => $representations,
 				'last_seen_at'      => $now,
 				'last_seen_run_id'  => '',
 				'seen_count'        => (int) ( $record['seen_count'] ?? 0 ) + 1,
@@ -121,7 +133,7 @@ class Mcpwp_SEO_Audit_Store {
 				'url'               => esc_url_raw( (string) ( $issue['url'] ?? '' ) ),
 				'category'          => sanitize_key( (string) ( $issue['category'] ?? '' ) ),
 				'code'              => sanitize_key( (string) ( $issue['code'] ?? '' ) ),
-				'representation'    => sanitize_key( (string) ( $issue['representation'] ?? '' ) ),
+				'representation'    => $representations ? $representations[0] : '',
 				'severity'          => sanitize_key( (string) ( $issue['severity'] ?? '' ) ),
 				'message'           => sanitize_text_field( (string) ( $issue['message'] ?? '' ) ),
 				'recommendation'    => sanitize_text_field( (string) ( $issue['recommendation'] ?? '' ) ),
@@ -135,6 +147,20 @@ class Mcpwp_SEO_Audit_Store {
 		self::save_guardrail_issues( $issues );
 
 		return $key;
+	}
+
+	/**
+	 * Representations currently holding a guardrail issue open.
+	 *
+	 * @param array $record Stored issue record.
+	 * @return string[]
+	 */
+	private static function issue_representations( array $record ) {
+		if ( isset( $record['representations'] ) && is_array( $record['representations'] ) ) {
+			return array_values( array_filter( array_map( 'strval', $record['representations'] ), 'strlen' ) );
+		}
+		$legacy = (string) ( $record['representation'] ?? '' );
+		return '' !== $legacy ? array( $legacy ) : array();
 	}
 
 	/**
@@ -178,9 +204,22 @@ class Mcpwp_SEO_Audit_Store {
 			return false;
 		}
 
-		if ( '' !== $representation && ( $issues[ $key ]['representation'] ?? '' ) !== $representation ) {
-			return false; // A DIFFERENT representation raised this — not this check's to resolve.
+		if ( '' !== $representation ) {
+			$remaining = self::issue_representations( $issues[ $key ] );
+			if ( ! in_array( $representation, $remaining, true ) ) {
+				return false; // A DIFFERENT representation raised this — not this check's to resolve.
+			}
+			// This representation is clean now; the issue stays open while
+			// any other representation that raised it has not been re-checked.
+			$remaining = array_values( array_diff( $remaining, array( $representation ) ) );
+			if ( $remaining ) {
+				$issues[ $key ]['representations'] = $remaining;
+				$issues[ $key ]['representation']  = $remaining[0];
+				self::save_guardrail_issues( $issues );
+				return false;
+			}
 		}
+		$issues[ $key ]['representations'] = array();
 
 		$issues[ $key ]['status']           = 'resolved';
 		$issues[ $key ]['resolved_at']       = gmdate( 'c' );
@@ -645,7 +684,8 @@ class Mcpwp_SEO_Audit_Store {
 			}
 			$last_seen = isset( $issue['last_seen_at'] ) ? strtotime( (string) $issue['last_seen_at'] ) : false;
 			if ( false !== $last_seen && $last_seen < $cutoff ) {
-				$issues[ $key ]['status']         = 'resolved';
+				$issues[ $key ]['status']          = 'resolved';
+				$issues[ $key ]['representations'] = array();
 				$issues[ $key ]['resolved_at']     = gmdate( 'c' );
 				$issues[ $key ]['resolved_run_id'] = '';
 				$changed                           = true;
