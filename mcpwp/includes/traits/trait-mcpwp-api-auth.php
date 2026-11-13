@@ -4949,7 +4949,26 @@ trait Mcpwp_Api_Auth {
 	 * @return bool
 	 */
 	protected function legacy_api_key_option_is_honoured() {
-		return array() === $this->get_scoped_api_keys_raw();
+		return array() === $this->get_scoped_api_keys_raw() && ! $this->scoped_api_key_store_is_unreadable();
+	}
+
+	/**
+	 * Whether the scoped key store holds something that is not a list of keys.
+	 *
+	 * A truncated or otherwise corrupt value reads as an empty store through
+	 * get_scoped_api_keys_raw(), which would make every legacy fallback look
+	 * safe: the legacy single key would be honoured and re-migrated as an
+	 * active admin record, and a spai_ copy of a revoked key would match. While
+	 * the store is unreadable nothing falls back to those; the request fails
+	 * closed (#1096).
+	 *
+	 * @return bool
+	 */
+	protected function scoped_api_key_store_is_unreadable() {
+		if ( ! class_exists( 'Mcpwp_Key_State' ) ) {
+			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
+		}
+		return Mcpwp_Key_State::store_is_unreadable();
 	}
 
 	/**
@@ -5135,6 +5154,9 @@ trait Mcpwp_Api_Auth {
 	 * @return array|null Matching (normalized) key record, or null.
 	 */
 	protected function find_legacy_spai_key( $api_key ) {
+		if ( $this->scoped_api_key_store_is_unreadable() ) {
+			return null; // Fail closed: see scoped_api_key_store_is_unreadable().
+		}
 		// #1097: the 2.8 migration copies spai_api_keys / spai_api_key into the
 		// mcpwp stores VERBATIM (same hash) and never deletes the originals. So
 		// a key revoked in the mcpwp store is still live in its spai copy — and
@@ -6213,8 +6235,13 @@ trait Mcpwp_Api_Auth {
 	 *               - custom role whose category list resolves empty (#1041):
 	 *                 array{error:'empty_custom_categories', message:string,
 	 *                 invalid_categories:array}
+	 *               - key store busy (#1096): array{error:'keystore_busy',
+	 *                 message:string, retry_after:int}; nothing was written.
+	 *
+	 * The sixth parameter makes the append atomic with revoking every live key
+	 * (key rotation): one store write, so a busy store changes nothing.
 	 */
-	public function create_scoped_api_key( $label = '', $scopes = array(), $role = 'admin', $tool_categories = array(), $allow_destructive = false ) {
+	public function create_scoped_api_key( $label = '', $scopes = array(), $role = 'admin', $tool_categories = array(), $allow_destructive = false, $revoke_existing = false ) {
 		$plain_key = $this->generate_api_key();
 		$key_id    = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true );
 		$now       = current_time( 'mysql' );
@@ -6350,9 +6377,26 @@ trait Mcpwp_Api_Auth {
 			'revoked_at'      => null,
 		);
 
-		$keys   = $this->get_scoped_api_keys_raw();
-		$keys[] = $record;
-		update_option( $this->get_scoped_api_keys_option_name(), $keys );
+		// #1096 P2-4: appended through the key-store write path, to the store
+		// as it is NOW — not a snapshot a migration or revoke could have outrun.
+		$stored = $this->mutate_scoped_api_keys(
+			static function ( array $keys ) use ( $record, $revoke_existing ) {
+				if ( $revoke_existing ) {
+					foreach ( $keys as &$existing ) {
+						if ( is_array( $existing ) && empty( $existing['revoked_at'] ) ) {
+							$existing['revoked_at'] = current_time( 'mysql' );
+						}
+					}
+					unset( $existing );
+				}
+				$keys[] = $record;
+				return array( $keys, true );
+			},
+			true
+		);
+		if ( ! $stored['written'] ) {
+			return $this->keystore_write_refusal( $stored['reason'] );
+		}
 
 		return array(
 			'id'              => $record['id'],
@@ -6415,30 +6459,58 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Revoke a scoped API key.
 	 *
+	 * True ONLY when this call revoked it. False covers "not found or already
+	 * revoked" AND "store busy"; a caller that must tell them apart (anything
+	 * that reports the result to a person, or forgets state on success) uses
+	 * revoke_scoped_api_key_outcome().
+	 *
 	 * @param string $key_id Key identifier.
 	 * @return bool True if revoked.
 	 */
 	public function revoke_scoped_api_key( $key_id ) {
+		return 'revoked' === $this->revoke_scoped_api_key_outcome( $key_id );
+	}
+
+	/**
+	 * Revoke a scoped API key and say what happened (#1096).
+	 *
+	 * @param string $key_id Key identifier.
+	 * @return string 'revoked' (this call revoked it), 'not_found' (no such key,
+	 *                or already revoked: nothing to do), 'busy' (the key store
+	 *                could not be written; the key is NOT revoked, retry) or
+	 *                'unreadable' (the stored keys are corrupt; retrying cannot
+	 *                help and nothing was changed).
+	 */
+	public function revoke_scoped_api_key_outcome( $key_id ) {
 		$key_id = sanitize_key( (string) $key_id );
 		if ( '' === $key_id ) {
-			return false;
+			return 'not_found';
 		}
 
-		$keys     = $this->get_scoped_api_keys_raw();
-		$updated  = false;
+		// #1096 P2-4: flipped through the key-store write path, on the store as
+		// it is now. A busy store answers 'busy', never a silent success.
+		$outcome = $this->mutate_scoped_api_keys(
+			function ( array $keys ) use ( $key_id ) {
+				$updated = false;
+				foreach ( $keys as &$key ) {
+					$normalized = $this->normalize_api_key_record( $key );
+					if ( $normalized['id'] !== $key_id ) {
+						continue;
+					}
 
-		foreach ( $keys as &$key ) {
-			$normalized = $this->normalize_api_key_record( $key );
-			if ( $normalized['id'] !== $key_id ) {
-				continue;
-			}
-
-			if ( empty( $normalized['revoked_at'] ) ) {
-				$key['revoked_at'] = current_time( 'mysql' );
-				$updated = true;
-			}
+					if ( empty( $normalized['revoked_at'] ) ) {
+						$key['revoked_at'] = current_time( 'mysql' );
+						$updated           = true;
+					}
+				}
+				unset( $key );
+				return array( $updated ? $keys : null, $updated );
+			},
+			true
+		);
+		if ( ! $outcome['written'] ) {
+			return 'unreadable' === $outcome['reason'] ? 'unreadable' : 'busy';
 		}
-		unset( $key );
 
 		// The legacy `mcpwp_api_key` hash is deliberately LEFT in place: three
 		// surfaces read it as "this site has been set up" (Setup page, the
@@ -6447,11 +6519,13 @@ trait Mcpwp_Api_Auth {
 		// key (#1097 review round 2). It cannot authenticate any more —
 		// legacy_api_key_option_is_honoured() refuses it once the scoped store
 		// holds any record, revoked records included.
-		if ( $updated ) {
-			update_option( $this->get_scoped_api_keys_option_name(), $keys );
+		if ( $outcome['result'] ) {
+			// Best effort: an in-flight touch can re-add a display-only entry.
+			$this->forget_api_key_last_used( array( $key_id ) );
+			return 'revoked';
 		}
 
-		return $updated;
+		return 'not_found';
 	}
 
 	/**
@@ -6474,23 +6548,6 @@ trait Mcpwp_Api_Auth {
 			update_option( 'mcpwp_api_key', $legacy_hash );
 		}
 
-		$keys = $this->get_scoped_api_keys_raw();
-		if ( ! empty( $keys ) ) {
-			foreach ( $keys as $key ) {
-				$normalized = $this->normalize_api_key_record( $key );
-				if ( ! empty( $normalized['revoked_at'] ) ) {
-					continue;
-				}
-				$is_existing_match = $legacy_is_hashed
-					? hash_equals( (string) $normalized['hash'], $legacy_hash )
-					: $this->is_api_key_match( $legacy_key, $normalized['hash'] );
-
-				if ( $is_existing_match ) {
-					return $normalized;
-				}
-			}
-		}
-
 		$migrated = array(
 			'id'           => sanitize_key( function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true ) ),
 			'label'        => __( 'Primary API Key (migrated)', 'mcpwp' ),
@@ -6501,10 +6558,119 @@ trait Mcpwp_Api_Auth {
 			'revoked_at'   => null,
 		);
 
-		$keys[] = $migrated;
-		update_option( $this->get_scoped_api_keys_option_name(), $keys );
+		// #1096 P2-4: decided on the store as it is NOW, under the key-store
+		// lock. This used to read the store, then write the whole array back,
+		// so a revoke, a new key or a rotation landing in between was
+		// overwritten. Inside the lock:
+		// - an active record already carrying this key wins (another request
+		//   migrated it first);
+		// - ANY other record means the store is no longer the empty
+		//   pre-multi-key store the legacy option is honoured for (this key may
+		//   well be a revoked one): refuse, never re-create it.
+		$outcome = $this->mutate_scoped_api_keys(
+			function ( array $keys ) use ( $legacy_key, $legacy_is_hashed, $legacy_hash, $migrated ) {
+				foreach ( $keys as $key ) {
+					$normalized = $this->normalize_api_key_record( $key );
+					if ( ! empty( $normalized['revoked_at'] ) ) {
+						continue;
+					}
+					$is_existing_match = $legacy_is_hashed
+						? hash_equals( (string) $normalized['hash'], $legacy_hash )
+						: $this->is_api_key_match( $legacy_key, $normalized['hash'] );
 
-		return $this->normalize_api_key_record( $migrated );
+					if ( $is_existing_match ) {
+						return array( null, $normalized );
+					}
+				}
+				if ( ! empty( $keys ) ) {
+					return array( null, null );
+				}
+
+				$keys[] = $migrated;
+				return array( $keys, $this->normalize_api_key_record( $migrated ) );
+			},
+			false
+		);
+
+		// A store that is busy, or a write that did not verify, is a refusal:
+		// this request fails and the next one retries.
+		return is_array( $outcome['result'] ) ? $outcome['result'] : null;
+	}
+
+	/**
+	 * The error shape for a key-store write that was refused (#1096).
+	 *
+	 * @param string $reason Mcpwp_Key_Store::mutate() reason.
+	 * @return array{error:string,message:string,retry_after?:int}
+	 */
+	protected function keystore_write_refusal( $reason ) {
+		switch ( $reason ) {
+			case 'unsupported_characters':
+				return array(
+					'error'   => 'unsupported_characters',
+					'message' => __( 'The database table that stores API keys cannot hold some of the characters in this key (for example in the label). Nothing was saved. Use only characters your database table supports; plain Latin letters always work.', 'mcpwp' ),
+				);
+			case 'unreadable':
+				if ( ! class_exists( 'Mcpwp_Key_State' ) ) {
+					require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
+				}
+				return array(
+					'error'   => 'keystore_unreadable',
+					'message' => Mcpwp_Key_State::unreadable_message(),
+				);
+			case 'unwritable':
+				return array(
+					'error'   => 'keystore_write_failed',
+					'message' => __( 'Writing the API key store failed and was rolled back. Nothing was changed.', 'mcpwp' ),
+				);
+			default:
+				return array(
+					'error'       => 'keystore_busy',
+					'message'     => __( 'The API key store is busy. Nothing was saved; try again in a moment.', 'mcpwp' ),
+					'retry_after' => 1,
+				);
+		}
+	}
+
+	/**
+	 * Read-modify-write the scoped key store without losing a concurrent write.
+	 *
+	 * Delegates to Mcpwp_Key_Store::mutate(), the single write path: store lock,
+	 * a read of the database row (never the options cache), and a
+	 * compare-and-swap write. See that class for the full argument. Fails
+	 * closed: a busy store or a swap that keeps missing changes nothing and says
+	 * so in `reason`.
+	 *
+	 * @param callable $mutator Receives (array $keys, bool $exists); returns array( $new_keys_or_null, $result ).
+	 * @param bool     $patient Retry the lock for ~1.5 s (admin writes).
+	 * @return array{locked:bool,written:bool,result:mixed,reason:string}
+	 */
+	protected function mutate_scoped_api_keys( callable $mutator, $patient ) {
+		if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
+			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-store.php';
+		}
+		return Mcpwp_Key_Store::mutate( $mutator, $patient );
+	}
+
+	/**
+	 * Drop last-used entries for keys that were revoked or removed.
+	 *
+	 * Without this the map only ever grew: a revoked key's id stayed in it for
+	 * good. Best effort and lock-free by design: it only touches the timestamp
+	 * map, where a lost update costs a timestamp, never a key.
+	 *
+	 * @param array $key_ids Key ids to forget.
+	 */
+	protected function forget_api_key_last_used( array $key_ids ) {
+		$name = $this->get_api_key_last_used_option_name();
+		$map  = get_option( $name, array() );
+		if ( ! is_array( $map ) || empty( $map ) ) {
+			return;
+		}
+		$pruned = array_diff_key( $map, array_flip( array_map( 'strval', $key_ids ) ) );
+		if ( count( $pruned ) !== count( $map ) ) {
+			update_option( $name, $pruned, false );
+		}
 	}
 
 	/**
@@ -6516,6 +6682,16 @@ trait Mcpwp_Api_Auth {
 	 * revoke wrote `revoked_at = null` back and resurrected the key (adversarial
 	 * review of #1090, P1-2). Losing a timestamp to a race is harmless; losing a
 	 * revocation is not, so the request path never writes the key store.
+	 *
+	 * NOT autoloaded, on purpose (#1096). In core, update_option() on an
+	 * autoloaded option force-loads `alloptions` and then wp_cache_set()s it. The
+	 * key store lives in that same `alloptions` entry, so a touch (which runs on
+	 * every authenticated request) stalled between that load and that set could
+	 * write a PRE-revoke copy of the key store back over a revoke's cache
+	 * refresh, and a revoked key would stay live on a persistent cache. A
+	 * non-autoloaded option never writes `alloptions`. The cost is one option
+	 * read per request on a site WITHOUT a persistent object cache; with one it
+	 * is cached under its own key.
 	 *
 	 * @return string
 	 */
@@ -7371,18 +7547,17 @@ trait Mcpwp_Api_Auth {
 	 * @return string New API key (plain text).
 	 */
 	public function regenerate_api_key() {
-		$keys = $this->get_scoped_api_keys_raw();
-
-		foreach ( $keys as &$key ) {
-			if ( empty( $key['revoked_at'] ) ) {
-				$key['revoked_at'] = current_time( 'mysql' );
-			}
+		// #1096: revoke-all and the new record are ONE store write, so a busy
+		// store changes nothing (every old key stays live) and returns ''.
+		$created = $this->create_scoped_api_key( __( 'Primary API Key', 'mcpwp' ), $this->get_default_api_key_scopes(), 'admin', array(), false, true );
+		if ( isset( $created['error'] ) && 'unsupported_characters' === $created['error'] ) {
+			// A translated label the table cannot hold: rotation must still work.
+			$created = $this->create_scoped_api_key( 'Primary API Key', $this->get_default_api_key_scopes(), 'admin', array(), false, true );
 		}
-		unset( $key );
-
-		update_option( $this->get_scoped_api_keys_option_name(), $keys );
-
-		$created = $this->create_scoped_api_key( __( 'Primary API Key', 'mcpwp' ), $this->get_default_api_key_scopes() );
+		if ( ! isset( $created['key'] ) ) {
+			return '';
+		}
+		delete_option( $this->get_api_key_last_used_option_name() );
 		update_option( 'mcpwp_api_key', wp_hash_password( $created['key'] ) );
 
 		return $created['key'];
