@@ -876,6 +876,13 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
                 $GLOBALS['wpdb']->queries = array();
             }
             mcpwp_test_reset_rate_limiter();
+            if (class_exists('Mcpwp_WooCommerce_Audit', false)) {
+                foreach (array('budgets', 'contexts', 'auth_requests', 'active_contexts') as $property) {
+                    $ref = new ReflectionProperty(Mcpwp_WooCommerce_Audit::class, $property);
+                    $ref->setAccessible(true);
+                    $ref->setValue(null, 'active_contexts' === $property ? array() : null);
+                }
+            }
             // The fake database: raw option rows (a lock, a first-writer-wins
             // record) and posts/meta. Every test that needs rows seeds them;
             // one left behind decided another test's outcome by run order.
@@ -5087,6 +5094,8 @@ require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-stag
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-pro-tools.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-integration.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-mcp.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-action-log.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-woocommerce-audit.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-webmcp.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-webmcp-integration.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-webmcp.php';

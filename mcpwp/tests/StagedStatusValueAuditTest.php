@@ -146,6 +146,9 @@ final class StagedStatusValueAuditTest extends TestCase {
 			'health flag, unrelated to post/product visibility.',
 		'core/class-mcpwp-signals.php' => 'staged value is a site-health signal\'s computed status (ok/warn/critical) — ' .
 			'read-only computed output, never caller-supplied and never consumed by a write.',
+		'core/class-mcpwp-woocommerce-audit.php' => 'the quoted status fields are HTTP outcomes and Site Health diagnostics; ' .
+			'update_option() stores audit failure timestamps only. No value is staged for a post/product publication write; ' .
+			'those writes still pass the existing WooCommerce route permission and publish gates.',
 		'core/class-mcpwp-action-log.php' => 'staged value is an action-log entry\'s own bookkeeping status — the file is ' .
 			'already blanket-admin-gated for every method via the /mcpwp/v1/action-log entry in $admin_write_routes ' .
 			'(see PublishStatusHandlerAuditTest::AUDITED), so no lower-scoped path reaches it regardless of this field.',
