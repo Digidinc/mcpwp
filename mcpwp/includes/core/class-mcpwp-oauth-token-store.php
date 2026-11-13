@@ -181,6 +181,29 @@ class Mcpwp_OAuth_Token_Store {
 	// -------------------------------------------------------------------------
 
 	/**
+	 * D8: OAuth never grants admin.  The scopes a token bound to a WordPress
+	 * user may carry: `admin` is dropped and replaced by the `write` it
+	 * implied (an old admin grant keeps read + write, never admin).  Only
+	 * narrows; a record without `admin` comes back unchanged.
+	 *
+	 * @param string[] $scopes Scopes as stored or presented.
+	 * @return string[]
+	 */
+	public static function cap_user_bound_scopes( array $scopes ) {
+		$scopes = array_values( array_unique( array_filter( $scopes, 'is_string' ) ) );
+		if ( ! in_array( 'admin', $scopes, true ) ) {
+			return $scopes;
+		}
+		$kept = array_values( array_diff( $scopes, array( 'admin' ) ) );
+		foreach ( array( 'read', 'write' ) as $implied ) {
+			if ( ! in_array( $implied, $kept, true ) ) {
+				$kept[] = $implied;
+			}
+		}
+		return $kept;
+	}
+
+	/**
 	 * Insert a token row.
 	 *
 	 * @param string $token  Token string (hashed here).
@@ -191,6 +214,14 @@ class Mcpwp_OAuth_Token_Store {
 	public static function insert( $token, $type, array $record ) {
 		global $wpdb;
 		$scopes = isset( $record['scopes'] ) ? array_values( array_filter( (array) $record['scopes'], 'is_string' ) ) : array();
+		$user   = isset( $record['user_id'] ) ? max( 0, (int) $record['user_id'] ) : 0;
+		if ( $user > 0 ) {
+			// D8, at the one place every token and refresh row is written —
+			// fresh issuance, rotation AND the carry-over of a record the
+			// pre-3.14.11 build issued (which let an administrator consent to
+			// `admin`): a token that runs as a user never persists `admin`.
+			$scopes = self::cap_user_bound_scopes( $scopes );
+		}
 		$row    = array(
 			'token_hash'   => self::hash( $token ),
 			'type'         => (string) $type,

@@ -707,7 +707,7 @@ final class OAuthRevocation1101Test extends TestCase {
 
 	// ── 6. DCR per-address ceiling ────────────────────────────────────────
 
-	public function test_one_address_cannot_spend_the_site_day_by_varying_redirect_hosts(): void {
+	public function test_one_address_cannot_spend_the_site_limit_by_varying_redirect_hosts(): void {
 		$made = 0;
 		for ( $i = 0; $i < 30; $i++ ) {
 			$result = Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://host' . $i . '.example.com/cb' ) ), '198.51.100.9' );
@@ -718,19 +718,19 @@ final class OAuthRevocation1101Test extends TestCase {
 			}
 			++$made;
 		}
-		$this->assertSame( Mcpwp_OAuth_Clients::ADDRESS_REGISTRATIONS_PER_DAY, $made );
-		$this->assertLessThan( Mcpwp_OAuth_Clients::SITE_REGISTRATIONS_PER_DAY, $made );
+		$this->assertSame( Mcpwp_OAuth_Clients::ADDRESS_PENDING_LIMIT, $made );
+		$this->assertLessThan( Mcpwp_OAuth_Clients::SITE_PENDING_LIMIT, $made );
 
 		// The same /64 is the same address; another address still registers.
 		$this->assertIsArray( Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://other.example.com/cb' ) ), '198.51.100.10' ) );
-		for ( $i = 0; $i < Mcpwp_OAuth_Clients::ADDRESS_REGISTRATIONS_PER_DAY; $i++ ) {
+		for ( $i = 0; $i < Mcpwp_OAuth_Clients::ADDRESS_PENDING_LIMIT; $i++ ) {
 			Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://v6host' . $i . '.example.com/cb' ) ), '2001:db8:1:2::' . dechex( $i + 1 ) );
 		}
 		$this->assertInstanceOf( WP_Error::class, Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://v6last.example.com/cb' ) ), '2001:db8:1:2:ffff::1' ) );
 	}
 
-	/** #1101 round 2 (P1): the buckets are read, checked and counted under the store lock. */
-	public function test_dcr_buckets_are_counted_under_the_store_lock(): void {
+	/** The hourly (address, hosts) bucket is read, checked and counted under the store lock. */
+	public function test_the_hourly_bucket_is_counted_under_the_store_lock(): void {
 		$under = array();
 		$GLOBALS['mcpwp_test_transient_write_fails'] = function ( $name ) use ( &$under ) {
 			if ( 0 === strpos( $name, 'mcpwp_oauth_dcr_' ) ) {
@@ -743,19 +743,19 @@ final class OAuthRevocation1101Test extends TestCase {
 		} finally {
 			unset( $GLOBALS['mcpwp_test_transient_write_fails'] );
 		}
-		$this->assertSame( array( true, true ), $under, 'Both buckets written while the lock is held.' );
+		$this->assertSame( array( true, true ), $under, 'Both buckets (hourly and per-minute) are written while the lock is held.' );
 	}
 
 	public function test_a_parallel_registration_from_one_address_cannot_read_a_stale_count(): void {
 		$ip = '198.51.100.21';
-		for ( $i = 0; $i < Mcpwp_OAuth_Clients::ADDRESS_REGISTRATIONS_PER_DAY - 1; $i++ ) {
+		for ( $i = 0; $i < Mcpwp_OAuth_Clients::ADDRESS_PENDING_LIMIT - 1; $i++ ) {
 			$this->assertIsArray( Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://p' . $i . '.example.com/cb' ) ), $ip ) );
 		}
 		// One slot left.  A second request from the same address arrives
-		// while the first is between reading the address bucket and counting.
+		// while the first holds the store lock between its re-read and its write.
 		$nested = null;
 		$GLOBALS['mcpwp_test_transient_hook'] = function ( $name ) use ( $ip, &$nested ) {
-			if ( null === $nested && 0 === strpos( $name, 'mcpwp_oauth_dcr_addr_' ) ) {
+			if ( null === $nested && 0 === strpos( $name, 'mcpwp_oauth_dcr_' ) && isset( $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_OAuth_Clients::LOCK_OPTION ] ) ) {
 				$nested = false;
 				$nested = Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://nested.example.com/cb' ) ), $ip );
 			}
@@ -769,7 +769,7 @@ final class OAuthRevocation1101Test extends TestCase {
 		$this->assertIsArray( $first );
 		$this->assertInstanceOf( WP_Error::class, $nested, 'The parallel request did not get a slot.' );
 		$this->assertSame( 503, $nested->get_error_data()['status'], 'It waited on the lock (busy), it did not read the same count.' );
-		$this->assertInstanceOf( WP_Error::class, Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://after.example.com/cb' ) ), $ip ), 'And the day is spent at exactly the ceiling.' );
+		$this->assertInstanceOf( WP_Error::class, Mcpwp_OAuth_Clients::register( array( 'redirect_uris' => array( 'https://after.example.com/cb' ) ), $ip ), 'And the address is at exactly the limit.' );
 	}
 
 	// ── 7. small items ────────────────────────────────────────────────────

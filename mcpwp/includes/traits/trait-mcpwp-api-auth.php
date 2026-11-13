@@ -4314,10 +4314,18 @@ trait Mcpwp_Api_Auth {
 	 * @return string|null API key or null.
 	 */
 	protected function get_api_key_from_request( $request ) {
+		// An OAuth access token (mcpwp_at_ / spai_at_) is a bearer credential
+		// and is accepted ONLY in `Authorization: Bearer` — the one method the
+		// discovery metadata advertises (bearer_methods_supported ["header"],
+		// RFC 6750 §2).  In X-API-Key or the ?api_key= query string it would
+		// end up in access logs and proxies' URL records, so it is not read
+		// from there at all.  API keys are unaffected: every method that
+		// accepted one still does.
+
 		// Check header first (X-API-Key)
 		$api_key = $request->get_header( 'X-API-Key' );
 
-		if ( ! empty( $api_key ) ) {
+		if ( ! empty( $api_key ) && ! $this->looks_like_oauth_access_token( $api_key ) ) {
 			return sanitize_text_field( $api_key );
 		}
 
@@ -4332,7 +4340,10 @@ trait Mcpwp_Api_Auth {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		if ( ! empty( $_GET['api_key'] ) ) {
 			// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-			return sanitize_text_field( wp_unslash( $_GET['api_key'] ) );
+			$from_query = sanitize_text_field( wp_unslash( $_GET['api_key'] ) );
+			if ( ! $this->looks_like_oauth_access_token( $from_query ) ) {
+				return $from_query;
+			}
 		}
 
 		return null;
@@ -4364,6 +4375,11 @@ trait Mcpwp_Api_Auth {
 	protected function forward_caller_credential( $outer_request, $internal_request ) {
 		$outer_api_key_header = method_exists( $outer_request, 'get_header' ) ? $outer_request->get_header( 'X-API-Key' ) : null;
 		$outer_auth_header    = method_exists( $outer_request, 'get_header' ) ? $outer_request->get_header( 'Authorization' ) : null;
+		// An OAuth token in X-API-Key was never the credential (see
+		// get_api_key_from_request()); do not forward it as one.
+		if ( ! empty( $outer_api_key_header ) && $this->looks_like_oauth_access_token( $outer_api_key_header ) ) {
+			$outer_api_key_header = null;
+		}
 
 		if ( ! empty( $outer_api_key_header ) ) {
 			$internal_request->set_header( 'X-API-Key', $outer_api_key_header );
@@ -4532,10 +4548,17 @@ trait Mcpwp_Api_Auth {
 			$principal_id = 'oauth:' . substr( hash( 'sha256', (string) $token ), 0, 16 );
 		}
 
+		// D8, again at authentication (belt and braces beside the cap at write
+		// in Mcpwp_OAuth_Token_Store::insert()): a token that runs as a user
+		// never acts with `admin`, whatever a stored row says.
+		$record_scopes = (array) $record['scopes'];
+		if ( $oauth_user_id > 0 ) {
+			$record_scopes = Mcpwp_OAuth_Token_Store::cap_user_bound_scopes( $record_scopes );
+		}
 		$key_record = array(
 			'id'     => $principal_id,
 			'type'   => 'oauth',
-			'scopes' => $this->sanitize_scopes( (array) $record['scopes'] ),
+			'scopes' => $this->sanitize_scopes( $record_scopes ),
 		);
 		if ( $oauth_user_id > 0 ) {
 			// Read by requester_oauth_user_id(): this principal is a real

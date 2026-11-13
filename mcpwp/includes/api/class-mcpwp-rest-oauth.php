@@ -72,6 +72,22 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 
+	/**
+	 * Transient prefix of the "this code was redeemed" markers (key: SHA-256
+	 * of the code; value: the family and client it produced).
+	 */
+	const REDEEMED_CODE_PREFIX = 'mcpwp_oauth_codeused_';
+
+	/**
+	 * Seconds after a redemption during which a second presentation of the
+	 * same code (a client double-submitting its callback) is refused without
+	 * revoking the winner's tokens.
+	 */
+	const REPLAY_GRACE_SECONDS = 10;
+
+	/** How long a redeemed-code marker is kept (1 day; the code itself lives 60 s). */
+	const REDEEMED_CODE_TTL = 86400;
+
 	// -------------------------------------------------------------------------
 	// Route registration
 	// -------------------------------------------------------------------------
@@ -184,7 +200,13 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			$metadata = is_array( $decoded ) ? $decoded : null;
 		}
 
-		$result = Mcpwp_OAuth_Clients::register( $metadata, $this->get_client_ip() );
+		// The limits key on the plugin's trusted address resolution
+		// (get_client_ip(): REMOTE_ADDR unless MCPWP_TRUST_PROXY_HEADERS).  An
+		// authenticated administrator (cookie + nonce, or an application
+		// password) is exempt from them: an anonymous flood must not stop
+		// the site's own admin from connecting an app.
+		$is_admin = function_exists( 'current_user_can' ) && current_user_can( 'manage_options' );
+		$result   = Mcpwp_OAuth_Clients::register( $metadata, $this->get_client_ip(), 0, $is_admin );
 
 		if ( is_wp_error( $result ) ) {
 			$response = $this->wpe_to_response( $result );
@@ -449,6 +471,19 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	 * @return WP_REST_Response
 	 */
 	public function handle_token( $request ) {
+		// RFC 6749 §5.1 / §5.2: every answer of the token endpoint — a token
+		// or an error, whichever grant produced it — is uncacheable.  Applied
+		// here, once, rather than in each grant handler.
+		return $this->no_store( $this->dispatch_token_grant( $request ) );
+	}
+
+	/**
+	 * Route a token request to its grant handler.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return WP_REST_Response
+	 */
+	private function dispatch_token_grant( $request ) {
 		if ( ! $this->is_oauth_enabled() ) {
 			return $this->oauth_error_response( 'server_error', 'OAuth is not enabled on this site.', 501 );
 		}
@@ -500,6 +535,10 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		if ( empty( $code_verifier ) ) {
 			return $this->oauth_error_response( 'invalid_request', 'code_verifier is required (PKCE mandatory).', 400 );
 		}
+		// RFC 7636 §4.1 shape, checked before anything is read or consumed.
+		if ( ! self::is_valid_pkce_string( $code_verifier ) ) {
+			return $this->oauth_error_response( 'invalid_grant', 'code_verifier must be 43 to 128 characters of A-Z a-z 0-9 - . _ ~.', 400 );
+		}
 		// #1101: RFC 6749 §4.1.3 — a public client sends its client_id.  The
 		// client check is never skipped: without an id there is nothing to
 		// check the code's binding against.
@@ -535,6 +574,11 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$checked_at = Mcpwp_OAuth_Revocation::now();
 
 		if ( ! is_array( $stored ) || empty( $stored['code_challenge'] ) ) {
+			// RFC 6749 §4.1.2: a code that was already redeemed and is
+			// presented again means a copy exists.  Revoke what the first
+			// redemption issued (the whole refresh family), then refuse like
+			// any other dead code.
+			$this->revoke_tokens_of_redeemed_code( $code, $client_id, $redirect_uri, $client_secret );
 			return $this->oauth_error_response( 'invalid_grant', 'Authorization code is invalid or has expired.', 400 );
 		}
 
@@ -607,7 +651,8 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// write burns nothing (503, the code still redeemable), and a lost
 		// claim race revokes what this request minted.
 		$ttl            = (int) $oauth_settings['oauth_token_ttl'];
-		$token_response = $this->issue_oauth_access_token_with_user( $scopes, $ttl, $stored_user_id, $client_id, '', $checked_at );
+		$family_id      = Mcpwp_OAuth_Revocation::new_family_id();
+		$token_response = $this->issue_oauth_access_token_with_user( $scopes, $ttl, $stored_user_id, $client_id, $family_id, $checked_at );
 		if ( is_wp_error( $token_response ) ) {
 			return $this->no_store( $this->wpe_to_response( $token_response ) );
 		}
@@ -618,6 +663,20 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			$this->discard_minted( $token_response );
 			return $this->oauth_error_response( 'invalid_grant', 'Authorization code is invalid or has expired.', 400 );
 		}
+
+		// Remember which family this code produced, so a replay of the code
+		// can revoke it (revoke_tokens_of_redeemed_code()).  Keyed by the
+		// code's hash; holds ids only.
+		set_transient(
+			self::REDEEMED_CODE_PREFIX . hash( 'sha256', $code ),
+			array(
+				'family_id'    => $family_id,
+				'client_id'    => $client_id,
+				'redirect_uri' => $redirect_uri,
+				'redeemed_at'  => time(),
+			),
+			self::REDEEMED_CODE_TTL
+		);
 
 		Mcpwp_OAuth_Clients::touch( $client_id );
 
@@ -632,6 +691,59 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		);
 
 		return $this->no_store( new WP_REST_Response( $token_response, 200 ) );
+	}
+
+	/**
+	 * A redeemed authorization code was presented again: revoke the token
+	 * family its first redemption created (RFC 6749 §4.1.2).
+	 *
+	 * Nothing is revoked unless the presenter authenticates as the client the
+	 * code was redeemed for: the exact client id and redirect URI, and — when
+	 * a client secret is sent — a correct secret.  Someone who merely saw a
+	 * used code (a log, a Referer) and knows the public client id therefore
+	 * cannot disconnect the app with a wrong secret or redirect URI.  And
+	 * nothing is revoked within REPLAY_GRACE_SECONDS of the redemption: a
+	 * client that submits its callback twice in parallel gets invalid_grant
+	 * for the loser without losing the winner's tokens.  The answer is
+	 * invalid_grant either way.
+	 *
+	 * @param string $code          The presented code.
+	 * @param string $client_id     The presenting client.
+	 * @param string $redirect_uri  The presented redirect URI.
+	 * @param string $client_secret The presented client secret ('' for a public client).
+	 */
+	private function revoke_tokens_of_redeemed_code( $code, $client_id, $redirect_uri, $client_secret ) {
+		$marker = get_transient( self::REDEEMED_CODE_PREFIX . hash( 'sha256', (string) $code ) );
+		if ( ! is_array( $marker ) || empty( $marker['family_id'] ) || empty( $marker['client_id'] ) ) {
+			return;
+		}
+		if ( ! hash_equals( (string) $marker['client_id'], (string) $client_id ) ) {
+			return;
+		}
+		if ( ! isset( $marker['redirect_uri'] ) || ! hash_equals( (string) $marker['redirect_uri'], (string) $redirect_uri ) ) {
+			return;
+		}
+		$settings     = $this->get_oauth_settings();
+		$confidential = '' !== $settings['oauth_client_id'] && hash_equals( $settings['oauth_client_id'], (string) $client_id ) && ! empty( $settings['oauth_client_secret_hash'] );
+		if ( '' !== (string) $client_secret ) {
+			if ( ! $this->verify_oauth_client_credentials( $client_id, (string) $client_secret ) ) {
+				return;
+			}
+		} elseif ( $confidential || null === $this->resolve_client( $client_id ) ) {
+			// A confidential client must prove itself; a public one must at
+			// least be a client that exists.
+			return;
+		}
+		if ( time() - (int) ( $marker['redeemed_at'] ?? 0 ) < self::REPLAY_GRACE_SECONDS ) {
+			return;
+		}
+		Mcpwp_OAuth_Revocation::revoke_family( (string) $marker['family_id'] );
+		$this->log_oauth_event(
+			'oauth_code_reuse_detected',
+			array(
+				'client_id' => (string) $marker['client_id'],
+			)
+		);
 	}
 
 	// -------------------------------------------------------------------------
@@ -951,7 +1063,9 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	private function handle_token_client_credentials( $request ) {
 		$rate_limit_check = $this->check_rate_limit( 'oauth-client:' . $this->get_client_ip() );
 		if ( is_wp_error( $rate_limit_check ) ) {
-			return $rate_limit_check;
+			// An OAuth error body (RFC 6749 §5.2), like the revoke endpoint's
+			// limiter answer — not the REST framework's error shape.
+			return $this->no_store( $this->wpe_to_response( $rate_limit_check ) );
 		}
 
 		$client_id     = sanitize_key( (string) $request->get_param( 'client_id' ) );
@@ -1003,7 +1117,7 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			)
 		);
 
-		return new WP_REST_Response( $token_data, 200 );
+		return $this->no_store( new WP_REST_Response( $token_data, 200 ) );
 	}
 
 	// -------------------------------------------------------------------------
@@ -1191,6 +1305,12 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		// PKCE: code_challenge must be present.
 		if ( empty( $params['code_challenge'] ) ) {
 			return new WP_Error( 'invalid_request', 'code_challenge is required.', array( 'status' => 400 ) );
+		}
+
+		// RFC 7636 §4.2: 43-128 characters of the unreserved set.  A one-
+		// character "challenge" is a guessable proof, not a proof.
+		if ( ! self::is_valid_pkce_string( $params['code_challenge'] ) ) {
+			return new WP_Error( 'invalid_request', 'code_challenge must be 43 to 128 characters of A-Z a-z 0-9 - . _ ~.', array( 'status' => 400 ) );
 		}
 
 		// RFC 8707 (D1): optional, but when present it must name this MCP
@@ -1518,6 +1638,17 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	// -------------------------------------------------------------------------
 	// Helpers
 	// -------------------------------------------------------------------------
+
+	/**
+	 * Whether a PKCE code_challenge / code_verifier has the RFC 7636 shape:
+	 * 43 to 128 characters of the unreserved set (§4.1, §4.2).
+	 *
+	 * @param mixed $value Candidate.
+	 * @return bool
+	 */
+	public static function is_valid_pkce_string( $value ) {
+		return is_string( $value ) && 1 === preg_match( '/\A[A-Za-z0-9\-._~]{43,128}\z/', $value );
+	}
 
 	/**
 	 * Compute a PKCE S256 code challenge from a verifier.

@@ -100,6 +100,9 @@ class Mcpwp_Uninstaller {
 		'mcpwp_oauth_revoked_pairs',
 		'mcpwp_oauth_revocation_lock',
 		'mcpwp_oauth_default_migration_lock',
+		// Minimum role for AI connections, and the "Add to ChatGPT" key id.
+		'mcpwp_oauth_min_role',
+		'mcpwp_chatgpt_connector_key_id',
 		'mcpwp_approvals_table_migration_lock',
 		'mcpwp_approvals_schema_version',
 		'mcpwp_approvals_migration_skipped',
@@ -165,6 +168,47 @@ class Mcpwp_Uninstaller {
 		delete_option( 'mcpwp_oauth_tokens_schema_version' );
 		delete_option( 'mcpwp_oauth_tokens_grace_until' );
 		wp_clear_scheduled_hook( 'mcpwp_oauth_tokens_cleanup' );
+
+		self::drop_oauth_residue_for_current_site();
+	}
+
+	/** @var array<string> User meta the OAuth server writes (per-user revocation epoch, notice dismissal). */
+	const OAUTH_USER_META = array(
+		'mcpwp_oauth_revoked_before',
+		'mcpwp_oauth_default_notice_dismissed',
+	);
+
+	/** @var array<string> Prefixes of the transients the OAuth server writes: codes, redeemed-code markers, DCR buckets, family revocation markers, legacy refresh/access tokens, per-user notices. */
+	const OAUTH_TRANSIENT_PREFIXES = array(
+		'mcpwp_oauth_code_',
+		'mcpwp_oauth_codeused_',
+		'mcpwp_oauth_dcr_',
+		'mcpwp_oauth_famrev_',
+		'mcpwp_oauth_rt_',
+		'mcpwp_oauth_token_',
+		'mcpwp_oauth_apps_notice_',
+	);
+
+	/**
+	 * Remove the OAuth server's user meta and transients (its options are in
+	 * APPROVALS_OPTIONS, its table is dropped above).  Transients are removed
+	 * from the options table, so a site on a persistent object cache keeps
+	 * the ones the cache holds until they expire (all are short-lived or
+	 * hashed ids, and none carries a usable token).
+	 */
+	public static function drop_oauth_residue_for_current_site() {
+		global $wpdb;
+
+		foreach ( self::OAUTH_USER_META as $meta_key ) {
+			delete_metadata( 'user', 0, $meta_key, '', true );
+		}
+
+		foreach ( self::OAUTH_TRANSIENT_PREFIXES as $prefix ) {
+			foreach ( array( '_transient_', '_transient_timeout_' ) as $kind ) {
+				// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->options is core's; the LIKE value is a fixed constant, escaped and prepared.
+				$wpdb->query( $wpdb->prepare( "DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", $wpdb->esc_like( $kind . $prefix ) . '%' ) );
+			}
+		}
 	}
 
 	/**
