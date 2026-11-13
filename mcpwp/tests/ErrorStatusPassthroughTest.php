@@ -25,6 +25,10 @@
 
 use PHPUnit\Framework\TestCase;
 
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-posts.php';
+require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-drafts.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-posts.php';
+
 /**
  * Minimal concrete subclass — Mcpwp_REST_API is abstract and the two
  * methods under test are protected. register_routes() is the only abstract
@@ -33,6 +37,10 @@ use PHPUnit\Framework\TestCase;
 class Mcpwp_Test_Error_Status_Controller extends Mcpwp_REST_API {
 
 	public function register_routes() {}
+
+	public function public_success_response( $data, $status = 200 ) {
+		return $this->success_response( $data, $status );
+	}
 
 	public function public_get_wp_error_status( WP_Error $error, $default_status = 400 ) {
 		return $this->get_wp_error_status( $error, $default_status );
@@ -60,6 +68,72 @@ final class ErrorStatusPassthroughTest extends TestCase {
 	// ---------------------------------------------------------------
 	// get_wp_error_status() / error_response_from_wp_error() contract.
 	// ---------------------------------------------------------------
+
+	public function test_list_posts_unknown_type_returns_a_400_error_not_a_success_body(): void {
+		$controller = new Mcpwp_REST_Posts();
+		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/posts', array( 'post_type' => 'unknown' ) );
+
+		$result = $controller->list_posts( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_post_type', $result->get_error_code() );
+		$this->assertSame( 'Invalid or unsupported post type.', $result->get_error_message() );
+		$this->assertSame( 400, $result->get_error_data()['status'] );
+	}
+
+	/** @dataProvider success_response_error_provider */
+	public function test_success_response_normalizes_only_the_error_status( $data, $expected_status ): void {
+		$controller = new Mcpwp_Test_Error_Status_Controller();
+		$error      = new WP_Error( 'invalid_post_type', 'Invalid type.', $data );
+		$result     = $controller->public_success_response( $error, 201 );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( $error, $result );
+		$this->assertSame( 'invalid_post_type', $result->get_error_code() );
+		$this->assertSame( 'Invalid type.', $result->get_error_message() );
+		$expected_data           = (array) $data;
+		$expected_data['status'] = $expected_status;
+		$this->assertSame( $expected_data, $result->get_error_data() );
+	}
+
+	public static function success_response_error_provider(): array {
+		return array(
+			'no status'       => array( null, 400 ),
+			'forbidden'       => array( array( 'status' => 403 ), 403 ),
+			'backend failure' => array( array( 'status' => 503 ), 503 ),
+			'invalid status'  => array( array( 'status' => 200, 'hint' => 'Backend hint.', 'guide' => array( 'retry' => false ) ), 400 ),
+			'string status'   => array( array( 'status' => '503', 'resource' => 'posts' ), 400 ),
+		);
+	}
+
+	public function test_list_posts_revision_preserves_the_backend_security_hint(): void {
+		require_once dirname( __DIR__ ) . '/includes/class-mcpwp-error-hints.php';
+
+		$controller = new Mcpwp_REST_Posts();
+		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/posts', array( 'post_type' => 'revision' ) );
+		$result     = $controller->list_posts( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_post_type', $result->get_error_code() );
+		$this->assertSame( 'Invalid or unsupported post type.', $result->get_error_message() );
+		$this->assertSame(
+			array(
+				'status' => 400,
+				'hint'   => 'Post type "revision" is blocked for security reasons. Use wp_site_info to check available post types, or wp_list_content(post_type=\'...\') for custom post types.',
+			),
+			$result->get_error_data()
+		);
+	}
+
+	public function test_success_response_keeps_success_data_and_status(): void {
+		$controller = new Mcpwp_Test_Error_Status_Controller();
+		$data       = array( 'posts' => array(), 'total' => 0 );
+		$result     = $controller->public_success_response( $data, 201 );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $result );
+		$this->assertSame( $data, $result->get_data() );
+		$this->assertSame( 201, $result->get_status() );
+	}
 
 	public function test_a_500_status_the_error_carries_is_preserved(): void {
 		$ctl   = new Mcpwp_Test_Error_Status_Controller();

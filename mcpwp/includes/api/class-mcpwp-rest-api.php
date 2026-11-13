@@ -456,9 +456,21 @@ abstract class Mcpwp_REST_API {
 	 *
 	 * @param mixed $data Response data.
 	 * @param int   $status HTTP status code.
-	 * @return WP_REST_Response Response object.
+	 * @return WP_REST_Response|WP_Error Response object.
 	 */
 	protected function success_response( $data, $status = 200 ) {
+		// A handler may pass a backend failure here; never serialize it as success.
+		if ( is_wp_error( $data ) ) {
+			// Keep backend messages and data (including specific hints) intact.
+			$error_data = (array) $data->get_error_data();
+			$status     = $this->get_wp_error_status( $data );
+			if ( ! isset( $error_data['status'] ) || $error_data['status'] !== $status ) {
+				$error_data['status'] = $status;
+				$data->add_data( $error_data );
+			}
+			return $data;
+		}
+
 		// Merge any content-guardrails notice recorded for a post ID
 		// somewhere in this response, generically — every create/update
 		// route reports guardrails results without needing its own call to
