@@ -5081,9 +5081,18 @@ trait Mcpwp_Api_Auth {
 		if ( $this->looks_like_password_hash( $hash ) ) {
 			return (bool) wp_check_password( $api_key, $hash ); // Any algorithm WordPress hashed it with.
 		}
-		// Not a hash: only core's own legacy MD5 branch (<= 32 chars) may match,
-		// never the plaintext string itself.
-		return strlen( $hash ) <= 32 && hash_equals( $hash, md5( (string) $api_key ) );
+		// Not a password hash: only an MD5-era verifier may match, by hashing the
+		// presented key — never the plaintext string itself. Hex case is not
+		// significant (an upper-case MD5 must still verify, and must still not
+		// match itself).
+		if ( ! Mcpwp_Key_State::is_md5_shaped( $hash ) ) {
+			return false;
+		}
+		$md5 = strtolower( $hash );
+		if ( hash_equals( $md5, strtolower( (string) $api_key ) ) ) {
+			return false;
+		}
+		return hash_equals( $md5, md5( (string) $api_key ) );
 	}
 
 	/**
@@ -5110,12 +5119,8 @@ trait Mcpwp_Api_Auth {
 		if ( ! class_exists( 'Mcpwp_Key_State' ) ) {
 			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
 		}
-		if ( Mcpwp_Key_State::is_password_hash_shaped( $stored_key ) ) {
+		if ( Mcpwp_Key_State::is_stored_verifier( $stored_key ) ) {
 			return $this->is_api_key_hash_match( $api_key, $stored_key );
-		}
-		if ( Mcpwp_Key_State::is_md5_shaped( $stored_key ) ) {
-			return ! hash_equals( strtolower( $stored_key ), strtolower( $api_key ) )
-				&& hash_equals( strtolower( $stored_key ), md5( $api_key ) );
 		}
 
 		return hash_equals( $stored_key, $api_key );
@@ -5222,10 +5227,13 @@ trait Mcpwp_Api_Auth {
 			}
 		}
 		foreach ( $revoked as $hash ) {
-			if ( hash_equals( $hash, $single ) ) {
+			if ( hash_equals( Mcpwp_Key_State::canonical_verifier( $hash ), Mcpwp_Key_State::canonical_verifier( $single ) ) ) {
 				return true;
 			}
 		}
+		// Not a password hash (plaintext, or an MD5 no string compare can tie
+		// to a revoked salted copy): verify the presented key against every
+		// revoked hash.
 		if ( ! $this->looks_like_password_hash( $single ) ) {
 			foreach ( $revoked as $hash ) {
 				if ( $this->is_api_key_hash_match( $api_key, $hash ) ) {
@@ -5249,8 +5257,11 @@ trait Mcpwp_Api_Auth {
 		if ( '' === $hash ) {
 			return false;
 		}
+		if ( ! class_exists( 'Mcpwp_Key_State' ) ) {
+			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
+		}
 		foreach ( $this->get_scoped_api_keys_raw() as $record ) {
-			if ( is_array( $record ) && ! empty( $record['revoked_at'] ) && isset( $record['hash'] ) && hash_equals( (string) $record['hash'], $hash ) ) {
+			if ( is_array( $record ) && ! empty( $record['revoked_at'] ) && isset( $record['hash'] ) && hash_equals( Mcpwp_Key_State::canonical_verifier( $record['hash'] ), Mcpwp_Key_State::canonical_verifier( $hash ) ) ) {
 				return true;
 			}
 		}

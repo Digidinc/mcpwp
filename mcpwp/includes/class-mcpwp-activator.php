@@ -1301,23 +1301,25 @@ class Mcpwp_Activator {
 		$now       = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
 
 		// Hashed once, outside the mutator: a salted hash differs on every call.
-		// A stored verifier (password hash or MD5-era hash) is carried VERBATIM:
-		// hashing it would make the stored string itself the key.
+		// A stored verifier (password hash or MD5-era hash) is carried as it is
+		// (an MD5 in its canonical lower case): hashing it would make the stored
+		// string itself the key.
 		$single_is_hash = '' !== $single && Mcpwp_Key_State::is_stored_verifier( $single );
-		$single_hash    = '' === $single ? '' : ( $single_is_hash ? $single : wp_hash_password( $single ) );
+		$single_is_md5  = '' !== $single && Mcpwp_Key_State::is_md5_shaped( $single );
+		$single_hash    = '' === $single ? '' : ( $single_is_hash ? Mcpwp_Key_State::canonical_verifier( $single ) : wp_hash_password( $single ) );
 
 		$legacy          = (string) get_option( 'mcpwp_api_key', '' );
 		$legacy_verifier = '' !== $legacy && Mcpwp_Key_State::is_stored_verifier( $legacy );
-		$legacy_hash     = '' === $legacy ? '' : ( $legacy_verifier ? $legacy : wp_hash_password( $legacy ) );
+		$legacy_hash     = '' === $legacy ? '' : ( $legacy_verifier ? Mcpwp_Key_State::canonical_verifier( $legacy ) : wp_hash_password( $legacy ) );
 		// A plaintext legacy key gets a fresh salted hash that no stored hash
 		// equals, so it is also compared by verification.
 		$legacy_plain = ( '' !== $legacy && ! $legacy_verifier ) ? $legacy : '';
 
-		return static function ( array $keys ) use ( $spai_keys, $single, $single_is_hash, $single_hash, $legacy_hash, $legacy_plain, $now, $revoke ) {
+		return static function ( array $keys ) use ( $spai_keys, $single, $single_is_hash, $single_is_md5, $single_hash, $legacy_hash, $legacy_plain, $now, $revoke ) {
 			$present = array();
 			foreach ( $keys as $record ) {
 				if ( is_array( $record ) && isset( $record['hash'] ) && '' !== (string) $record['hash'] ) {
-					$present[ (string) $record['hash'] ] = true; // Active OR revoked: never add it again.
+					$present[ Mcpwp_Key_State::canonical_verifier( $record['hash'] ) ] = true; // Active OR revoked: never add it again.
 				}
 			}
 			// The legacy single key is honoured only while the store is empty.
@@ -1348,7 +1350,7 @@ class Mcpwp_Activator {
 				if ( ! is_array( $key ) || ( ! $revoke && empty( $key['revoked_at'] ) ) ) {
 					continue;
 				}
-				$hash = isset( $key['hash'] ) ? (string) $key['hash'] : '';
+				$hash = isset( $key['hash'] ) ? Mcpwp_Key_State::canonical_verifier( $key['hash'] ) : '';
 				if ( '' === $hash || isset( $present[ $hash ] ) ) {
 					continue;
 				}
@@ -1382,7 +1384,7 @@ class Mcpwp_Activator {
 					if ( ! is_array( $key ) || ! empty( $key['revoked_at'] ) ) {
 						continue;
 					}
-					$hash = isset( $key['hash'] ) ? (string) $key['hash'] : '';
+					$hash = isset( $key['hash'] ) ? Mcpwp_Key_State::canonical_verifier( $key['hash'] ) : '';
 					$id   = isset( $key['id'] ) ? sanitize_key( (string) $key['id'] ) : '';
 					// Not a verifier, or no id: the bridge refuses it (no plaintext
 					// match for a store record, no principal without an id), so it
@@ -1427,6 +1429,13 @@ class Mcpwp_Activator {
 						}
 					}
 				}
+				// An MD5 single cannot be verified against any other stored hash
+				// without the key itself, so it cannot be shown NOT to be a revoked
+				// (or still-live, revocable) copy of one — the bridge proves that
+				// on presentation, adoption cannot. It is adopted live only when it
+				// is the site's sole credential; otherwise it is adopted revoked
+				// (fail closed: a revoked key must not come back).
+				$single_unprovable = $single_is_md5 && ( ! empty( $present ) || $legacy_in_play );
 				if ( ! $dup ) {
 					$adds[] = array(
 						'id'            => self::SPAI_SINGLE_KEY_ID,
@@ -1437,7 +1446,7 @@ class Mcpwp_Activator {
 						'role'          => 'admin',
 						'created_at'    => $now,
 						'last_used_at'  => null,
-						'revoked_at'    => $revoke ? $now : null,
+						'revoked_at'    => ( $revoke || $single_unprovable ) ? $now : null,
 						'migrated_from' => 'spai',
 					);
 					$present[ $single_hash ] = true;
@@ -2483,7 +2492,7 @@ class Mcpwp_Activator {
 
 		// A stored verifier (password hash or MD5-era hash) is kept verbatim:
 		// hashing it would make the stored string itself the key.
-		$legacy_hash = Mcpwp_Key_State::is_stored_verifier( (string) $legacy_key ) ? (string) $legacy_key : wp_hash_password( (string) $legacy_key );
+		$legacy_hash = Mcpwp_Key_State::is_stored_verifier( (string) $legacy_key ) ? Mcpwp_Key_State::canonical_verifier( $legacy_key ) : wp_hash_password( (string) $legacy_key );
 
 		$key_id = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true );
 		$record = array(

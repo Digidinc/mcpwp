@@ -91,16 +91,20 @@ final class LegacyCredentialHashTest extends TestCase {
 			'wp68'     => '$wp' . password_hash( base64_encode( hash_hmac( 'sha384', $key, 'wp-sha384', true ) ), PASSWORD_BCRYPT ),
 			'bcrypt'   => password_hash( $key, PASSWORD_BCRYPT ),
 			'argon2id' => defined( 'PASSWORD_ARGON2ID' ) ? password_hash( $key, PASSWORD_ARGON2ID ) : null,
+			'phpass'   => mcpwp_test_phpass_hash( $key ),
 			'md5'      => md5( $key ),
+			'md5_uc'   => strtoupper( md5( $key ) ),
 		);
 	}
 
 	/**
-	 * A phpass-shaped value. The test stub cannot verify phpass, so it is used
-	 * for the refusal side only — which is exactly the side that matters: the
-	 * stub falls back to a plain string compare for it, like a careless
-	 * `check_password` filter would, and the stored value must still be refused.
+	 * phpass's own published test vector: '$P$9IQRaTwmfeRo7ud9Fh4E2PdI0S3r.L0'
+	 * is the portable hash of 'test12345' — a 2.8-era, pre-WordPress-6.8 hash.
 	 */
+	const PHPASS_VECTOR     = '$P$9IQRaTwmfeRo7ud9Fh4E2PdI0S3r.L0';
+	const PHPASS_VECTOR_KEY = 'test12345';
+
+	/** A phpass-shaped value whose key nobody knows; refusal side only. */
 	const PHPASS = '$P$BabcdefghijklmnopqrstuvwxyzABCD.';
 
 	public static function stored_shapes(): array {
@@ -110,7 +114,8 @@ final class LegacyCredentialHashTest extends TestCase {
 				$shapes[ $name ] = array( $value );
 			}
 		}
-		$shapes['phpass'] = array( self::PHPASS );
+		$shapes['phpass_unknown'] = array( self::PHPASS );
+		$shapes['phpass_vector']  = array( self::PHPASS_VECTOR );
 		return $shapes;
 	}
 
@@ -431,5 +436,161 @@ final class LegacyCredentialHashTest extends TestCase {
 		$limiter = Mcpwp_Rate_Limiter::get_instance();
 		$this->assertSame( 1, $limiter->get_usage( 'key:scoped-key-1' )['minute']['used'] );
 		$this->assertSame( 0, $limiter->get_usage( 'invalid:' . $auth->client_ip() )['minute']['used'] );
+	}
+
+	// -----------------------------------------------------------------
+	// The wp_check_password() stub mirrors core
+	// -----------------------------------------------------------------
+
+	public function test_the_stub_verifies_phpass_like_core(): void {
+		$this->assertTrue( wp_check_password( self::PHPASS_VECTOR_KEY, self::PHPASS_VECTOR ), 'phpass test vector' );
+		$this->assertFalse( wp_check_password( 'test12346', self::PHPASS_VECTOR ) );
+		$this->assertFalse( wp_check_password( self::PHPASS_VECTOR, self::PHPASS_VECTOR ), 'No plaintext fallback.' );
+		$fresh = mcpwp_test_phpass_hash( self::KEY );
+		$this->assertStringStartsWith( '$P$B', $fresh );
+		$this->assertSame( 34, strlen( $fresh ) );
+		$this->assertTrue( wp_check_password( self::KEY, $fresh ) );
+	}
+
+	public function test_the_stub_verifies_md5_like_core(): void {
+		$md5 = md5( self::KEY );
+		$this->assertTrue( wp_check_password( self::KEY, $md5 ) );
+		$this->assertFalse( wp_check_password( $md5, $md5 ), 'Core compares md5( presented ), never the string.' );
+		$this->assertFalse( wp_check_password( self::KEY, strtoupper( $md5 ) ), 'Core is case-sensitive here; the plugin normalises.' );
+		$this->assertFalse( wp_check_password( 'short', 'short' ), 'A short non-hash is an MD5 compare, not plaintext.' );
+		$long = str_repeat( 'p', 40 );
+		$this->assertFalse( wp_check_password( $long, $long ), 'A long non-hash goes to password_verify(), never plaintext.' );
+	}
+
+	public function test_a_real_2_8_era_phpass_key_authenticates_end_to_end(): void {
+		foreach ( array( 'legacy_option', 'spai_single', 'spai_record', 'scoped_record' ) as $store ) {
+			foreach ( array( 'direct', 'sub' ) as $plane ) {
+				$this->setUp();
+				$this->plant( $store, self::PHPASS_VECTOR );
+				$auth = new Mcpwp_Legacy_Credential_Hash_Test_Auth();
+				$this->assertTrue( $this->verify( $auth, $plane, $this->request( self::PHPASS_VECTOR_KEY, 'header' ) ), "$store/$plane" );
+				Mcpwp_REST_MCP::reset_verdict_memo();
+				$GLOBALS['mcpwp_test_current_user'] = 0;
+				$this->assert_refused( $this->verify( $auth, $plane, $this->request( self::PHPASS_VECTOR, 'header' ) ), "$store/$plane hash-as-key" );
+			}
+		}
+	}
+
+	// -----------------------------------------------------------------
+	// Review P2-1: an MD5 spai single must not resurrect a revoked key
+	// -----------------------------------------------------------------
+
+	private function plant_revoked_spai_record_and_md5_single( string $md5 ): void {
+		update_option(
+			'spai_api_keys',
+			array(
+				array(
+					'id'         => 'spai-revoked',
+					'label'      => 'Revoked primary',
+					'hash'       => wp_hash_password( self::KEY ),
+					'scopes'     => array( 'read', 'write', 'admin' ),
+					'role'       => 'admin',
+					'created_at' => '2026-01-01 00:00:00',
+					'revoked_at' => '2026-02-01 00:00:00',
+				),
+			)
+		);
+		update_option( 'spai_api_key', $md5 );
+	}
+
+	public function test_an_md5_single_of_a_revoked_key_stays_refused_through_adoption(): void {
+		foreach ( array( 'lower' => md5( self::KEY ), 'upper' => strtoupper( md5( self::KEY ) ) ) as $case => $md5 ) {
+			$this->setUp();
+			$this->plant_revoked_spai_record_and_md5_single( $md5 );
+			$auth = new Mcpwp_Legacy_Credential_Hash_Test_Auth();
+
+			$this->assertNull( $auth->spai_lookup( self::KEY ), $case . ': pre-adoption, the bridge refuses the revoked key.' );
+			$this->assert_refused( $auth->auth_only( $this->request( self::KEY, 'header' ) ), $case . ' pre' );
+
+			$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials(), $case );
+			Mcpwp_REST_MCP::reset_verdict_memo();
+
+			$this->assertNull( $auth->scoped_lookup( self::KEY ), $case . ': post-adoption, no live record carries the revoked key.' );
+			$this->assert_refused( $auth->auth_only( $this->request( self::KEY, 'header' ) ), $case . ' post (sub)' );
+			$this->assert_refused( $auth->verify_api_key( $this->request( self::KEY, 'header' ) ), $case . ' post (direct)' );
+
+			$single = null;
+			foreach ( get_option( 'mcpwp_api_keys', array() ) as $record ) {
+				if ( Mcpwp_Activator::SPAI_SINGLE_KEY_ID === ( $record['id'] ?? '' ) ) {
+					$single = $record;
+				}
+			}
+			$this->assertNotNull( $single, $case . ': the single is adopted (so it stays listed) ...' );
+			$this->assertNotEmpty( $single['revoked_at'], $case . ': ... but revoked.' );
+		}
+	}
+
+	public function test_an_md5_single_beside_other_credentials_is_adopted_revoked(): void {
+		update_option(
+			'spai_api_keys',
+			array(
+				array(
+					'id'         => 'spai-live',
+					'label'      => 'Other key',
+					'hash'       => wp_hash_password( 'spai_other_live_key_0123456789abcdef' ),
+					'scopes'     => array( 'read' ),
+					'role'       => 'admin',
+					'created_at' => '2026-01-01 00:00:00',
+					'revoked_at' => null,
+				),
+			)
+		);
+		update_option( 'spai_api_key', md5( self::KEY ) );
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+
+		$auth = new Mcpwp_Legacy_Credential_Hash_Test_Auth();
+		$this->assertNull( $auth->scoped_lookup( self::KEY ), 'Unprovable against the other hashes: fail closed.' );
+		$this->assertNotNull( $auth->scoped_lookup( 'spai_other_live_key_0123456789abcdef' ) );
+	}
+
+	// -----------------------------------------------------------------
+	// Review P2-2: an upper-case MD5 must not lock the real key out
+	// -----------------------------------------------------------------
+
+	public function test_an_uppercase_md5_survives_adoption_and_activation(): void {
+		$upper = strtoupper( md5( self::KEY ) );
+
+		update_option( 'spai_api_key', $upper );
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$auth = new Mcpwp_Legacy_Credential_Hash_Test_Auth();
+		$this->assertNotNull( $auth->scoped_lookup( self::KEY ), 'spai single, adopted' );
+		$this->assertNull( $auth->scoped_lookup( $upper ) );
+		$this->assertNull( $auth->scoped_lookup( strtolower( $upper ) ) );
+
+		$this->setUp();
+		update_option( 'mcpwp_api_key', $upper );
+		$method = new ReflectionMethod( 'Mcpwp_Activator', 'ensure_scoped_api_keys' );
+		$method->setAccessible( true );
+		$method->invoke( null );
+		$this->assertNotNull( $auth->scoped_lookup( self::KEY ), 'legacy option, activation' );
+		$this->assertNull( $auth->scoped_lookup( $upper ) );
+		$this->assertNull( $auth->scoped_lookup( strtolower( $upper ) ) );
+		foreach ( get_option( 'mcpwp_api_keys', array() ) as $record ) {
+			$this->assertSame( strtolower( $upper ), $record['hash'], 'Carried in canonical lower case.' );
+		}
+	}
+
+	public function test_an_uppercase_md5_single_still_sees_its_revoked_twin(): void {
+		update_option(
+			'mcpwp_api_keys',
+			array(
+				array(
+					'id'         => 'revoked-twin',
+					'label'      => 'Revoked copy',
+					'hash'       => md5( self::KEY ),
+					'scopes'     => array( 'read', 'write', 'admin' ),
+					'created_at' => '2026-01-01 00:00:00',
+					'revoked_at' => '2026-02-01 00:00:00',
+				),
+			)
+		);
+		update_option( 'spai_api_key', strtoupper( md5( self::KEY ) ) );
+		$auth = new Mcpwp_Legacy_Credential_Hash_Test_Auth();
+		$this->assertNull( $auth->spai_lookup( self::KEY ), 'Hex case must not hide a revoked copy.' );
 	}
 }

@@ -146,6 +146,19 @@ class Mcpwp_Key_State {
 	}
 
 	/**
+	 * The canonical form of a stored verifier, for carrying it into the key
+	 * store and for comparing two stored values: an MD5 hash in lower case
+	 * (hex case is not significant), anything else unchanged.
+	 *
+	 * @param mixed $value Stored value.
+	 * @return string
+	 */
+	public static function canonical_verifier( $value ) {
+		$value = (string) $value;
+		return self::is_md5_shaped( $value ) ? strtolower( $value ) : $value;
+	}
+
+	/**
 	 * Raw scoped records.
 	 *
 	 * @return array
