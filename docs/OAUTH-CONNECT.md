@@ -27,6 +27,16 @@ permalinks it is `https://YOUR-SITE/?rest_route=/mcpwp/v1/mcp`.
 To connect with OAuth you do not need to change a setting: OAuth is on by default. The person who
 signs in must be a WordPress user at or above the site's minimum role (Editor by default).
 
+OAuth access tokens are accepted **only over HTTPS**. A bearer token that arrives over plain HTTP is
+refused with `403 https_required` before it is looked up, whatever the token. API keys are not
+affected. "HTTPS" means WordPress's own `is_ssl()` says so (behind a TLS-terminating proxy, set
+`$_SERVER['HTTPS'] = 'on'` in `wp-config.php` the way WordPress documents), or, only when
+`MCPWP_TRUST_PROXY_HEADERS` is defined as `true`, the first `X-Forwarded-Proto` hop is `https`. Local
+development is exempt in three cases: `define( 'MCPWP_ALLOW_INSECURE_OAUTH', true );` in
+`wp-config.php`; `wp_get_environment_type()` is `local` (not `development` or `staging`); or the site
+address (the `home` option) and the request's `Host` are both loopback (`localhost`, `*.localhost`,
+`127.0.0.1`, `[::1]`). Never set the constant on a site reachable from the internet.
+
 What a client discovers on its own (nothing here is typed in by hand):
 
 | URL | What it is |
@@ -108,6 +118,7 @@ The errors below are the ones this plugin emits. OAuth errors are JSON `{"error"
 | `access_denied` in the redirect | The user pressed Deny. | Approve, if intended. |
 | Consent page: "Your WordPress role can't connect AI apps on this site; ask an administrator." | The signed-in user is below the minimum role (Editor by default). | An administrator signs in, or changes the minimum role on the Setup page. |
 | `401`, `invalid_token`, "This connection has expired or was revoked. Reconnect (sign in again) to continue." on a Bearer call, with `WWW-Authenticate: Bearer error="invalid_token", resource_metadata="..."` | The access token (an `mcpwp_at_` or legacy `spai_at_` bearer) is unknown, expired (default 1 hour), or **revoked** (app removed, user revoke, revoked refresh family, `/oauth/revoke`, Disconnect all, a revocation epoch covering its client, user or the whole site, a deleted user), or local OAuth is off. All of these answer identically on purpose, so the response says nothing about whether a string was ever a real token. | Try the refresh token; if that is refused, reconnect (remove and re-add the connector, or sign in again). MCP clients re-run discovery from the challenge. |
+| `403`, `https_required`, "OAuth access tokens are accepted only over HTTPS. This request arrived over plain HTTP and was refused." | The client called the `http://` MCP URL, or a proxy in front of the site terminates TLS without WordPress knowing (`is_ssl()` is false). Same answer for every token, live or not; nothing is charged to the address's failed-credential limit. The token travelled unencrypted. | Use the `https://` MCP URL and reconnect so the exposed token is replaced. Behind a proxy, make `is_ssl()` true (`wp-config.php`) or define `MCPWP_TRUST_PROXY_HEADERS` if the proxy sets `X-Forwarded-Proto`. For local development only, define `MCPWP_ALLOW_INSECURE_OAUTH` as `true`, set the environment type to `local`, or use a `localhost` address. |
 | `401`, `invalid_api_key` "Invalid API key." | A wrong or revoked **API key**, or a token that is not OAuth-shaped (neither the `mcpwp_at_` nor the legacy `spai_at_` prefix). This is not an OAuth reconnect problem. | Create or paste a valid API key under MCPWP -> Setup. |
 | `401`, `invalid_token`, "This access token was issued for a different resource." | Token minted for another site address. | Reconnect. |
 | `401`, `invalid_token`, "The WordPress user who approved this connection can no longer connect AI apps on this site." | The user still exists but no longer holds the minimum role (a *deleted* user gets the reconnect answer above instead, because deleting a user revokes their tokens). | Restore the role, or connect as someone else. |

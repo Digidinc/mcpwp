@@ -4545,6 +4545,20 @@ trait Mcpwp_Api_Auth {
 	 * @return bool|WP_Error True when valid, error otherwise.
 	 */
 	protected function authenticate_oauth_access_token( $token, $request, $metered = true ) {
+		// A bearer token over plain HTTP (RFC 6750 §5.3, OAuth 2.1 §1.5) is
+		// refused FIRST: before the OAuth switch, before any token lookup and
+		// before any rate-limit charge. So the answer is one fixed 403 whether
+		// the string is a live token, a dead one or was never issued (no
+		// oracle), it costs no database work, and it never charges the
+		// 'invalid:<ip>' bucket that wrong API keys share — a client set up
+		// with an http:// URL cannot spend that budget for everyone behind its
+		// address. The sub-request path (verify_api_key_auth_only()) lands
+		// here too, so /mcp and /batch answer the same.
+		$transport_refusal = $this->oauth_transport_refusal();
+		if ( null !== $transport_refusal ) {
+			return $transport_refusal;
+		}
+
 		$oauth_settings = $this->get_oauth_settings();
 		if ( empty( $oauth_settings['oauth_enabled'] ) ) {
 			$this->count_oauth_failure( $request, $metered );
@@ -6140,6 +6154,163 @@ trait Mcpwp_Api_Auth {
 				'hint'   => self::oauth_reconnect_hint(),
 			)
 		);
+	}
+
+	/**
+	 * The refusal for an OAuth access token presented over plain HTTP, or
+	 * null when the transport is acceptable.
+	 *
+	 * Acceptable means the request arrived over TLS (see
+	 * oauth_request_is_secure()) or one of the documented local-development
+	 * exceptions applies (see oauth_insecure_transport_allowed()). Reads only
+	 * the request's own transport facts and the site configuration — never
+	 * the token — so it is the same answer for every token.
+	 *
+	 * Applies to OAuth access tokens only (mcpwp_at_ / spai_at_). API keys,
+	 * the mumcp.com broker bearer and the WebMCP / admin-AJAX principals do
+	 * not pass through here and are unchanged.
+	 *
+	 * @return WP_Error|null
+	 */
+	protected function oauth_transport_refusal() {
+		// phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- normalised by the static helpers below.
+		$forwarded_proto = isset( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) ? (string) wp_unslash( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) : '';
+		$request_host    = isset( $_SERVER['HTTP_HOST'] ) ? (string) wp_unslash( $_SERVER['HTTP_HOST'] ) : '';
+		// phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+
+		$secure = self::oauth_request_is_secure(
+			function_exists( 'is_ssl' ) && is_ssl(),
+			defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS,
+			$forwarded_proto
+		);
+		if ( $secure ) {
+			return null;
+		}
+
+		$allowed = self::oauth_insecure_transport_allowed(
+			defined( 'MCPWP_ALLOW_INSECURE_OAUTH' ) && true === constant( 'MCPWP_ALLOW_INSECURE_OAUTH' ),
+			function_exists( 'wp_get_environment_type' ) ? (string) wp_get_environment_type() : 'production',
+			function_exists( 'get_option' ) ? (string) get_option( 'home', '' ) : '',
+			$request_host
+		);
+
+		return $allowed ? null : self::oauth_https_required_error();
+	}
+
+	/**
+	 * Whether a request arrived over TLS, the way WordPress decides it.
+	 *
+	 * is_ssl() is core's answer ($_SERVER['HTTPS'] or port 443). A site behind
+	 * a TLS-terminating proxy normally makes that true in wp-config.php (the
+	 * snippet core's documentation gives). As a second route, and only behind
+	 * the explicit MCPWP_TRUST_PROXY_HEADERS opt-in the rest of the plugin
+	 * uses for proxy headers, the first X-Forwarded-Proto hop may say
+	 * "https". Without that opt-in the header is anyone's to send, so it is
+	 * ignored. Pure: split from oauth_transport_refusal() so every branch is
+	 * testable without define()-ing constants.
+	 *
+	 * @param bool   $is_ssl          Result of is_ssl().
+	 * @param bool   $trust_proxy     Whether MCPWP_TRUST_PROXY_HEADERS is on.
+	 * @param string $forwarded_proto Raw X-Forwarded-Proto value, or ''.
+	 * @return bool
+	 */
+	public static function oauth_request_is_secure( $is_ssl, $trust_proxy, $forwarded_proto ) {
+		if ( $is_ssl ) {
+			return true;
+		}
+		if ( ! $trust_proxy || '' === (string) $forwarded_proto ) {
+			return false;
+		}
+		$hops = explode( ',', (string) $forwarded_proto );
+		return 'https' === strtolower( trim( $hops[0] ) );
+	}
+
+	/**
+	 * Whether an OAuth token may be accepted over plain HTTP anyway.
+	 *
+	 * Only for local development, in three documented ways:
+	 *  - the MCPWP_ALLOW_INSECURE_OAUTH constant is defined as true;
+	 *  - wp_get_environment_type() is 'local' (not 'development' or
+	 *    'staging': those are often reachable from the internet);
+	 *  - the site's configured address (the `home` option) AND the request's
+	 *    Host are both loopback (localhost, *.localhost, 127.0.0.1, ::1).
+	 *    The configured address alone decides nothing an outside caller can
+	 *    change, and the Host check keeps a localhost-configured site that is
+	 *    reachable over a LAN or a published port from accepting tokens sent
+	 *    to it by another name. REMOTE_ADDR is deliberately not used: behind a
+	 *    proxy on the same machine every request comes from 127.0.0.1.
+	 * Pure: see oauth_request_is_secure().
+	 *
+	 * @param bool   $allow_constant Whether MCPWP_ALLOW_INSECURE_OAUTH is true.
+	 * @param string $environment    wp_get_environment_type().
+	 * @param string $home_url       The `home` option.
+	 * @param string $request_host   The request's Host header, or ''.
+	 * @return bool
+	 */
+	public static function oauth_insecure_transport_allowed( $allow_constant, $environment, $home_url, $request_host ) {
+		if ( $allow_constant ) {
+			return true;
+		}
+		if ( 'local' === (string) $environment ) {
+			return true;
+		}
+		$home_host = '' !== (string) $home_url ? (string) wp_parse_url( (string) $home_url, PHP_URL_HOST ) : '';
+		return self::is_loopback_host( $home_host ) && self::is_loopback_host( $request_host );
+	}
+
+	/**
+	 * Whether a host (optionally with a port, IPv6 optionally bracketed) names
+	 * the local machine: localhost, a *.localhost name (RFC 6761 §6.3),
+	 * 127.0.0.1 or ::1. Anything else, including '', is not loopback.
+	 *
+	 * @param string $host Host, as in a URL or a Host header.
+	 * @return bool
+	 */
+	public static function is_loopback_host( $host ) {
+		$host = strtolower( trim( (string) $host ) );
+		if ( '' === $host ) {
+			return false;
+		}
+		if ( '[' === $host[0] ) {
+			$end  = strpos( $host, ']' );
+			$host = false === $end ? '' : substr( $host, 1, $end - 1 );
+		} elseif ( 1 === substr_count( $host, ':' ) ) {
+			// host:port. A bare IPv6 literal has two or more colons.
+			$host = substr( $host, 0, strpos( $host, ':' ) );
+		}
+		$host = rtrim( $host, '.' );
+		if ( in_array( $host, array( 'localhost', '127.0.0.1', '::1' ), true ) ) {
+			return true;
+		}
+		return strlen( $host ) > strlen( '.localhost' ) && '.localhost' === substr( $host, -strlen( '.localhost' ) );
+	}
+
+	/**
+	 * The one answer for an OAuth access token sent over plain HTTP.
+	 *
+	 * 403, not 401: a 401 here would carry the WWW-Authenticate challenge,
+	 * and a client would re-run sign-in and send the fresh token over the
+	 * same plain-HTTP URL. Identical for every token and every entry path;
+	 * it never carries the token.
+	 *
+	 * @return WP_Error
+	 */
+	public static function oauth_https_required_error() {
+		return new WP_Error(
+			'https_required',
+			__( 'OAuth access tokens are accepted only over HTTPS. This request arrived over plain HTTP and was refused.', 'mcpwp' ),
+			array(
+				'status' => 403,
+				'hint'   => self::oauth_https_required_hint(),
+			)
+		);
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function oauth_https_required_hint() {
+		return 'Use the site\'s https:// MCP URL. The token travelled unencrypted, so reconnect over https to replace it. Site owner: serve the site over HTTPS; behind a TLS-terminating proxy, make WordPress see HTTPS (is_ssl()) or define MCPWP_TRUST_PROXY_HEADERS. For local development only, define MCPWP_ALLOW_INSECURE_OAUTH as true. API keys are not affected.';
 	}
 
 	/**

@@ -235,6 +235,23 @@ do_consent() { # jar client_id scope state tick
 }
 qparam() { python3 -I -c 'import sys,urllib.parse as u; q=u.parse_qs(u.urlparse(sys.argv[1]).query); print(q.get(sys.argv[2],[""])[0])' "$1" "$2"; }
 
+# The documented MCPWP_ALLOW_INSECURE_OAUTH escape hatch, as a throwaway mu-plugin.
+INSECURE_MU=/var/www/html/wp-content/mu-plugins/e2e-allow-insecure-oauth.php
+allow_insecure() { # on|off
+	if [[ $1 == on ]]; then
+		docker exec "$WP" mkdir -p /var/www/html/wp-content/mu-plugins
+		printf '%s\n' '<?php' "define( 'MCPWP_ALLOW_INSECURE_OAUTH', true );" | docker exec -i "$WP" sh -c "cat >$INSECURE_MU"
+		docker exec "$WP" chown -R www-data:www-data /var/www/html/wp-content/mu-plugins
+	else
+		docker exec "$WP" rm -f "$INSECURE_MU"
+	fi
+}
+# tools/list over http with a non-loopback Host; prints the status, body in $SCRATCH/f2.body.
+lan_call() { # token
+	curl -s -D "$HDR" -o "$SCRATCH/f2.body" -w '%{http_code}' -X POST "$MCP" -H 'Host: e2e-oauth.example' \
+		-H "Authorization: Bearer $1" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+}
+
 token_post() { curl -s -w '\n%{http_code}' -X POST "$TOKEN_EP" "$@"; }
 split_resp() { RESP_BODY=$(sed '$d' <<<"$1"); RESP_CODE=$(tail -n1 <<<"$1"); }
 
@@ -346,6 +363,23 @@ check "(f) ... with insufficient_scope naming admin" "$(jq -r '.code + ":" + .da
 R=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$MCP" -H 'Authorization: Bearer notatoken' -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')
 check "(f) a garbage bearer is 401" "$R" 401
 
+# ================================================================ (f2)
+echo "== (f2) transport: a bearer over plain HTTP"
+# This whole run is plain http://localhost, which the plugin allows for local
+# development (site address and Host both loopback). Name the site by anything
+# else and the same token is refused before it is looked up.
+check "(f2) non-loopback Host over http -> 403" "$(lan_call "$ACCESS")" 403
+check "(f2) ... code https_required" "$(jq -r .code "$SCRATCH/f2.body")" https_required
+if grep -qF "$ACCESS" "$SCRATCH/f2.body" "$HDR"; then bad "(f2) the refusal echoes the token"; else ok "(f2) the refusal does not echo the token"; fi
+if grep -qi '^www-authenticate:' "$HDR"; then bad "(f2) the refusal carries a reconnect challenge"; else ok "(f2) the refusal carries no reconnect challenge"; fi
+lan_call "$ACCESS" >/dev/null; LIVE_BODY=$(jq -c . "$SCRATCH/f2.body")
+lan_call "mcpwp_at_$(rand 20)" >/dev/null; FAKE_BODY=$(jq -c . "$SCRATCH/f2.body")
+check "(f2) a never-issued token gets the identical answer" "$FAKE_BODY" "$LIVE_BODY"
+allow_insecure on
+check "(f2) MCPWP_ALLOW_INSECURE_OAUTH lets the same call through (200)" "$(lan_call "$ACCESS")" 200
+allow_insecure off
+check "(f2) removing the constant refuses it again" "$(lan_call "$ACCESS")" 403
+
 # ================================================================ (g)
 echo "== (g) scope limits"
 # g1: an administrator asking for scope=admin is clamped, never granted admin.
@@ -456,6 +490,9 @@ echo "== $pass passed, $fail failed"
 if [[ $KEEP -eq 1 ]]; then
 	if [[ -n $SITE_URL_OVERRIDE ]]; then
 		wpcli option update home "$SITE_URL_OVERRIDE" >/dev/null && wpcli option update siteurl "$SITE_URL_OVERRIDE" >/dev/null
+		# The tunnel terminates TLS and reaches this container over plain HTTP, which the
+		# plugin refuses for OAuth bearers; this throwaway stack takes the documented escape hatch.
+		allow_insecure on
 		SHOWN=$SITE_URL_OVERRIDE
 	else
 		SHOWN=$SITE
