@@ -7,11 +7,14 @@
  * the freshly-created mcpwp_* tables.  The routine is:
  *
  *   - Idempotent: guarded by the `mcpwp_migrated_from_spai` flag option.
- *   - Non-destructive: leaves all spai_* originals intact. (The two
- *     credential options are the exception, handled AFTER this run by
- *     Mcpwp_Activator::adopt_spai_credentials(), #1098: every live spai key
- *     is moved into the revocable store, then spai_api_keys / spai_api_key
- *     are deleted.)
+ *   - Non-destructive: leaves all spai_* originals intact — with ONE
+ *     deliberate exception (#1098). The two credential options are handled
+ *     AFTER this run by Mcpwp_Activator::adopt_spai_credentials(): every live
+ *     spai key is moved into the revocable scoped store, then spai_api_keys /
+ *     spai_api_key are DELETED. Release note: downgrading to 2.8.x afterwards
+ *     finds no credential option, so 2.8 mints a new key and agents holding
+ *     the old one must be re-keyed (the old key keeps working in this plugin
+ *     as an ordinary, listed, revocable key).
  *   - Non-overwriting: skips any mcpwp_* option that already has a value.
  *   - Safe on fresh installs: no spai_* options present → nothing happens.
  *

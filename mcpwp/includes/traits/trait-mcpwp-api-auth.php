@@ -5031,7 +5031,7 @@ trait Mcpwp_Api_Auth {
 
 	/**
 	 * Match a presented key against a SCOPED-STORE (or 2.8 store) record's
-	 * hash: hash-shaped values only, never the plaintext fallback of
+	 * hash: a hash of any algorithm WordPress can verify, never the plaintext fallback of
 	 * is_api_key_match(). That fallback exists for the single-key options a
 	 * pre-1.0.14 site stored in plaintext; on a store record it let any
 	 * non-hash string authenticate as itself (#1098).
@@ -5041,13 +5041,15 @@ trait Mcpwp_Api_Auth {
 	 * @return bool
 	 */
 	protected function is_api_key_hash_match( $api_key, $hash ) {
-		if ( ! class_exists( 'Mcpwp_Key_State' ) ) {
-			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
-		}
-		if ( empty( $api_key ) || ! Mcpwp_Key_State::is_password_hash_shaped( $hash ) ) {
+		if ( empty( $api_key ) || ! is_string( $hash ) || '' === $hash ) {
 			return false;
 		}
-		return (bool) wp_check_password( $api_key, $hash );
+		if ( $this->looks_like_password_hash( $hash ) ) {
+			return (bool) wp_check_password( $api_key, $hash ); // Any algorithm WordPress hashed it with.
+		}
+		// Not a hash: only core's own legacy MD5 branch (<= 32 chars) may match,
+		// never the plaintext string itself.
+		return strlen( $hash ) <= 32 && hash_equals( $hash, md5( (string) $api_key ) );
 	}
 
 	/**
@@ -5351,6 +5353,13 @@ trait Mcpwp_Api_Auth {
 		if ( $this->scoped_api_key_store_is_unreadable() ) {
 			return null; // Fail closed: see scoped_api_key_store_is_unreadable().
 		}
+		// #1098: once adoption has finished every live 2.8 credential is in the
+		// scoped store, so anything still readable in the spai options is NOT
+		// one of them — e.g. the key a reactivated 2.8 plugin mints. Refused:
+		// an unlisted, unrevocable admin key is the #1098 problem again.
+		if ( get_option( 'mcpwp_spai_credentials_adopted' ) ) {
+			return null;
+		}
 		// #1097: the 2.8 migration copies spai_api_keys / spai_api_key into the
 		// mcpwp stores VERBATIM (same hash) and never deletes the originals. So
 		// a key revoked in the mcpwp store is still live in its spai copy — and
@@ -5387,7 +5396,8 @@ trait Mcpwp_Api_Auth {
 
 		// 2. Fall back to the single-key spai_api_key option.
 		$spai_single = get_option( 'spai_api_key' );
-		if ( ! empty( $spai_single ) && ! $this->spai_single_key_is_revoked( (string) $spai_single, $api_key, is_array( $spai_keys ) ? $spai_keys : array() ) && $this->is_api_key_match( $api_key, $spai_single ) ) {
+		// The match first: the revoked-hash scan (a verify per hash) runs only for a key that is right (#1178).
+		if ( ! empty( $spai_single ) && $this->is_api_key_match( $api_key, $spai_single ) && ! $this->spai_single_key_is_revoked( (string) $spai_single, $api_key, is_array( $spai_keys ) ? $spai_keys : array() ) ) {
 			// Synthesise a minimal key record consistent with normalize_api_key_record().
 			return $this->normalize_api_key_record(
 				array(
@@ -6899,8 +6909,22 @@ trait Mcpwp_Api_Auth {
 
 		// #1096 P2-4: appended through the key-store write path, to the store
 		// as it is NOW — not a snapshot a migration or revoke could have outrun.
+		// A rotation also ends the 2.8 spai credentials (#1098). Their revoked
+		// placeholders go in THIS write, so no failure after it can leave a spai
+		// key that the next adoption would take as live.
+		$spai_ending = null;
+		if ( $revoke_existing ) {
+			if ( ! class_exists( 'Mcpwp_Activator' ) ) {
+				require_once dirname( __DIR__ ) . '/class-mcpwp-activator.php';
+			}
+			$spai_ending = Mcpwp_Activator::spai_credential_mutator( get_option( 'spai_api_keys', false ), get_option( 'spai_api_key', false ), true );
+		}
 		$stored = $this->mutate_scoped_api_keys(
-			static function ( array $keys ) use ( $record, $revoke_existing ) {
+			static function ( array $keys ) use ( $record, $revoke_existing, $spai_ending ) {
+				if ( null !== $spai_ending ) {
+					list( $with_placeholders ) = $spai_ending( $keys );
+					$keys                      = is_array( $with_placeholders ) ? $with_placeholders : $keys;
+				}
 				if ( $revoke_existing ) {
 					foreach ( $keys as &$existing ) {
 						if ( is_array( $existing ) && empty( $existing['revoked_at'] ) ) {
@@ -7976,8 +8000,10 @@ trait Mcpwp_Api_Auth {
 	 * @return bool True when value looks hashed.
 	 */
 	protected function looks_like_password_hash( $value ) {
-		$value = (string) $value;
-		return '' !== $value && '$' === substr( $value, 0, 1 );
+		if ( ! class_exists( 'Mcpwp_Key_State' ) ) {
+			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
+		}
+		return Mcpwp_Key_State::is_password_hash_shaped( (string) $value ); // The one predicate (#1178).
 	}
 
 	/**
@@ -8088,6 +8114,8 @@ trait Mcpwp_Api_Auth {
 		if ( ! class_exists( 'Mcpwp_Activator' ) ) {
 			require_once dirname( __DIR__ ) . '/class-mcpwp-activator.php';
 		}
+		// The placeholders are already in the rotation's write; this deletes the
+		// options (and sweeps an adoption that slipped in between).
 		Mcpwp_Activator::end_spai_credentials();
 
 		return $created['key'];

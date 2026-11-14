@@ -128,6 +128,12 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		return $made;
 	}
 
+	/** A later page load: the failed-attempt back-off has expired. */
+	private function later_load(): bool {
+		delete_transient( Mcpwp_Activator::SPAI_ADOPTION_BACKOFF );
+		return Mcpwp_Activator::adopt_spai_credentials();
+	}
+
 	private function gone( string $option ): bool {
 		return '__gone__' === get_option( $option, '__gone__' );
 	}
@@ -380,7 +386,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->assertFalse( get_option( Mcpwp_Activator::SPAI_ADOPTION_FLAG ) );
 
 		unset( $GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Key_Store::LOCK ] );
-		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$this->assertTrue( $this->later_load() );
 		$this->assertCount( 1, $this->records_with_hash( $hash ) );
 	}
 
@@ -427,7 +433,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->assertTrue( $auth->revoke_scoped_api_key( $id ) );
 
 		$GLOBALS['mcpwp_test_delete_option_fail'] = array();
-		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$this->assertTrue( $this->later_load() );
 
 		$this->assertFalse( $this->works( $key ), 'A revoked adopted key stays revoked.' );
 		$this->assertCount( 1, $this->records_with_hash( $hash ) );
@@ -488,7 +494,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->assertFalse( get_option( Mcpwp_Activator::SPAI_ADOPTION_FLAG ) );
 
 		$GLOBALS['mcpwp_test_delete_option_fail'] = array();
-		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials(), 'A later load completes.' );
+		$this->assertTrue( $this->later_load(), 'A later load completes.' );
 		$this->assertFalse( $this->works( $key ) );
 		$this->assertCount( 1, $this->records_with_hash( $hash ) );
 	}
@@ -655,7 +661,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->assertFalse( $this->works( $single ), 'The revoked placeholder keeps it refused.' );
 		$this->assertTrue( $this->works( $new ) );
 		$GLOBALS['mcpwp_test_delete_option_fail'] = array();
-		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials(), 'And a later adoption does not revive it.' );
+		$this->assertTrue( $this->later_load(), 'And a later adoption does not revive it.' );
 		$this->assertFalse( $this->works( $single ) );
 	}
 

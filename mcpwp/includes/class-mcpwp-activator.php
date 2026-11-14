@@ -1154,6 +1154,10 @@ class Mcpwp_Activator {
 	/** Set once every 2.8 spai credential is in the scoped store or dead (#1098). Autoloaded: read on every request. */
 	const SPAI_ADOPTION_FLAG = 'mcpwp_spai_credentials_adopted';
 
+	/** Marker (short-lived transient) that an attempt failed; the next one waits. */
+	const SPAI_ADOPTION_BACKOFF     = 'mcpwp_spai_adoption_backoff';
+	const SPAI_ADOPTION_BACKOFF_TTL = 60;
+
 	/** Label of an adopted record; the Setup page explains what it can do. */
 	const SPAI_ADOPTED_LABEL = 'Migrated 2.8 key';
 
@@ -1215,6 +1219,12 @@ class Mcpwp_Activator {
 		$has_options = false !== $spai_keys || false !== $spai_single;
 
 		if ( $has_options ) {
+			// A refused or half-finished attempt is not repeated on every load:
+			// it would hash a plaintext key and verify against every stored hash
+			// each time (#1178 review).
+			if ( false !== get_transient( self::SPAI_ADOPTION_BACKOFF ) ) {
+				return false;
+			}
 			if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
 				require_once __DIR__ . '/core/class-mcpwp-key-store.php';
 			}
@@ -1222,12 +1232,11 @@ class Mcpwp_Activator {
 				self::spai_credential_mutator( $spai_keys, $spai_single, false ),
 				false
 			);
-			if ( ! $stored['written'] ) {
+			if ( ! $stored['written'] || ! self::delete_spai_options() ) {
+				set_transient( self::SPAI_ADOPTION_BACKOFF, 1, self::SPAI_ADOPTION_BACKOFF_TTL );
 				return false;
 			}
-			if ( ! self::delete_spai_options() ) {
-				return false;
-			}
+			delete_transient( self::SPAI_ADOPTION_BACKOFF );
 		}
 
 		update_option( self::SPAI_ADOPTION_FLAG, 1, true );
@@ -1286,7 +1295,7 @@ class Mcpwp_Activator {
 	 * @param bool  $revoke      Write every spai credential as revoked.
 	 * @return callable
 	 */
-	private static function spai_credential_mutator( $spai_keys, $spai_single, $revoke ) {
+	public static function spai_credential_mutator( $spai_keys, $spai_single, $revoke ) {
 		$spai_keys = is_array( $spai_keys ) ? $spai_keys : array();
 		$single    = ( is_string( $spai_single ) && '' !== $spai_single ) ? $spai_single : '';
 		$now       = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
@@ -1295,10 +1304,13 @@ class Mcpwp_Activator {
 		$single_is_hash = '' !== $single && Mcpwp_Key_State::is_password_hash_shaped( $single );
 		$single_hash    = '' === $single ? '' : ( $single_is_hash ? $single : wp_hash_password( $single ) );
 
-		$legacy      = (string) get_option( 'mcpwp_api_key', '' );
-		$legacy_hash = '' === $legacy ? '' : ( self::looks_like_password_hash( $legacy ) ? $legacy : wp_hash_password( $legacy ) );
+		$legacy       = (string) get_option( 'mcpwp_api_key', '' );
+		$legacy_hash  = '' === $legacy ? '' : ( self::looks_like_password_hash( $legacy ) ? $legacy : wp_hash_password( $legacy ) );
+		// A plaintext legacy key gets a fresh salted hash that no stored hash
+		// equals, so it is also compared by verification.
+		$legacy_plain = ( '' !== $legacy && ! self::looks_like_password_hash( $legacy ) ) ? $legacy : '';
 
-		return static function ( array $keys ) use ( $spai_keys, $single, $single_is_hash, $single_hash, $legacy_hash, $now, $revoke ) {
+		return static function ( array $keys ) use ( $spai_keys, $single, $single_is_hash, $single_hash, $legacy_hash, $legacy_plain, $now, $revoke ) {
 			$present = array();
 			foreach ( $keys as $record ) {
 				if ( is_array( $record ) && isset( $record['hash'] ) && '' !== (string) $record['hash'] ) {
@@ -1307,6 +1319,10 @@ class Mcpwp_Activator {
 			}
 			// The legacy single key is honoured only while the store is empty.
 			$legacy_in_play = ! $revoke && empty( $keys ) && '' !== $legacy_hash;
+			// Whether a stored hash is the legacy key's credential.
+			$is_legacy = static function ( $hash ) use ( $legacy_hash, $legacy_plain ) {
+				return (string) $hash === $legacy_hash || ( '' !== $legacy_plain && wp_check_password( $legacy_plain, (string) $hash ) );
+			};
 
 			$changed = false;
 			if ( $revoke ) {
@@ -1346,7 +1362,16 @@ class Mcpwp_Activator {
 				$present[ $hash ] = true;
 			}
 
-			$legacy_dead = $legacy_in_play && isset( $present[ $legacy_hash ] ); // Revoked in spai.
+			// Revoked in spai: a placeholder is this credential.
+			$legacy_dead = false;
+			if ( $legacy_in_play ) {
+				foreach ( array_keys( $present ) as $hash ) {
+					if ( $is_legacy( $hash ) ) {
+						$legacy_dead = true;
+						break;
+					}
+				}
+			}
 
 			// 2. Live spai_api_keys records, as the bridge granted them.
 			if ( ! $revoke ) {
@@ -1362,7 +1387,7 @@ class Mcpwp_Activator {
 					if ( '' === $hash || '' === $id || isset( $present[ $hash ] ) || ! Mcpwp_Key_State::is_password_hash_shaped( $hash ) ) {
 						continue;
 					}
-					if ( $legacy_in_play && $hash === $legacy_hash ) {
+					if ( $legacy_in_play && $is_legacy( $hash ) ) {
 						continue; // The legacy record below carries this credential.
 					}
 					$record = array(
@@ -1389,7 +1414,7 @@ class Mcpwp_Activator {
 			// no string compare can match to a stored hash: it is checked
 			// against every hash, and refused when it matches one.
 			if ( '' !== $single_hash ) {
-				$dup = isset( $present[ $single_hash ] ) || ( $legacy_in_play && $single_hash === $legacy_hash );
+				$dup = isset( $present[ $single_hash ] ) || ( $legacy_in_play && $is_legacy( $single_hash ) );
 				if ( ! $dup && ! $single_is_hash ) {
 					$known = array_merge( array_keys( $present ), $legacy_in_play ? array( $legacy_hash ) : array() );
 					foreach ( $known as $hash ) {
@@ -2508,8 +2533,8 @@ class Mcpwp_Activator {
 	 * @return bool True when value looks hashed.
 	 */
 	private static function looks_like_password_hash( $value ) {
-		$value = (string) $value;
-		return '' !== $value && '$' === substr( $value, 0, 1 );
+		require_once __DIR__ . '/core/class-mcpwp-key-state.php';
+		return Mcpwp_Key_State::is_password_hash_shaped( (string) $value ); // The one predicate (#1178).
 	}
 
 	/**
