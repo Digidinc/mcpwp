@@ -544,7 +544,12 @@ $last_activity_time = ! empty( $recent_activity[0]['created_at'] ) ? $recent_act
 						}
 					?>
 					<tr<?php echo ! empty( $key['revoked_at'] ) ? ' style="opacity:0.5;"' : ''; ?>>
-						<td><strong><?php echo esc_html( $key['label'] ); ?></strong></td>
+						<td>
+							<strong><?php echo esc_html( $key['label'] ); ?></strong>
+							<?php if ( 'spai' === ( $key['migrated_from'] ?? '' ) && 'admin' === $key_role && empty( $key['revoked_at'] ) ) : // #1098: adopted 2.8 admin key. ?>
+							<p class="description mcpwp-migrated-key-note"><?php esc_html_e( 'Migrated from an older version — has full admin access. Create a new key with only what it needs, then revoke this one.', 'mcpwp' ); ?></p>
+							<?php endif; ?>
+						</td>
 						<td>
 							<span style="display:inline-block;background:<?php echo esc_attr( $badge_bg ); ?>;color:#fff;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:600;">
 								<?php echo esc_html( $role_def['label'] ); ?>

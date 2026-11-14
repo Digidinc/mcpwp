@@ -330,7 +330,7 @@ trait Mcpwp_Admin_Setup_Trait {
 		$profile         = $this->get_site_profile();
 		$inventory       = $this->get_library_inventory();
 		$has_site_profile = ! empty( array_filter( $profile ) );
-		$has_api_key     = ! empty( get_option( 'mcpwp_api_key', '' ) );
+		$has_api_key     = Mcpwp_Key_State::site_has_api_key(); // Not the legacy option alone (#1098 P2).
 		$has_references  = ! empty( $inventory['design_references'] );
 		$has_archetypes  = ! empty( $inventory['page_archetypes'] ) || ! empty( $inventory['product_archetypes'] );
 		$has_parts       = ! empty( $inventory['parts'] );

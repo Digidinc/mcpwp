@@ -101,6 +101,17 @@ class Mcpwp_Key_State {
 	}
 
 	/**
+	 * Whether a stored value is a real password hash: phpass ($P$ / $H$),
+	 * bcrypt ($2a$ / $2b$ / $2y$) or WordPress 6.8+'s prefixed $wp$ form.
+	 *
+	 * @param mixed $value Stored value.
+	 * @return bool
+	 */
+	public static function is_password_hash_shaped( $value ) {
+		return is_string( $value ) && 1 === preg_match( '/^\$(?:P\$|H\$|2[aby]\$|wp\$)/', $value );
+	}
+
+	/**
 	 * Raw scoped records.
 	 *
 	 * @return array

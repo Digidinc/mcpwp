@@ -899,6 +899,7 @@ Config stored per-provider in `mcpwp_integrations` wp_option (encrypted). Manage
 | `mcpwp_approvals_identity_migrated` | One-time flag: on upgrade, purge identity-less pending/approved approvals so a reconnected OAuth principal can't self-approve a pre-fix request |
 | `mcpwp_approvals_table_migrated` | One-time flag (#1042): the approvals queue was copied from the old `mcpwp_approval_requests` option into the `{prefix}mcpwp_approvals` table. Holds the Unix time of that first migration (older sites hold `1`; the backup shrink treats that as "now" on its first pass). Readers must only test truthiness |
 | `mcpwp_approval_requests_pre_3149` | The old approvals option, renamed by that migration (autoload off) as a recovery copy. After `mcpwp_approvals_table_migrated`'s age (90 days) and a per-id check against the table, the hourly cron's `Mcpwp_Activator::cleanup_approvals_backup()` (#1053) shrinks it to an `id => true` tombstone map (kept so a late import cannot resurrect a decided id); it never deletes a non-empty map. Why it was left alone: the `mcpwp_approvals_backup_cleanup_status` transient |
+| `mcpwp_spai_credentials_adopted` | One-time flag, autoloaded (#1098): every 2.8 `spai_api_key` / `spai_api_keys` credential was written into the scoped store through `Mcpwp_Key_Store::mutate()` (revoked ones as revoked placeholders) and both spai options deleted. Unset while the store is unreadable or a write/delete was refused; retried on the next load |
 
 ## WP Hooks
 

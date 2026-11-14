@@ -261,6 +261,7 @@ class Mcpwp_Uninstaller {
 		// The key store's last-used bookkeeping and write lock (#1096).
 		'mcpwp_api_keys_last_used',
 		'mcpwp_api_keys_lock',
+		'mcpwp_spai_credentials_adopted', // #1098: exact name, no wildcard (#1159).
 		'mcpwp_settings',
 		'mcpwp_version',
 		'mcpwp_db_version',
