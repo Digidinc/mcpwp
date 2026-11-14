@@ -68,7 +68,10 @@ final class GraphReadSurfaceTest extends TestCase
 
     protected function setUp(): void
     {
-        foreach (array('_mcpwp_test_posts', 'mcpwp_test_options', 'mcpwp_test_public_post_types', 'mcpwp_test_graph_nodes', 'mcpwp_test_graph_edges', 'mcpwp_test_graph_queue') as $g) {
+        // _mcpwp_test_taxonomies: the term visibility clause lists every
+        // registered viewable taxonomy, so this test owns the registry rather
+        // than inheriting whatever an earlier test registered (#1189).
+        foreach (array('_mcpwp_test_posts', 'mcpwp_test_options', 'mcpwp_test_public_post_types', 'mcpwp_test_graph_nodes', 'mcpwp_test_graph_edges', 'mcpwp_test_graph_queue', '_mcpwp_test_taxonomies', '_mcpwp_test_existing_terms') as $g) {
             $this->saved[ $g ] = $GLOBALS[ $g ] ?? array();
             $GLOBALS[ $g ]     = array();
         }

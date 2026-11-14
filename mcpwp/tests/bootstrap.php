@@ -1053,6 +1053,12 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
             $GLOBALS['mcpwp_test_wpdb_options'] = array();
             $GLOBALS['_mcpwp_test_posts']       = array();
             $GLOBALS['_mcpwp_test_meta']        = array();
+            // The taxonomy registry and known terms (#1189): a product_cat one
+            // test registered in setUp() and never removed became a viewable
+            // taxonomy in a later graph-reader SQL assertion, by run order.
+            // Every test that needs taxonomies registers them in setUp().
+            $GLOBALS['_mcpwp_test_taxonomies']     = array();
+            $GLOBALS['_mcpwp_test_existing_terms'] = array();
             // did_action() counts: a test marking 'elementor/loaded' made
             // Elementor "active" for later tests. 'init' is re-seeded before
             // every test by Mcpwp_Test_Approvals_Table_Reset.

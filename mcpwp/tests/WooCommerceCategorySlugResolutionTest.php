@@ -34,6 +34,12 @@ final class WooCommerceCategorySlugResolutionTest extends TestCase {
 		);
 	}
 
+	protected function tearDown(): void {
+		// #1189: a product_cat left registered here became a viewable taxonomy
+		// in every later test (the graph reader's term visibility clause).
+		$GLOBALS['_mcpwp_test_taxonomies'] = array();
+	}
+
 	private function resolve( $category ) {
 		$method = new ReflectionMethod( Mcpwp_WooCommerce::class, 'resolve_category_slug' );
 		$method->setAccessible( true );
