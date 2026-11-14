@@ -5,6 +5,13 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.15](https://github.com/Digidinc/mcpwp/compare/v3.14.14...v3.14.15) (2026-11-14)
+
+
+### Bug Fixes
+
+* **freemius:** ship the plugin icon the freemius bootstrap points at ([#1188](https://github.com/Digidinc/mcpwp/issues/1188)) ([2911d8c](https://github.com/Digidinc/mcpwp/commit/2911d8c15c136546198cb8faf6ac9c2329bd4649))
+
 ## [3.14.14](https://github.com/Digidinc/mcpwp/compare/v3.14.13...v3.14.14) (2026-11-14)
 
 
