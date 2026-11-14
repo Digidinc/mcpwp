@@ -501,6 +501,24 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		}
 	}
 
+	// #1098: adopt every uncopied 2.8 spai credential into the revocable scoped
+	// store, then delete the spai originals. After Migrate::run(), so the
+	// verbatim copies it made are already in the store (and skipped). One-time:
+	// the flag is autoloaded, so a finished site pays no query. An unreadable
+	// store or a refused write leaves the flag unset and changes nothing; the
+	// next load tries again (a cached read when the store stays unreadable).
+	if ( ! get_option( 'mcpwp_spai_credentials_adopted' ) ) {
+		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
+		try {
+			Mcpwp_Activator::adopt_spai_credentials();
+		} catch ( \Throwable $e ) {
+			if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				error_log( 'MCPWP spai credential adoption error: ' . get_class( $e ) );
+			}
+		}
+	}
+
 	// Encryption key migration: re-encrypt provider blobs from AUTH_SALT-derived
 	// key → dedicated MCPWP key (non-destructive, idempotent, runs once).
 	// Registered here (class already required above); fires on plugins_loaded prio 20.
@@ -901,6 +919,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 			Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 			try {
 				Mcpwp_Migrate::run();
+				Mcpwp_Activator::adopt_spai_credentials(); // #1098.
 			} catch ( \Throwable $e ) {
 				if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
@@ -920,6 +939,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 		Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 		try {
 			Mcpwp_Migrate::run();
+			Mcpwp_Activator::adopt_spai_credentials(); // #1098.
 		} catch ( \Throwable $e ) {
 			if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log

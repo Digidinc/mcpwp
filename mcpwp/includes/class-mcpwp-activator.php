@@ -1151,6 +1151,320 @@ class Mcpwp_Activator {
 	const DENY_ALL_CATEGORIES_LOCK_OPTION = 'mcpwp_deny_all_categories_migration_lock';
 	const DENY_ALL_CATEGORIES_LOCK_TTL    = 15;
 
+	/** Set once every 2.8 spai credential is in the scoped store or dead (#1098). Autoloaded: read on every request. */
+	const SPAI_ADOPTION_FLAG = 'mcpwp_spai_credentials_adopted';
+
+	/** Marker (short-lived transient) that an attempt failed; the next one waits. */
+	const SPAI_ADOPTION_BACKOFF     = 'mcpwp_spai_adoption_backoff';
+	const SPAI_ADOPTION_BACKOFF_TTL = 60;
+
+	/** Label of an adopted record; the Setup page explains what it can do. */
+	const SPAI_ADOPTED_LABEL = 'Migrated 2.8 key';
+
+	/** The id the bridge gives the single spai_api_key; kept, because approvals compare key ids. */
+	const SPAI_SINGLE_KEY_ID = 'spai_legacy_single';
+
+	/**
+	 * One-time adoption of the 2.8 spai credentials into the revocable store
+	 * (#1098), then deletion of the originals.
+	 *
+	 * On the normal upgrade path activate() mints mcpwp_api_key before
+	 * Mcpwp_Migrate::run(), so a single spai_api_key is never copied (the copy
+	 * skips a target that already has a value). That key then authenticated as
+	 * admin through find_legacy_spai_key() for good, and no screen could revoke
+	 * it. Here every live spai credential becomes an ordinary scoped record
+	 * that Active Keys lists and Revoke kills, and the spai options are
+	 * deleted so the bridge has nothing left to honour.
+	 *
+	 * One Mcpwp_Key_Store::mutate() call (#1166): the store lock, a database
+	 * read, a compare-and-swap. The mutator is a pure function of the keys it
+	 * is handed, so a revoke that lands first is simply read and kept:
+	 *  - a hash already in the store, active OR revoked, is never added again;
+	 *  - a REVOKED spai record is written as a revoked placeholder, so the
+	 *    revocation outlives the deletion of the spai options;
+	 *  - an adopted record keeps exactly what the bridge granted it (scopes,
+	 *    role, tool_categories, rate_limits, allow_destructive) and its id —
+	 *    the single key keeps 'spai_legacy_single': the approvals
+	 *    self-approval check compares key ids, so renaming an identity would
+	 *    let a key approve its own earlier request;
+	 *  - on a site whose store is empty, the legacy mcpwp_api_key is honoured
+	 *    only while the store stays empty, so it moves into the store in the
+	 *    same write.
+	 *
+	 * Fails closed: an unreadable store, or a refused write (unreadable,
+	 * unsupported_characters, unwritable, busy), changes nothing and leaves the
+	 * flag unset. Nothing is built on a store that merely READS as empty.
+	 *
+	 * The originals are deleted only after the write reports written, the
+	 * single key first (deleting spai_api_keys first would leave a revoked twin
+	 * of spai_api_key as a live admin record), and the flag is set only after
+	 * both deletes are verified. A failed delete keeps the originals; the
+	 * revoked placeholders keep the bridge refusing their hashes. Nothing here
+	 * logs or prints a key or a hash.
+	 *
+	 * @return bool True when adoption is complete (flag set).
+	 */
+	public static function adopt_spai_credentials() {
+		if ( get_option( self::SPAI_ADOPTION_FLAG ) ) {
+			return true;
+		}
+
+		require_once __DIR__ . '/core/class-mcpwp-key-state.php';
+		if ( Mcpwp_Key_State::store_is_unreadable() ) {
+			return false; // Before any lock or query; a cached read, so cheap on every load.
+		}
+
+		$spai_keys   = get_option( 'spai_api_keys', false );
+		$spai_single = get_option( 'spai_api_key', false );
+		$has_options = false !== $spai_keys || false !== $spai_single;
+
+		if ( $has_options ) {
+			// A refused or half-finished attempt is not repeated on every load:
+			// it would hash a plaintext key and verify against every stored hash
+			// each time (#1178 review).
+			if ( false !== get_transient( self::SPAI_ADOPTION_BACKOFF ) ) {
+				return false;
+			}
+			if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
+				require_once __DIR__ . '/core/class-mcpwp-key-store.php';
+			}
+			$stored = Mcpwp_Key_Store::mutate(
+				self::spai_credential_mutator( $spai_keys, $spai_single, false ),
+				false
+			);
+			if ( ! $stored['written'] || ! self::delete_spai_options() ) {
+				set_transient( self::SPAI_ADOPTION_BACKOFF, 1, self::SPAI_ADOPTION_BACKOFF_TTL );
+				return false;
+			}
+			delete_transient( self::SPAI_ADOPTION_BACKOFF );
+		}
+
+		update_option( self::SPAI_ADOPTION_FLAG, 1, true );
+		return true;
+	}
+
+	/**
+	 * End every 2.8 spai credential: "regenerate revokes every key" (#1098).
+	 *
+	 * Called by regenerate_api_key() once the new key exists. The spai hashes
+	 * are first written as revoked placeholders, and any adopted record still
+	 * active is revoked (an adoption that landed between the rotation's write
+	 * and this one), so the revocation holds even when the delete below fails.
+	 *
+	 * @return bool True when both spai options are gone.
+	 */
+	public static function end_spai_credentials() {
+		$spai_keys   = get_option( 'spai_api_keys', false );
+		$spai_single = get_option( 'spai_api_key', false );
+		if ( false === $spai_keys && false === $spai_single ) {
+			return true;
+		}
+		require_once __DIR__ . '/core/class-mcpwp-key-state.php';
+		if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
+			require_once __DIR__ . '/core/class-mcpwp-key-store.php';
+		}
+		Mcpwp_Key_Store::mutate( self::spai_credential_mutator( $spai_keys, $spai_single, true ), true );
+		return self::delete_spai_options();
+	}
+
+	/**
+	 * Delete the spai credential options: the single key FIRST, then the store.
+	 *
+	 * @return bool True only when both are verified gone.
+	 */
+	private static function delete_spai_options() {
+		$absent = '__mcpwp_row_absent__';
+		foreach ( array( 'spai_api_key', 'spai_api_keys' ) as $option ) {
+			if ( $absent !== get_option( $option, $absent ) ) {
+				delete_option( $option );
+			}
+			if ( $absent !== get_option( $option, $absent ) ) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * The Mcpwp_Key_Store::mutate() callback for adopt (or, with $revoke, end)
+	 * the spai credentials. A pure function of ($keys): it may run again after
+	 * a swap miss, and then sees whatever landed in between.
+	 *
+	 * @param mixed $spai_keys   spai_api_keys value (false when absent).
+	 * @param mixed $spai_single spai_api_key value (false when absent).
+	 * @param bool  $revoke      Write every spai credential as revoked.
+	 * @return callable
+	 */
+	public static function spai_credential_mutator( $spai_keys, $spai_single, $revoke ) {
+		$spai_keys = is_array( $spai_keys ) ? $spai_keys : array();
+		$single    = ( is_string( $spai_single ) && '' !== $spai_single ) ? $spai_single : '';
+		$now       = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
+
+		// Hashed once, outside the mutator: a salted hash differs on every call.
+		$single_is_hash = '' !== $single && Mcpwp_Key_State::is_password_hash_shaped( $single );
+		$single_hash    = '' === $single ? '' : ( $single_is_hash ? $single : wp_hash_password( $single ) );
+
+		$legacy       = (string) get_option( 'mcpwp_api_key', '' );
+		$legacy_hash  = '' === $legacy ? '' : ( self::looks_like_password_hash( $legacy ) ? $legacy : wp_hash_password( $legacy ) );
+		// A plaintext legacy key gets a fresh salted hash that no stored hash
+		// equals, so it is also compared by verification.
+		$legacy_plain = ( '' !== $legacy && ! self::looks_like_password_hash( $legacy ) ) ? $legacy : '';
+
+		return static function ( array $keys ) use ( $spai_keys, $single, $single_is_hash, $single_hash, $legacy_hash, $legacy_plain, $now, $revoke ) {
+			$present = array();
+			foreach ( $keys as $record ) {
+				if ( is_array( $record ) && isset( $record['hash'] ) && '' !== (string) $record['hash'] ) {
+					$present[ (string) $record['hash'] ] = true; // Active OR revoked: never add it again.
+				}
+			}
+			// The legacy single key is honoured only while the store is empty.
+			$legacy_in_play = ! $revoke && empty( $keys ) && '' !== $legacy_hash;
+			// Whether a stored hash is the legacy key's credential.
+			$is_legacy = static function ( $hash ) use ( $legacy_hash, $legacy_plain ) {
+				return (string) $hash === $legacy_hash || ( '' !== $legacy_plain && wp_check_password( $legacy_plain, (string) $hash ) );
+			};
+
+			$changed = false;
+			if ( $revoke ) {
+				// An adopted record still active is revoked with the rest.
+				foreach ( $keys as &$record ) {
+					if ( is_array( $record ) && 'spai' === ( $record['migrated_from'] ?? '' ) && empty( $record['revoked_at'] ) ) {
+						$record['revoked_at'] = $now;
+						$changed              = true;
+					}
+				}
+				unset( $record );
+			}
+
+			$adds = array();
+
+			// 1. Revoked placeholders — every revoked spai record (all of them
+			// when ending), whatever its hash looks like: the bridge compares
+			// hashes exactly to refuse a revoked twin.
+			foreach ( $spai_keys as $key ) {
+				if ( ! is_array( $key ) || ( ! $revoke && empty( $key['revoked_at'] ) ) ) {
+					continue;
+				}
+				$hash = isset( $key['hash'] ) ? (string) $key['hash'] : '';
+				if ( '' === $hash || isset( $present[ $hash ] ) ) {
+					continue;
+				}
+				$id     = isset( $key['id'] ) ? sanitize_key( (string) $key['id'] ) : '';
+				$adds[] = array(
+					'id'            => '' !== $id ? $id : 'spai_revoked_' . substr( md5( $hash ), 0, 12 ),
+					'label'         => self::SPAI_ADOPTED_LABEL,
+					'hash'          => $hash,
+					'created_at'    => ! empty( $key['created_at'] ) ? (string) $key['created_at'] : $now,
+					'last_used_at'  => null,
+					'revoked_at'    => ! empty( $key['revoked_at'] ) ? (string) $key['revoked_at'] : $now,
+					'migrated_from' => 'spai',
+				);
+				$present[ $hash ] = true;
+			}
+
+			// Revoked in spai: a placeholder is this credential.
+			$legacy_dead = false;
+			if ( $legacy_in_play ) {
+				foreach ( array_keys( $present ) as $hash ) {
+					if ( $is_legacy( $hash ) ) {
+						$legacy_dead = true;
+						break;
+					}
+				}
+			}
+
+			// 2. Live spai_api_keys records, as the bridge granted them.
+			if ( ! $revoke ) {
+				foreach ( $spai_keys as $key ) {
+					if ( ! is_array( $key ) || ! empty( $key['revoked_at'] ) ) {
+						continue;
+					}
+					$hash = isset( $key['hash'] ) ? (string) $key['hash'] : '';
+					$id   = isset( $key['id'] ) ? sanitize_key( (string) $key['id'] ) : '';
+					// Not a real hash, or no id: the bridge refuses it (no plaintext
+					// match for a store record, no principal without an id), so it
+					// is already dead and is not adopted.
+					if ( '' === $hash || '' === $id || isset( $present[ $hash ] ) || ! Mcpwp_Key_State::is_password_hash_shaped( $hash ) ) {
+						continue;
+					}
+					if ( $legacy_in_play && $is_legacy( $hash ) ) {
+						continue; // The legacy record below carries this credential.
+					}
+					$record = array(
+						'id'            => $id,
+						'label'         => self::SPAI_ADOPTED_LABEL,
+						'hash'          => $hash,
+						'created_at'    => ! empty( $key['created_at'] ) ? (string) $key['created_at'] : $now,
+						'last_used_at'  => ! empty( $key['last_used_at'] ) ? (string) $key['last_used_at'] : null,
+						'revoked_at'    => null,
+						'migrated_from' => 'spai',
+					);
+					// Exactly what normalize_api_key_record() reads: no more, no less.
+					foreach ( array( 'scopes', 'role', 'tool_categories', 'rate_limits', 'allow_destructive' ) as $field ) {
+						if ( array_key_exists( $field, $key ) ) {
+							$record[ $field ] = $key[ $field ];
+						}
+					}
+					$adds[]           = $record;
+					$present[ $hash ] = true;
+				}
+			}
+
+			// 3. The single spai_api_key. A pre-1.0.14 value is PLAINTEXT, which
+			// no string compare can match to a stored hash: it is checked
+			// against every hash, and refused when it matches one.
+			if ( '' !== $single_hash ) {
+				$dup = isset( $present[ $single_hash ] ) || ( $legacy_in_play && $is_legacy( $single_hash ) );
+				if ( ! $dup && ! $single_is_hash ) {
+					$known = array_merge( array_keys( $present ), $legacy_in_play ? array( $legacy_hash ) : array() );
+					foreach ( $known as $hash ) {
+						if ( wp_check_password( $single, (string) $hash ) ) {
+							$dup = true;
+							break;
+						}
+					}
+				}
+				if ( ! $dup ) {
+					$adds[] = array(
+						'id'            => self::SPAI_SINGLE_KEY_ID,
+						'label'         => self::SPAI_ADOPTED_LABEL,
+						'hash'          => $single_hash,
+						// As the bridge synthesised it: admin.
+						'scopes'        => array( 'read', 'write', 'admin' ),
+						'role'          => 'admin',
+						'created_at'    => $now,
+						'last_used_at'  => null,
+						'revoked_at'    => $revoke ? $now : null,
+						'migrated_from' => 'spai',
+					);
+					$present[ $single_hash ] = true;
+				}
+			}
+
+			// An empty store honours the legacy mcpwp_api_key; the first record
+			// switches that off, so the legacy key moves into the store with it.
+			if ( ! empty( $adds ) && $legacy_in_play && ! $legacy_dead ) {
+				array_unshift(
+					$adds,
+					array(
+						'id'           => sanitize_key( function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true ) ),
+						'label'        => 'Primary API Key',
+						'hash'         => $legacy_hash,
+						'scopes'       => array( 'read', 'write', 'admin' ),
+						'created_at'   => $now,
+						'last_used_at' => null,
+						'revoked_at'   => null,
+					)
+				);
+			}
+
+			if ( empty( $adds ) && ! $changed ) {
+				return array( null, true );
+			}
+			return array( array_merge( $keys, $adds ), true );
+		};
+	}
+
 	/**
 	 * Snippets repaired per plugins_loaded call, in addition to the time
 	 * budget below — whichever limit is hit first ends the current run. Kept
@@ -2219,8 +2533,8 @@ class Mcpwp_Activator {
 	 * @return bool True when value looks hashed.
 	 */
 	private static function looks_like_password_hash( $value ) {
-		$value = (string) $value;
-		return '' !== $value && '$' === substr( $value, 0, 1 );
+		require_once __DIR__ . '/core/class-mcpwp-key-state.php';
+		return Mcpwp_Key_State::is_password_hash_shaped( (string) $value ); // The one predicate (#1178).
 	}
 
 	/**

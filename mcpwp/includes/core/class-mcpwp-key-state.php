@@ -101,6 +101,23 @@ class Mcpwp_Key_State {
 	}
 
 	/**
+	 * Whether a stored value is a password hash, as wp_check_password() sees it.
+	 *
+	 * ONE predicate for every place that classes a credential as hash or
+	 * plaintext. A hash is anything leading with `$`: phpass ($P$), bcrypt
+	 * ($2y$), WordPress 6.8's prefixed form ($wp$2y$...) and whatever the
+	 * `wp_hash_password_algorithm` filter produces, such as a bare
+	 * `$argon2id$...`. A narrower list classed an Argon2 hash as plaintext,
+	 * re-hashed it, and refused the real key (#1178 review).
+	 *
+	 * @param mixed $value Stored value.
+	 * @return bool
+	 */
+	public static function is_password_hash_shaped( $value ) {
+		return is_string( $value ) && '' !== $value && '$' === $value[0];
+	}
+
+	/**
 	 * Raw scoped records.
 	 *
 	 * @return array
