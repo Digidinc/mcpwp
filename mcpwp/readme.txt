@@ -157,6 +157,14 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.13 =
+* feat: **admin:** add a connect-an-AI-app card on Setup and a plainer OAuth consent screen ([#1173](https://github.com/Digidinc/mcpwp/issues/1173))
+* fix: **auth:** a dead OAuth token's 401 carries the same rate-limit headers under or over budget ([#1177](https://github.com/Digidinc/mcpwp/issues/1177))
+* fix: **auth:** adopt uncopied 2.8 spai credentials into the revocable key store ([#1098](https://github.com/Digidinc/mcpwp/issues/1098)) ([#1178](https://github.com/Digidinc/mcpwp/issues/1178))
+* fix: **auth:** answer an invalid OAuth access token with one clear reconnect message ([#1174](https://github.com/Digidinc/mcpwp/issues/1174))
+* fix: **elementor:** never strip unedited widgets; store Elementor data and Kit CSS past REST kses ([#829](https://github.com/Digidinc/mcpwp/issues/829), supersedes [#1083](https://github.com/Digidinc/mcpwp/issues/1083)) ([#1179](https://github.com/Digidinc/mcpwp/issues/1179))
+* fix: **mcp-server:** raise stdio cap to 16 MiB, log transport errors, realign bun.lock ([#1124](https://github.com/Digidinc/mcpwp/issues/1124))
+
 = 3.14.12 =
 * fix: **approvals:** age-gated, fail-closed shrink of the pre_3149 backup option ([#1053](https://github.com/Digidinc/mcpwp/issues/1053)) ([#1160](https://github.com/Digidinc/mcpwp/issues/1160))
 * fix: **license:** update vendored Freemius SDK 2.13.4 -&gt; 2.13.5 ([#1169](https://github.com/Digidinc/mcpwp/issues/1169))
