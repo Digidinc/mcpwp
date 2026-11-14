@@ -6152,7 +6152,18 @@ trait Mcpwp_Api_Auth {
 			return false;
 		}
 		$method = method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST';
-		$over   = $this->check_rate_limit( 'invalid:' . $this->get_client_ip(), $method );
+		$check  = function () use ( $method ) {
+			return $this->check_rate_limit( 'invalid:' . $this->get_client_ip(), $method );
+		};
+		// The charge is real, but the dead-token 401 must not report the
+		// bucket's state (Retry-After, X-RateLimit-Remaining) in its headers:
+		// that would tell an over-budget caller from an under-budget one on an
+		// answer that is meant to be identical (#1175).
+		if ( class_exists( 'Mcpwp_Rate_Limiter' ) ) {
+			$over = Mcpwp_Rate_Limiter::get_instance()->without_reporting( $check );
+		} else {
+			$over = $check();
+		}
 		return is_wp_error( $over );
 	}
 
