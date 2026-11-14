@@ -4547,14 +4547,8 @@ trait Mcpwp_Api_Auth {
 	protected function authenticate_oauth_access_token( $token, $request, $metered = true ) {
 		$oauth_settings = $this->get_oauth_settings();
 		if ( empty( $oauth_settings['oauth_enabled'] ) ) {
-			return new WP_Error(
-				'invalid_api_key',
-				__( 'Invalid API key.', 'mcpwp' ),
-				array(
-					'status' => 401,
-					'hint'   => self::invalid_api_key_hint(),
-				)
-			);
+			$this->count_oauth_failure( $request, $metered );
+			return self::oauth_disabled_error();
 		}
 
 		// #1101 PR-3b: access tokens live in the hashed token table.  A
@@ -4584,15 +4578,22 @@ trait Mcpwp_Api_Auth {
 		}
 
 		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
-			$this->log_auth_failure( $request );
-			return new WP_Error(
-				'invalid_api_key',
-				__( 'Invalid API key.', 'mcpwp' ),
-				array(
-					'status' => 401,
-					'hint'   => self::invalid_api_key_hint(),
-				)
-			);
+			if ( ! $this->count_oauth_failure( $request, $metered ) ) {
+				$this->log_auth_failure( $request );
+			}
+			return self::oauth_reconnect_error();
+		}
+
+		// #1101: revoked by epoch (its client was revoked or deleted, its user
+		// revoked or deleted, its refresh family killed, or the whole site
+		// disconnected) at or after the moment it was issued. Checked BEFORE
+		// the audience so a revoked token answers like every other dead one,
+		// whatever else is wrong with it.
+		if ( Mcpwp_OAuth_Revocation::is_revoked( $record ) ) {
+			if ( ! $this->count_oauth_failure( $request, $metered ) ) {
+				$this->log_auth_failure( $request );
+			}
+			return self::oauth_reconnect_error();
 		}
 
 		// RFC 8707 audience binding (PR-2 D2).  Every token issued since PR-2
@@ -4610,19 +4611,10 @@ trait Mcpwp_Api_Auth {
 			return new WP_Error(
 				'invalid_token',
 				__( 'This access token was issued for a different resource.', 'mcpwp' ),
-				array( 'status' => 401 )
-			);
-		}
-
-		// #1101: revoked by epoch — its client was revoked or deleted, its
-		// user revoked or deleted, or its refresh family killed — at or after
-		// the moment it was issued.
-		if ( Mcpwp_OAuth_Revocation::is_revoked( $record ) ) {
-			$this->log_auth_failure( $request );
-			return new WP_Error(
-				'invalid_token',
-				__( 'This access token has been revoked.', 'mcpwp' ),
-				array( 'status' => 401 )
+				array(
+					'status' => 401,
+					'hint'   => 'This token was issued for a different site address. Connect to this site\'s current MCP URL, or re-add the connector.',
+				)
 			);
 		}
 
@@ -4638,7 +4630,10 @@ trait Mcpwp_Api_Auth {
 			return new WP_Error(
 				'invalid_token',
 				__( 'The WordPress user who approved this connection can no longer connect AI apps on this site.', 'mcpwp' ),
-				array( 'status' => 401 )
+				array(
+					'status' => 401,
+					'hint'   => 'Ask a site administrator to restore this user\'s role (MCPWP -> Setup -> minimum role), or connect as another user.',
+				)
 			);
 		}
 
@@ -6052,6 +6047,97 @@ trait Mcpwp_Api_Auth {
 		}
 
 		return 'read';
+	}
+
+	/**
+	 * The one answer for an OAuth access token that is not valid: expired,
+	 * unknown, never issued, malformed, revoked (app removed, user revoke,
+	 * revoked refresh family, /oauth/revoke, Disconnect all), covered by a
+	 * revocation epoch, or local OAuth switched off. Identical for every
+	 * cause, so it is no oracle for whether a string was once a real token.
+	 * It never carries the token. The WWW-Authenticate challenge
+	 * (error="invalid_token" plus resource_metadata) is added to the 401 by
+	 * Mcpwp_OAuth_Well_Known::add_www_authenticate_header().
+	 *
+	 * @return WP_Error
+	 */
+	public static function oauth_reconnect_error() {
+		return new WP_Error(
+			'invalid_token',
+			self::oauth_reconnect_message(),
+			array(
+				'status' => 401,
+				'hint'   => self::oauth_reconnect_hint(),
+			)
+		);
+	}
+
+	/**
+	 * Count a failed OAuth token against the same per-address limiter a wrong
+	 * API key uses ('invalid:<ip>'), so the two share ONE budget and the
+	 * failure load is bounded. Unlike the API-key path, going over the limit
+	 * never changes the answer: a dead token still gets the identical 401
+	 * invalid_token (a client refreshes on 401, never on 429, so a shared
+	 * address's exhausted budget must not stall every client's hourly expiry).
+	 * The caller skips only the side effects (the activity-log INSERT) when
+	 * this returns true. Valid tokens never reach this; unmetered
+	 * sub-requests were already charged by their outer request.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @param bool            $metered Whether this call is the outer request.
+	 * @return bool True when the address is over its failure budget.
+	 */
+	protected function count_oauth_failure( $request, $metered ) {
+		if ( ! $metered ) {
+			return false;
+		}
+		$method = method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST';
+		$over   = $this->check_rate_limit( 'invalid:' . $this->get_client_ip(), $method );
+		return is_wp_error( $over );
+	}
+
+	/**
+	 * A token presented while local OAuth sign-in is switched off. On a site
+	 * enrolled with the mumcp.com broker, discovery still points somewhere, so
+	 * it is the ordinary reconnect answer. Otherwise "reconnect" is not
+	 * actionable, so say so. Same answer for every token on such a site; the
+	 * switch is already public (the metadata answers 404).
+	 *
+	 * @return WP_Error
+	 */
+	public static function oauth_disabled_error() {
+		if ( class_exists( 'Mcpwp_OAuth_Well_Known' ) && Mcpwp_OAuth_Well_Known::is_broker_enrolled() ) {
+			return self::oauth_reconnect_error();
+		}
+		return new WP_Error(
+			'invalid_token',
+			self::oauth_disabled_message(),
+			array(
+				'status' => 401,
+				'hint'   => 'OAuth sign-in is switched off on this site (MCPWP -> Setup -> Advanced). Use an API key, or ask the site owner to turn it on.',
+			)
+		);
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function oauth_disabled_message() {
+		return __( 'OAuth sign-in is switched off on this site. Use an API key, or ask the site owner.', 'mcpwp' );
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function oauth_reconnect_message() {
+		return __( 'This connection has expired or was revoked. Reconnect (sign in again) to continue.', 'mcpwp' );
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function oauth_reconnect_hint() {
+		return 'The access token is expired, revoked, or not recognised. Try the refresh token, and if that is refused, reconnect: remove and re-add the connector, or sign in again.';
 	}
 
 	/**

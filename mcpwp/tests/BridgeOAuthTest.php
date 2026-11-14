@@ -157,7 +157,7 @@ final class BridgeOAuthTest extends TestCase {
 		$result = $auth->verify_api_key( $this->make_request( $token ) );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'invalid_api_key', $result->get_error_code() );
+		$this->assertSame( 'invalid_token', $result->get_error_code() );
 		$this->assertSame( 401, $result->get_error_data()['status'] );
 	}
 
@@ -168,7 +168,7 @@ final class BridgeOAuthTest extends TestCase {
 		$result = $auth->verify_api_key( $this->make_request( $token ) );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'invalid_api_key', $result->get_error_code() );
+		$this->assertSame( 'invalid_token', $result->get_error_code() );
 	}
 
 	// -----------------------------------------------------------------------
@@ -190,7 +190,7 @@ final class BridgeOAuthTest extends TestCase {
 		$result = $auth->verify_api_key( $this->make_request( $token ) );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'invalid_api_key', $result->get_error_code() );
+		$this->assertSame( 'invalid_token', $result->get_error_code() );
 	}
 
 	public function test_mcpwp_at_token_rejected_when_oauth_disabled(): void {
@@ -206,6 +206,6 @@ final class BridgeOAuthTest extends TestCase {
 		$result = $auth->verify_api_key( $this->make_request( $token ) );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'invalid_api_key', $result->get_error_code() );
+		$this->assertSame( 'invalid_token', $result->get_error_code() );
 	}
 }
