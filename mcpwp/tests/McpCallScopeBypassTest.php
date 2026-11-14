@@ -191,13 +191,22 @@ final class McpCallScopeBypassTest extends TestCase {
 		Mcpwp_REST_MCP::reset_verdict_memo();
 		$wrapped_verdict = $controller2->verify_api_key( $wrapped_request );
 
-		$this->assertInstanceOf( WP_Error::class, $direct_verdict, 'Precondition: a read key must be refused calling an admin tool directly.' );
-		$this->assertInstanceOf( WP_Error::class, $wrapped_verdict, 'BLOCK-1: a read key wrapping an admin tool in mcpwp_call must be refused at authentication, exactly like a direct call — never reach dispatch.' );
-		$this->assertSame( 'insufficient_scope', $direct_verdict->get_error_code() );
-		$this->assertSame( $direct_verdict->get_error_code(), $wrapped_verdict->get_error_code() );
-		$this->assertSame( $direct_verdict->get_error_data()['status'], $wrapped_verdict->get_error_data()['status'], 'NIT-4: same HTTP status as the direct refusal.' );
-		$this->assertSame( 403, $wrapped_verdict->get_error_data()['status'] );
-		$this->assertSame( $direct_verdict->get_error_data()['required_scope'], $wrapped_verdict->get_error_data()['required_scope'] );
+		// The refusal is reported per call, inside /mcp (an isError tool
+		// result, #936) — for the wrapped call exactly as for the direct one.
+		$this->assertTrue( $direct_verdict, 'The envelope admits a tools/call; the call itself is refused.' );
+		$this->assertTrue( $wrapped_verdict, 'The envelope admits a tools/call; the call itself is refused.' );
+		$direct_error  = $controller->handle_mcp( $direct_request )->get_data()['result'];
+		$wrapped_error = $controller2->handle_mcp( $wrapped_request )->get_data()['result'];
+
+		$this->assertTrue( $direct_error['isError'], 'Precondition: a read key must be refused calling an admin tool directly.' );
+		$this->assertTrue( $wrapped_error['isError'], 'BLOCK-1: a read key wrapping an admin tool in mcpwp_call must be refused, exactly like a direct call — never reach dispatch.' );
+		$d = $direct_error['structuredContent']['error'];
+		$w = $wrapped_error['structuredContent']['error'];
+		$this->assertSame( 'insufficient_scope', $d['code'] );
+		$this->assertSame( $d['code'], $w['code'] );
+		$this->assertSame( $d['status'], $w['status'], 'NIT-4: same status as the direct refusal.' );
+		$this->assertSame( 403, $w['status'] );
+		$this->assertSame( $d['required_scope'], $w['required_scope'] );
 	}
 
 	public function test_write_key_wrapped_admin_tool_refused_with_same_envelope_as_direct(): void {
@@ -214,9 +223,15 @@ final class McpCallScopeBypassTest extends TestCase {
 			Mcpwp_REST_MCP::reset_verdict_memo();
 			$wrapped_verdict = $controller2->verify_api_key( $wrapped_request );
 
-			$this->assertInstanceOf( WP_Error::class, $direct_verdict, "Precondition: a write key must be refused calling \"$tool\" directly." );
-			$this->assertInstanceOf( WP_Error::class, $wrapped_verdict, "A write key wrapping \"$tool\" in mcpwp_call must be refused at authentication too — this was the live 200-with-real-deletion bug." );
-			$this->assertSame( 403, $wrapped_verdict->get_error_data()['status'] );
+			$this->assertTrue( $direct_verdict, 'The envelope admits a tools/call; the call itself is refused.' );
+			$this->assertTrue( $wrapped_verdict, 'The envelope admits a tools/call; the call itself is refused.' );
+			$direct_result  = $controller->handle_mcp( $direct_request )->get_data()['result'];
+			$wrapped_result = $controller2->handle_mcp( $wrapped_request )->get_data()['result'];
+
+			$this->assertTrue( $direct_result['isError'], "Precondition: a write key must be refused calling \"$tool\" directly." );
+			$this->assertTrue( $wrapped_result['isError'], "A write key wrapping \"$tool\" in mcpwp_call must be refused too — this was the live 200-with-real-deletion bug." );
+			$this->assertSame( 'insufficient_scope', $wrapped_result['structuredContent']['error']['code'] );
+			$this->assertSame( 403, $wrapped_result['structuredContent']['error']['status'] );
 		}
 	}
 

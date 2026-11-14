@@ -129,15 +129,19 @@ class Mcpwp_Error_Hints {
 		return array(
 			// Auth errors.
 			'missing_api_key'     => array(
-				'hint'  => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Settings, or call wp_create_api_key if you have admin access.',
+				'hint'  => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Setup, or call wp_create_api_key if you have admin access.',
 				'guide' => '',
 			),
 			'invalid_api_key'     => array(
-				'hint'  => 'The provided API key is not valid. Check for typos or whitespace. Keys start with "mcpwp_". Generate a new key in WP Admin > MCPWP > Settings.',
+				'hint'  => 'The key is not valid: it may be mistyped, revoked, or a retired first-activation key. Create a new key under MCPWP -> Setup.',
+				'guide' => '',
+			),
+			'invalid_token'       => array(
+				'hint'  => 'The access token is expired, revoked, or not recognised. Try the refresh token, and if that is refused, reconnect: remove and re-add the connector, or sign in again.',
 				'guide' => '',
 			),
 			'api_not_configured'  => array(
-				'hint'  => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Settings to generate an API key.',
+				'hint'  => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Setup to generate an API key.',
 				'guide' => '',
 			),
 			'insufficient_scope'  => array(

@@ -259,13 +259,13 @@ class Mcpwp_Settings {
 
 		add_settings_field(
 			'oauth_enabled',
-			__( 'OAuth Token Endpoint', 'mcpwp' ),
+			__( 'Allow AI apps to connect with WordPress sign-in (OAuth)', 'mcpwp' ),
 			array( $this, 'render_checkbox_field' ),
 			'mcpwp_settings',
 			'mcpwp_general_section',
 			array(
 				'id'          => 'oauth_enabled',
-				'description' => __( 'Enable OAuth2 client credentials at /wp-json/mcpwp/v1/oauth/token.', 'mcpwp' ),
+				'description' => __( 'ChatGPT, Claude and other AI apps can connect by sending you to your own WordPress login and a consent screen. They get read and write access at most, never administrator access, and only to this site\'s MCP endpoint. On by default; turning it off also turns off the OAuth token endpoint (/wp-json/mcpwp/v1/oauth/token).', 'mcpwp' ),
 			)
 		);
 
@@ -646,7 +646,11 @@ class Mcpwp_Settings {
 				'client_secret',
 			),
 			'allowed_origins'    => '',
-			'oauth_enabled'      => false,
+			// D10 (PR-2): on unless an administrator stored it off.  Readers
+			// resolve an ABSENT key to true via
+			// Mcpwp_OAuth_Well_Known::resolve_oauth_enabled(); this default is
+			// what the form shows and what a save stores when it carries no value.
+			'oauth_enabled'      => true,
 			'oauth_client_id'    => 'site_pilot_ai',
 			'oauth_client_secret_hash' => '',
 			'oauth_token_ttl'    => 3600,
@@ -786,7 +790,16 @@ class Mcpwp_Settings {
 			? sanitize_textarea_field( $input['allowed_origins'] )
 			: '';
 
-		$sanitized['oauth_enabled'] = $this->resolve_checkbox( $input, $present, $stored, 'oauth_enabled' ) ?? $defaults['oauth_enabled'];
+		// D10 (PR-2): "never stored" is a state of its own — it means ON, and
+		// it is what the one-time admin notice keys on.  So, like
+		// analytics_enabled, a write that neither carries the box nor finds a
+		// stored value writes NO value, instead of freezing today's default
+		// into an explicit choice nobody made.  The form (which renders the
+		// box) and the Setup → Advanced switch still store explicit values.
+		$oauth_enabled = $this->resolve_checkbox( $input, $present, $stored, 'oauth_enabled' );
+		if ( null !== $oauth_enabled ) {
+			$sanitized['oauth_enabled'] = $oauth_enabled;
+		}
 		$sanitized['oauth_client_id'] = isset( $input['oauth_client_id'] ) && '' !== $input['oauth_client_id']
 			? sanitize_key( $input['oauth_client_id'] )
 			: 'site_pilot_ai';

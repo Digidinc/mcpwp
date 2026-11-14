@@ -133,9 +133,10 @@ final class Regression1030Round5WarnsTest extends TestCase {
 			$key,
 			'create_menu'
 		);
-		$this->assertInstanceOf( WP_REST_Response::class, $result, 'One hidden item must not refuse the whole menu.' );
+		$this->assertInstanceOf( WP_Error::class, $result, 'Every item is validated before creating the menu.' );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_nav_menus'] );
 
-		return array( $result->get_data(), $GLOBALS['_mcpwp_test_nav_menu_item_writes'] );
+		return array( array( 'code' => $result->get_error_code(), 'message' => $result->get_error_message(), 'data' => $result->get_error_data() ), $GLOBALS['_mcpwp_test_nav_menu_item_writes'] );
 	}
 
 	public function test_menu_create_items_answer_a_gated_post_exactly_like_a_missing_one(): void {
@@ -143,9 +144,8 @@ final class Regression1030Round5WarnsTest extends TestCase {
 			list( $gated, $gated_writes )     = $this->create_menu_with( self::COUPON_ID, $type );
 			list( $missing, $missing_writes ) = $this->create_menu_with( self::MISSING_ID, $type );
 
-			$this->assertCount( 1, $gated_writes, "{$type}: only the page item is created." );
-			$this->assertSame( self::PAGE_ID, $gated_writes[0]['data']['menu-item-object-id'] );
-			$this->assertSame( wp_json_encode( $missing['item_errors'] ), wp_json_encode( $gated['item_errors'] ), "{$type}: the gated item's error is the missing item's error." );
+			$this->assertEmpty( $gated_writes, "{$type}: validation failure must precede all item writes." );
+			$this->assertSame( wp_json_encode( $missing ), wp_json_encode( $gated ), "{$type}: the gated item's error is the missing item's error." );
 			$this->assertSame( count( $missing_writes ), count( $gated_writes ) );
 			$this->assertStringNotContainsString( (string) self::COUPON_ID, wp_json_encode( $gated_writes ) );
 		}

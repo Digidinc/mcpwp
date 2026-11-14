@@ -501,13 +501,11 @@ final class ApprovalCategoryGateTest extends TestCase {
 
 	public function test_block1_door_level_product_delete_via_generic_posts_route_is_hidden_from_admin_content_key(): void {
 		$posts_controller = new Mcpwp_REST_Posts();
-		$requester        = $this->real_scoped_key_request(
-			$posts_controller,
-			array( 'content', 'woocommerce' ),
-			'DELETE',
-			'/mcpwp/v1/posts/' . self::PRODUCT_ID,
-			array( 'id' => self::PRODUCT_ID, 'force' => true )
-		);
+		// #1103 round 2: deleting a product through /posts needs admin scope,
+		// so the requester is an admin key (was a [content, woocommerce] key).
+		$admin     = $posts_controller->create_scoped_api_key( 'requester-admin', array( 'read', 'write', 'admin' ) );
+		$requester = new WP_REST_Request( 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ), array( 'X-API-Key' => $admin['key'] ) );
+		$this->assertTrue( $posts_controller->check_permission( $requester ), 'premise: an admin key may queue this delete' );
 
 		$deferred = $posts_controller->delete_post( $requester );
 		$this->assertInstanceOf( WP_REST_Response::class, $deferred, 'premise: the requester key must be able to queue this delete' );

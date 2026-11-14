@@ -369,35 +369,25 @@ class Mcpwp_Theme_Builder {
 			);
 		}
 
-		// Save conditions via Elementor's conditions manager.
-		//
-		// save_conditions() (real ElementorPro\...\Conditions_Manager, verified
-		// against the installed source, not re-derived) writes `_elementor_conditions`
-		// post meta AND already calls $this->cache->regenerate() itself before
-		// returning — the explicit regenerate() below is deliberately kept as a
-		// defensive second call (harmless: regenerate() rebuilds from scratch
-		// and is idempotent) for an older Elementor Pro build whose
-		// save_conditions() might not do this internally. Nothing here writes
-		// `elementor_pro_theme_builder_conditions` directly any more (#976):
-		// this class previously also wrote it itself, in
-		// update_global_conditions_index(), shaped `{ condition_key =>
-		// [template_ids] }` — the wrong axis. Elementor Pro's own
-		// Conditions_Cache stores `{ location => { template_id =>
-		// [condition_strings] } }`, LOCATION first (confirmed reading
-		// ElementorPro\Modules\ThemeBuilder\Classes\Conditions_Cache::add()/
-		// regenerate() directly). That wrong-shaped write was harmless only
-		// because both regenerate() calls immediately overwrote it in the
-		// normal case; any path where regenerate() is skipped or throws
-		// between the two writes left `elementor_pro_theme_builder_conditions`
-		// genuinely malformed, which #975's own delete-cleanup fix could not
-		// even recognise. The fix is to never write that shape ourselves and
-		// let Elementor Pro own the option entirely, as #975 already does for
-		// deletes via Conditions_Manager::purge_post_from_cache().
-		$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-		$conditions_manager->save_conditions( $template_id, $formatted_conditions );
+		// Match Pro's persisted strings and {location => {id => conditions}}
+		// cache shape while updating only this document with bounded CAS.
+		require_once dirname( __DIR__, 2 ) . '/class-mcpwp-activator.php';
+		require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-encryption.php';
+		require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-custom-code-cache-entry.php';
+		$strings = Mcpwp_Custom_Code_Conditions::convert( $formatted_conditions );
+		if ( is_wp_error( $strings ) ) {
+			return $strings;
+		}
+		$document = \Elementor\Plugin::instance()->documents->get( $template_id );
+		if ( ! $document ) {
+			return new WP_Error( 'template_not_found', __( 'Template not found.', 'mcpwp' ), array( 'status' => 404 ) );
+		}
+		update_post_meta( $template_id, '_elementor_conditions', wp_slash( $strings ) );
+		$synced = Mcpwp_Custom_Code_Cache_Entry::sync( $template_id, $document->get_location(), $strings );
+		if ( is_wp_error( $synced ) ) {
+			return $synced;
+		}
 
-		// Clear cache.
-		$conditions_manager->get_cache()->regenerate();
 
 		// Always the same shape, warnings or not. A response that changes
 		// structure depending on whether anything went wrong is the same trap
@@ -715,6 +705,409 @@ class Mcpwp_Theme_Builder {
 	}
 
 	/**
+	 * Recognize the union of preview intent spellings, including MCP's
+	 * case/separator variants. This only classifies keys, never values.
+	 *
+	 * @param string $key Parameter key.
+	 * @return bool Whether the key carries preview intent.
+	 */
+	public static function is_dry_run_key( $key ) {
+		$key = strtolower( (string) preg_replace( '/[^a-zA-Z0-9]/', '', (string) $key ) );
+		return in_array( $key, array( 'dryrun', 'preview' ), true );
+	}
+
+	/** Parameter containers shared by parsed bags and lossless wire scans. */
+	const INTENT_PARAMETER_PATHS = array(
+		array(), array( 'params' ), array( '_meta' ), array( 'params', '_meta' ),
+		array( 'arguments' ), array( 'params', 'arguments' ),
+		array( 'arguments', 'arguments' ), array( 'params', 'arguments', 'arguments' ),
+		array( 'arguments', '_meta' ), array( 'params', 'arguments', '_meta' ),
+	);
+
+	/**
+	 * Record keys exactly as PHP exposed them. This walks an already parsed
+	 * field/tree; it does not decode, split or normalize PHP parameter names.
+	 *
+	 * @param object $document Source evidence cache.
+	 * @param array  $parameters One PHP-parsed field or multipart bag.
+	 * @param array  $path Current key path.
+	 */
+	private static function record_php_intent_fields( $document, $parameters, $path = array() ) {
+		foreach ( $parameters as $key => $value ) {
+			$next = array_merge( $path, array( $key ) );
+			if ( self::is_dry_run_key( $key ) ) {
+				$document->keys[] = $next;
+				$document->values[] = is_array( $value ) ? array() : $value;
+			} elseif ( is_array( $value ) ) {
+				self::record_php_intent_fields( $document, $value, $next );
+			}
+		}
+	}
+
+	/**
+	 * Query separators follow PHP configuration; POST bodies always use &.
+	 * The optional separator set allows direct parity tests on SAPIs where
+	 * arg_separator.input cannot be changed with ini_set().
+	 *
+	 * @param string      $raw Raw form/query bytes.
+	 * @param string      $channel Query or body.
+	 * @param string|null $query_separators Explicit query separators for tests.
+	 * @return array Ordered raw fields.
+	 */
+	public static function split_form_fields( $raw, $channel, $query_separators = null ) {
+		$separators = 'query' === $channel ? ( null === $query_separators ? (string) ini_get( 'arg_separator.input' ) : $query_separators ) : '&';
+		return preg_split( '~[' . preg_quote( '' === $separators ? '&' : $separators, '~' ) . ']~', $raw );
+	}
+
+	/**
+	 * Isolate a POST field from parse_str's query grammar. If a configured
+	 * delimiter collides with an existing percent escape, or with its own
+	 * escaped representation, PHP cannot safely parse this isolated field.
+	 * Return unreadable evidence instead of guessing a parameter name/value.
+	 *
+	 * @param string      $field One ampersand-delimited POST field.
+	 * @param string|null $query_separators Explicit query separators for tests.
+	 * @return string|null Field safe for PHP parsing, or unknown history.
+	 */
+	public static function prepare_post_field( $field, $query_separators = null ) {
+		$separators = null === $query_separators ? (string) ini_get( 'arg_separator.input' ) : $query_separators;
+		$extra = implode( '', array_diff( str_split( $separators ), array( '&' ) ) );
+		if ( '' === $extra ) {
+			return $field;
+		}
+		if ( false !== strpbrk( $extra, '%0123456789abcdefABCDEF' ) ) {
+			preg_match_all( '/%[0-9a-fA-F]{2}/', $field, $escapes );
+			foreach ( $escapes[0] as $escape ) {
+				if ( false !== strpbrk( $escape, $extra ) ) {
+					return null;
+				}
+			}
+		}
+		$quoted = array();
+		foreach ( str_split( $extra ) as $separator ) {
+			if ( '=' !== $separator ) {
+				$quoted[ $separator ] = rawurlencode( $separator );
+			}
+		}
+		$field = strtr( $field, $quoted );
+		return false === strpbrk( $field, $extra ) ? $field : null;
+	}
+
+	/**
+	 * Observe the parsed multipart BODY, without interpreting query flags or
+	 * inventing unavailable part history. Count visible scalar leaves only.
+	 *
+	 * @param Mcpwp_Raw_Parameter_Source $source Parsed body snapshot.
+	 * @return array Visible intent/field counts and the configured input cap.
+	 */
+	public static function multipart_input_evidence( $source, $ignore_operations = false ) {
+		$document = $source->document;
+		if ( ! isset( $document->multipart_totals ) ) {
+			$totals = array( 'fields' => 0, 'limit' => (int) ini_get( 'max_input_vars' ), 'unreadable' => ! is_array( $document->raw ) );
+			$pending = $totals['unreadable'] ? array() : array( $document->raw );
+			while ( ! empty( $pending ) ) {
+				foreach ( array_pop( $pending ) as $value ) {
+					if ( is_array( $value ) ) {
+						$pending[] = $value;
+					} else {
+						++$totals['fields'];
+					}
+				}
+			}
+			$document->multipart_totals = $totals;
+			$document->multipart = array();
+		}
+		$cache_key = wp_json_encode( array( $source->path, $ignore_operations ) );
+		if ( ! isset( $document->multipart[ $cache_key ] ) ) {
+			$state = $document->multipart_totals;
+			$state['intent_keys'] = 0;
+			$selected = $document->raw;
+			foreach ( $source->path as $segment ) {
+				$selected = is_array( $selected ) && array_key_exists( $segment, $selected ) ? $selected[ $segment ] : array();
+			}
+			if ( $ignore_operations && is_array( $selected ) ) {
+				// Global multipart fields still apply, but operation bodies
+				// are inspected only through their selected source views.
+				foreach ( self::INTENT_PARAMETER_PATHS as $path ) {
+					$slot =& $selected;
+					foreach ( $path as $segment ) {
+						if ( ! is_array( $slot ) || ! array_key_exists( $segment, $slot ) ) {
+							unset( $slot );
+							continue 2;
+						}
+						$slot =& $slot[ $segment ];
+					}
+					if ( is_array( $slot ) ) {
+						unset( $slot['operations'] );
+					}
+					unset( $slot );
+				}
+			}
+			$pending = is_array( $selected ) ? array( $selected ) : array();
+			while ( ! empty( $pending ) ) {
+				foreach ( array_pop( $pending ) as $key => $value ) {
+					if ( self::is_dry_run_key( $key ) ) {
+						++$state['intent_keys'];
+					}
+					if ( is_array( $value ) ) {
+						$pending[] = $value;
+					}
+				}
+			}
+			$document->multipart[ $cache_key ] = $state;
+		}
+		return $document->multipart[ $cache_key ];
+	}
+
+	/**
+	 * Count raw intent keys by relevant container, before last-key-wins can
+	 * erase repeats. String contents are skipped; JSON keys are decoded so
+	 * escaped spellings count too. Shared documents are tokenized only once.
+	 * An unreadable source is ambiguous and therefore fails closed.
+	 *
+	 * @param Mcpwp_Raw_Parameter_Source $source Scoped original bytes.
+	 * @return array Raw values and per-container occurrence counts.
+	 */
+	public static function raw_intent_evidence( $source ) {
+		$document = $source->document;
+		if ( 'unknown' === $document->format ) {
+			if ( null === $document->keys ) {
+				$document->keys = array();
+				foreach ( $document->raw as $parameters ) {
+					if ( is_array( $parameters ) ) {
+						self::record_php_intent_fields( $document, $parameters );
+					}
+				}
+			}
+			return array( 'counts' => array(), 'values' => array(), 'occurrences' => empty( $document->keys ) ? array() : array( 'unknown_media_intent' => array() ) );
+		}
+		if ( in_array( $document->format, array( 'multipart', 'parsed-form' ), true ) ) {
+			return array( 'counts' => array(), 'values' => array(), 'occurrences' => array( 'multipart_guard:' . wp_json_encode( $source->path ) => self::multipart_input_evidence( $source ) ) );
+		}
+		if ( null === $document->keys ) {
+			$document->keys = array();
+			if ( 'form' === $document->format ) {
+				// Parse each field independently: PHP owns bracket/NUL/dot/
+				// space handling, while separate fields retain every repeat.
+				foreach ( self::split_form_fields( $document->raw, $source->channel ) as $field ) {
+					if ( 'body' === $source->channel ) {
+						$field = self::prepare_post_field( $field );
+						if ( null === $field ) {
+							$document->keys = false;
+							break;
+						}
+					}
+					parse_str( $field, $parameters );
+					self::record_php_intent_fields( $document, $parameters );
+				}
+			} else {
+				// Validation only: the decoded map is NEVER used for keys.
+				json_decode( $document->raw, true );
+				if ( JSON_ERROR_NONE !== json_last_error() ) {
+					$document->keys = false;
+				} else {
+					$stack = array();
+					$raw = $document->raw;
+					$length = strlen( $raw );
+					for ( $i = 0; $i < $length; ++$i ) {
+						$char = $raw[ $i ];
+						$top = count( $stack ) - 1;
+						if ( '"' === $char ) {
+							$start = $i++;
+							while ( $i < $length && '"' !== $raw[ $i ] ) {
+								$i += '\\' === $raw[ $i ] ? 2 : 1;
+							}
+							$next = $i + 1;
+							while ( $next < $length && false !== strpos( " \t\r\n", $raw[ $next ] ) ) {
+								++$next;
+							}
+							if ( $top >= 0 && 'object' === $stack[ $top ]['type'] && $next < $length && ':' === $raw[ $next ] ) {
+								$key = json_decode( substr( $raw, $start, $i - $start + 1 ), true );
+								$stack[ $top ]['key'] = $key;
+								if ( self::is_dry_run_key( $key ) ) {
+									$document->keys[] = array_merge( $stack[ $top ]['path'], array( $key ) );
+									$begin = $next + 1;
+									while ( $begin < $length && false !== strpos( " \t\r\n", $raw[ $begin ] ) ) {
+										++$begin;
+									}
+									if ( '{' === $raw[ $begin ] || '[' === $raw[ $begin ] ) {
+										// Containers cannot be canonical false; no need
+										// to decode/copy their potentially large content.
+										$document->values[] = array();
+									} else {
+										$end = $begin;
+										if ( '"' === $raw[ $begin ] ) {
+											++$end;
+											while ( '"' !== $raw[ $end ] ) {
+												$end += '\\' === $raw[ $end ] ? 2 : 1;
+											}
+											++$end;
+										} else {
+											while ( $end < $length && false === strpos( " \t\r\n,}]", $raw[ $end ] ) ) {
+												++$end;
+											}
+										}
+										$document->values[] = json_decode( substr( $raw, $begin, $end - $begin ), true );
+									}
+								}
+							}
+						} elseif ( '{' === $char || '[' === $char ) {
+							$path = $top < 0 ? array() : array_merge( $stack[ $top ]['path'], array( 'object' === $stack[ $top ]['type'] ? $stack[ $top ]['key'] : $stack[ $top ]['index'] ) );
+							$stack[] = array( 'type' => '{' === $char ? 'object' : 'array', 'path' => $path, 'key' => null, 'index' => 0 );
+						} elseif ( '}' === $char || ']' === $char ) {
+							array_pop( $stack );
+						} elseif ( ',' === $char && $top >= 0 ) {
+							++$stack[ $top ]['index'];
+							$stack[ $top ]['key'] = null;
+						}
+					}
+				}
+			}
+		}
+		if ( false === $document->keys ) {
+			return array( 'counts' => array( 'unreadable_source' => 2 ), 'values' => array(), 'occurrences' => array( 'unreadable_source' => array() ) );
+		}
+		$counts = array();
+		$values = array();
+		$occurrences = array();
+		$prefix = array_map( 'strval', $source->path );
+		foreach ( $document->keys as $index => $path ) {
+			$container = array_map( 'strval', array_slice( $path, 0, -1 ) );
+			if ( array_slice( $container, 0, count( $prefix ) ) !== $prefix || ! in_array( array_slice( $container, count( $prefix ) ), self::INTENT_PARAMETER_PATHS, true ) ) {
+				continue;
+			}
+			$scope = wp_json_encode( $container );
+			$counts[ $scope ] = ( $counts[ $scope ] ?? 0 ) + 1;
+			$values[] = $document->values[ $index ];
+			$occurrences[ $index ] = $document->values[ $index ];
+		}
+		return array( 'counts' => $counts, 'values' => $values, 'occurrences' => $occurrences );
+	}
+
+	/**
+	 * Union selected occurrences per original source, deduplicating forwarded
+	 * views of the same bytes. Query and body remain separate documents;
+	 * sibling operations/messages were excluded by each view's path.
+	 *
+	 * @param Mcpwp_Raw_Parameter_Source[] $sources Scoped raw sources.
+	 * @return SplObjectStorage Document => unique occurrence/value map.
+	 */
+	public static function raw_intent_documents( $sources ) {
+		$documents = new SplObjectStorage();
+		foreach ( $sources as $source ) {
+			$raw = self::raw_intent_evidence( $source );
+			$found = $documents->contains( $source->document ) ? $documents[ $source->document ] : array();
+			$found += $raw['occurrences'];
+			ksort( $found );
+			$documents[ $source->document ] = $found;
+		}
+		return $documents;
+	}
+
+	/**
+	 * Open only the known tool/wrapper argument paths in each unmerged bag.
+	 * A source need not repeat the tool name supplied by another source.
+	 * Operation lists are NOT opened: batch forwards the selected body.
+	 * This preserves evidence; it makes no publish/preview decision.
+	 *
+	 * @param array[] $bags Raw source bags.
+	 * @return array[] Sources plus their raw tool argument bags.
+	 */
+	public static function intent_parameter_bags( $bags ) {
+		$all = $bags;
+		foreach ( $bags as $bag ) {
+			foreach ( self::INTENT_PARAMETER_PATHS as $path ) {
+				if ( empty( $path ) ) {
+					continue;
+				}
+				$value = $bag;
+				foreach ( $path as $segment ) {
+					$value = is_array( $value ) && array_key_exists( $segment, $value ) ? $value[ $segment ] : null;
+				}
+				if ( is_array( $value ) ) {
+					$all[] = $value;
+				}
+			}
+		}
+		return $all;
+	}
+
+	/**
+	 * The sole publish/preview decision, over ALL unmerged source bags.
+	 * Never coerce numbers or compare loosely: "00", "0.0", "-0", "0e0",
+	 * null, containers and numeric zero are not canonical false. Any source
+	 * requesting preview wins, independently of source or key order.
+	 *
+	 * @param array[] $bags Raw query, form, JSON and tool argument bags.
+	 * @return bool|WP_Error Whether to preview, or an unsupported-format refusal.
+	 */
+	private function is_create_dry_run( $bags ) {
+		$values = array();
+		$sources = array();
+		$multipart_sources = array();
+		foreach ( self::intent_parameter_bags( $bags ) as $bag ) {
+			if ( $bag instanceof Mcpwp_Raw_Parameter_Source ) {
+				if ( 'parsed-form' === $bag->document->format ) {
+					$parsed = self::multipart_input_evidence( $bag );
+					if ( $parsed['unreadable'] || ( $parsed['limit'] >= 0 && $parsed['fields'] >= $parsed['limit'] ) ) {
+						return new WP_Error( 'invalid_params', __( 'Parsed form input reaches max_input_vars or cannot be verified. Send application/json or fewer fields.', 'mcpwp' ), array( 'status' => 400 ) );
+					}
+					continue;
+				}
+				if ( 'unknown' === $bag->document->format ) {
+					$unknown = self::raw_intent_evidence( $bag );
+					if ( ! empty( $unknown['occurrences'] ) ) {
+						return new WP_Error( 'invalid_params', __( 'Preview intent requires a supported Content-Type. Send application/json or application/x-www-form-urlencoded.', 'mcpwp' ), array( 'status' => 400 ) );
+					}
+					continue;
+				}
+				if ( 'multipart' === $bag->document->format ) {
+					$multipart_sources[] = $bag;
+					continue;
+				}
+				$sources[] = $bag;
+				continue;
+			}
+			foreach ( $bag as $key => $value ) {
+				if ( self::is_dry_run_key( $key ) ) {
+					$values[] = $value;
+				}
+			}
+		}
+		$scoped_multipart = new SplObjectStorage();
+		foreach ( $multipart_sources as $source ) {
+			if ( ! empty( $source->path ) ) {
+				$scoped_multipart[ $source->document ] = true;
+			}
+		}
+		foreach ( $multipart_sources as $source ) {
+			$multipart = self::multipart_input_evidence( $source, empty( $source->path ) && $scoped_multipart->contains( $source->document ) );
+			if ( $multipart['unreadable'] || $multipart['intent_keys'] > 0 ) {
+				return new WP_Error( 'invalid_params', __( 'Multipart preview intent cannot be verified from the consumed parts. Send application/json or application/x-www-form-urlencoded.', 'mcpwp' ), array( 'status' => 400 ) );
+			}
+			// PHP's input cap is request-wide, even for a selected operation.
+			if ( $multipart['limit'] >= 0 && $multipart['fields'] >= $multipart['limit'] ) {
+				return new WP_Error( 'invalid_params', __( 'Multipart input reaches max_input_vars; a preview field may have been dropped. Send application/json or fewer fields.', 'mcpwp' ), array( 'status' => 400 ) );
+			}
+		}
+		$documents = self::raw_intent_documents( $sources );
+		foreach ( $documents as $document ) {
+			$occurrences = $documents[ $document ];
+			if ( count( $occurrences ) > 1 ) {
+				return true;
+			}
+			$values = array_merge( $values, array_values( $occurrences ) );
+		}
+		foreach ( $values as $value ) {
+			if ( false === $value || ( is_string( $value ) && in_array( strtolower( trim( $value ) ), array( 'false', '0' ), true ) ) ) {
+				continue;
+			}
+			return true;
+		}
+		return false;
+	}
+
+	/**
 	 * Create a Theme Builder template and assign it to a location in one step.
 	 *
 	 * @param array $data {
@@ -722,15 +1115,21 @@ class Mcpwp_Theme_Builder {
 	 *     @type string $type           Template type: header, footer, single, archive (required).
 	 *     @type array  $elementor_data Elementor JSON data (optional).
 	 *     @type string $scope          Display scope: entire_site, singular, archive, front_page, 404 (default: entire_site).
+	 *     @type bool   $dry_run        Validate and preview without writing (default: false).
 	 * }
+	 * @param array[]|null $raw_parameter_bags Unmerged source bags, if dispatched via REST.
 	 * @return array|WP_Error Created template with conditions.
 	 */
-	public function create_theme_template( $data ) {
+	public function create_theme_template( $data, $raw_parameter_bags = null ) {
 		if ( ! $this->is_available() ) {
 			return new WP_Error( 'not_available', __( 'Elementor Pro Theme Builder is not available.', 'mcpwp' ) );
 		}
 
-		$dry_run = ! empty( $data['dry_run'] );
+		$dry_run = $this->is_create_dry_run( null === $raw_parameter_bags ? array( $data ) : $raw_parameter_bags );
+		if ( is_wp_error( $dry_run ) ) {
+			return $dry_run;
+		}
+
 		$title   = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '';
 		$type    = ! empty( $data['type'] ) ? sanitize_text_field( $data['type'] ) : '';
 		$scope   = ! empty( $data['scope'] ) ? sanitize_text_field( $data['scope'] ) : 'entire_site';
@@ -751,12 +1150,20 @@ class Mcpwp_Theme_Builder {
 		// Dry run: validate params without creating anything.
 		if ( $dry_run ) {
 			$result = array(
-				'dry_run'  => true,
-				'valid'    => true,
-				'title'    => $title,
-				'type'     => $type,
-				'scope'    => $scope,
-				'message'  => __( 'Validation passed — no template created.', 'mcpwp' ),
+				'dry_run'       => true,
+				'valid'         => true,
+				'title'         => $title,
+				'type'          => $type,
+				'scope'         => $scope,
+				'post_type'     => ! empty( $data['post_type'] ) ? sanitize_text_field( $data['post_type'] ) : 'post',
+				'post_ids'      => ! empty( $data['post_ids'] ) ? array_map( 'absint', (array) $data['post_ids'] ) : array(),
+				'element_count' => 0,
+				'would_create'  => array(
+					'post_title'  => $title,
+					'post_type'   => 'elementor_library',
+					'post_status' => 'publish',
+				),
+				'message'       => __( 'Would create and publish the template, then attempt assignment to the requested display scope. No template, metadata or conditions were saved.', 'mcpwp' ),
 			);
 			if ( ! empty( $data['elementor_data'] ) ) {
 				$elements = $data['elementor_data'];
@@ -1138,95 +1545,18 @@ class Mcpwp_Theme_Builder {
 	}
 
 	/**
-	 * Remove a deleted template's ID from Elementor Pro's real conditions
-	 * cache/option (#952) — trash or force delete alike, since Elementor
-	 * never does this itself: `wp_delete_post()` does not touch
-	 * `elementor_pro_theme_builder_conditions`, and nothing else runs
-	 * afterward that would. (Elementor Pro's own Conditions_Manager DOES
-	 * self-clean on `wp_trash_post` — see `handle_before_delete_post()`'s
-	 * docblock for why that never actually fires for us here.)
+	 * Remove only the deleted document's entry with bounded compare-and-swap.
 	 *
-	 * Delegates the actual removal to Elementor Pro's own purpose-built
-	 * Conditions_Manager::purge_post_from_cache() rather than re-deriving
-	 * the option's shape here a second time: a hand-rolled removal that
-	 * disagreed with Elementor's real internal shape (or a future Elementor
-	 * Pro release that changes it) would silently do nothing, which is a
-	 * worse failure than doing nothing loudly.
-	 *
-	 * Two hazards found in adversarial review (WARN-2) that a naive call to
-	 * purge_post_from_cache() would hit:
-	 *
-	 * 1. Conditions_Manager (and its Conditions_Cache) is a per-request
-	 *    singleton, loaded from the option once at construction. If
-	 *    anything earlier in THIS SAME request already called
-	 *    regenerate() — Elementor's own save_conditions() does, and
-	 *    set_template_conditions() calls it again explicitly — and that
-	 *    call threw partway through its rebuild, the singleton's in-memory
-	 *    state now holds only whatever it had rebuilt before the crash,
-	 *    while the option on disk is untouched (regenerate() never reached
-	 *    its own save()). purge_post_from_cache() would persist that
-	 *    truncated in-memory state, wiping every OTHER template's real
-	 *    binding, not just the one being deleted. Refreshing the cache
-	 *    from the option immediately before purging discards any such
-	 *    staleness — the fix is to trust the option, not this request's
-	 *    possibly-corrupted copy of it.
-	 * 2. The natural-looking fallback for an Elementor Pro build old
-	 *    enough not to have purge_post_from_cache() is
-	 *    get_cache()->regenerate() — but its rebuild query matches only
-	 *    public statuses, so it would silently drop every draft or
-	 *    scheduled template's binding too, not just remove the one
-	 *    template actually being deleted. The fallback instead removes
-	 *    this one template directly from the stored option — same real
-	 *    shape, no Elementor object involved, so there is nothing to leave
-	 *    stale.
-	 *
-	 * Callers: handle_before_delete_post() above, wired to WordPress's
-	 * before_delete_post — see that method's docblock for every path that
-	 * reaches this through it.
-	 *
-	 * @param int $template_id Template ID.
-	 * @return bool True if the template was actually removed (and the
-	 *              option written); false if it was never in the cache, or
-	 *              Elementor Pro's Theme Builder is not available.
+	 * @param int $template_id Deleted document ID.
+	 * @return bool Whether the target cache entry was removed or absent.
 	 */
 	public function cleanup_after_template_delete( $template_id ) {
 		if ( ! $this->is_available() || ! $this->template_is_in_conditions_cache( $template_id ) ) {
 			return false;
 		}
-
-		try {
-			$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-
-			if ( method_exists( $conditions_manager, 'purge_post_from_cache' ) ) {
-				// WARN-2 hazard 1: never purge without first proving this
-				// singleton's in-memory cache actually matches the option —
-				// a regenerate() elsewhere in this request may have thrown
-				// partway through and left it holding less than what is
-				// really on disk.
-				if ( method_exists( $conditions_manager, 'get_cache' ) ) {
-					$cache = $conditions_manager->get_cache();
-					if ( is_object( $cache ) && method_exists( $cache, 'refresh' ) ) {
-						$cache->refresh();
-					}
-				}
-
-				$conditions_manager->purge_post_from_cache( $template_id );
-			} else {
-				// WARN-2 hazard 2: regenerate() is not a safe substitute —
-				// see docblock above.
-				$this->remove_template_from_stored_conditions_option( $template_id );
-			}
-
-			$this->drop_empty_condition_locations();
-		} catch ( \Throwable $e ) {
-			// Best-effort: a cache that fails to update here self-heals on
-			// the next conditions write (set_template_conditions() always
-			// calls regenerate()), and a delete must never fail on account
-			// of it.
-			return false;
-		}
-
-		return true;
+		require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-encryption.php';
+		require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-custom-code-cache-entry.php';
+		return true === Mcpwp_Custom_Code_Cache_Entry::remove( $template_id );
 	}
 
 	/**

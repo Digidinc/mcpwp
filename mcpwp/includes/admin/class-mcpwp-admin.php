@@ -287,7 +287,7 @@ class Mcpwp_Admin {
 				'strings'              => array(
 					'copied'             => __( 'Copied!', 'mcpwp' ),
 					'copyFailed'         => __( 'Copy failed', 'mcpwp' ),
-					'confirm'            => __( 'Are you sure you want to regenerate the API key? The old key will stop working immediately.', 'mcpwp' ),
+					'confirm'            => __( 'Regenerate the API key? This revokes EVERY key on this site — the primary key, all role-based keys and the ChatGPT link — and makes one new primary key.', 'mcpwp' ),
 					'testing'            => __( 'Testing...', 'mcpwp' ),
 					'connected'          => __( 'Connected!', 'mcpwp' ),
 					'testFailed'         => __( 'Connection failed', 'mcpwp' ),
@@ -326,9 +326,9 @@ class Mcpwp_Admin {
 		// requires an API key header which isn't present in admin AJAX.
 		$rest_url = rest_url( 'mcpwp/v1/' );
 
-		// Check that the API key exists.
-		$stored_key = get_option( 'mcpwp_api_key' );
-		if ( empty( $stored_key ) ) {
+		// Check that the site has a key: the legacy option OR an active scoped
+		// record (the legacy option alone is only a copy, #1097).
+		if ( ! Mcpwp_Key_State::site_has_api_key() ) {
 			wp_send_json_error( array(
 				'message' => __( 'No API key configured. Please generate one on the Setup tab.', 'mcpwp' ),
 			) );

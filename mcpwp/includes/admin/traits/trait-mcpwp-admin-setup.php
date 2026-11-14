@@ -26,12 +26,22 @@ trait Mcpwp_Admin_Setup_Trait {
 		if ( isset( $_POST['mcpwp_regenerate_key'] ) ) {
 			check_admin_referer( 'mcpwp_regenerate_key', 'mcpwp_nonce' );
 			$new_key = $this->regenerate_api_key();
-			add_settings_error(
-				'mcpwp_messages',
-				'mcpwp_key_regenerated',
-				__( 'API key has been regenerated. Copy it now — it will not be shown again.', 'mcpwp' ),
-				'updated'
-			);
+			if ( '' === $new_key ) {
+				$new_key = null;
+				add_settings_error(
+					'mcpwp_messages',
+					'mcpwp_key_regenerate_busy',
+					Mcpwp_Key_State::store_is_unreadable() ? Mcpwp_Key_State::unreadable_message() : __( 'The API key store is busy. Nothing was changed; try again.', 'mcpwp' ),
+					'error'
+				);
+			} else {
+				add_settings_error(
+					'mcpwp_messages',
+					'mcpwp_key_regenerated',
+					__( 'API key has been regenerated. Copy it now — it will not be shown again.', 'mcpwp' ),
+					'updated'
+				);
+			}
 		}
 
 		$new_scoped_key = null;
@@ -93,13 +103,22 @@ trait Mcpwp_Admin_Setup_Trait {
 
 			$key_id = isset( $_POST['mcpwp_scoped_key_id'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_scoped_key_id'] ) ) : '';
 			if ( '' !== $key_id ) {
-				$revoked = $this->revoke_scoped_api_key( $key_id );
-				if ( $revoked ) {
+				$outcome = $this->revoke_scoped_api_key_outcome( $key_id );
+				if ( 'revoked' === $outcome ) {
 					add_settings_error(
 						'mcpwp_messages',
 						'mcpwp_scoped_key_revoked',
 						__( 'Scoped API key revoked.', 'mcpwp' ),
 						'updated'
+					);
+				} elseif ( 'unreadable' === $outcome ) {
+					add_settings_error( 'mcpwp_messages', 'mcpwp_scoped_key_revoke_unreadable', Mcpwp_Key_State::unreadable_message(), 'error' );
+				} elseif ( 'busy' === $outcome ) {
+					add_settings_error(
+						'mcpwp_messages',
+						'mcpwp_scoped_key_revoke_busy',
+						__( 'The API key store is busy. The key was NOT revoked and is still active. Try again in a moment.', 'mcpwp' ),
+						'error'
 					);
 				} else {
 					add_settings_error(
@@ -133,6 +152,23 @@ trait Mcpwp_Admin_Setup_Trait {
 				'updated'
 			);
 		}
+
+		// "Add to ChatGPT": create/rotate or revoke the one connector key.
+		$chatgpt_connector = new Mcpwp_ChatGPT_Connector( $this );
+		$chatgpt_new_url   = null;
+		if ( isset( $_POST['mcpwp_chatgpt_connector_action'] ) ) {
+			check_admin_referer( Mcpwp_ChatGPT_Connector::NONCE_ACTION, 'mcpwp_chatgpt_connector_nonce' );
+			$chatgpt_result = $chatgpt_connector->handle_request( wp_unslash( $_POST ) );
+			if ( is_array( $chatgpt_result ) ) {
+				add_settings_error( 'mcpwp_messages', 'mcpwp_chatgpt_connector', $chatgpt_result['message'], $chatgpt_result['type'] );
+				if ( ! empty( $chatgpt_result['url'] ) ) {
+					$chatgpt_new_url = $chatgpt_result['url'];
+				}
+			}
+		}
+		$chatgpt_oauth_conflict = Mcpwp_ChatGPT_Connector::oauth_discovery_conflict();
+		$local_oauth_enabled    = Mcpwp_OAuth_Well_Known::is_legacy_oauth_enabled();
+		$chatgpt_active_key = $chatgpt_connector->get_active_key();
 
 		$scoped_keys = $this->list_scoped_api_keys( true );
 

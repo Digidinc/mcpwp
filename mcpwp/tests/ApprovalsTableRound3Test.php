@@ -123,7 +123,7 @@ final class ApprovalsTableRound3Test extends TestCase {
 	public function test_a_legacy_product_deletion_is_hidden_from_a_content_key_everywhere(): void {
 		update_option( Mcpwp_Approvals::OPTION_NAME, array( 'apr_eta' => $this->legacy_destructive( 'apr_eta', self::PRODUCT, 'product' ) ), false );
 		$this->boot();
-		$this->assertSame( 1, get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
+		$this->assertGreaterThan( 1, (int) get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
 
 		$content = self::allow( array( 'admin', 'content' ) );
 		$this->assertSame( array(), Mcpwp_Approvals::list_requests( '', 50, true, 'date', $content ) );
@@ -216,7 +216,7 @@ final class ApprovalsTableRound3Test extends TestCase {
 		$legacy = $this->matrix();
 		update_option( Mcpwp_Approvals::OPTION_NAME, $legacy, false );
 		$this->boot();
-		$this->assertSame( 1, get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
+		$this->assertGreaterThan( 1, (int) get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
 
 		$keys = array(
 			'everything'   => static function () {
@@ -278,6 +278,6 @@ final class ApprovalsTableRound3Test extends TestCase {
 		$listed = Mcpwp_Approvals::list_requests( '', 10, true );
 		$this->assertIsArray( $listed, 'Not approvals_busy.' );
 		$this->assertSame( array( 'apr_spai' ), array_column( $listed, 'id' ) );
-		$this->assertSame( 1, get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
+		$this->assertGreaterThan( 1, (int) get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
 	}
 }

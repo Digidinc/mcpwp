@@ -148,7 +148,7 @@ final class ApprovalsTableRound1Test extends TestCase {
 
 		// The first read migrates; it neither fails nor 500s.
 		$this->assertSame( 'pending', Mcpwp_Approvals::get_request( 'apr_ok1' )['status'] );
-		$this->assertSame( 1, get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
+		$this->assertGreaterThan( 1, (int) get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
 		$this->assertSame( array( 'apr_ok1', 'apr_ok2' ), array_keys( mcpwp_test_approvals_all() ) );
 		$this->assertSame( array( 'apr_deep', 'apr_bad' ), get_option( Mcpwp_Approvals::SKIPPED_OPTION ) );
 		$this->assertFalse( $GLOBALS['mcpwp_test_options_autoload'][ Mcpwp_Approvals::SKIPPED_OPTION ] );
@@ -179,7 +179,7 @@ final class ApprovalsTableRound1Test extends TestCase {
 		$now = gmdate( 'c' );
 		update_option( Mcpwp_Approvals::OPTION_NAME, array( 'apr_first' => array( 'id' => 'apr_first', 'status' => 'pending', 'action' => 'destructive_operation', 'requested_by_key_id' => 'k1', 'created_at' => $now, 'updated_at' => $now ) ), false );
 		$this->assertTrue( Mcpwp_Activator::migrate_approvals_to_table() );
-		$this->assertSame( 1, get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
+		$this->assertGreaterThan( 1, (int) get_option( Mcpwp_Approvals::MIGRATED_FLAG ) );
 
 		// An old-code worker (or a stint downgraded to 3.14.8) writes the
 		// option again: a new id, plus a stale copy of one already migrated.

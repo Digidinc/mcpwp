@@ -124,6 +124,20 @@ class Mcpwp_Loader {
 		$this->add_action( 'admin_post_mcpwp_broker_connect', $broker_admin, 'handle_connect' );
 		$this->add_action( 'admin_post_mcpwp_broker_disconnect', $broker_admin, 'handle_disconnect' );
 
+		// Local OAuth (PR-2 D10): Setup → Advanced switch + one-time notice.
+		$this->add_action( 'admin_notices', 'Mcpwp_OAuth_Local_Admin', 'render_notice' );
+		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Local_Admin::TOGGLE_ACTION, 'Mcpwp_OAuth_Local_Admin', 'handle_toggle' );
+		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Local_Admin::DISMISS_ACTION, 'Mcpwp_OAuth_Local_Admin', 'handle_dismiss' );
+		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Local_Admin::ADDRESS_DISMISS_ACTION, 'Mcpwp_OAuth_Local_Admin', 'handle_address_dismiss' );
+
+		// Connected AI apps (#1101 PR-3b): the app list's Remove, and the
+		// profile section with per-app Revoke / Disconnect all.
+		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Apps_Admin::DELETE_ACTION, 'Mcpwp_OAuth_Apps_Admin', 'handle_delete' );
+		$this->add_action( 'show_user_profile', 'Mcpwp_OAuth_Apps_Admin', 'render_profile_section' );
+		$this->add_action( 'edit_user_profile', 'Mcpwp_OAuth_Apps_Admin', 'render_profile_section' );
+		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Apps_Admin::REVOKE_ACTION, 'Mcpwp_OAuth_Apps_Admin', 'handle_revoke_request' );
+		$this->add_action( 'admin_post_' . Mcpwp_OAuth_Apps_Admin::DISCONNECT_ALL_ACTION, 'Mcpwp_OAuth_Apps_Admin', 'handle_disconnect_all' );
+
 		// WebMCP in wp-admin (#981): script + origin-trial meta, both no-ops
 		// unless switched on and the user qualifies.
 		$this->add_action( 'admin_enqueue_scripts', 'Mcpwp_WebMCP', 'enqueue' );
@@ -162,6 +176,12 @@ class Mcpwp_Loader {
 		$this->add_action( 'rest_api_init', $this, 'register_rest_routes' );
 		$this->add_action( 'init', $ai_presence, 'register' );
 		$this->add_action( 'init', $indexnow, 'register' );
+		// Audit all WooCommerce REST doors, including internal batch dispatch.
+		$this->add_filter( 'rest_pre_dispatch', 'Mcpwp_WooCommerce_Audit', 'rest_dispatch', PHP_INT_MAX, 3 );
+		$this->add_filter( 'rest_dispatch_request', 'Mcpwp_WooCommerce_Audit', 'capture_dispatch', PHP_INT_MAX, 4 );
+		$this->add_filter( 'rest_dispatch_request', 'Mcpwp_WooCommerce_Audit', 'scope_dispatch', PHP_INT_MAX, 4 );
+		$this->add_filter( 'rest_request_after_callbacks', 'Mcpwp_WooCommerce_Audit', 'rest_result', 10, 3 );
+		$this->add_filter( 'site_status_tests', 'Mcpwp_WooCommerce_Audit', 'register_site_health' );
 		// Attach rate-limit headers to both success and error responses.
 		$this->add_filter( 'rest_post_dispatch', $this, 'add_mcpwp_rate_limit_headers', 10, 3 );
 		// Ensure log cleanup cron is scheduled and executed.
@@ -299,7 +319,6 @@ class Mcpwp_Loader {
 
 		// Content graph and internal links
 		$content_graph_controller = new Mcpwp_REST_Content_Graph();
-		$content_graph_controller->register_routes();
 
 		// Site graph read surface (#943 S2)
 		if ( class_exists( 'Mcpwp_REST_Graph' ) ) {
@@ -309,7 +328,6 @@ class Mcpwp_Loader {
 
 		// SEO audit
 		$seo_audit_controller = new Mcpwp_REST_SEO_Audit();
-		$seo_audit_controller->register_routes();
 
 		// SEO market data — visibility and opportunities
 		$seo_market = new Mcpwp_REST_SEO_Market();
@@ -321,7 +339,6 @@ class Mcpwp_Loader {
 
 		// Content quality
 		$content_quality_controller = new Mcpwp_REST_Content_Quality();
-		$content_quality_controller->register_routes();
 
 		// Posts
 		$posts_controller = new Mcpwp_REST_Posts();

@@ -180,6 +180,7 @@ Then confirm the release PR's title changed to the pinned version before merging
 - [ ] PHP 7.4 lint clean on production files
 - [ ] Behaviour changes have Upgrade Notes
 - [ ] Auth, credential and write-path changes in this release passed adversarial review
+- [ ] `bash mcpwp/tests/rig/oauth-connect-e2e.sh` exits 0 (OAuth connect flow against a real WordPress, ~2 min, throwaway `e2e-oauth-*` stack). Add `--keep` for a human joint test with a real connector; `--down` removes it
 
 ## Post-release verification
 

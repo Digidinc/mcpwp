@@ -9,6 +9,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once dirname( __DIR__, 2 ) . '/class-mcpwp-activator.php';
+require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-encryption.php';
+require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-custom-code-cache-entry.php';
+
 /**
  * REST API controller for Elementor Pro features.
  *
@@ -23,6 +27,19 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @var string
 	 */
 	private $custom_code_cpt = 'elementor_snippet';
+
+	/** Quarantine reporting belongs only to authorized Custom Code responses. */
+	private function custom_code_success_response( $data, $status = 200, $read_report = false ) {
+		if ( is_array( $data ) && $this->custom_code_admin_reporting_allowed() ) {
+			$data = Mcpwp_Custom_Code_Conditions::annotate_response( $data, $read_report );
+		}
+		return parent::success_response( $data, $status );
+	}
+
+	private function custom_code_admin_reporting_allowed() {
+		$record = $this->get_current_api_key_record();
+		return is_array( $record ) && $this->key_has_scope( $record, 'admin' );
+	}
 
 	/**
 	 * Elementor Pro handler.
@@ -240,22 +257,6 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			)
 		);
 
-		// Widgets.
-		register_rest_route(
-			$this->namespace,
-			'/elementor/widgets',
-			array(
-				'methods'             => WP_REST_Server::READABLE,
-				'callback'            => array( $this, 'get_widgets' ),
-				'permission_callback' => array( $this, 'check_permission' ),
-				'args'                => array(
-					'widget' => array(
-						'description' => __( 'Widget type name to get full controls schema.', 'mcpwp' ),
-						'type'        => 'string',
-					),
-				),
-			)
-		);
 
 		// Globals.
 		register_rest_route(
@@ -479,6 +480,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			)
 		);
 
+		$args['update_post_meta_cache'] = false;
 		$args['post_type']      = $this->custom_code_cpt;
 		$args['posts_per_page'] = isset( $args['posts_per_page'] ) ? $args['posts_per_page'] : 50;
 		$args['paged']          = isset( $args['paged'] ) ? $args['paged'] : 1;
@@ -492,14 +494,16 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'list_elementor_custom_code', $request, array( 'count' => count( $snippets ) ) );
 
-		return $this->success_response(
+		return $this->custom_code_success_response(
 			array(
 				'snippets'  => $snippets,
 				'total'     => (int) $query->found_posts,
 				'page'      => (int) $args['paged'],
 				'per_page'  => (int) $args['posts_per_page'],
 				'post_type' => $this->custom_code_cpt,
-			)
+			),
+			200,
+			true
 		);
 	}
 
@@ -517,7 +521,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		}
 
 		if ( ! empty( $prepared['dry_run'] ) ) {
-			return $this->success_response(
+			return $this->custom_code_success_response(
 				array(
 					'dry_run'  => true,
 					'valid'    => true,
@@ -527,6 +531,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			);
 		}
 
+		return $this->create_custom_code_prepared( $request, $prepared );
+	}
+
+	private function create_custom_code_prepared( $request, $prepared ) {
 		$post_id = wp_insert_post(
 			array(
 				'post_type'     => $this->custom_code_cpt,
@@ -549,27 +557,41 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response_from_wp_error( $post_id );
 		}
 
-		$meta_result = $this->save_custom_code_meta( $post_id, $prepared );
-		if ( is_wp_error( $meta_result ) ) {
-			wp_delete_post( $post_id, true );
-			return $this->error_response_from_wp_error( $meta_result );
-		}
-		if ( 'draft' !== $prepared['status'] ) {
-			$published = wp_update_post( array( 'ID' => $post_id, 'post_status' => $prepared['status'], 'page_template' => 'default' ), true );
-			if ( is_wp_error( $published ) || ! $published ) {
-				wp_delete_post( $post_id, true );
-				return is_wp_error( $published ) ? $this->error_response_from_wp_error( $published ) : $this->error_response( 'custom_code_publish_failed', __( 'Custom Code could not be published.', 'mcpwp' ), 500 );
+		try {
+			if ( class_exists( 'Mcpwp_Action_Log' ) ) {
+				Mcpwp_Action_Log::capture_custom_code_create( $post_id );
 			}
+			$saved = $this->save_custom_code_meta( $post_id, $prepared );
+			if ( is_wp_error( $saved ) ) {
+				$this->log_activity( 'create_elementor_custom_code', $request, null, $this->get_wp_error_status( $saved ) );
+				return $saved;
+			}
+
+			// Conditions and source must be ready before the snippet can run.
+			if ( 'publish' === $prepared['status'] ) {
+				$published = wp_update_post( array( 'ID' => $post_id, 'post_status' => 'publish', 'page_template' => 'default' ), true );
+				if ( is_wp_error( $published ) ) {
+					return new WP_Error( 'custom_code_publish_failed', __( 'Custom Code could not be published. Read the snippet before retrying an update.', 'mcpwp' ), array( 'status' => 500, 'resource_id' => (int) $post_id, 'partial_write' => true ) );
+				}
+				$synced = $this->sync_custom_code_conditions_cache( $post_id );
+				if ( is_wp_error( $synced ) ) {
+					return $synced;
+				}
+			}
+
+			$data = array(
+				'id'      => (int) $post_id,
+				'snippet' => $this->format_custom_code_snippet( get_post( $post_id ), true, $prepared['code'] ),
+			);
+
+			$this->log_activity( 'create_elementor_custom_code', $request, $this->redact_custom_code_payload( $data ) );
+
+			return $this->custom_code_success_response( $data, 201 );
+		} catch ( \Throwable $exception ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP Custom Code create failed for snippet ' . (int) $post_id . ': ' . $exception->getMessage() );
+			return new WP_Error( 'custom_code_save_failed', __( 'Custom Code could not be saved. Read the snippet before retrying an update.', 'mcpwp' ), array( 'status' => 500, 'resource_id' => (int) $post_id, 'partial_write' => true ) );
 		}
-
-		$data = array(
-			'id'      => (int) $post_id,
-			'snippet' => $this->format_custom_code_snippet( get_post( $post_id ), true, $prepared['code'] ),
-		);
-
-		$this->log_activity( 'create_elementor_custom_code', $request, $this->redact_custom_code_payload( $data ) );
-
-		return $this->success_response( $data, 201 );
 	}
 
 	/**
@@ -591,7 +613,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'get_elementor_custom_code', $request, array( 'id' => (int) $post->ID ) );
 
-		return $this->success_response( $data );
+		return $this->custom_code_success_response( $data, 200, true );
 	}
 
 	/**
@@ -605,6 +627,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		if ( is_wp_error( $post ) ) {
 			$this->log_activity( 'update_elementor_custom_code', $request, null, 404 );
 			return $post;
+		}
+
+		$inspection = Mcpwp_Custom_Code_Conditions::inspect( $post->ID );
+		if ( null === $request->get_param( 'conditions' ) && is_wp_error( $inspection ) && 'conditions_too_large' === $inspection->get_error_code() ) {
+			return $inspection;
 		}
 
 		$prepared = $this->prepare_custom_code_payload( $request, false );
@@ -639,7 +666,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				$effective['conditions'] = $this->get_custom_code_conditions( $post->ID );
 			}
 
-			return $this->success_response(
+			return $this->custom_code_success_response(
 				array(
 					'dry_run' => true,
 					'valid'   => true,
@@ -650,6 +677,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			);
 		}
 
+		return $this->update_custom_code_prepared( $request, $post, $prepared );
+	}
+
+	private function update_custom_code_prepared( $request, $post, $prepared ) {
 		$post_update = array(
 			'ID'            => (int) $post->ID,
 			// wp_update_post() fetches the full existing post row and merges
@@ -675,6 +706,17 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		if ( array_key_exists( 'code', $prepared ) ) {
 			$post_update['post_content'] = $prepared['code'];
 		}
+		if ( isset( $prepared['status'] ) ) {
+			$post_update['post_status'] = $prepared['status'];
+		}
+
+		// Keep the existing post fields intact if Pro refuses conditions.
+		$saved = $this->save_custom_code_meta( (int) $post->ID, $prepared );
+		if ( is_wp_error( $saved ) ) {
+			$this->log_activity( 'update_elementor_custom_code', $request, null, $this->get_wp_error_status( $saved ) );
+			return $saved;
+		}
+
 		$updated = wp_update_post( $post_update, true );
 		if ( is_wp_error( $updated ) ) {
 			$status = $this->get_wp_error_status( $updated );
@@ -682,15 +724,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response_from_wp_error( $updated );
 		}
 
-		$meta_result = $this->save_custom_code_meta( (int) $post->ID, $prepared );
-		if ( is_wp_error( $meta_result ) ) {
-			return $this->error_response_from_wp_error( $meta_result );
-		}
-		if ( isset( $prepared['status'] ) && $prepared['status'] !== $post->post_status ) {
-			$status_result = wp_update_post( array( 'ID' => (int) $post->ID, 'post_status' => $prepared['status'], 'page_template' => 'default' ), true );
-			if ( is_wp_error( $status_result ) || ! $status_result ) {
-				return is_wp_error( $status_result ) ? $this->error_response_from_wp_error( $status_result ) : $this->error_response( 'custom_code_status_write_failed', __( 'Custom Code status was not stored.', 'mcpwp' ), 500 );
-			}
+
+		$synced = $this->sync_custom_code_conditions_cache( (int) $post->ID );
+		if ( is_wp_error( $synced ) ) {
+			return $synced;
 		}
 
 		$data = array(
@@ -704,7 +741,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'update_elementor_custom_code', $request, $this->redact_custom_code_payload( $data ) );
 
-		return $this->success_response( $data );
+		return $this->custom_code_success_response( $data );
 	}
 
 	/**
@@ -788,10 +825,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			}
 
 			// An Elementor key is read as its real (unserialized) value and
-			// written back through the one chokepoint (#829 review round 3):
-			// get_post_meta( $id ) returns `_elementor_page_settings` as a
-			// serialized string, which used to be stripped as text and stored
-			// back as a string — serialized twice, and no longer settings.
+			// written back through the one chokepoint (#829): get_post_meta( $id )
+			// returns `_elementor_page_settings` as a serialized string, which
+			// would be stripped as text and stored back serialized twice.
 			if ( in_array( $key, Mcpwp_Elementor_Meta_Write::KEYS, true ) ) {
 				$current = get_post_meta( $id, $key, true );
 				$fixed   = $this->strip_wrapper_html_tags_deep( $current );
@@ -834,7 +870,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'sanitize_elementor_custom_code', $request, $result );
 
-		return $this->success_response( $result );
+		return $this->custom_code_success_response( $result );
 	}
 
 	/**
@@ -869,11 +905,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			);
 		}
 
-		if ( 'publish' === $status ) {
-			$sync_result = $this->sync_custom_code_conditions_cache( $id );
-			if ( is_wp_error( $sync_result ) ) {
-				return $this->error_response_from_wp_error( $sync_result );
-			}
+		$inspection = Mcpwp_Custom_Code_Conditions::inspect( $id );
+		if ( 'publish' === $status && is_wp_error( $inspection ) && 'conditions_too_large' === $inspection->get_error_code() ) {
+			return $inspection;
 		}
 
 		$update = wp_update_post(
@@ -889,7 +923,6 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			$this->log_activity( 'set_elementor_custom_code_status', $request, null, $status );
 			return $this->error_response_from_wp_error( $update );
 		}
-
 		// #974/#976 review W1: enable_custom_code()/disable_custom_code()
 		// are a status-only change that never runs through
 		// save_custom_code_meta() at all — without this, a snippet created
@@ -897,11 +930,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		// status-filtered regenerate() never wrote in the first place) and
 		// later enabled here would stay permanently absent from Elementor
 		// Pro's real conditions cache and never render.
-		if ( 'publish' !== $status ) {
-			$sync_result = $this->sync_custom_code_conditions_cache( $id );
-			if ( is_wp_error( $sync_result ) ) {
-				return $this->error_response_from_wp_error( $sync_result );
-			}
+		$synced = $this->sync_custom_code_conditions_cache( $id );
+		if ( is_wp_error( $synced ) ) {
+			return $synced;
 		}
 
 		$data = array(
@@ -912,7 +943,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$this->log_activity( 'set_elementor_custom_code_status', $request, $data );
 
-		return $this->success_response( $data );
+		return $this->custom_code_success_response( $data );
 	}
 
 	/**
@@ -1096,7 +1127,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			if ( ! is_array( $conditions ) ) {
 				return $this->error_response( 'invalid_conditions', __( 'conditions must be an array.', 'mcpwp' ), 400 );
 			}
-			$payload['conditions'] = $this->normalize_custom_code_conditions( $conditions );
+			$converted = Mcpwp_Custom_Code_Conditions::convert( $conditions );
+			if ( is_wp_error( $converted ) ) {
+				if ( 'conditions_too_large' === $converted->get_error_code() ) {
+					return $converted;
+				}
+				return $this->error_response( 'invalid_conditions', __( 'Every display condition must be convertible without changing its scope.', 'mcpwp' ), 400 );
+			}
+			$payload['conditions'] = $this->normalize_custom_code_conditions( $converted );
 		} elseif ( $creating ) {
 			$payload['conditions'] = $this->normalize_custom_code_conditions( array() );
 		}
@@ -1274,6 +1312,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		$normalized = array();
 		foreach ( $conditions as $condition ) {
+			if ( is_string( $condition ) ) {
+				list( $type, $name, $sub_name, $sub_id ) = array_pad( explode( '/', $condition, 4 ), 4, '' );
+				$condition = compact( 'type', 'name', 'sub_name', 'sub_id' );
+			}
 			if ( ! is_array( $condition ) ) {
 				continue;
 			}
@@ -1488,6 +1530,12 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $allcaps;
 		}
 
+		// While an Elementor meta write is vouching/suspending grants, this one
+		// stays out too, like the writer-trait grants (#829).
+		if ( class_exists( 'Mcpwp_Elementor_Meta_Write', false ) && Mcpwp_Elementor_Meta_Write::grants_suspended() ) {
+			return $allcaps;
+		}
+
 		$user_id = ( $user instanceof \WP_User ) ? (int) $user->ID : 0;
 
 		if ( $user_id < 1 || $user_id !== self::$custom_code_unfiltered_user ) {
@@ -1649,342 +1697,121 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 *
 	 * @param int   $post_id  Snippet post ID.
 	 * @param array $payload  Prepared payload.
+	 * @return true|WP_Error Verified metadata or a partial-write receipt.
 	 */
-	private function custom_code_meta_raw( $post_id, $key ) {
-		global $wpdb;
-		$raw = $wpdb->get_var(
-			$wpdb->prepare(
-				"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = %s ORDER BY meta_id DESC LIMIT 1",
-				(int) $post_id,
-				$key
-			)
-		);
-		wp_cache_delete( (int) $post_id, 'post_meta' );
-		return $raw;
-	}
-
-	private function custom_code_meta_matches( $post_id, $key, $expected ) {
-		return $expected === maybe_unserialize( $this->custom_code_meta_raw( $post_id, $key ) );
-	}
-
 	private function save_custom_code_meta( $post_id, $payload ) {
+		if ( isset( $payload['conditions'] ) ) {
+			$result = $this->save_custom_code_conditions( $post_id, $payload['conditions'] );
+			update_post_meta(
+				$post_id,
+				'_mcpwp_custom_code_conditions_engine',
+				is_wp_error( $result ) ? 'fallback_meta' : (string) $result
+			);
+			if ( is_wp_error( $result ) ) {
+				return $result;
+			}
+		}
+
 		if ( isset( $payload['location'] ) ) {
 			$map               = $this->get_custom_code_location_map();
 			$internal_location = isset( $map[ $payload['location'] ] ) ? $map[ $payload['location'] ] : $payload['location'];
 			update_post_meta( $post_id, '_elementor_location', $internal_location );
-			if ( ! $this->custom_code_meta_matches( $post_id, '_elementor_location', $internal_location ) ) {
-				return new WP_Error( 'custom_code_meta_write_failed', __( 'Custom Code location was not stored.', 'mcpwp' ), array( 'status' => 500 ) );
-			}
 		}
 
 		if ( array_key_exists( 'code', $payload ) ) {
 			$this->write_custom_code_meta( $post_id, $payload['code'] );
-			if ( ! $this->custom_code_meta_matches( $post_id, '_elementor_code', $payload['code'] ) ) {
-				return new WP_Error( 'custom_code_meta_write_failed', __( 'Custom Code content was not stored.', 'mcpwp' ), array( 'status' => 500 ) );
-			}
 		}
 
 		if ( isset( $payload['priority'] ) ) {
 			update_post_meta( $post_id, '_elementor_priority', (int) $payload['priority'] );
-			if ( ! $this->custom_code_meta_matches( $post_id, '_elementor_priority', (string) (int) $payload['priority'] ) ) {
-				return new WP_Error( 'custom_code_meta_write_failed', __( 'Custom Code priority was not stored.', 'mcpwp' ), array( 'status' => 500 ) );
-			}
 		}
 
 		update_post_meta( $post_id, '_elementor_edit_mode', 'builder' );
-		if ( ! $this->custom_code_meta_matches( $post_id, '_elementor_edit_mode', 'builder' ) ) {
-			return new WP_Error( 'custom_code_meta_write_failed', __( 'Custom Code edit mode was not stored.', 'mcpwp' ), array( 'status' => 500 ) );
-		}
 
 		if ( array_key_exists( 'wrapper_tags_removed', $payload ) ) {
 			update_post_meta( $post_id, '_mcpwp_wrapper_tags_removed', (bool) $payload['wrapper_tags_removed'] ? '1' : '0' );
 		}
 
-		if ( isset( $payload['conditions'] ) ) {
-			$result = $this->save_custom_code_conditions( $post_id, $payload['conditions'] );
-			if ( is_wp_error( $result ) ) {
-				return $result;
-			}
-			if ( null === $this->custom_code_meta_raw( $post_id, '_elementor_conditions' ) || $this->normalize_custom_code_conditions( $payload['conditions'] ) !== $this->get_custom_code_conditions( $post_id ) ) {
-				return new WP_Error( 'custom_code_meta_write_failed', __( 'Custom Code conditions were not stored.', 'mcpwp' ), array( 'status' => 500 ) );
-			}
-			update_post_meta(
-				$post_id,
-				'_mcpwp_custom_code_conditions_engine',
-				(string) $result
-			);
-		}
-
-		// #974/#976 review W1 + W2: unconditional, regardless of which
-		// fields this call actually touched — location alone is enough to
-		// leave the cache stale (W2), and this is also the ONLY place a
-		// freshly created snippet's cache entry gets written at all. See
-		// sync_custom_code_conditions_cache()'s docblock.
-		$sync_result = $this->sync_custom_code_conditions_cache( $post_id );
-		return is_wp_error( $sync_result ) ? $sync_result : null;
+		// The caller verifies the display cache after finalizing post status.
+		return true;
 	}
 
 	/**
-	 * Save Elementor display conditions through Elementor Pro when available.
+	 * Persist the canonical condition strings and verify only this document.
+	 * Full-site Pro cache regeneration is reserved for operator rebuilds.
 	 *
-	 * Used to also call update_custom_code_conditions_index() here, writing
-	 * `elementor_pro_theme_builder_conditions` itself under the same wrong
-	 * axis #976 removed from Mcpwp_Theme_Builder — `{ condition_key =>
-	 * [post_ids] }` instead of Elementor Pro's real `{ location =>
-	 * { post_id => [condition_strings] } }`. Elementor Pro's own Custom Code
-	 * renderer (modules/custom-code/module.php print_snippets()) never reads
-	 * that option directly either way: it always goes through
-	 * `Plugin::instance()->modules_manager->get_modules('theme-builder')
-	 * ->get_conditions_manager()->get_documents_for_location()`, which reads
-	 * Elementor's own Conditions_Cache in its real shape — confirmed against
-	 * the installed Elementor Pro source. So the wrong-axis write was pure
-	 * dead weight in the common case (immediately below, where
-	 * Conditions_Manager::save_conditions() + regenerate() write the real
-	 * shape and would just overwrite it), and in the case where those
-	 * ThemeBuilder classes are not loaded at all, that same renderer cannot
-	 * run either — Custom Code's frontend print path hard-depends on the
-	 * ThemeBuilder module, so there is no live scenario where writing that
-	 * option ourselves would ever be read back by anything. Removed
-	 * entirely, same fix as #976.
-	 *
-	 * @param int   $post_id    Snippet post ID.
-	 * @param array $conditions Normalized conditions.
-	 * @return string|WP_Error Save engine name or error.
+	 * @param int   $post_id Snippet ID.
+	 * @param array $conditions Validated condition maps.
+	 * @return string|WP_Error Save engine or recoverable failure receipt.
 	 */
 	private function save_custom_code_conditions( $post_id, $conditions ) {
-		update_post_meta( $post_id, '_elementor_conditions', $conditions );
-
-		if (
-			class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' )
-			&& class_exists( '\\Elementor\\Plugin' )
-			&& method_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module', 'instance' )
-		) {
-			try {
-				$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-				$saved = $conditions_manager->save_conditions( $post_id, $conditions );
-				if ( false === $saved ) {
-					return new WP_Error( 'conditions_save_failed', __( 'Elementor Pro did not save the Custom Code conditions.', 'mcpwp' ), array( 'status' => 500 ) );
-				}
-
-				if ( method_exists( $conditions_manager, 'get_cache' ) ) {
-					$cache = $conditions_manager->get_cache();
-					if ( $cache && method_exists( $cache, 'regenerate' ) ) {
-						$cache->regenerate();
-					}
-				}
-
-				return 'elementor_pro_conditions_manager';
-			} catch ( \Throwable $exception ) {
-				return new WP_Error( 'conditions_save_failed', $exception->getMessage(), array( 'status' => 500 ) );
+		$snapshot = Mcpwp_Custom_Code_Conditions::inspect( $post_id );
+		$previous = is_wp_error( $snapshot )
+			? ( 'conditions_too_large' === $snapshot->get_error_code() ? null : Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id ) )
+			: $snapshot['raw'];
+		try {
+			$strings = Mcpwp_Custom_Code_Conditions::convert( $conditions );
+			if ( is_wp_error( $strings ) ) {
+				throw new RuntimeException( $strings->get_error_message() );
 			}
+			update_post_meta( $post_id, '_elementor_conditions', wp_slash( $strings ) );
+			Mcpwp_Custom_Code_Conditions::invalidate_cache_view( $post_id );
+			if ( Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id ) !== $strings ) {
+				throw new RuntimeException( 'Condition metadata was not persisted.' );
+			}
+			Mcpwp_Custom_Code_Conditions::clear_quarantine( $post_id );
+			return class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' ) && class_exists( '\\Elementor\\Plugin' ) ? 'mcpwp_conditions_cache_entry' : 'fallback_meta';
+		} catch ( \Throwable $exception ) {
+			try {
+				if ( null !== $previous ) {
+					update_post_meta( $post_id, '_elementor_conditions', wp_slash( $previous ) );
+					Mcpwp_Custom_Code_Conditions::invalidate_cache_view( $post_id );
+				}
+			} catch ( \Throwable $restore_error ) {
+				// The partial-write receipt covers an unavailable metadata store.
+			}
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP Custom Code conditions save failed: ' . $exception->getMessage() );
+			return new WP_Error( 'conditions_save_failed', __( 'Display conditions could not be saved. Read the snippet before retrying an update.', 'mcpwp' ), array( 'status' => 500, 'resource_id' => (int) $post_id, 'partial_write' => true ) );
 		}
-
-		return 'fallback_meta';
 	}
 
 	/**
-	 * Keep THIS snippet's entry in Elementor Pro's real conditions cache
-	 * in sync with its current location + conditions, regardless of its
-	 * post_status.
+	 * Rebuild and verify this snippet's cache entry without a global rebuild.
+	 * The shared helper merges against the exact stored option bytes and
+	 * retries conflicts at most three times with a short jitter.
 	 *
-	 * #974/#976 review, W1 + W2 (against #990): #976 made
-	 * set_template_conditions()/save_custom_code_conditions() delegate the
-	 * shared `elementor_pro_theme_builder_conditions` option entirely to
-	 * Elementor Pro's own Conditions_Manager/Conditions_Cache — correct
-	 * shape, but `Conditions_Cache::regenerate()`'s rebuild query carries
-	 * no explicit `post_status` (confirmed reading the installed
-	 * conditions-cache.php directly), so outside `is_admin()` — every REST
-	 * request this plugin serves — it matches PUBLISHED posts only. Two
-	 * live consequences, both seen on a real rig:
-	 *
-	 *  - W1: create a snippet as draft with conditions, then enable it
-	 *    (the `/enable` route, or `update status:publish`) — regenerate()
-	 *    ran while it was still draft and never saw it; nothing after
-	 *    `/enable` (a bare wp_update_post() for post_status alone) ever
-	 *    re-runs it. The snippet is genuinely published and correctly
-	 *    conditioned, and never renders.
-	 *  - W2: change ONLY `location` (head -> body_end) on an already-cached
-	 *    snippet. save_custom_code_conditions() — the one place that used
-	 *    to touch the cache at all — only runs when `conditions` is part
-	 *    of the payload; a location-only update never calls it, so the
-	 *    cache keeps filing the snippet under its stale former location.
-	 *
-	 * The fix delegates to Elementor Pro's own API for ONE post directly —
-	 * `Conditions_Cache::update()`/`add()`/`remove()` — instead of the
-	 * status-filtered, whole-site `regenerate()` query. Those methods
-	 * derive the document's CURRENT location (Theme_Document::get_location(),
-	 * which for a Custom Code document resolves `_elementor_location` meta
-	 * — confirmed reading theme-document.php + custom-code/document.php)
-	 * and store whatever conditions are handed to them, with no status
-	 * filter at all. That is safe to do unconditionally, including for a
-	 * draft: Elementor Pro's OWN render gate
-	 * (`Conditions_Manager::get_location_templates()`) re-checks
-	 * `get_post_status() === 'publish'` at render time, on every request —
-	 * a draft's entry sitting in the cache is simply skipped there, never
-	 * rendered. Keeping the cache in permanent sync is therefore both
-	 * simpler and correct, rather than trying to add/remove entries in
-	 * lockstep with publish/draft transitions.
-	 *
-	 * Called unconditionally from the end of save_custom_code_meta()
-	 * (covers create and every update, whichever fields changed) and from
-	 * set_custom_code_status() (covers enable/disable) — the two places a
-	 * Custom Code snippet's status, location, or conditions can change. One
-	 * method, every call site; see #991 below for the delete-side sibling.
-	 *
-	 * @param int $post_id Snippet post ID.
-	 * @return true|WP_Error
+	 * @param int $post_id Snippet ID.
+	 * @return true|WP_Error Verified cache or partial-write receipt.
 	 */
 	private function sync_custom_code_conditions_cache( $post_id ) {
-		if (
-			! class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' )
-			|| ! class_exists( '\\Elementor\\Plugin' )
-			|| ! method_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module', 'instance' )
-		) {
+		$snapshot = Mcpwp_Custom_Code_Conditions::inspect( $post_id );
+		if ( is_wp_error( $snapshot ) ) {
+			Mcpwp_Custom_Code_Conditions::quarantine( $post_id, $snapshot );
+			return Mcpwp_Custom_Code_Cache_Entry::remove( $post_id );
+		}
+		$conditions = $snapshot['conditions'];
+		Mcpwp_Custom_Code_Conditions::clear_quarantine( $post_id );
+		if ( ! class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' ) || ! class_exists( '\\Elementor\\Plugin' ) ) {
 			return true;
 		}
-
-		try {
-			$document = \Elementor\Plugin::instance()->documents->get( $post_id );
-			if ( ! $document ) {
-				return new WP_Error( 'conditions_cache_unavailable', __( 'Elementor Pro could not load this Custom Code document.', 'mcpwp' ), array( 'status' => 500 ) );
-			}
-
-			$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-			if ( ! method_exists( $conditions_manager, 'get_cache' ) ) {
-				return new WP_Error( 'conditions_cache_unavailable', __( 'Elementor Pro conditions cache is unavailable.', 'mcpwp' ), array( 'status' => 500 ) );
-			}
-
-			$cache = $conditions_manager->get_cache();
-			if ( ! $cache ) {
-				return new WP_Error( 'conditions_cache_unavailable', __( 'Elementor Pro conditions cache is unavailable.', 'mcpwp' ), array( 'status' => 500 ) );
-			}
-
-			// #975 WARN-2 pattern: this Cache instance is a per-request
-			// singleton loaded from the option once, at construction. Never
-			// mutate-then-save from a possibly-stale in-memory copy —
-			// refresh from the real option immediately before touching it.
-			if ( method_exists( $cache, 'refresh' ) ) {
-				$cache->refresh();
-			}
-
-			// The exact value Elementor Pro's OWN regenerate() would store
-			// for this post (raw `_elementor_conditions` meta, string-array
-			// form — save_custom_code_conditions() already ran this through
-			// Conditions_Manager::save_conditions(), which overwrites this
-			// meta with that form; never the object-array shape this class
-			// uses for its own API contract).
-			$conditions = get_post_meta( $post_id, '_elementor_conditions', true );
-			$conditions = is_array( $conditions ) ? $conditions : array();
-			$conditions = $this->coerce_conditions_to_strings( $conditions, $post_id );
-
-			if ( method_exists( $cache, 'update' ) ) {
-				$cache->update( $document, $conditions );
-			} elseif ( method_exists( $cache, 'remove' ) && method_exists( $cache, 'add' ) ) {
-				$cache->remove( $post_id )->add( $document, $conditions );
-			} else {
-				return new WP_Error( 'conditions_cache_unavailable', __( 'Elementor Pro cannot update its conditions cache.', 'mcpwp' ), array( 'status' => 500 ) );
-			}
-
-			if ( ! method_exists( $cache, 'save' ) ) {
-				return new WP_Error( 'conditions_cache_unavailable', __( 'Elementor Pro cannot save its conditions cache.', 'mcpwp' ), array( 'status' => 500 ) );
-			}
-			$cache->save();
-			global $wpdb;
-			$stored_raw = $wpdb->get_var(
-				$wpdb->prepare(
-					"SELECT option_value FROM {$wpdb->options} WHERE option_name = %s LIMIT 1",
-					'elementor_pro_theme_builder_conditions'
-				)
-			);
-			$stored = maybe_unserialize( $stored_raw );
-			$location = $document->get_location();
-			if ( ! is_array( $stored ) || ( $stored[ $location ][ (int) $post_id ] ?? null ) !== $conditions ) {
-				return new WP_Error( 'conditions_cache_unverified', __( 'Elementor Pro did not store the approved Custom Code conditions.', 'mcpwp' ), array( 'status' => 500 ) );
-			}
-			return true;
-		} catch ( \Throwable $e ) {
-			return new WP_Error( 'conditions_cache_unverified', __( 'Elementor Pro conditions cache update failed.', 'mcpwp' ), array( 'status' => 500 ) );
+		if ( 'publish' !== get_post_status( $post_id ) ) {
+			return Mcpwp_Custom_Code_Cache_Entry::remove( $post_id );
 		}
+		$location = get_post_meta( $post_id, '_elementor_location', true );
+		$location = is_string( $location ) && '' !== $location ? $location : 'elementor_head';
+		return Mcpwp_Custom_Code_Cache_Entry::sync( $post_id, $location, $conditions );
 	}
 
 	/**
-	 * Guarantee every entry handed to Elementor Pro's real Conditions_Cache
-	 * is a plain string (#974/#976 review round 2, NIT-4).
+	 * Use the upgrade repair's serializer at the cache-write boundary too.
 	 *
-	 * Elementor's OWN `Conditions_Manager::parse_condition()` does
-	 * `explode('/', $condition)` on every entry it reads out of the cache
-	 * — a hard PHP TypeError if `$condition` is anything but a string.
-	 * `_elementor_conditions` should already be all-strings by the time
-	 * sync_custom_code_conditions_cache() reads it (Conditions_Manager::
-	 * save_conditions() overwrites the meta in exactly that form — see
-	 * save_custom_code_conditions()'s docblock), but this is the LAST
-	 * chokepoint before the value reaches Elementor's cache at all, and
-	 * trusting stored meta blindly turns a defensive read into an
-	 * offensive write: the 'fallback_meta' engine (no ThemeBuilder classes
-	 * loaded at save time) leaves the meta in MCPWP's own object-array
-	 * shape, and if those classes ARE loaded by the time this method next
-	 * runs, that stale shape would otherwise be pushed straight into
-	 * Elementor's cache and fatal the next page load that hits
-	 * get_location_templates().
-	 *
-	 * A non-string entry is stringified using the same type/name/sub_name/
-	 * sub_id join Conditions_Manager::save_conditions() itself uses, when
-	 * it carries enough shape to do that; otherwise it is dropped — a
-	 * missing condition is a wrong-but-safe outcome, a fatal front end is
-	 * not. Logged at most once per call, however many entries needed
-	 * fixing, so one bad snippet cannot flood the log.
-	 *
-	 * @param array $conditions Raw values read from `_elementor_conditions` meta.
-	 * @param int   $post_id    Snippet post ID, for the log line only.
-	 * @return string[] Condition strings only.
+	 * @param array $conditions Stored conditions.
+	 * @param int   $post_id    Snippet ID.
+	 * @return string[]|WP_Error Complete conditions in Elementor's persisted format.
 	 */
 	private function coerce_conditions_to_strings( array $conditions, $post_id ) {
-		$strings = array();
-		$altered = false;
-
-		foreach ( $conditions as $condition ) {
-			if ( is_string( $condition ) ) {
-				$strings[] = $condition;
-				continue;
-			}
-
-			$altered = true;
-
-			if ( is_array( $condition ) ) {
-				$stringified = rtrim(
-					implode(
-						'/',
-						array(
-							isset( $condition['type'] ) ? (string) $condition['type'] : '',
-							isset( $condition['name'] ) ? (string) $condition['name'] : '',
-							isset( $condition['sub_name'] ) ? (string) $condition['sub_name'] : '',
-							isset( $condition['sub_id'] ) ? (string) $condition['sub_id'] : '',
-						)
-					),
-					'/'
-				);
-
-				if ( '' !== $stringified ) {
-					$strings[] = $stringified;
-				}
-			}
-
-			// Anything else (int, bool, object, an array with no usable
-			// type/name) is dropped outright — nothing here can be turned
-			// into a condition string Elementor could parse back.
-		}
-
-		if ( $altered ) {
-			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
-			error_log(
-				sprintf(
-					'MCPWP: snippet %d had a non-string _elementor_conditions entry; stringified or dropped before writing Elementor Pro\'s conditions cache.',
-					(int) $post_id
-				)
-			);
-		}
-
-		return $strings;
+		return Mcpwp_Custom_Code_Conditions::convert( $conditions );
 	}
 
 	/**
@@ -2011,27 +1838,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return array Conditions.
 	 */
 	private function get_custom_code_conditions( $post_id ) {
-		if (
-			class_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module' )
-			&& class_exists( '\\Elementor\\Plugin' )
-			&& method_exists( '\\ElementorPro\\Modules\\ThemeBuilder\\Module', 'instance' )
-		) {
-			try {
-				$document = \Elementor\Plugin::instance()->documents->get( $post_id );
-				if ( $document ) {
-					$conditions_manager = \ElementorPro\Modules\ThemeBuilder\Module::instance()->get_conditions_manager();
-					$conditions         = $conditions_manager->get_document_conditions( $document );
-					return is_array( $conditions ) ? $this->normalize_custom_code_conditions( $conditions ) : array();
-				}
-			} catch ( Exception $exception ) {
-				// Fall back to stored meta below.
-			}
-		}
-
-		$conditions = get_post_meta( $post_id, '_elementor_conditions', true );
-		return is_array( $conditions ) ? $this->normalize_custom_code_conditions( $conditions ) : array();
+		return $this->normalize_custom_code_conditions( Mcpwp_Custom_Code_Conditions::raw_conditions( $post_id ) );
 	}
-
 
 	/**
 	 * Redact raw code from activity logs and dry-run summaries.
@@ -2072,6 +1880,15 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return array Formatted snippet.
 	 */
 	private function format_custom_code_snippet( $post, $include_code = false, $submitted_code = null ) {
+		$inspection = Mcpwp_Custom_Code_Conditions::inspect( $post->ID );
+		if ( is_wp_error( $inspection ) && 'conditions_too_large' === $inspection->get_error_code() ) {
+			$data = array( 'id' => (int) $post->ID, 'title' => (string) $post->post_title, 'status' => (string) $post->post_status, 'modified_gmt' => (string) $post->post_modified_gmt, 'conditions' => array() );
+			if ( $this->custom_code_admin_reporting_allowed() ) {
+				$data['quarantined'] = true;
+				$data['quarantine_reason'] = 'conditions_too_large';
+			}
+			return $data;
+		}
 		$meta = get_post_meta( $post->ID );
 
 		$matching_meta_keys = array();
@@ -2126,6 +1943,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		if ( $include_code ) {
 			$data['code'] = $code['content'];
+		}
+
+		if ( $this->custom_code_admin_reporting_allowed() && is_wp_error( $inspection ) ) {
+			$data['quarantined'] = true;
+			$data['quarantine_reason'] = Mcpwp_Custom_Code_Conditions::quarantine_reason( $post->ID );
 		}
 
 		return $data;
@@ -3198,8 +3020,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			if ( 'custom_css' === $key ) {
 				$value = $this->sanitize_kit_custom_css( (string) $value, $warnings );
 				// Stored as sent (#829), so nothing that can end the <style>
-				// element it is printed in: sanitize_kit_custom_css() removes
-				// `</style` but not `</ style` or `< /style`.
+				// element it is printed in. sanitize_kit_custom_css() is
+				// iterated to a fixed point, and this check stays as defence in
+				// depth (also covers `</ style`, `<\/style`, NUL, lookalikes).
 				if ( Mcpwp_Elementor_Meta_Write::css_breaks_out( $value ) ) {
 					return $this->error_response(
 						'kit_css_style_breakout',
@@ -3239,9 +3062,9 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			$warnings[] = __( 'custom_css was not applied: writing kit CSS requires an admin-scoped API key. Other settings were saved.', 'mcpwp' );
 		}
 
-		// custom_css (admin-scoped, already cleaned by sanitize_kit_custom_css(),
-		// which removes any `</style`) is stored as that cleaning left it, not
-		// HTML-escaped; every other string follows the caller's policy (#829).
+		// custom_css (admin-scoped, cleaned by sanitize_kit_custom_css()) is
+		// stored as that cleaning left it, not HTML-escaped; every other string
+		// follows the caller's policy (#829).
 		$written = Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $updated, array( 'raw_paths' => array( 'custom_css' ) ) );
 		if ( is_wp_error( $written ) ) {
 			return $this->error_response_from_wp_error( $written );
@@ -3325,9 +3148,22 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	private function sanitize_kit_custom_css( $css, &$warnings ) {
 		$css = (string) $css;
 
-		// Remove HTML tag sequences (style/script-context breakouts).
-		$css = preg_replace( '#</?[a-z][^>]*>#i', '', $css );
-		$css = str_ireplace( array( '</style', '<style', '<script', '</script' ), '', (string) $css );
+		// Remove HTML tag sequences (style/script-context breakouts). Each pass
+		// can splice the text around a removed piece into a new tag
+		// (`<<b>/s<<a>/styletyle>` -> `</style>`), so repeat to a fixed point.
+		// A bounded loop that still has not settled is emptied rather than kept.
+		for ( $pass = 0; ; $pass++ ) {
+			$prev = $css;
+			$css  = preg_replace( '#</?[a-z][^>]*>#i', '', $css );
+			$css  = str_ireplace( array( '</style', '<style', '<script', '</script' ), '', (string) $css );
+			if ( $css === $prev ) {
+				break;
+			}
+			if ( $pass >= 50 ) {
+				$css = '';
+				break;
+			}
+		}
 
 		// Neutralize dangerous CSS directives (case-insensitive).
 		$patterns = array(

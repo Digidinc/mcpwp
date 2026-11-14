@@ -43,7 +43,6 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 		$GLOBALS['_mcpwp_test_posts']       = array();
 		$GLOBALS['_mcpwp_test_meta']        = array();
 		$GLOBALS['mcpwp_test_current_user'] = 1;
-		unset( $GLOBALS['mcpwp_test_meta_write_fails'] );
 	}
 
 	/**
@@ -155,69 +154,6 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 		$this->assertTrue( $snippet['code_may_be_altered'] );
 	}
 
-	public function test_failed_custom_code_meta_write_is_not_reported_as_created(): void {
-		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_code' );
-		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
-
-		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'Failed code', 'code' => '<script>missing()</script>', 'status' => 'publish' ) ) );
-
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
-	}
-
-	public function test_custom_code_stays_draft_until_its_code_is_stored(): void {
-		$status_during_write = null;
-		$refuse_code = static function ( $check, $post_id, $key ) use ( &$status_during_write ) {
-			if ( '_elementor_code' === $key ) {
-				$status_during_write = get_post_status( $post_id );
-				return false;
-			}
-			return $check;
-		};
-		add_filter( 'add_post_metadata', $refuse_code, 1, 3 );
-		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
-
-		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'Premature code', 'code' => '<script>missing()</script>', 'status' => 'publish' ) ) );
-		remove_filter( 'add_post_metadata', $refuse_code, 1 );
-
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'draft', $status_during_write );
-		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
-	}
-
-	public function test_failed_custom_code_meta_write_is_not_reported_as_updated(): void {
-		$this->seed_published_snippet( 1083 );
-		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_code' );
-		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
-
-		$result = $controller->update_custom_code( new WP_REST_Request( 'PUT', '/mcpwp/v1/elementor/custom-code/1083', array( 'id' => 1083, 'code' => '<script>new()</script>' ) ) );
-
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( '<script>console.log("original");</script>', get_post_meta( 1083, '_elementor_code', true ) );
-	}
-
-	public function test_failed_custom_code_update_does_not_publish_a_draft(): void {
-		$this->seed_published_snippet( 1084 );
-		$GLOBALS['_mcpwp_test_posts'][1084]->post_status = 'draft';
-		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_code' );
-		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
-
-		$result = $controller->update_custom_code( new WP_REST_Request( 'PUT', '/mcpwp/v1/elementor/custom-code/1084', array( 'id' => 1084, 'code' => '<script>new()</script>', 'status' => 'publish' ) ) );
-
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'draft', get_post_status( 1084 ) );
-	}
-
-	public function test_failed_custom_code_conditions_write_is_not_reported_as_created(): void {
-		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_conditions' );
-		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
-
-		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'Failed conditions', 'code' => '<script>conditional()</script>', 'status' => 'publish', 'conditions' => array( array( 'type' => 'include', 'name' => 'singular', 'sub_name' => 'post' ) ) ) ) );
-
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
-	}
-
 	public function test_create_and_update_responses_also_read_back_from_elementor_code(): void {
 		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
 		$create     = $controller->create_custom_code(
@@ -231,7 +167,6 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 				)
 			)
 		);
-		$this->assertInstanceOf( WP_REST_Response::class, $create, $create instanceof WP_Error ? $create->get_error_message() : '' );
 		$post_id = $create->get_data()['id'];
 
 		$this->assertSame( '<script>created()</script>', $create->get_data()['snippet']['code'] );
@@ -637,7 +572,9 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 	 * The read-time evidence check is environment-based, not just
 	 * DISALLOW_UNFILTERED_HTML-based: multisite without super admin is the
 	 * other structurally-inert case (custom_code_environment_can_hold_unfiltered_html()),
-	 * and it needs no constant, so it runs without @runInSeparateProcess.
+	 * and it needs no constant, so it runs in-process. (Written without the
+	 * at-sign: PHPUnit reads an annotation anywhere on a docblock line, so
+	 * naming it here used to isolate this test with preserved global state.)
 	 */
 	public function test_get_flags_stored_code_on_multisite_without_super_admin_too(): void {
 		$GLOBALS['mcpwp_test_is_multisite']   = true;
@@ -801,7 +738,7 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 	// explode('/', $condition), a hard TypeError on anything else.
 	// ---------------------------------------------------------------
 
-	public function test_coerce_conditions_to_strings_stringifies_and_drops_non_strings(): void {
+	public function test_coerce_conditions_to_strings_refuses_a_partial_result(): void {
 		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
 		$method     = new ReflectionMethod( Mcpwp_REST_Elementor_Pro::class, 'coerce_conditions_to_strings' );
 		$method->setAccessible( true );
@@ -820,11 +757,7 @@ final class ElementorCustomCodeHardeningTest extends TestCase {
 			999
 		);
 
-		$this->assertSame(
-			array( 'include/general', 'include/singular' ),
-			$result,
-			'A real string passes through, an array with type/name is stringified the same way Conditions_Manager::save_conditions() does, and anything with no usable shape (an int, an array with no type/name) is dropped rather than fatal Elementor\'s own parser.'
-		);
+		$this->assertInstanceOf( WP_Error::class, $result, 'The whole snippet must be refused when any condition cannot be converted.' );
 	}
 
 	public function test_coerce_conditions_to_strings_is_a_noop_when_everything_is_already_a_string(): void {

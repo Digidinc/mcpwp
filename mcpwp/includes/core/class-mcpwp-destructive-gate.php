@@ -378,6 +378,9 @@ class Mcpwp_Destructive_Gate {
 		$params = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
 
 		unset( $params['_locale'], $params['_wpnonce'], $params['rest_route'], $params['_method'] );
+		// A key sent as ?api_key= (connector links) is a credential, not an
+		// operation parameter — never persist it into the approval record.
+		unset( $params['api_key'] );
 
 		// Only a route the operation owns is ever stored.
 		$bound = self::route_matches_operation( $operation, $method, $route );

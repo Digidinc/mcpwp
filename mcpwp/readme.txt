@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.14.10
+Stable tag: 3.14.12
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -66,7 +66,7 @@ The WordPress.org package is the free core: API keys, scoped access, activity lo
 
 = MCP Server Setup =
 
-**Claude Desktop** (Settings → Connectors → Add custom connector) — enable OAuth in the plugin settings and paste the plain MCP URL; Claude opens your WordPress login to authorize, so no key is stored in the client:
+**Claude Desktop** (Settings → Connectors → Add custom connector) — paste the plain MCP URL (OAuth sign-in is on by default); Claude opens your WordPress login to authorize, so no key is stored in the client:
 
 `https://yoursite.com/wp-json/mcpwp/v1/mcp`
 
@@ -156,6 +156,40 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.14.12 =
+* fix: **approvals:** age-gated, fail-closed shrink of the pre_3149 backup option ([#1053](https://github.com/Digidinc/mcpwp/issues/1053)) ([#1160](https://github.com/Digidinc/mcpwp/issues/1160))
+* fix: **license:** update vendored Freemius SDK 2.13.4 -&gt; 2.13.5 ([#1169](https://github.com/Digidinc/mcpwp/issues/1169))
+
+= 3.14.11 =
+* feat: **oauth:** connected AI apps — persistent hashed tokens, client list and per-user revoke ([#1101](https://github.com/Digidinc/mcpwp/issues/1101)) ([#1117](https://github.com/Digidinc/mcpwp/issues/1117))
+* feat: **oauth:** the site is its own OAuth authorization server — DCR, PKCE, WP-login consent, run-as-user, aud binding, default-on discovery ([#1099](https://github.com/Digidinc/mcpwp/issues/1099))
+* feat: **setup:** "Add to ChatGPT" — one link, no account, never admin ([#1090](https://github.com/Digidinc/mcpwp/issues/1090))
+* fix: **audit:** complete WooCommerce write logging ([#1126](https://github.com/Digidinc/mcpwp/issues/1126))
+* fix: **auth:** a revoked primary key stays revoked ([#1097](https://github.com/Digidinc/mcpwp/issues/1097))
+* fix: **auth:** capability map follow-ups from the [#1103](https://github.com/Digidinc/mcpwp/issues/1103) gates ([#1108](https://github.com/Digidinc/mcpwp/issues/1108)) ([#1165](https://github.com/Digidinc/mcpwp/issues/1165))
+* fix: **auth:** close the scope-only route class — admin-scope stop-gaps now, a route→capability map for user-run principals ([#1103](https://github.com/Digidinc/mcpwp/issues/1103))
+* fix: **auth:** one compare-and-swap write path for the scoped key store; truthful busy answers; prune and document the last-used map ([#1096](https://github.com/Digidinc/mcpwp/issues/1096)) ([#1166](https://github.com/Digidinc/mcpwp/issues/1166))
+* fix: **auth:** per-post map covers every post reference; read-only refs need read_post ([#1101](https://github.com/Digidinc/mcpwp/issues/1101)) ([#1118](https://github.com/Digidinc/mcpwp/issues/1118))
+* fix: **auth:** post-meta id-meta values are post refs; key lowercased, handler's own decoder ([#1121](https://github.com/Digidinc/mcpwp/issues/1121)) ([#1162](https://github.com/Digidinc/mcpwp/issues/1162))
+* fix: **auth:** say what is true when a call is refused, and list only what a key can call ([#1106](https://github.com/Digidinc/mcpwp/issues/1106)) ([#1150](https://github.com/Digidinc/mcpwp/issues/1150))
+* fix: **auth:** the gate reads lists through get_param(), matching the handlers ([#1110](https://github.com/Digidinc/mcpwp/issues/1110)) ([#1111](https://github.com/Digidinc/mcpwp/issues/1111))
+* fix: **content:** read back created pages by ID ([#1127](https://github.com/Digidinc/mcpwp/issues/1127)) ([0fd85c3](https://github.com/Digidinc/mcpwp/commit/0fd85c31b8d7cd0a13de339a755509b447c21d8d)), closes [#1039](https://github.com/Digidinc/mcpwp/issues/1039)
+* fix: **elementor:** honor theme template dry runs ([#1130](https://github.com/Digidinc/mcpwp/issues/1130))
+* fix: **elementor:** repair Custom Code conditions ([#1131](https://github.com/Digidinc/mcpwp/issues/1131))
+* fix: **elementor:** verify underscore widget renders ([#1129](https://github.com/Digidinc/mcpwp/issues/1129))
+* fix: **graph:** single-segment link permalink check; filter resolver fallback to covered types ([#1137](https://github.com/Digidinc/mcpwp/issues/1137))
+* fix: **guardrails:** copy-key segment matching; per-representation advisory tracking ([#996](https://github.com/Digidinc/mcpwp/issues/996)) ([#1158](https://github.com/Digidinc/mcpwp/issues/1158))
+* fix: **integrations:** preserve saved provider fields ([#1128](https://github.com/Digidinc/mcpwp/issues/1128))
+* fix: **menus:** share menu item type parsing ([#1133](https://github.com/Digidinc/mcpwp/issues/1133))
+* fix: **oauth:** bind refresh tokens to their client, revoke per client and user, RFC 7009 ([#1101](https://github.com/Digidinc/mcpwp/issues/1101)) ([#1113](https://github.com/Digidinc/mcpwp/issues/1113))
+* fix: **oauth:** harden the self-hosted OAuth server (scope cap, registration limits, bearer-only tokens, PKCE shape, code replay, uninstall) ([#1149](https://github.com/Digidinc/mcpwp/issues/1149))
+* fix: **oauth:** regression tests for the [#1115](https://github.com/Digidinc/mcpwp/issues/1115) follow-ups; derive a missing refresh family from the token ([#1164](https://github.com/Digidinc/mcpwp/issues/1164))
+* fix: **proxy:** pass the server's initialize instructions and protocol version through both proxies ([#1074](https://github.com/Digidinc/mcpwp/issues/1074)) ([#1157](https://github.com/Digidinc/mcpwp/issues/1157))
+* fix: **release:** attach only the Free and Freemius ZIPs; PHP &lt; 8.2 test guard; checklist for working Actions ([#1081](https://github.com/Digidinc/mcpwp/issues/1081))
+* fix: **rest:** return errors with failure status ([#1125](https://github.com/Digidinc/mcpwp/issues/1125))
+* fix: **routing:** remove shadowed REST handlers ([#1132](https://github.com/Digidinc/mcpwp/issues/1132)) ([5034cd1](https://github.com/Digidinc/mcpwp/commit/5034cd16d83f7620faa5c830d5c56bcc521c29a4)), closes [#1107](https://github.com/Digidinc/mcpwp/issues/1107)
+* fix: **uninstall:** drop the older tables and options on every build ([#995](https://github.com/Digidinc/mcpwp/issues/995)) ([#1159](https://github.com/Digidinc/mcpwp/issues/1159))
 
 = 3.14.10 =
 * feat: **docs:** generate the tool and error reference from a live site ([#1072](https://github.com/Digidinc/mcpwp/issues/1072))

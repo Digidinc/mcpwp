@@ -138,13 +138,15 @@ final class AdminScopeMatrixTest extends TestCase {
 		$this->assertSame( 'admin', $this->h->scope( 'POST', '/mcpwp/v1/action-log/abc123/rollback' ) );
 	}
 
-	// ── Site-blueprints: deploy admin, create/delete/extract read/write ──
+	// ── Site-blueprints: deploy, create and delete admin; reads stay read ──
+	// #1100 phase 1 (was: create/delete at write scope): a stored blueprint
+	// is site-wide configuration, manage_options in wp-admin.
 
 	public function test_site_blueprint_deploy_is_admin(): void {
 		$this->assertSame( 'read', $this->h->scope( 'GET', '/mcpwp/v1/site-blueprints' ) );
-		$this->assertSame( 'write', $this->h->scope( 'POST', '/mcpwp/v1/site-blueprints' ) );
+		$this->assertSame( 'admin', $this->h->scope( 'POST', '/mcpwp/v1/site-blueprints' ) );
 		$this->assertSame( 'read', $this->h->scope( 'GET', '/mcpwp/v1/site-blueprints/extract' ) );
-		$this->assertSame( 'write', $this->h->scope( 'DELETE', '/mcpwp/v1/site-blueprints/bp_1' ) );
+		$this->assertSame( 'admin', $this->h->scope( 'DELETE', '/mcpwp/v1/site-blueprints/bp_1' ) );
 		$this->assertSame( 'admin', $this->h->scope( 'POST', '/mcpwp/v1/site-blueprints/bp_1/deploy' ) );
 	}
 

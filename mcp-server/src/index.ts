@@ -14,8 +14,10 @@ import { join } from "path";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import type { Transport, TransportSendOptions } from "@modelcontextprotocol/sdk/shared/transport.js";
 import {
   CallToolRequestSchema,
+  type JSONRPCMessage,
   LATEST_PROTOCOL_VERSION,
   SUPPORTED_PROTOCOL_VERSIONS,
   ListToolsRequestSchema,
@@ -24,6 +26,7 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 
 import { loadConfig, getActiveSite } from "./config.js";
+import { withUpstreamInstructions } from "./initialize.js";
 import { McpProxy } from "./proxy.js";
 import { runSetup } from "./setup.js";
 
@@ -283,6 +286,17 @@ const server = new Server(
   { capabilities: { tools: {}, resources: {} } }
 );
 
+// Surface protocol/transport errors on stderr. Without this the SDK drops them
+// silently, so a closed session looks like a hang to the host (#1123).
+server.onerror = (error: Error) => {
+  log("error", "stdio transport error", error.message);
+};
+
+// Inbound stdio cap per JSON-RPC line. The SDK default is 10 MiB; on overflow
+// it closes the session without replying. wp_upload_media_b64 takes files up to
+// 10 MB decoded (~13.3 MB base64), so leave headroom for the JSON envelope.
+const STDIO_MAX_BUFFER_SIZE = 16 * 1024 * 1024;
+
 // Host protocol version (#906). The SDK answers the host's `initialize` itself;
 // this derives the version it answered with the same rule, from the SDK's
 // public constants — the requested version if the SDK supports it, else its
@@ -371,14 +385,37 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
 async function main() {
   try {
-    const transport = new StdioServerTransport();
+    // (stdin, stdout, options): undefined selects the process streams.
+    const transport = new StdioServerTransport(undefined, undefined, {
+      maxBufferSize: STDIO_MAX_BUFFER_SIZE,
+    });
     await server.connect(transport);
     // Observe (never alter) inbound messages through the public Transport
     // interface, to learn the host's requested protocol version.
     const deliver = transport.onmessage;
+    let initializeId: unknown;
     transport.onmessage = (message) => {
       noteHostInitialize(message);
+      if ((message as { method?: unknown }).method === "initialize") {
+        initializeId = (message as { id?: unknown }).id;
+      }
       deliver?.(message);
+    };
+    // #1074: the SDK answers `initialize` without instructions. Add the ones
+    // WordPress sent (the "Finding Tools" guidance) to that one response.
+    // Typed through the Transport interface, whose send() takes the options.
+    const out: Transport = transport;
+    const deliverOut = out.send.bind(out);
+    out.send = async (message: JSONRPCMessage, options?: TransportSendOptions) => {
+      const id = "id" in message ? message.id : undefined;
+      if (initializeId !== undefined && id === initializeId) {
+        // Any response to that id ends the wait, an error included (#1074).
+        initializeId = undefined;
+        if ("result" in message) {
+          return deliverOut(withUpstreamInstructions(message, await activeProxy.getInstructions()), options);
+        }
+      }
+      return deliverOut(message, options);
     };
     log("info", `MCPWP Server v${VERSION} running as "${serverName}" (proxy mode)`);
     log("info", `Proxying to: ${site.url} | session: ${sessionId}`);

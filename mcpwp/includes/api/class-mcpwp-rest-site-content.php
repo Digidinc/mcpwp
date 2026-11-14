@@ -625,9 +625,22 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			);
 		}
 
+		// An id-meta's value is canonicalised ONCE: the ids the authorization
+		// guard checked and the value stored below are the same list, for every
+		// principal (#1121). Not an id-meta: the generic decoder, as before.
+		$canonical = self::canonicalize_post_meta_value( $key, $value );
+		if ( is_wp_error( $canonical ) ) {
+			return $this->error_response_from_wp_error( $canonical );
+		}
+		if ( is_array( $canonical ) ) {
+			$value = $canonical['value'];
+		}
+
 		// The featured image goes through the same check as the dedicated
 		// route: it has to be an attachment.
-		if ( '_thumbnail_id' === $key && ! empty( $value ) ) {
+		// Compared lowercase: meta_key collates case-insensitively, so
+		// '_THUMBNAIL_ID' is the same row (#1121).
+		if ( '_thumbnail_id' === strtolower( $key ) && ! empty( $value ) ) {
 			$attachment = get_post( absint( $value ) );
 			if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
 				return $this->error_response( 'invalid_media', __( '_thumbnail_id must be the ID of a media attachment.', 'mcpwp' ), 400 );
@@ -646,11 +659,10 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		}
 
 		// A JSON object/array sent as a string is meant as a structure.
-		if ( is_string( $value ) ) {
-			$trimmed = ltrim( $value );
-			if ( ( '{' === substr( $trimmed, 0, 1 ) || '[' === substr( $trimmed, 0, 1 ) ) && null !== json_decode( $value ) ) {
-				$value = json_decode( $value, true );
-			}
+		// The same decoder the authorization guard reads the value with
+		// (decode_post_meta_value(), #1121).
+		if ( ! is_array( $canonical ) ) {
+			$value = self::decode_post_meta_value( $value );
 		}
 
 		// The same policy as meta on a post write (#797): one answer to "can
@@ -659,6 +671,13 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		$clean = Mcpwp_Post_Fields::validate_meta( array( $key => $value ), true, (string) $post->post_type );
 		if ( is_wp_error( $clean ) ) {
 			return $clean;
+		}
+
+		// #1108: the shared user-run meta authorization (WordPress's
+		// edit_post_meta), the same one every post/page write door applies.
+		$refused = Mcpwp_Post_Fields::meta_write_refusal( $post_id, $clean, (string) $post->post_type );
+		if ( is_wp_error( $refused ) ) {
+			return $this->error_response_from_wp_error( $refused );
 		}
 
 		$deleted = array();

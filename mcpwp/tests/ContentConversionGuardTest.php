@@ -41,6 +41,18 @@ final class ContentConversionGuardTest extends TestCase {
 	private $posts_before = array();
 
 	protected function setUp(): void {
+		// These tests exercise the Elementor writer's conversion guard, not
+		// the content guardrails. Any earlier test that authenticated an API
+		// key leaves Mcpwp_Content_Guardrails' per-request context active (a
+		// process-wide static), and in context its wp_insert_post_data
+		// callback reads the stub post this class seeds, so the outcome
+		// depended on which test ran before. The class owns that
+		// precondition instead (same shape as #1109). The class is only loaded
+		// when another test file requires it, hence the class_exists().
+		if ( class_exists( 'Mcpwp_Content_Guardrails' ) ) {
+			Mcpwp_Content_Guardrails::reset_context_for_tests();
+		}
+
 		$this->meta_before  = $GLOBALS['_mcpwp_test_meta'] ?? array();
 		$this->posts_before = $GLOBALS['_mcpwp_test_posts'] ?? array();
 
@@ -49,6 +61,10 @@ final class ContentConversionGuardTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
+		if ( class_exists( 'Mcpwp_Content_Guardrails' ) ) {
+			Mcpwp_Content_Guardrails::reset_context_for_tests();
+		}
+
 		$GLOBALS['_mcpwp_test_meta']  = $this->meta_before;
 		$GLOBALS['_mcpwp_test_posts'] = $this->posts_before;
 	}

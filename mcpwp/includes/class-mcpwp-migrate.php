@@ -261,7 +261,20 @@ class Mcpwp_Migrate {
 				continue;
 			}
 
-			update_option( $new_key, $legacy_value );
+			if ( 'mcpwp_integrations' === $new_key ) {
+				// A fresh configure may have created the row since the absence
+				// check. A plain INSERT never replaces that winning writer.
+				if ( ! Mcpwp_Encryption::insert_option_row_if_absent( $new_key, maybe_serialize( $legacy_value ), 'yes' ) ) {
+					$row = Mcpwp_Encryption::read_option_row( $new_key );
+					if ( Mcpwp_Encryption::ROW_PRESENT !== $row['state'] ) {
+						throw new RuntimeException( 'Provider legacy import could not be stored; migration will retry.' );
+					}
+					$log['skipped_existing'][] = $new_key;
+					continue;
+				}
+			} else {
+				update_option( $new_key, $legacy_value );
+			}
 			$log['copied'][] = $legacy_key . ' → ' . $new_key;
 		}
 
@@ -373,52 +386,66 @@ class Mcpwp_Migrate {
 		// any that are already present (matched by hash) or already revoked.
 		// -----------------------------------------------------------------------
 		$spai_keys_raw = get_option( 'spai_api_keys', '__NOT_SET__' );
+		$keys_failed   = false;
 		if ( '__NOT_SET__' !== $spai_keys_raw && is_array( $spai_keys_raw ) && ! empty( $spai_keys_raw ) ) {
-			$mcpwp_keys_existing = get_option( 'mcpwp_api_keys', false );
-			if ( false === $mcpwp_keys_existing ) {
-				// mcpwp_api_keys does not exist yet — simple copy.
-				update_option( 'mcpwp_api_keys', $spai_keys_raw );
+			// #1096: written through Mcpwp_Key_Store, the single write path to
+			// mcpwp_api_keys, so this plugin-load migration cannot overwrite a
+			// key created or revoked at the same moment. The decision is made on
+			// the store as read under the lock.
+			if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
+				require_once __DIR__ . '/core/class-mcpwp-key-store.php';
+			}
+			$merge = Mcpwp_Key_Store::mutate(
+				static function ( array $mcpwp_keys, $exists ) use ( $spai_keys_raw ) {
+					if ( ! $exists ) {
+						// mcpwp_api_keys does not exist yet — simple copy.
+						return array( $spai_keys_raw, array( 'copy', count( $spai_keys_raw ) ) );
+					}
+
+					// Build a set of existing hashes for O(1) dedup lookup.
+					$existing_hashes = array();
+					foreach ( $mcpwp_keys as $k ) {
+						if ( ! empty( $k['hash'] ) ) {
+							$existing_hashes[ (string) $k['hash'] ] = true;
+						}
+					}
+
+					$appended = 0;
+					foreach ( $spai_keys_raw as $spai_key ) {
+						if ( ! is_array( $spai_key ) ) {
+							continue;
+						}
+						// Skip revoked spai_ keys — no point importing them.
+						if ( ! empty( $spai_key['revoked_at'] ) ) {
+							continue;
+						}
+						$hash = isset( $spai_key['hash'] ) ? (string) $spai_key['hash'] : '';
+						if ( '' === $hash ) {
+							continue;
+						}
+						// Skip if already present by hash.
+						if ( isset( $existing_hashes[ $hash ] ) ) {
+							continue;
+						}
+						$mcpwp_keys[]             = $spai_key;
+						$existing_hashes[ $hash ] = true;
+						$appended++;
+					}
+
+					return array( $appended > 0 ? $mcpwp_keys : null, array( 'append', $appended ) );
+				},
+				false
+			);
+
+			if ( ! $merge['written'] ) {
+				// Busy store: not marked done, retried on the next request.
+				$keys_failed = true;
+			} elseif ( 'copy' === $merge['result'][0] ) {
 				$log['copied'][] = 'spai_api_keys → mcpwp_api_keys (direct copy)';
+			} elseif ( $merge['result'][1] > 0 ) {
+				$log['copied'][] = 'spai_api_keys → mcpwp_api_keys (appended ' . $merge['result'][1] . ' record(s), no clobber)';
 			} else {
-				// mcpwp_api_keys already exists — append missing entries.
-				$mcpwp_keys = is_array( $mcpwp_keys_existing ) ? $mcpwp_keys_existing : array();
-
-				// Build a set of existing hashes for O(1) dedup lookup.
-				$existing_hashes = array();
-				foreach ( $mcpwp_keys as $k ) {
-					if ( ! empty( $k['hash'] ) ) {
-						$existing_hashes[ (string) $k['hash'] ] = true;
-					}
-				}
-
-				$appended = 0;
-				foreach ( $spai_keys_raw as $spai_key ) {
-					if ( ! is_array( $spai_key ) ) {
-						continue;
-					}
-					// Skip revoked spai_ keys — no point importing them.
-					if ( ! empty( $spai_key['revoked_at'] ) ) {
-						continue;
-					}
-					$hash = isset( $spai_key['hash'] ) ? (string) $spai_key['hash'] : '';
-					if ( '' === $hash ) {
-						continue;
-					}
-					// Skip if already present by hash.
-					if ( isset( $existing_hashes[ $hash ] ) ) {
-						continue;
-					}
-					$mcpwp_keys[]             = $spai_key;
-					$existing_hashes[ $hash ] = true;
-					$appended++;
-				}
-
-				if ( $appended > 0 ) {
-					update_option( 'mcpwp_api_keys', $mcpwp_keys );
-					$log['copied'][] = 'spai_api_keys → mcpwp_api_keys (appended ' . $appended . ' record(s), no clobber)';
-				} else {
-					$log['skipped_existing'][] = 'spai_api_keys (all records already present in mcpwp_api_keys)';
-				}
+				$log['skipped_existing'][] = 'spai_api_keys (all records already present in mcpwp_api_keys)';
 			}
 		} elseif ( '__NOT_SET__' !== $spai_keys_raw ) {
 			// spai_api_keys exists but is empty or not an array — nothing to append.
@@ -490,7 +517,7 @@ class Mcpwp_Migrate {
 		//   - Clear mcpwp_migration_incomplete (previous failed run may have set it).
 		//   - Set MIGRATED_FLAG to '1' — short-circuits all future calls.
 		// -----------------------------------------------------------------------
-		$failed_tables = array();
+		$failed_tables = $keys_failed ? array( 'mcpwp_api_keys' ) : array();
 		foreach ( $log['tables'] as $table_key => $table_entry ) {
 			if ( isset( $table_entry['status'] ) && 'error' === $table_entry['status'] ) {
 				$failed_tables[] = $table_key;

@@ -792,6 +792,30 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 	}
 
 	/**
+	 * #1110: the request-wide template-ref scan reads each key through
+	 * get_param(), as the handler does — a JSON-body null cannot hide a
+	 * query-string elementor_data carrying a gated template reference.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_rest_wiring_refuses_a_gated_template_hidden_behind_a_json_null(): void {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '3.0' );
+		}
+		$controller = new Mcpwp_REST_Elementor();
+		$created    = $controller->create_scoped_api_key( 'designer, no templates', array( 'read', 'write' ), 'custom', array( 'elementor' ) );
+		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/' . self::PAGE_ID, array( 'id' => self::PAGE_ID ), array( 'X-API-Key' => $created['key'] ) );
+		$request->set_query_params( array( 'elementor_data' => $this->tree_with_template_widget( self::ARCHETYPE_ID ) ) );
+		$request->set_json_params( array( 'elementor_data' => null ) );
+		$this->assertNotNull( $request->get_param( 'elementor_data' ), 'The handler would read the query value.' );
+
+		$auth = $controller->check_permission( $request );
+		$this->assertInstanceOf( WP_Error::class, $auth );
+		$this->assertSame( 'not_found', $auth->get_error_code() );
+	}
+
+	/**
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
@@ -1270,14 +1294,40 @@ final class Regression1032TemplateRefGateTest extends TestCase {
 	// every REST controller shares, not a per-controller reimplementation.
 	// =========================================================================
 
+	/**
+	 * #1100 interim: widget/sidebar writes and product creation are admin
+	 * scope, and only an admin-ROLE key (every category) can hold admin
+	 * scope — so no key can both reach these routes and lack
+	 * elementor-templates. A category-restricted write key is now refused
+	 * by the scope gate in front of the template-reference scan; the scan
+	 * itself stays covered on the write-scope routes in this file (blocks,
+	 * media, content-graph, posts, elementor).
+	 */
+	private function is_interim_admin_route( WP_REST_Request $request ): bool {
+		$route = (string) $request->get_route();
+		return 'GET' !== $request->get_method()
+			&& ( preg_match( '#^/mcpwp/v1/(widgets|sidebars)(/|$)#', $route ) || ( 'POST' === $request->get_method() && '/mcpwp/v1/woocommerce/products' === $route ) );
+	}
+
 	private function assert_request_refused( object $controller, WP_REST_Request $request, string $context = '' ): void {
 		$auth = $controller->check_permission( $request );
+		if ( $this->is_interim_admin_route( $request ) ) {
+			$this->assertInstanceOf( WP_Error::class, $auth, $context );
+			$this->assertSame( 'insufficient_scope', $auth->get_error_code(), $context . ' (#1100: refused by admin scope before the scan)' );
+			return;
+		}
 		$this->assertInstanceOf( WP_Error::class, $auth, $context );
 		$this->assertSame( 'not_found', $auth->get_error_code(), $context );
 		$this->assertSame( 'A referenced template was not found.', $auth->get_error_data()['hint'] ?? null, $context );
 	}
 
 	private function assert_request_allowed( object $controller, WP_REST_Request $request, string $context = '' ): void {
+		if ( $this->is_interim_admin_route( $request ) ) {
+			// #1100: same body with an admin-role key — the scan still lets
+			// a non-reference through on these routes.
+			$admin   = $controller->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ) );
+			$request = new WP_REST_Request( $request->get_method(), $request->get_route(), $request->get_params(), array( 'X-API-Key' => $admin['key'] ) );
+		}
 		$this->assertTrue( $controller->check_permission( $request ), $context );
 	}
 

@@ -475,6 +475,14 @@ All endpoints require `X-API-Key` header. Namespace: `mcpwp/v1`.
 | `/categories` | GET | All post categories |
 | `/tags` | GET | All post tags |
 
+On `POST /post-meta/{id}`, when `key` is a known id-meta (`Mcpwp_REST_API::get_post_ref_meta_value_keys()`:
+`_thumbnail_id`, `_product_image_gallery`, `_upsell_ids`, `_crosssell_ids`, `_children`), a user-run
+principal must be able to read every post `value` names (`read_post`, #1121). The key is lowercased
+before the lookup (`meta_key` collates case-insensitively) and the value is read through
+`Mcpwp_REST_API::decode_post_meta_value()`, the same decoder the handler stores with. Negative, signed, out-of-range
+and nested values (anything that does not round-trip as a positive integer) are `400 invalid_post_ref`; more than 500 ids is `400 too_many_ids`; bot keys are
+unchanged. A new id-meta key must be classified in `PostMetaIdRefs1121Test::CLASSIFIED`.
+
 ### Media
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
@@ -723,7 +731,11 @@ anything else — the handshake never fails on version. Every later request foll
 malformed value is an HTTP 400 JSON-RPC error listing the supported versions (the value is not echoed).
 An `initialize` in the same JSON-RPC batch wins over the header. The npm proxy (`mcp-server/`) runs its
 own `initialize` against WordPress with the version its host negotiated and forwards the answer as the
-header on every request after that.
+header on every request after that. Both proxies also pass WordPress's `initialize` `instructions`
+(the "Finding Tools" guidance) on to the client (#1074): the npm proxy patches them into the SDK's
+`initialize` response; the agency gateway (`mcpwp-agency-proxy/`) sends the selected site's (the only
+site, or the `_site` / `X-Mcpwp-Site` hint) plus a `_site` note, or a short generic version when none
+is selected, and forwards the client's `MCP-Protocol-Version` on every upstream call.
 
 Under `2025-06-18`+ tools carry top-level `title`, and tools with a stable result shape
 (`wp_site_info`, `wp_list_pages`, `wp_list_posts`, `wp_get_page_by_slug`) declare an `outputSchema`
@@ -868,6 +880,8 @@ Config stored per-provider in `mcpwp_integrations` wp_option (encrypted). Manage
 |-----|---------|
 | `mcpwp_api_keys` | Stored API key hashes |
 | `mcpwp_api_key` | Single key (legacy) |
+| `mcpwp_api_keys_last_used` | Last-used timestamp per scoped key id (#1090). NOT autoloaded, on purpose (#1096): core's `update_option()` on an autoloaded option force-loads and then sets the `alloptions` cache entry, which also holds the key store, so a stalled touch could write a pre-revoke key store back over a revoke on a persistent cache. Written at most once a minute per key; pruned (best effort) when a key is revoked or rotated. Never written into the key store itself |
+| `mcpwp_api_keys_lock` | Transient lock row (insert-claim, 10 s TTL) taken by `Mcpwp_Key_Store::mutate()`, the write path for `mcpwp_api_keys` used by create, revoke, rotate, the legacy-key migration, the spai key import and the deny-all categories migration (#1096). The store is read from the database row and written by compare-and-swap, so a stalled holder whose lock was stolen cannot overwrite a newer write; a write that cannot be made fails closed. It also refuses a value the `option_value` column cannot hold (a latin1 table would silently truncate the row at the first unencodable character), rolls back a write that does not read back whole, and refuses to build on a corrupt store, which also stops the legacy/spai fallbacks from authenticating; `Mcpwp_Key_Store_Health` reports that state (Site Health "critical" plus an admin notice on every admin screen). The activator's first-key mint and legacy migration (`ensure_api_keys()`, which runs at every plugin update) skip an unreadable store and otherwise write through `mutate()` |
 | `mcpwp_version` | Installed plugin version |
 | `mcpwp_db_version` | DB schema version |
 | `mcpwp_settings` | Plugin settings array (analytics_enabled, logging, etc.) |
@@ -883,8 +897,8 @@ Config stored per-provider in `mcpwp_integrations` wp_option (encrypted). Manage
 | `mcpwp_site_uuid` | Anonymous site UUID for analytics (`mcpwp-<uuid4>`) |
 | `mcpwp_first_activation` | Initial activation timestamp |
 | `mcpwp_approvals_identity_migrated` | One-time flag: on upgrade, purge identity-less pending/approved approvals so a reconnected OAuth principal can't self-approve a pre-fix request |
-| `mcpwp_approvals_table_migrated` | One-time flag (#1042): the approvals queue was copied from the old `mcpwp_approval_requests` option into the `{prefix}mcpwp_approvals` table |
-| `mcpwp_approval_requests_pre_3149` | The old approvals option, renamed by that migration and kept (autoload off) for recovery by hand; a later release removes it |
+| `mcpwp_approvals_table_migrated` | One-time flag (#1042): the approvals queue was copied from the old `mcpwp_approval_requests` option into the `{prefix}mcpwp_approvals` table. Holds the Unix time of that first migration (older sites hold `1`; the backup shrink treats that as "now" on its first pass). Readers must only test truthiness |
+| `mcpwp_approval_requests_pre_3149` | The old approvals option, renamed by that migration (autoload off) as a recovery copy. After `mcpwp_approvals_table_migrated`'s age (90 days) and a per-id check against the table, the hourly cron's `Mcpwp_Activator::cleanup_approvals_backup()` (#1053) shrinks it to an `id => true` tombstone map (kept so a late import cannot resurrect a decided id); it never deletes a non-empty map. Why it was left alone: the `mcpwp_approvals_backup_cleanup_status` transient |
 
 ## WP Hooks
 

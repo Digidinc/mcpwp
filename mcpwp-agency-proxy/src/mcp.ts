@@ -14,7 +14,16 @@
 
 import { getSites } from './registry';
 import { decryptForAgency } from './crypto';
-import { fetchToolsList, forwardToolCall, siteUrl, fetchNoRedirect } from './proxy';
+import {
+  fetchToolsList,
+  forwardToolCall,
+  fetchInitialize,
+  siteUrl,
+  fetchNoRedirect,
+  supportedProtocolVersion,
+  SUPPORTED_PROTOCOL_VERSIONS,
+  LATEST_PROTOCOL_VERSION,
+} from './proxy';
 import type { Env, SiteEntry } from './types';
 
 const PROXY_TOOLS = [
@@ -80,14 +89,68 @@ function trimToLimit(tools: unknown[]): unknown[] {
   return result;
 }
 
-export function handleInitialize(id: unknown): unknown {
+// Shown when no site is selected (several sites, no hint) or the selected site
+// cannot be reached. A selected site's own instructions replace it (#1074).
+const GENERIC_INSTRUCTIONS =
+  '# MCPWP agency gateway\n\n' +
+  'This gateway fronts several WordPress sites. Call `proxy_list_sites` to see them, then set ' +
+  '`_site` on every tool call (or the `X-Mcpwp-Site` header on tools/list to see that site\'s tools).\n\n' +
+  '## Finding Tools\n\n' +
+  'A site\'s tool list is its core set, not everything. Once a site is selected, ' +
+  '`mcpwp_find_tools(query)` searches every other tool on it and returns full parameters, and ' +
+  '`mcpwp_call(name, arguments)` runs the one you pick.';
+
+const GATEWAY_NOTE =
+  '\n\n## Agency gateway\n\n' +
+  'You reach this site through an agency gateway: pass `_site` (this site\'s id from `proxy_list_sites`) ' +
+  'on every tool call, including `mcpwp_find_tools` and `mcpwp_call`.';
+
+/**
+ * handleInitialize (#1074): negotiate the MCP version and carry the selected
+ * site's `instructions` (the "Finding Tools" guidance) to the client.
+ *
+ * Site selection mirrors tools/list: the only site, or the hinted one. With no
+ * selection, or if the site does not answer, a short generic version is sent.
+ * The negotiated version is also what the gateway speaks to the site upstream.
+ */
+export async function handleInitialize(
+  id: unknown,
+  agencyId?: string,
+  env?: Env,
+  siteHint?: string,
+  requestedVersion?: unknown
+): Promise<unknown> {
+  const negotiated = supportedProtocolVersion(requestedVersion) ?? LATEST_PROTOCOL_VERSION;
+  let protocolVersion: string = negotiated;
+  let instructions = GENERIC_INSTRUCTIONS;
+
+  if (agencyId && env) {
+    try {
+      const sites = await getSites(agencyId, env);
+      const target = sites.length === 1 ? sites[0] : sites.find((s) => s.site_id === siteHint);
+      if (target) {
+        const upstream = await fetchInitialize(target, env.ENCRYPTION_KEY, agencyId, negotiated);
+        if (upstream?.instructions) instructions = upstream.instructions + GATEWAY_NOTE;
+        // An older plugin may answer with a lower version and the client must
+        // hear it, but a site never raises the version the client asked for.
+        const answered = supportedProtocolVersion(upstream?.protocolVersion);
+        const order = SUPPORTED_PROTOCOL_VERSIONS as readonly string[];
+        if (answered && order.indexOf(answered) >= order.indexOf(negotiated)) protocolVersion = answered;
+      }
+    } catch (err) {
+      // A registry (KV) failure must not fail the client's handshake.
+      console.warn('[mcpwp-proxy] initialize: site lookup failed:', err);
+    }
+  }
+
   return {
     jsonrpc: '2.0',
     id,
     result: {
-      protocolVersion: '2024-11-05',
+      protocolVersion,
       capabilities: { tools: {} },
       serverInfo: { name: 'mcpwp-agency-proxy', version: '1.0.0' },
+      instructions,
     },
   };
 }
@@ -101,7 +164,8 @@ export async function handleToolsList(
   id: unknown,
   agencyId: string,
   env: Env,
-  siteHint?: string
+  siteHint?: string,
+  protocolVersion?: string | null
 ): Promise<unknown> {
   const sites = await getSites(agencyId, env);
 
@@ -132,7 +196,7 @@ export async function handleToolsList(
   // Fetch tools from the selected site only.
   let upstreamTools: unknown[];
   try {
-    upstreamTools = await fetchToolsList(targetSite, env.ENCRYPTION_KEY, agencyId);
+    upstreamTools = await fetchToolsList(targetSite, env.ENCRYPTION_KEY, agencyId, protocolVersion);
   } catch (err) {
     console.warn(`[mcpwp-proxy] tools/list fetch failed for ${targetSite.site_id}:`, err);
     return { jsonrpc: '2.0', id, result: { tools: PROXY_TOOLS } };
@@ -151,7 +215,8 @@ export async function handleToolsCall(
   id: unknown,
   params: { name: string; arguments: Record<string, unknown> },
   agencyId: string,
-  env: Env
+  env: Env,
+  protocolVersion?: string | null
 ): Promise<unknown> {
   const { name, arguments: args = {} } = params;
 
@@ -229,5 +294,5 @@ export async function handleToolsCall(
     };
   }
 
-  return forwardToolCall(site, name, cleanArgs, env.ENCRYPTION_KEY, id, agencyId);
+  return forwardToolCall(site, name, cleanArgs, env.ENCRYPTION_KEY, id, agencyId, protocolVersion);
 }

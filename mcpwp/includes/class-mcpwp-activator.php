@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/core/class-mcpwp-custom-code-conditions.php';
+
 // mcpwp_activate() (mcpwp.php) requires this file directly, without going
 // through plugins_loaded's own require order — so this file cannot assume
 // the trait is already loaded the way most of the codebase can. Idempotent.
@@ -30,18 +32,7 @@ class Mcpwp_Activator {
 		// Create API role and user
 		self::create_api_role_and_user();
 
-		// Generate API key if not exists
-		if ( ! get_option( 'mcpwp_api_key' ) ) {
-			$api_key = self::generate_api_key();
-			update_option( 'mcpwp_api_key', wp_hash_password( $api_key ) );
-			// Store plain text temporarily so admin can see it on first visit
-			set_transient( 'mcpwp_new_api_key', $api_key, HOUR_IN_SECONDS );
-			// Flag first activation for welcome flow
-			update_option( 'mcpwp_first_activation', true );
-		}
-
-		// Ensure scoped API key store exists for key-level revocation/scopes.
-		self::ensure_scoped_api_keys();
+		self::ensure_api_keys();
 
 		// Set default options
 		if ( false === get_option( 'mcpwp_settings' ) ) {
@@ -530,7 +521,8 @@ class Mcpwp_Activator {
 	 * table holds at least as many rows as were copyable; only then merge the
 	 * option into `mcpwp_approval_requests_pre_3149` (autoload off; ids
 	 * already in the backup win) — kept, not deleted, so a downgrade or a bad
-	 * migration can be recovered by hand; a later release removes it —
+	 * migration can be recovered by hand; cleanup_approvals_backup() (#1053)
+	 * removes it later, fail closed —
 	 * delete the option and set the flag.
 	 *
 	 * Late import (#1042 review round 1, W3): if the option exists again
@@ -677,11 +669,303 @@ class Mcpwp_Activator {
 			}
 
 			update_option( Mcpwp_Approvals::SCHEMA_OPTION, Mcpwp_Approvals::SCHEMA_VERSION );
-			update_option( $flag, 1 );
+			// The flag holds the time of the FIRST migration (the backup's age
+			// gate reads it); every other reader only tests truthiness. A
+			// late import must not move it.
+			if ( ! get_option( $flag ) ) {
+				update_option( $flag, time() );
+			}
 			return true;
 		} finally {
 			self::release_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, $lock_token );
 		}
+	}
+
+	/**
+	 * Transient (a day) holding the last outcome of the backup shrink, so
+	 * "why is it still full" has an answer (#1053). A transient, not an
+	 * option: nothing for the uninstaller to chase.
+	 */
+	const APPROVALS_BACKUP_CLEANUP_STATUS = 'mcpwp_approvals_backup_cleanup_status';
+
+	/** Ids checked per `WHERE id IN (...)` query by the backup shrink. */
+	const APPROVALS_BACKUP_CHECK_CHUNK = 200;
+
+	/**
+	 * The hourly late-import cron (Mcpwp_Approvals::LATE_IMPORT_CRON_HOOK):
+	 * the migration/late import, then the backup shrink — but only when the
+	 * migration answered cleanly, so a failed run never shrinks a backup it
+	 * could not reconcile.
+	 *
+	 * @return true|WP_Error The migration's answer.
+	 */
+	public static function run_approvals_late_import_tick() {
+		$migrated = self::migrate_approvals_to_table();
+		if ( ! is_wp_error( $migrated ) ) {
+			self::cleanup_approvals_backup();
+		}
+		return $migrated;
+	}
+
+	/**
+	 * Shrink `mcpwp_approval_requests_pre_3149` (#1053), the recovery copy
+	 * migrate_approvals_to_table() keeps of the old option.
+	 *
+	 * What it does: once the backup is old enough and the table demonstrably
+	 * holds (or legitimately no longer holds) every record in it, each full
+	 * record is replaced by `true`, leaving an `id => true` tombstone map.
+	 * The late import still needs that map: array_key_exists() on it is what
+	 * stops an already-decided id from being resurrected when an old-code
+	 * worker or a downgrade recreates `mcpwp_approval_requests`, and
+	 * `$backup + $items` keeps working. The map is only ids, so almost all of
+	 * the size goes away. The option itself is deleted only when it is an
+	 * empty array. The tombstone map is never age-deleted: deleting it would
+	 * re-open the resurrection hole for good, for a few KB.
+	 *
+	 * What it is NOT: one-time. A late import re-merges recovered records
+	 * into the backup, and the next tick shrinks those the same way (they
+	 * were verified present first; the recovery copy of late-imported
+	 * records is therefore short-lived).
+	 *
+	 * Gates, in order. Fail closed — each refusal leaves the option alone
+	 * and records its reason in APPROVALS_BACKUP_CLEANUP_STATUS:
+	 *  - `backup_unreadable`: the row exists but get_option() cannot read it
+	 *    (corrupt serialization).
+	 *  - `not_migrated`: the table flag is unset.
+	 *  - `too_recent`: the flag holds the time the site migrated (a `1` from
+	 *    an older release is stamped with now on this first pass), and the
+	 *    backup is younger than Mcpwp_Approvals::CLOSED_RETENTION_DAYS days —
+	 *    the rollback window for a site that just updated.
+	 *  - `busy`: the migration lock is held.
+	 *  - `late_import_pending` (legacy option present), `skipped_records`
+	 *    (the copy skipped a record, so the backup holds its only copy).
+	 *  - `backup_unrecognised`: not an array, or a record that is not an
+	 *    array.
+	 *  - `table_unreadable`, `rows_missing`: every full record id must be in
+	 *    the table, or legitimately gone (see approvals_backup_record_is_gone()).
+	 *    A table dropped and recreated with one new approval fails this.
+	 *
+	 * Per site (options and table are per blog; the hourly cron runs once per
+	 * site). Cron or admin context only, never a public request hook.
+	 *
+	 * @return string Outcome: shrunk | deleted | nothing_to_clean | the
+	 *                refusal codes above | delete_failed | shrink_failed.
+	 */
+	public static function cleanup_approvals_backup() {
+		global $wpdb;
+		if ( ! class_exists( 'Mcpwp_Approvals' ) ) {
+			require_once __DIR__ . '/core/class-mcpwp-approvals.php';
+		}
+		$backup_option = Mcpwp_Approvals::LEGACY_BACKUP_OPTION;
+		$backup        = get_option( $backup_option, false );
+		if ( false === $backup ) {
+			// Gone, or present but unreadable (corrupt serialization makes
+			// get_option() answer false too): look at the row itself.
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$row = $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM {$wpdb->options} WHERE option_name = %s", $backup_option ) );
+			return (int) $row > 0 ? self::approvals_backup_refused( 'backup_unreadable' ) : 'nothing_to_clean';
+		}
+		if ( ! get_option( Mcpwp_Approvals::MIGRATED_FLAG ) ) {
+			return self::approvals_backup_refused( 'not_migrated' );
+		}
+
+		$lock_token = self::acquire_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, self::APPROVALS_TABLE_LOCK_TTL );
+		if ( false === $lock_token ) {
+			return self::approvals_backup_refused( 'busy' );
+		}
+
+		try {
+			if ( function_exists( 'wp_cache_delete' ) ) {
+				foreach ( array( $backup_option, Mcpwp_Approvals::OPTION_NAME, Mcpwp_Approvals::SKIPPED_OPTION, Mcpwp_Approvals::MIGRATED_FLAG, 'alloptions', 'notoptions' ) as $cached ) {
+					wp_cache_delete( $cached, 'options' );
+				}
+			}
+			$backup = get_option( $backup_option, false );
+			if ( false === $backup ) {
+				return 'nothing_to_clean';
+			}
+
+			// Age gate. The flag holds the migration time; a bare `1` (set by
+			// a release before this one) is stamped with now, so the window
+			// starts at the first pass rather than never.
+			$migrated_at = (int) get_option( Mcpwp_Approvals::MIGRATED_FLAG );
+			if ( $migrated_at <= 1 ) {
+				update_option( Mcpwp_Approvals::MIGRATED_FLAG, time() );
+				return self::approvals_backup_refused( 'too_recent' );
+			}
+			if ( time() - $migrated_at < (int) Mcpwp_Approvals::CLOSED_RETENTION_DAYS * DAY_IN_SECONDS ) {
+				return self::approvals_backup_refused( 'too_recent' );
+			}
+
+			if ( false !== get_option( Mcpwp_Approvals::OPTION_NAME, false ) ) {
+				return self::approvals_backup_refused( 'late_import_pending' );
+			}
+			if ( ! empty( get_option( Mcpwp_Approvals::SKIPPED_OPTION, array() ) ) ) {
+				// A skipped record exists nowhere but the backup.
+				return self::approvals_backup_refused( 'skipped_records' );
+			}
+			if ( ! is_array( $backup ) ) {
+				return self::approvals_backup_refused( 'backup_unrecognised' );
+			}
+			if ( array() === $backup ) {
+				delete_option( $backup_option );
+				if ( function_exists( 'wp_cache_delete' ) ) {
+					wp_cache_delete( $backup_option, 'options' );
+				}
+				if ( false !== get_option( $backup_option, false ) ) {
+					return self::approvals_backup_refused( 'delete_failed' );
+				}
+				return self::approvals_backup_done( 'deleted' );
+			}
+
+			$records = array();
+			foreach ( $backup as $id => $record ) {
+				if ( true === $record ) {
+					continue; // Already a tombstone.
+				}
+				if ( ! is_array( $record ) ) {
+					return self::approvals_backup_refused( 'backup_unrecognised' );
+				}
+				$records[ (string) $id ] = $record;
+			}
+			if ( empty( $records ) ) {
+				return 'nothing_to_clean';
+			}
+
+			$present = self::approvals_present_ids( array_keys( $records ) );
+			if ( null === $present ) {
+				return self::approvals_backup_refused( 'table_unreadable' );
+			}
+			foreach ( $records as $id => $record ) {
+				if ( ! isset( $present[ $id ] ) && ! self::approvals_backup_record_is_gone( $id, $record ) ) {
+					return self::approvals_backup_refused( 'rows_missing' );
+				}
+			}
+
+			$tombstones = array();
+			foreach ( $backup as $id => $record ) {
+				$tombstones[ $id ] = true;
+			}
+			update_option( $backup_option, $tombstones, false );
+			if ( function_exists( 'wp_cache_delete' ) ) {
+				wp_cache_delete( $backup_option, 'options' );
+			}
+			if ( get_option( $backup_option, null ) !== $tombstones ) {
+				return self::approvals_backup_refused( 'shrink_failed' );
+			}
+			return self::approvals_backup_done( 'shrunk' );
+		} finally {
+			self::release_migration_lock( self::APPROVALS_TABLE_LOCK_OPTION, $lock_token );
+		}
+	}
+
+	/**
+	 * Which of $ids are rows of the approvals table.
+	 *
+	 * @param array<int,string> $ids Approval ids.
+	 * @return array<string,true>|null Present ids, or null when the table cannot be read.
+	 */
+	private static function approvals_present_ids( array $ids ) {
+		global $wpdb;
+		$table   = Mcpwp_Approvals::table_name();
+		$present = array();
+		foreach ( array_chunk( $ids, self::APPROVALS_BACKUP_CHECK_CHUNK ) as $chunk ) {
+			$wpdb->last_error = '';
+			$in               = implode( ', ', array_fill( 0, count( $chunk ), '%s' ) );
+			// phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- table name is prefix + constant; ids are bound.
+			$found = $wpdb->get_col( $wpdb->prepare( "SELECT id FROM {$table} WHERE id IN ({$in})", $chunk ) );
+			if ( ! is_array( $found ) || '' !== (string) $wpdb->last_error ) {
+				return null;
+			}
+			foreach ( $found as $id ) {
+				$present[ (string) $id ] = true;
+			}
+		}
+		return $present;
+	}
+
+	/**
+	 * A backup record that is not in the table and should not be. Three
+	 * things really remove a record, and only these count:
+	 *  - the migration's purge of an identity-less pending/approved record
+	 *    (also dropped by the late import) — no audit row, so it is matched
+	 *    by its shape;
+	 *  - retention and the closed-record purge, both through
+	 *    Mcpwp_Approvals::audited_delete(): the approval_record_removed audit
+	 *    row is written BEFORE the DELETE, so its presence proves the removal
+	 *    (checked for every record, open or closed);
+	 *  - for a record that was CLOSED in the backup, being older than the
+	 *    retention window, in case the audit row was pruned from the log.
+	 * An OPEN record (pending, approved, applying, rolling_back, apply_failed)
+	 * is never removed any other way — not even an expired-looking pending
+	 * post_content_update, which expire_stale_one() only re-labels `expired`
+	 * in place — so one missing from the table without an audit row is a
+	 * record the table lost. An unreadable audit log counts as "not logged"
+	 * (fail closed). A record with no usable date is never "gone" by age.
+	 *
+	 * @param string $id     Approval id.
+	 * @param array  $record A backup record.
+	 * @return bool
+	 */
+	private static function approvals_backup_record_is_gone( $id, array $record ) {
+		$status = isset( $record['status'] ) ? (string) $record['status'] : '';
+		$open   = in_array( $status, Mcpwp_Approvals::open_statuses(), true );
+		if ( in_array( $status, array( 'pending', 'approved' ), true ) && ( ! isset( $record['requested_by_key_id'] ) || '' === (string) $record['requested_by_key_id'] ) ) {
+			return true;
+		}
+		if ( ! class_exists( 'Mcpwp_Action_Log' ) ) {
+			$log_file = __DIR__ . '/core/class-mcpwp-action-log.php';
+			if ( is_readable( $log_file ) ) {
+				require_once $log_file;
+			}
+		}
+		if ( class_exists( 'Mcpwp_Action_Log' ) && method_exists( 'Mcpwp_Action_Log', 'approval_removal_logged' ) && true === Mcpwp_Action_Log::approval_removal_logged( $id ) ) {
+			return true;
+		}
+		if ( $open ) {
+			return false;
+		}
+		$days = (int) apply_filters( 'mcpwp_approvals_closed_retention_days', Mcpwp_Approvals::CLOSED_RETENTION_DAYS );
+		if ( $days < 1 ) {
+			return false; // Retention is off: nothing is ever deleted.
+		}
+		$last = 0;
+		foreach ( array( 'created_at', 'updated_at', 'decided_at', 'approved_at', 'rejected_at', 'applied_at', 'expired_at', 'rolled_back_at' ) as $key ) {
+			if ( ! empty( $record[ $key ] ) ) {
+				$time = strtotime( (string) $record[ $key ] );
+				$last = $time && $time > $last ? $time : $last;
+			}
+		}
+		if ( 0 === $last ) {
+			return false;
+		}
+		return $last < time() - $days * DAY_IN_SECONDS;
+	}
+
+	/**
+	 * Record a refusal.
+	 *
+	 * @param string $reason Outcome code.
+	 * @return string The same code.
+	 */
+	private static function approvals_backup_refused( $reason ) {
+		set_transient( self::APPROVALS_BACKUP_CLEANUP_STATUS, $reason, DAY_IN_SECONDS );
+		if ( 'not_migrated' !== $reason && 'too_recent' !== $reason && defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP approvals backup cleanup: left mcpwp_approval_requests_pre_3149 alone (' . $reason . ')' );
+		}
+		return $reason;
+	}
+
+	/**
+	 * Record a success.
+	 *
+	 * @param string $outcome Outcome code.
+	 * @return string The same code.
+	 */
+	private static function approvals_backup_done( $outcome ) {
+		set_transient( self::APPROVALS_BACKUP_CLEANUP_STATUS, $outcome, DAY_IN_SECONDS );
+		return $outcome;
 	}
 
 	/**
@@ -778,15 +1062,8 @@ class Mcpwp_Activator {
 			$auth   = new self();
 			$all_ok = true;
 
-			foreach ( array( 'mcpwp_api_keys', 'spai_api_keys' ) as $option_name ) {
-				// Re-read INSIDE the lock — never reuse a read from before the
-				// lock was acquired, which could already be stale relative to a
-				// write another request made while we were waiting.
-				$keys = get_option( $option_name, array() );
-				if ( ! is_array( $keys ) || empty( $keys ) ) {
-					continue;
-				}
-
+			// The transformation, as a pure function of the keys it is given.
+			$transform = static function ( array $keys ) use ( $auth ) {
 				$changed = false;
 				foreach ( $keys as &$key ) {
 					if ( ! is_array( $key ) ) {
@@ -807,23 +1084,49 @@ class Mcpwp_Activator {
 					}
 				}
 				unset( $key );
+				return array( $changed ? $keys : null, $changed );
+			};
 
-				if ( ! $changed ) {
-					continue;
-				}
+			// mcpwp_api_keys goes through Mcpwp_Key_Store (#1096): this runs on
+			// the request path, and a plain read-modify-write here could
+			// overwrite a key created or revoked in the meantime. The read
+			// happens INSIDE the store lock, from the database. A busy store
+			// leaves the migration unfinished and it is retried.
+			if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
+				require_once __DIR__ . '/core/class-mcpwp-key-store.php';
+			}
+			$store = Mcpwp_Key_Store::mutate(
+				static function ( array $keys ) use ( $transform ) {
+					return empty( $keys ) ? array( null, false ) : $transform( $keys );
+				},
+				false
+			);
+			if ( ! $store['written'] ) {
+				$all_ok = false;
+			}
 
-				$written = update_option( $option_name, $keys );
-				if ( ! $written ) {
-					// update_option() returns false both on a genuine write
-					// failure AND when the new value is byte-identical to what
-					// is already stored. $changed being true here means we
-					// built a $keys array that DIFFERS from what get_option()
-					// just handed us, so a false return means the write did
-					// not happen — verify by re-reading rather than assuming
-					// either meaning.
-					$verify = get_option( $option_name, array() );
-					if ( $verify !== $keys ) {
-						$all_ok = false;
+			// The legacy 2.8 store is not contended by any request path.
+			$option_name = 'spai_api_keys';
+			{
+				// Re-read INSIDE the lock — never reuse a read from before the
+				// lock was acquired, which could already be stale relative to a
+				// write another request made while we were waiting.
+				$keys = get_option( $option_name, array() );
+				if ( is_array( $keys ) && ! empty( $keys ) ) {
+					list( $new_keys, $changed ) = $transform( $keys );
+					if ( $changed ) {
+						$keys    = $new_keys;
+						$written = update_option( $option_name, $keys );
+						if ( ! $written ) {
+							// update_option() returns false both on a genuine
+							// write failure AND when the new value is
+							// byte-identical to what is already stored; verify
+							// by re-reading rather than assuming either.
+							$verify = get_option( $option_name, array() );
+							if ( $verify !== $keys ) {
+								$all_ok = false;
+							}
+						}
 					}
 				}
 			}
@@ -856,6 +1159,15 @@ class Mcpwp_Activator {
 	 * guarantees forward progress on every call (see below).
 	 */
 	const CUSTOM_CODE_REPAIR_BATCH_SIZE = 200;
+
+	const CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION = 'mcpwp_custom_code_conditions_repair_cursor';
+	const CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_OPTION   = 'mcpwp_custom_code_conditions_repair_lock';
+	const CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_TTL      = 30;
+	const CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION = 'mcpwp_custom_code_cache_backfill_v1_done';
+	const CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION = 'mcpwp_custom_code_cache_backfill_state';
+	const CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION = 'mcpwp_custom_code_cache_repair_failed_ids';
+	const CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION = 'mcpwp_custom_code_cache_repair_failure_state';
+	const CUSTOM_CODE_CACHE_REPAIR_MAX_ATTEMPTS = 5;
 
 	/**
 	 * Durable scan position for repair_custom_code_locations(): the highest
@@ -927,6 +1239,356 @@ class Mcpwp_Activator {
 	 * is, not because a real site is expected to approach it.
 	 */
 	const CUSTOM_CODE_REPAIR_VERIFY_LIMIT = 1000000;
+
+	/**
+	 * Convert legacy Custom Code condition maps to Elementor Pro's string
+	 * form without widening a condition.
+	 *
+	 * @param array $conditions Stored condition values.
+	 * @return string[]|WP_Error
+	 */
+	public static function coerce_custom_code_conditions_to_strings( array $conditions ) {
+		return Mcpwp_Custom_Code_Conditions::convert( $conditions );
+	}
+
+	/**
+	 * Repair legacy condition maps in bounded, checkpointed batches.
+	 *
+	 * @param float|null $time_budget Per-request budget, used by tests.
+	 * @return true|WP_Error
+	 */
+	public static function repair_custom_code_conditions( ?float $time_budget = null, $rescan = false ) {
+		$done = get_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION );
+		$lock_token = self::acquire_migration_lock( self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_OPTION, self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_TTL );
+		if ( false === $lock_token ) {
+			return true;
+		}
+		try {
+			$start  = microtime( true );
+			$budget = null !== $time_budget ? $time_budget : self::migration_time_budget();
+			self::retry_due_custom_code_cache_failures_in_budget( $start, $budget );
+
+			if ( $done && ! $rescan ) {
+				return true;
+			}
+			if ( $done && $rescan ) {
+				delete_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION );
+				delete_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION );
+			}
+			return self::run_custom_code_conditions_repair_batches( $time_budget );
+		} finally {
+			self::release_migration_lock( self::CUSTOM_CODE_CONDITIONS_REPAIR_LOCK_OPTION, $lock_token );
+		}
+	}
+
+	/** Cheap maintenance gate; cache backfill never runs on an API write. */
+	public static function custom_code_cache_maintenance_due() {
+		return self::custom_code_cache_full_rescan_due() || self::custom_code_cache_retry_due();
+	}
+
+	/** A full scan is independent from the failure retry queue. */
+	public static function custom_code_cache_full_rescan_due() {
+		if ( ! get_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION ) ) {
+			return true;
+		}
+		$state = get_option( self::CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION, array() );
+		return ! is_array( $state ) || ! isset( $state['marker'], $state['completed_at'] )
+			|| (string) $state['marker'] !== (string) get_option( Mcpwp_Custom_Code_Conditions::REPORT_MARKER, '' )
+			|| (int) $state['completed_at'] + Mcpwp_Custom_Code_Conditions::REPORT_TTL <= time();
+	}
+
+	/** True when at least one failed document has reached its retry time. */
+	public static function custom_code_cache_retry_due() {
+		foreach ( self::custom_code_cache_failure_state() as $state ) {
+			if ( isset( $state['next_retry'] ) && (int) $state['next_retry'] <= time() ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/** Schedule a corrupt cache row for bounded admin repair without a read-side write. */
+	public static function observe_custom_code_cache_entry_failure( $post_id ) {
+		$post_id = (int) $post_id;
+		if ( $post_id <= 0 ) {
+			return;
+		}
+		$states = self::custom_code_cache_failure_state();
+		if ( ! isset( $states[ $post_id ] ) ) {
+			$states[ $post_id ] = array( 'attempts' => 0, 'next_retry' => 0, 'parked' => false );
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, $states, false );
+		}
+		$failed = array_map( 'intval', (array) get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() ) );
+		if ( ! in_array( $post_id, $failed, true ) ) {
+			$failed[] = $post_id;
+			sort( $failed );
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, $failed, false );
+			// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+			error_log( 'MCPWP Custom Code cache repair failed for snippet ' . $post_id . ': cache_entry_invalid' );
+		}
+	}
+
+	/** Reset a parked document when its source metadata changes. */
+	public static function reset_custom_code_cache_repair_failure( $post_id ) {
+		$post_id = (int) $post_id;
+		$states  = self::custom_code_cache_failure_state();
+		if ( isset( $states[ $post_id ] ) ) {
+			unset( $states[ $post_id ] );
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, $states, false );
+			self::remove_custom_code_cache_failure_id( $post_id );
+		}
+	}
+
+	/**
+	 * Guarantee legacy condition maps cannot reach Elementor Pro's global
+	 * cache rebuild. It intentionally scans even after the one-time flag:
+	 * old data may be imported after the upgrade completed.
+	 *
+	 * @return true|WP_Error
+	 */
+	public static function ensure_custom_code_conditions_repaired() {
+		// Request guards are idempotent per row and do not contend with the
+		// upgrade cursor lock. One administrator's repair cannot refuse a save.
+		$cursor = 0;
+		do {
+			$snippet_ids = self::custom_code_conditions_batch( $cursor, self::CUSTOM_CODE_REPAIR_BATCH_SIZE );
+			if ( is_wp_error( $snippet_ids ) ) {
+				return $snippet_ids;
+			}
+			foreach ( $snippet_ids as $post_id ) {
+				self::repair_one_custom_code_conditions( (int) $post_id );
+				$cursor = (int) $post_id;
+			}
+		} while ( count( $snippet_ids ) === self::CUSTOM_CODE_REPAIR_BATCH_SIZE );
+		return true;
+	}
+
+	/** @return true|WP_Error */
+	private static function run_custom_code_conditions_repair_batches( ?float $time_budget ) {
+		$start  = microtime( true );
+		$budget = null !== $time_budget ? $time_budget : self::migration_time_budget();
+		$cursor = (int) get_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION, 0 );
+
+		do {
+			$snippet_ids = self::custom_code_conditions_batch( $cursor, self::CUSTOM_CODE_REPAIR_BATCH_SIZE );
+			if ( is_wp_error( $snippet_ids ) ) {
+				return $snippet_ids;
+			}
+			if ( empty( $snippet_ids ) ) {
+				return self::finish_custom_code_conditions_repair();
+			}
+
+			if ( function_exists( '_prime_post_caches' ) ) {
+				_prime_post_caches( array_map( 'intval', $snippet_ids ), false, false );
+			}
+			foreach ( $snippet_ids as $post_id ) {
+				$result = self::repair_one_custom_code_conditions( (int) $post_id );
+				if ( is_wp_error( $result ) ) {
+					return $result;
+				}
+				$cursor = (int) $post_id;
+				if ( $budget > 0 && microtime( true ) - $start >= $budget ) {
+					update_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION, $cursor, false );
+					return true;
+				}
+			}
+			update_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION, $cursor, false );
+
+			if ( count( $snippet_ids ) < self::CUSTOM_CODE_REPAIR_BATCH_SIZE ) {
+				return self::finish_custom_code_conditions_repair();
+			}
+		} while ( ( microtime( true ) - $start ) <= $budget );
+
+		return true;
+	}
+
+	/** @return true|WP_Error */
+	private static function finish_custom_code_conditions_repair() {
+		$unrepaired = self::has_unrepaired_custom_code_conditions();
+		if ( is_wp_error( $unrepaired ) ) {
+			return $unrepaired;
+		}
+		if ( $unrepaired ) {
+			update_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION, 0, false );
+			return true;
+		}
+		delete_option( self::CUSTOM_CODE_CONDITIONS_REPAIR_CURSOR_OPTION );
+		update_option( 'mcpwp_custom_code_conditions_repaired', 1, false );
+		update_option( self::CUSTOM_CODE_CACHE_BACKFILL_DONE_OPTION, 1, false );
+		update_option( self::CUSTOM_CODE_CACHE_BACKFILL_STATE_OPTION, array(
+			'marker' => (string) get_option( Mcpwp_Custom_Code_Conditions::REPORT_MARKER, '' ),
+			'completed_at' => time(),
+		), false );
+		return true;
+	}
+
+	/** @return int[]|WP_Error */
+	private static function custom_code_conditions_batch( $cursor, $limit ) {
+		global $wpdb;
+
+		if ( ! is_object( $wpdb ) || ! method_exists( $wpdb, 'get_col' ) ) {
+			return new WP_Error( 'conditions_repair_failed', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
+		}
+
+		$wpdb->last_error = '';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- keyset pagination over core tables.
+		$ids = $wpdb->get_col(
+			$wpdb->prepare(
+				"SELECT ID FROM {$wpdb->posts} WHERE post_type = %s AND ID > %d ORDER BY ID ASC LIMIT %d",
+				'elementor_snippet',
+				(int) $cursor,
+				(int) $limit
+			)
+		);
+
+		if ( ! empty( $wpdb->last_error ) ) {
+			return new WP_Error( 'conditions_repair_failed', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
+		}
+
+		return is_array( $ids ) ? array_map( 'intval', $ids ) : new WP_Error( 'conditions_repair_failed', __( 'Custom Code conditions could not be repaired.', 'mcpwp' ) );
+	}
+
+	/** @return true|WP_Error */
+	private static function repair_one_custom_code_conditions( $post_id ) {
+		$inspection = Mcpwp_Custom_Code_Conditions::inspect( $post_id );
+		if ( is_wp_error( $inspection ) ) {
+			Mcpwp_Custom_Code_Conditions::quarantine_inspection( $post_id, $inspection );
+			self::record_custom_code_cache_repair_result( $post_id, true );
+			return true;
+		}
+		$raw     = $inspection['raw'];
+		$strings = $inspection['conditions'];
+		if ( $raw !== $strings ) {
+			// A concurrent editor wins. Re-read before deciding whether this
+			// record can enter the cache; never reject another snippet's save.
+			update_post_meta( $post_id, '_elementor_conditions', wp_slash( $strings ), $raw );
+			Mcpwp_Custom_Code_Conditions::invalidate_cache_view( $post_id );
+			$current = Mcpwp_Custom_Code_Conditions::inspect( $post_id );
+			if ( is_wp_error( $current ) ) {
+				Mcpwp_Custom_Code_Conditions::quarantine_inspection( $post_id, $current );
+				return true;
+			}
+			$strings = $current['conditions'];
+		}
+		Mcpwp_Custom_Code_Conditions::clear_quarantine( $post_id );
+		self::repair_custom_code_conditions_cache_entry( $post_id );
+		return true;
+	}
+
+	/** @return true */
+	private static function repair_custom_code_conditions_cache_entry( $post_id ) {
+		if ( 'publish' !== get_post_status( $post_id ) ) {
+			self::record_custom_code_cache_repair_result( $post_id, true );
+			return true;
+		}
+		require_once __DIR__ . '/core/class-mcpwp-encryption.php';
+		require_once __DIR__ . '/core/class-mcpwp-custom-code-cache-entry.php';
+		$inspection = Mcpwp_Custom_Code_Conditions::inspect( $post_id );
+		if ( is_wp_error( $inspection ) ) {
+			return true;
+		}
+		$strings = $inspection['conditions'];
+		$failures = self::custom_code_cache_failure_state();
+		if ( isset( $failures[ $post_id ] ) && (int) $failures[ $post_id ]['next_retry'] > time() ) {
+			return true;
+		}
+		$location = get_post_meta( $post_id, '_elementor_location', true );
+		$location = is_string( $location ) && '' !== $location ? $location : 'elementor_head';
+		$result = Mcpwp_Custom_Code_Cache_Entry::sync( $post_id, $location, $strings );
+		self::record_custom_code_cache_repair_result( $post_id, $result );
+		return true;
+	}
+
+	/** Retain failed IDs for a later bounded admin retry without aborting peers. */
+	private static function record_custom_code_cache_repair_result( $post_id, $result ) {
+		$post_id = (int) $post_id;
+		$failed  = array_values( array_unique( array_map( 'intval', (array) get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() ) ) ) );
+		$states  = self::custom_code_cache_failure_state();
+		if ( is_wp_error( $result ) ) {
+			$prior    = isset( $states[ $post_id ]['attempts'] ) ? (int) $states[ $post_id ]['attempts'] : 0;
+			$attempts = $prior + 1;
+			$parked   = $attempts >= self::CUSTOM_CODE_CACHE_REPAIR_MAX_ATTEMPTS;
+			$delay    = $parked
+				? Mcpwp_Custom_Code_Conditions::REPORT_TTL
+				: min( Mcpwp_Custom_Code_Conditions::REPORT_TTL, 5 * ( 2 ** max( 0, $attempts - 1 ) ) );
+			$states[ $post_id ] = array(
+				'attempts'   => $attempts,
+				'next_retry' => time() + $delay,
+				'parked'     => $parked,
+			);
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, $states, false );
+			if ( ! in_array( $post_id, $failed, true ) ) {
+				$failed[] = $post_id;
+				sort( $failed );
+				update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, $failed, false );
+				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
+				error_log( 'MCPWP Custom Code cache repair failed for snippet ' . (int) $post_id . ': ' . $result->get_error_code() );
+			}
+		} elseif ( isset( $states[ $post_id ] ) || in_array( $post_id, $failed, true ) ) {
+			unset( $states[ $post_id ] );
+			update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, $states, false );
+			self::remove_custom_code_cache_failure_id( $post_id );
+		}
+	}
+
+	/** @return array<int,array{attempts:int,next_retry:int,parked:bool}> */
+	private static function custom_code_cache_failure_state() {
+		$stored = get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILURE_STATE_OPTION, array() );
+		$out    = array();
+		foreach ( is_array( $stored ) ? $stored : array() as $post_id => $state ) {
+			if ( is_array( $state ) && (int) $post_id > 0 ) {
+				$out[ (int) $post_id ] = array(
+					'attempts'   => max( 0, (int) ( $state['attempts'] ?? 0 ) ),
+					'next_retry' => max( 0, (int) ( $state['next_retry'] ?? 0 ) ),
+					'parked'     => ! empty( $state['parked'] ),
+				);
+			}
+		}
+		return $out;
+	}
+
+	private static function remove_custom_code_cache_failure_id( $post_id ) {
+		$failed = array_values( array_diff( array_map( 'intval', (array) get_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, array() ) ), array( (int) $post_id ) ) );
+		update_option( self::CUSTOM_CODE_CACHE_REPAIR_FAILED_OPTION, $failed, false );
+	}
+
+	/** Retry only failures whose backoff window has elapsed. */
+	public static function retry_due_custom_code_cache_failures( ?float $time_budget = null ) {
+		$budget = null !== $time_budget ? $time_budget : self::migration_time_budget();
+		self::retry_due_custom_code_cache_failures_in_budget( microtime( true ), $budget );
+	}
+
+	private static function retry_due_custom_code_cache_failures_in_budget( $start, $budget ) {
+		foreach ( self::custom_code_cache_failure_state() as $post_id => $state ) {
+			if ( (int) $state['next_retry'] > time() ) {
+				continue;
+			}
+			self::repair_one_custom_code_conditions( (int) $post_id );
+			if ( $budget > 0 && microtime( true ) - $start >= $budget ) {
+				return;
+			}
+		}
+	}
+
+	/** @return bool|WP_Error */
+	private static function has_unrepaired_custom_code_conditions() {
+		$cursor = 0;
+		do {
+			$snippet_ids = self::custom_code_conditions_batch( $cursor, self::CUSTOM_CODE_REPAIR_VERIFY_LIMIT );
+			if ( is_wp_error( $snippet_ids ) ) {
+				return $snippet_ids;
+			}
+			foreach ( $snippet_ids as $post_id ) {
+				$inspection = Mcpwp_Custom_Code_Conditions::inspect( (int) $post_id );
+				if ( is_wp_error( $inspection ) ) {
+					Mcpwp_Custom_Code_Conditions::quarantine_inspection( (int) $post_id, $inspection );
+				}
+				$cursor = (int) $post_id;
+			}
+		} while ( count( $snippet_ids ) === self::CUSTOM_CODE_REPAIR_VERIFY_LIMIT );
+
+		return false;
+	}
 
 	/**
 	 * Repair Elementor Custom Code snippets written under GH #871, once.
@@ -1448,6 +2110,34 @@ class Mcpwp_Activator {
 	}
 
 	/**
+	 * The key part of activation, split out so it can run on its own: mint a
+	 * first key on a genuinely fresh site, and make sure the scoped store exists.
+	 *
+	 * Runs on the request path at every plugin update (mcpwp.php calls
+	 * activate() whenever mcpwp_db_version is behind), so it must never write on
+	 * the strength of a store it could not read (#1096).
+	 *
+	 * @return void
+	 */
+	public static function ensure_api_keys() {
+		// Generate a first API key only on a genuinely fresh site (both key
+		// stores empty). On any other site a minted legacy key would be refused
+		// at auth (#1097) and shown to the admin as a key that never works.
+		require_once __DIR__ . '/core/class-mcpwp-key-state.php';
+		if ( Mcpwp_Key_State::is_fresh_site() ) {
+			$api_key = self::generate_api_key();
+			update_option( 'mcpwp_api_key', wp_hash_password( $api_key ) );
+			// Store plain text temporarily so admin can see it on first visit
+			set_transient( 'mcpwp_new_api_key', $api_key, HOUR_IN_SECONDS );
+			// Flag first activation for welcome flow
+			update_option( 'mcpwp_first_activation', true );
+		}
+
+		// Ensure scoped API key store exists for key-level revocation/scopes.
+		self::ensure_scoped_api_keys();
+	}
+
+	/**
 	 * Generate a secure API key.
 	 *
 	 * @return string API key.
@@ -1460,8 +2150,12 @@ class Mcpwp_Activator {
 	 * Ensure scoped API key option exists and migrate legacy single-key storage.
 	 */
 	private static function ensure_scoped_api_keys() {
-		$existing = get_option( 'mcpwp_api_keys', array() );
-		if ( is_array( $existing ) && ! empty( $existing ) ) {
+		require_once __DIR__ . '/core/class-mcpwp-key-state.php';
+		if ( Mcpwp_Key_State::store_is_unreadable() ) {
+			// #1096: a store that exists but cannot be read is NOT an empty one.
+			// Overwriting it would drop every revocation record and let the legacy
+			// key and the spai_ copies of revoked keys authenticate again. Leave
+			// it exactly as it is; Mcpwp_Key_Store_Health reports it to an admin.
 			return;
 		}
 
@@ -1471,14 +2165,11 @@ class Mcpwp_Activator {
 		}
 
 		$legacy_hash = self::looks_like_password_hash( $legacy_key ) ? (string) $legacy_key : wp_hash_password( (string) $legacy_key );
-		if ( $legacy_hash !== $legacy_key ) {
-			update_option( 'mcpwp_api_key', $legacy_hash );
-		}
 
 		$key_id = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true );
 		$record = array(
 			'id'           => sanitize_key( (string) $key_id ),
-			'label'        => __( 'Primary API Key', 'mcpwp' ),
+			'label'        => 'Primary API Key',
 			'hash'         => $legacy_hash,
 			'scopes'       => array( 'read', 'write', 'admin' ),
 			'created_at'   => current_time( 'mysql' ),
@@ -1486,7 +2177,24 @@ class Mcpwp_Activator {
 			'revoked_at'   => null,
 		);
 
-		update_option( 'mcpwp_api_keys', array( $record ) );
+		// Through the key-store write path, on the store as it is under the lock
+		// (this runs on the request path at every plugin update).
+		if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
+			require_once __DIR__ . '/core/class-mcpwp-key-store.php';
+		}
+		$stored = Mcpwp_Key_Store::mutate(
+			static function ( array $keys ) use ( $record ) {
+				return empty( $keys ) ? array( array( $record ), true ) : array( null, false );
+			},
+			false
+		);
+
+		// 'unavailable' (no database to arbitrate with) writes nothing and fails
+		// closed: the legacy key keeps working through the request-path migration,
+		// which goes through the same write path and retries on its own.
+		if ( $stored['written'] && true === $stored['result'] && $legacy_hash !== $legacy_key ) {
+			update_option( 'mcpwp_api_key', $legacy_hash );
+		}
 	}
 
 	/**
@@ -1606,6 +2314,16 @@ class Mcpwp_Activator {
 
 		// Approvals table (#1042).
 		dbDelta( self::approvals_create_sql( $wpdb->prefix . 'mcpwp_approvals', $charset_collate ) );
+
+		// OAuth token table (#1101 PR-3b) — on its own schema option; this
+		// file cannot assume the plugin's require order (see top of file).
+		if ( ! class_exists( 'Mcpwp_OAuth_Revocation' ) ) {
+			require_once __DIR__ . '/core/class-mcpwp-oauth-revocation.php';
+		}
+		if ( ! class_exists( 'Mcpwp_OAuth_Token_Store' ) ) {
+			require_once __DIR__ . '/core/class-mcpwp-oauth-token-store.php';
+		}
+		Mcpwp_OAuth_Token_Store::ensure_table();
 
 		self::ensure_graph_tables();
 	}

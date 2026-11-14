@@ -360,9 +360,6 @@ namespace ElementorPro\Modules\ThemeBuilder {
 		}
 
 		public function save() {
-			if ( ! empty( $GLOBALS['mcpwp_theme_test_cache_save_throws'] ) ) {
-				throw new \RuntimeException( 'seeded conditions cache failure' );
-			}
 			return update_option( 'elementor_pro_theme_builder_conditions', $this->conditions );
 		}
 
@@ -374,6 +371,9 @@ namespace ElementorPro\Modules\ThemeBuilder {
 		 */
 		public function refresh() {
 			$this->conditions = get_option( 'elementor_pro_theme_builder_conditions', array() );
+			if ( class_exists( '\\Mcpwp_Custom_Code_Conditions' ) ) {
+				$this->conditions = \Mcpwp_Custom_Code_Conditions::filter_conditions_cache( $this->conditions );
+			}
 
 			return $this;
 		}

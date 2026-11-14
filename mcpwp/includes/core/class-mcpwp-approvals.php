@@ -176,6 +176,13 @@ class Mcpwp_Approvals {
 	const LIST_BATCH = 100;
 
 	/**
+	 * Most rows list_requests() reads while a per-record filter is hiding some
+	 * of them (#1108): bounds the scan, since hidden records cannot count
+	 * toward the page. A page that hits it is simply shorter.
+	 */
+	const LIST_FILTER_SCAN_MAX = 1000;
+
+	/**
 	 * Optimistic-concurrency attempts before update_one() answers
 	 * approvals_busy.
 	 */
@@ -705,17 +712,30 @@ class Mcpwp_Approvals {
 	 *                                  $category_allowed. A category-restricted
 	 *                                  caller never sees one (its visibility
 	 *                                  cannot be proven).
+	 * @param callable|null $record_allowed function(array $record): bool — a
+	 *                                  per-record filter on the loaded record
+	 *                                  (#1108: a user-run principal sees only
+	 *                                  approvals whose posts it may read).
+	 *                                  Applied before the $limit slice, like
+	 *                                  $category_allowed, so a hidden record
+	 *                                  never displaces a visible one and leaves
+	 *                                  no gap in the page. Null: unfiltered.
 	 * @return array|WP_Error Requests; a WP_Error (503) when the store cannot
 	 *                        be read — never an empty list that would look
 	 *                        like "no approvals".
 	 */
-	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false, $order = 'date', $category_allowed = null, $show_damaged = null ) {
+	public static function list_requests( $status = '', $limit = 50, $reveal_non_public = false, $order = 'date', $category_allowed = null, $show_damaged = null, $record_allowed = null ) {
 		$status = sanitize_key( (string) $status );
 		$limit  = min( 100, max( 1, (int) $limit ) );
 		// A damaged row is shown (as a stub) only to a caller whose visibility
 		// needs no proof: no category filter, or one the caller says is
 		// unrestricted. Hidden otherwise.
 		$show_damaged = null === $show_damaged ? ! is_callable( $category_allowed ) : (bool) $show_damaged;
+		// A per-record filter cannot be applied to a damaged row either: its
+		// posts cannot be read, so it stays hidden from a filtered caller.
+		if ( is_callable( $record_allowed ) ) {
+			$show_damaged = false;
+		}
 
 		$ready = self::ensure_store();
 		if ( is_wp_error( $ready ) ) {
@@ -740,13 +760,16 @@ class Mcpwp_Approvals {
 			: 'created_at DESC, seq ASC';
 		$where    = '' !== $status ? array( array( 'status =', $status ) ) : array();
 
-		$records = array();
-		$seen    = array();
-		$bytes   = 0;
+		$records   = array();
+		$seen      = array();
+		$bytes     = 0;
+		$scanned   = 0;
+		$page_full = false;
+		$filtering = is_callable( $record_allowed );
 		$offset  = 0;
 		$batch   = self::LIST_BATCH;
 		$done    = false;
-		while ( ! $done && count( $records ) < $limit ) {
+		while ( ! $done && ! $page_full && count( $records ) < $limit ) {
 			$rows = self::select_light( $where, $order_by, $batch, $offset );
 			if ( is_wp_error( $rows ) ) {
 				return $rows;
@@ -760,8 +783,9 @@ class Mcpwp_Approvals {
 			// small groups (never more than the page still needs), so a row
 			// that turns out damaged and hidden is simply replaced by the next
 			// visible one.
-			$pending = array();
-			$flush   = function () use ( &$pending, &$records, $status, $reveal_non_public, $show_damaged ) {
+			$pending       = array();
+			$pending_bytes = 0;
+			$flush         = function () use ( &$pending, &$pending_bytes, &$records, &$bytes, &$page_full, $status, $reveal_non_public, $show_damaged, $record_allowed ) {
 				$loaded = self::load_records( array_keys( $pending ) );
 				if ( is_wp_error( $loaded ) ) {
 					return $loaded;
@@ -785,12 +809,26 @@ class Mcpwp_Approvals {
 						continue;
 					}
 					$item = self::public_record( $item );
+					if ( is_callable( $record_allowed ) ) {
+						if ( ! call_user_func( $record_allowed, $item ) ) {
+							continue; // Hidden: costs the page nothing.
+						}
+						// Only what the caller can see counts toward the page's
+						// byte budget; the first visible record always fits.
+						$quota = (int) $row['quota_bytes'];
+						if ( ! empty( $records ) && $bytes + $quota > self::LIST_PAGE_BYTES_MAX ) {
+							$page_full = true;
+							break;
+						}
+						$bytes += $quota;
+					}
 					if ( ! $reveal_non_public ) {
 						$item = self::redact_source_for_unprivileged( $item );
 					}
 					$records[] = $item;
 				}
-				$pending = array();
+				$pending       = array();
+				$pending_bytes = 0;
 				return true;
 			};
 
@@ -800,7 +838,7 @@ class Mcpwp_Approvals {
 					if ( is_wp_error( $flushed ) ) {
 						return $flushed;
 					}
-					if ( count( $records ) >= $limit ) {
+					if ( $page_full || count( $records ) >= $limit ) {
 						$done = true;
 						break;
 					}
@@ -814,12 +852,34 @@ class Mcpwp_Approvals {
 				if ( is_callable( $category_allowed ) && ! self::is_approval_visible_to( self::light_record( $row ), $category_allowed ) ) {
 					continue;
 				}
-				if ( ( ! empty( $records ) || ! empty( $pending ) ) && $bytes + (int) $row['quota_bytes'] > self::LIST_PAGE_BYTES_MAX ) {
+				if ( $filtering ) {
+					if ( ++$scanned > self::LIST_FILTER_SCAN_MAX ) {
+						$done = true;
+						break;
+					}
+					// LOAD-time bound (#1108): hidden records are loaded before
+					// they can be judged, so the group queued for loading never
+					// holds more than one page's byte budget at once. Separate
+					// from the visible-bytes counter and from the scan bound.
+					if ( ! empty( $pending ) && $pending_bytes + (int) $row['quota_bytes'] > self::LIST_PAGE_BYTES_MAX ) {
+						$flushed = $flush();
+						if ( is_wp_error( $flushed ) ) {
+							return $flushed;
+						}
+						if ( $page_full || count( $records ) >= $limit ) {
+							$done = true;
+							break;
+						}
+					}
+					$pending_bytes += (int) $row['quota_bytes'];
+				} elseif ( ( ! empty( $records ) || ! empty( $pending ) ) && $bytes + (int) $row['quota_bytes'] > self::LIST_PAGE_BYTES_MAX ) {
 					$done = true;
 					break;
 				}
 				$pending[ $row['id'] ] = $row;
-				$bytes                += (int) $row['quota_bytes'];
+				if ( ! $filtering ) {
+					$bytes += (int) $row['quota_bytes'];
+				}
 			}
 			if ( ! empty( $pending ) ) {
 				$flushed = $flush();
@@ -832,6 +892,35 @@ class Mcpwp_Approvals {
 		return array_slice( $records, 0, $limit );
 	}
 
+
+	/**
+	 * Every post id a record names: its resource and, for a bulk publish, each
+	 * item. Resources that are not posts (a term, a user, an API key, a
+	 * drafts sweep, a staging push) name none. Used to judge a record per post (#1108).
+	 *
+	 * @param array $record Public or private approval record.
+	 * @return int[]
+	 */
+	public static function post_ids_for_record( array $record ) {
+		$ids      = array();
+		$resource = isset( $record['resource'] ) && is_array( $record['resource'] ) ? $record['resource'] : array();
+		$type     = isset( $resource['type'] ) ? (string) $resource['type'] : '';
+		// Only a post-like resource's id is a post id: a term, a user or a
+		// menu with the same number is not that post.
+		$post_like = in_array( $type, array( 'post', 'page', 'attachment' ), true ) || ( '' !== $type && function_exists( 'post_type_exists' ) && post_type_exists( $type ) );
+		if ( $post_like && ! empty( $resource['id'] ) && is_numeric( $resource['id'] ) ) {
+			$ids[] = (int) $resource['id'];
+		}
+		$is_bulk = isset( $record['action'] ) && 'bulk_content_publish' === $record['action'];
+		if ( $is_bulk && isset( $record['payload']['items'] ) && is_array( $record['payload']['items'] ) ) {
+			foreach ( $record['payload']['items'] as $item ) {
+				if ( is_array( $item ) && ! empty( $item['id'] ) && is_numeric( $item['id'] ) ) {
+					$ids[] = (int) $item['id'];
+				}
+			}
+		}
+		return array_values( array_unique( array_filter( $ids ) ) );
+	}
 
 	/**
 	 * Approvals per status (#1042 review rounds 1-2) — every consumer of

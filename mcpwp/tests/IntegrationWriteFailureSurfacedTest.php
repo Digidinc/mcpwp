@@ -118,6 +118,7 @@ final class IntegrationWriteFailureSurfacedTest extends TestCase
             $value = $GLOBALS['mcpwp_test_options'][ self::OPTION ] ?? array();
         }
 
+        if (is_array($value)) { unset($value[Mcpwp_Integration_Manager::GENERATIONS_KEY]); }
         return is_array($value) ? $value : array();
     }
 
@@ -207,6 +208,102 @@ final class IntegrationWriteFailureSurfacedTest extends TestCase
         $this->assertArrayNotHasKey('pexels', $this->records());
     }
 
+    /** @dataProvider secretContainerEncodings */
+    public function test_secret_key_is_masked_before_decoding_in_both_logs($secret): void
+    {
+        require_once dirname(__DIR__) . '/includes/core/class-mcpwp-action-log.php';
+        update_option('mcpwp_settings', array('enable_logging' => true));
+        $GLOBALS['mcpwp_test_wpdb_rows'] = array();
+        $args = array('provider' => 'figma', 'config' => array('oauth_client_secret' => $secret));
+        $this->assertInstanceOf(WP_REST_Response::class, $this->controller()->configure_integration($this->request($args)));
+        $id = Mcpwp_Action_Log::begin('wp_configure_integration', $args, 'fixture', 'ai');
+        Mcpwp_Action_Log::complete($id, 1, true, '');
+        foreach (array('mcpwp_activity_log' => 'request_data', Mcpwp_Action_Log::TABLE => 'arguments') as $table => $column) {
+            $rows = $GLOBALS['mcpwp_test_wpdb_rows'][$GLOBALS['wpdb']->prefix . $table] ?? array();
+            $this->assertNotEmpty($rows, 'both audit tables record the action');
+            $data = json_decode(end($rows)[$column], true);
+            $this->assertSame('[redacted]', $data['config']['oauth_client_secret']);
+        }
+    }
+
+    public function secretContainerEncodings(): array
+    {
+        return array(array('[]'), array('{}'), array('a:0:{}'), array('O:8:"stdClass":0:{}'), array('abc'));
+    }
+
+    /** @dataProvider destinationProbeProviders */
+    public function test_configure_destination_change_does_not_reuse_saved_credentials(string $provider, string $field, string $secret): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config($provider, array($field => 'https://a.example', $secret => 'destination-fixture-token')));
+        $request = $this->request(array('provider' => $provider, 'config' => array($field => 'https://b.example')));
+        $this->assertInstanceOf(WP_REST_Response::class, $this->controller()->configure_integration($request));
+        $probe = function ($response, $args, $url) {
+            $this->assertFalse(str_contains(wp_json_encode($args), 'destination-fixture-token'), 'new destination request has no saved credential');
+            return array('response' => array('code' => 200), 'body' => '{}');
+        };
+        add_filter('pre_http_request', $probe, 20, 3);
+        try {
+            $this->controller()->test_integration($this->request(array('provider' => $provider)));
+        } finally {
+            remove_filter('pre_http_request', $probe, 20);
+        }
+        $this->assertTrue(empty($manager->get_provider_config($provider)[$secret]));
+    }
+
+    public function destinationProbeProviders(): array
+    {
+        return array(array('screenshot', 'url', 'token'), array('jev', 'endpoint', 'api_key'));
+    }
+
+    public function test_rest_configure_still_clears_an_explicit_empty_secret(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://a.example', 'token' => 'fixture-token')));
+        $response = $this->controller()->configure_integration($this->request(array('provider' => 'screenshot', 'config' => array('token' => ''))));
+        $this->assertInstanceOf(WP_REST_Response::class, $response);
+        $config = $manager->get_provider_config('screenshot');
+        $this->assertSame('', $config['token']);
+        $this->assertSame('https://a.example', $config['url']);
+    }
+
+    public function test_configure_activity_log_redacts_short_secrets(): void
+    {
+        update_option('mcpwp_settings', array('enable_logging' => true));
+        foreach (array('x', 'xy', 'abc', '0', '1', 'yes', 'long-fixture-secret') as $secret) {
+            $GLOBALS['mcpwp_test_wpdb_rows'] = array();
+            $result = $this->controller()->configure_integration($this->request(array(
+                'provider' => 'figma',
+                'config' => array('oauth_client_secret' => $secret),
+            )));
+            $this->assertInstanceOf(WP_REST_Response::class, $result);
+            $rows = $GLOBALS['mcpwp_test_wpdb_rows'][ $GLOBALS['wpdb']->prefix . 'mcpwp_activity_log' ] ?? array();
+            $this->assertNotEmpty($rows, 'configure writes an activity record');
+            $logged = false;
+            foreach ($rows as $row) {
+                $data = json_decode($row['request_data'] ?? '', true);
+                if (isset($data['config']['oauth_client_secret'])) {
+                    $logged = true;
+                    $this->assertSame('[redacted]', $data['config']['oauth_client_secret']);
+                }
+            }
+            $this->assertTrue($logged, 'configured secret field is present only as a redacted marker');
+        }
+    }
+
+    public function test_rest_key_only_write_to_multi_field_provider_returns_actionable_400(): void
+    {
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('screenshot', array('url' => 'https://worker.example', 'token' => 'fixture-token')));
+        $before = $this->records();
+        $result = $this->controller()->store_key($this->request(array('provider' => 'screenshot', 'key' => 'replacement')));
+        $this->assertInstanceOf(WP_Error::class, $result);
+        $this->assertSame('invalid_config', $result->get_error_code());
+        $this->assertSame(400, $result->get_error_data()['status']);
+        $this->assertStringContainsString('/integrations/configure', $result->get_error_message());
+        $this->assertTrue($before === $this->records(), 'REST refusal preserves ciphertext');
+    }
+
     public function test_rest_store_key_reports_a_lost_write(): void
     {
         $this->seed(array('pexels' => $this->record('v2:pexels-blob')));
@@ -286,6 +383,48 @@ final class IntegrationWriteFailureSurfacedTest extends TestCase
         }
 
         $this->fail("{$handler} sent no response");
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     * @dataProvider adminPartialPayloads
+     */
+    public function test_admin_blank_fields_preserve_saved_values(string $provider, array $initial, array $config, array $changed): void
+    {
+        $this->stubJsonResponses();
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config($provider, $initial));
+        $before = $manager->get_provider_config($provider);
+        $sent = $this->ajax('ajax_save_key', array('action' => 'mcpwp_save_integration_key', 'provider' => $provider, 'config' => $config));
+        $this->assertTrue($sent->sent_success);
+        $after = $manager->get_provider_config($provider);
+        $this->assertTrue(array_merge($before, $changed) === $after, 'blank admin inputs preserve the other saved fields');
+    }
+
+    public function adminPartialPayloads(): array
+    {
+        return array(
+            'figma update' => array('figma', array('personal_access_token' => 'personal-fixture', 'oauth_client_id' => 'client', 'oauth_client_secret' => 'secret-fixture', 'default_file_key' => 'OLD'), array('personal_access_token' => '', 'oauth_client_id' => '', 'oauth_client_secret' => '', 'default_file_key' => 'NEW'), array('default_file_key' => 'NEW')),
+            'jev update' => array('jev', array('api_key' => 'api-fixture', 'endpoint' => 'https://jev.example', 'cf_api_token' => 'cf-fixture', 'cf_account_id' => str_repeat('a', 32), 'transport' => 'auto'), array('api_key' => '', 'endpoint' => '', 'cf_api_token' => '', 'cf_account_id' => '', 'transport' => 'off'), array('transport' => 'off')),
+        );
+    }
+
+    /**
+     * @runInSeparateProcess
+     * @preserveGlobalState disabled
+     */
+    public function test_admin_clear_fields_is_an_explicit_separate_action(): void
+    {
+        $this->stubJsonResponses();
+        $manager = Mcpwp_Integration_Manager::get_instance();
+        $this->assertTrue($manager->set_provider_config('figma', array('personal_access_token' => 'personal-fixture', 'oauth_client_secret' => 'secret-fixture', 'default_file_key' => 'FILE')));
+        $sent = $this->ajax('ajax_save_key', array('action' => 'mcpwp_save_integration_key', 'provider' => 'figma', 'config' => array('personal_access_token' => '', 'oauth_client_secret' => '', 'default_file_key' => ''), 'clear_fields' => array('oauth_client_secret')));
+        $this->assertTrue($sent->sent_success);
+        $config = $manager->get_provider_config('figma');
+        $this->assertSame('', $config['oauth_client_secret']);
+        $this->assertTrue('personal-fixture' === $config['personal_access_token']);
+        $this->assertSame('FILE', $config['default_file_key']);
     }
 
     /**

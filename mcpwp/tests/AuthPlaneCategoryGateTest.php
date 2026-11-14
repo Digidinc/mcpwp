@@ -39,7 +39,20 @@ class Mcpwp_Auth_Category_Gate_Harness {
 
 final class AuthPlaneCategoryGateTest extends TestCase {
 
+
+	/** @var array */
+	private $pr2_saved_users;
+
+	/** @var array */
+	private $pr2_saved_caps;
+
 	protected function setUp(): void {
+		// PR-2 P0: an OAuth token acts as its approving user, who must exist
+		// and meet the minimum role (default Editor). User 7 is that Editor.
+		$this->pr2_saved_users                = $GLOBALS['mcpwp_test_users'];
+		$this->pr2_saved_caps                 = $GLOBALS['mcpwp_test_user_caps'] ?? array();
+		$GLOBALS['mcpwp_test_users'][]        = (object) array( 'ID' => 7, 'roles' => array( 'editor' ), 'user_login' => 'editor7' );
+		$GLOBALS['mcpwp_test_user_caps'][7]   = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'publish_posts' => true, 'read_private_posts' => true );
 		$GLOBALS['mcpwp_test_options']      = array();
 		$GLOBALS['mcpwp_test_transients']   = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
@@ -56,6 +69,8 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 	}
 
 	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_users']      = $this->pr2_saved_users;
+		$GLOBALS['mcpwp_test_user_caps'] = $this->pr2_saved_caps;
 		// PHPUnit does not reset statics between tests; a mid-test failure must not
 		// leak the batch context into the rest of the suite.
 		if ( class_exists( 'Mcpwp_REST_Batch' ) ) {
@@ -69,6 +84,11 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 
 	private function request_with_key( string $key, string $method, string $route ): WP_REST_Request {
 		return new WP_REST_Request( $method, $route, array(), array( 'X-API-Key' => $key ) );
+	}
+
+	/** An OAuth access token is a bearer credential: Authorization header only. */
+	private function request_with_bearer( string $token, string $method, string $route ): WP_REST_Request {
+		return new WP_REST_Request( $method, $route, array(), array( 'Authorization' => 'Bearer ' . $token ) );
 	}
 
 	private function assert_forbidden_category( $result, string $message ): void {
@@ -86,7 +106,7 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 		$auth  = $this->harness();
 		$token = $auth->issue_oauth_access_token( array( 'read', 'write', 'admin' ), 3600, array( 'user_id' => 7 ) )['access_token'];
 
-		$result = $auth->verify_api_key( $this->request_with_key( $token, 'GET', '/mcpwp/v1/pages' ) );
+		$result = $auth->verify_api_key( $this->request_with_bearer( $token, 'GET', '/mcpwp/v1/pages' ) );
 
 		$this->assert_forbidden_category( $result, 'An OAuth principal must not reach a disabled category' );
 	}
@@ -97,14 +117,14 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 		$auth  = $this->harness();
 		$token = $auth->issue_oauth_access_token( array( 'read', 'write', 'admin' ), 3600, array( 'user_id' => 7 ) )['access_token'];
 
-		$this->assertTrue( $auth->verify_api_key( $this->request_with_key( $token, 'GET', '/mcpwp/v1/pages' ) ) );
+		$this->assertTrue( $auth->verify_api_key( $this->request_with_bearer( $token, 'GET', '/mcpwp/v1/pages' ) ) );
 	}
 
 	public function test_oauth_token_allowed_when_no_category_is_disabled(): void {
 		$auth  = $this->harness();
 		$token = $auth->issue_oauth_access_token( array( 'read', 'write', 'admin' ), 3600, array( 'user_id' => 7 ) )['access_token'];
 
-		$this->assertTrue( $auth->verify_api_key( $this->request_with_key( $token, 'GET', '/mcpwp/v1/pages' ) ) );
+		$this->assertTrue( $auth->verify_api_key( $this->request_with_bearer( $token, 'GET', '/mcpwp/v1/pages' ) ) );
 	}
 
 	/**
@@ -115,11 +135,11 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 		update_option( 'mcpwp_disabled_tool_categories', array( 'content' ) );
 
 		$result = $this->harness()->verify_api_key(
-			$this->request_with_key( 'mcpwp_at_deadbeefdeadbeefdeadbeefdeadbeef', 'GET', '/mcpwp/v1/pages' )
+			$this->request_with_bearer( 'mcpwp_at_deadbeefdeadbeefdeadbeefdeadbeef', 'GET', '/mcpwp/v1/pages' )
 		);
 
 		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'invalid_api_key', $result->get_error_code() );
+		$this->assertSame( 'invalid_token', $result->get_error_code() );
 		$this->assertSame( 401, $result->get_error_data()['status'] );
 	}
 

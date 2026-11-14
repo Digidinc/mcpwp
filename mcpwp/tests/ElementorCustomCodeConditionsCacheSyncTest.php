@@ -68,13 +68,15 @@ final class ElementorCustomCodeConditionsCacheSyncTest extends TestCase {
 		}
 
 		require_once __DIR__ . '/fixtures/theme-builder-elementor-doubles.php';
+		Mcpwp_Custom_Code_Conditions::initialize_legacy_cache_storage();
+		Mcpwp_Custom_Code_Conditions::register_hooks();
 	}
 
 	/**
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
-	public function test_create_syncs_the_cache_entry_immediately_even_as_a_draft(): void {
+	public function test_draft_creation_defers_the_cache_entry_until_publication(): void {
 		$this->install_elementor_pro_doubles();
 
 		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
@@ -102,66 +104,12 @@ final class ElementorCustomCodeConditionsCacheSyncTest extends TestCase {
 
 		$option = get_option( 'elementor_pro_theme_builder_conditions', array() );
 
-		$this->assertArrayHasKey(
-			'elementor_head',
-			$option,
-			'A draft snippet must still enter the cache at create time — the whole point of not relying on the status-filtered regenerate().'
-		);
-		$this->assertArrayHasKey( $post_id, $option['elementor_head'] );
-		$this->assertSame( array( 'include/general' ), $option['elementor_head'][ $post_id ] );
-	}
+		$this->assertArrayNotHasKey( $post_id, $option['elementor_head'] ?? array() );
+		$this->assertSame( array( 'include/general' ), get_post_meta( $post_id, '_elementor_conditions', true ) );
+		$enabled = $controller->enable_custom_code( new WP_REST_Request( 'POST', '/', array( 'id' => $post_id ) ) );
+		$this->assertFalse( is_wp_error( $enabled ) );
+		$this->assertSame( array( 'include/general' ), get_option( 'elementor_pro_theme_builder_conditions' )['elementor_head'][$post_id] );
 
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
-	public function test_create_refuses_when_pro_cannot_load_the_new_document_for_conditions(): void {
-		$this->install_elementor_pro_doubles();
-		add_action( 'wp_insert_post', static function ( $post_id, $post ) {
-			if ( 'elementor_snippet' === $post->post_type ) {
-				$GLOBALS['mcpwp_theme_test_no_document_ids'][] = $post_id;
-			}
-		}, 1, 2 );
-		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
-
-		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'No Pro document', 'code' => '<div>example</div>', 'status' => 'publish', 'conditions' => array( array( 'type' => 'include', 'name' => 'general' ) ) ) ) );
-
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
-	}
-
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
-	public function test_create_refuses_when_pro_conditions_cache_cannot_save(): void {
-		$this->install_elementor_pro_doubles();
-		$GLOBALS['mcpwp_theme_test_cache_save_throws'] = true;
-		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
-
-		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'No cache', 'code' => '<div>example</div>', 'status' => 'publish', 'conditions' => array( array( 'type' => 'include', 'name' => 'general' ) ) ) ) );
-
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
-	}
-
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
-	public function test_create_refuses_when_the_cache_reports_a_value_the_database_lacks(): void {
-		$this->install_elementor_pro_doubles();
-		$GLOBALS['mcpwp_test_option_store_after_hook'] = static function ( $name ) {
-			if ( 'elementor_pro_theme_builder_conditions' === $name ) {
-				$GLOBALS['mcpwp_test_wpdb_options'][ $name ] = maybe_serialize( array() );
-			}
-		};
-		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
-
-		$result = $controller->create_custom_code( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/custom-code', array( 'title' => 'False cache', 'code' => '<div>example</div>', 'status' => 'publish', 'conditions' => array( array( 'type' => 'include', 'name' => 'general' ) ) ) ) );
-
-		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'] );
 	}
 
 	/**
@@ -209,7 +157,7 @@ final class ElementorCustomCodeConditionsCacheSyncTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
-	public function test_disabling_a_snippet_whose_cache_entry_is_missing_adds_it_too(): void {
+	public function test_disabling_a_snippet_keeps_it_out_of_the_display_cache(): void {
 		$this->install_elementor_pro_doubles();
 
 		$post_id = wp_insert_post(
@@ -233,8 +181,9 @@ final class ElementorCustomCodeConditionsCacheSyncTest extends TestCase {
 
 		$option = get_option( 'elementor_pro_theme_builder_conditions', array() );
 
-		$this->assertArrayHasKey( 'elementor_head', $option );
-		$this->assertArrayHasKey( $post_id, $option['elementor_head'] );
+		$this->assertArrayNotHasKey( $post_id, $option['elementor_head'] ?? array() );
+		$this->assertSame( 'draft', get_post_status( $post_id ) );
+
 	}
 
 	/**
@@ -312,6 +261,7 @@ final class ElementorCustomCodeConditionsCacheSyncTest extends TestCase {
 			),
 			true
 		);
+		update_post_meta( $post_id, '_elementor_conditions', array( 'include/general' ) );
 		update_option(
 			'elementor_pro_theme_builder_conditions',
 			array(

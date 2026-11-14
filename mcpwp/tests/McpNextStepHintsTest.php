@@ -304,6 +304,15 @@ final class McpNextStepHintsTest extends TestCase {
 	}
 
 	public function test_existing_meta_keys_survive_alongside_the_hint(): void {
+		// #1095: wp_create_page's hints (wp_set_elementor, wp_set_seo) are
+		// visible only when Elementor / an SEO plugin is active. This test used
+		// to set neither and passed only when an earlier test had run
+		// define( 'ELEMENTOR_VERSION' ) — a process-global constant that can
+		// never be undone — so it failed whenever it ran first or alone.
+		// Arrange the SEO capability itself, via the per-test filter (reset in
+		// setUp), so the test owns its precondition in any order.
+		$this->force_seo_capability_active();
+
 		$response                          = $this->success_response( array( 'id' => 55 ) );
 		$response['result']['_meta']       = array( 'plugin_version' => '3.14.9', 'replayed' => true );
 

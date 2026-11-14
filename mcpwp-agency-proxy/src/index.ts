@@ -11,7 +11,7 @@ import {
 } from './auth';
 import { getSites, addSite, removeSite } from './registry';
 import { encryptForAgency, decryptForAgency } from './crypto';
-import { checkSsrfUrl, fetchNoRedirect } from './proxy';
+import { checkSsrfUrl, fetchNoRedirect, resolveHeaderVersion, SUPPORTED_PROTOCOL_VERSIONS } from './proxy';
 import { DASHBOARD_HTML } from './dashboard';
 
 type Variables = { agencyId: string };
@@ -137,7 +137,38 @@ app.post('/mcp', requireAgencyToken, async (c) => {
   const { method, id, params } = body;
   const agencyId = c.get('agencyId');
 
-  if (method === 'initialize') return c.json(handleInitialize(id));
+  // #1074: the version the client negotiated, forwarded to the site. An
+  // initialize carries it in params (and wins over the header); every later
+  // request carries it as MCP-Protocol-Version, refused with 400 when invalid.
+  let headerVersion: string | null = null;
+  if (method !== 'initialize') {
+    const resolved = resolveHeaderVersion(c.req.header('MCP-Protocol-Version'));
+    if ('invalid' in resolved) {
+      // The header value is deliberately not echoed back.
+      return c.json(
+        {
+          jsonrpc: '2.0',
+          id: id ?? null,
+          error: {
+            code: -32600,
+            message: `Unsupported MCP-Protocol-Version header. Supported versions: ${SUPPORTED_PROTOCOL_VERSIONS.join(', ')}.`,
+            data: {
+              supported: SUPPORTED_PROTOCOL_VERSIONS,
+              hint: 'Send the protocolVersion the initialize response returned, or omit the header.',
+            },
+          },
+        },
+        400
+      );
+    }
+    headerVersion = resolved.version;
+  }
+
+  if (method === 'initialize') {
+    const initParams = params && typeof params === 'object' ? (params as Record<string, unknown>) : {};
+    const initSite = (typeof initParams._site === 'string' ? initParams._site : '') || c.req.header('X-Mcpwp-Site') || undefined;
+    return c.json(await handleInitialize(id, agencyId, c.env, initSite, initParams.protocolVersion));
+  }
   if (method === 'notifications/initialized') return c.json({ jsonrpc: '2.0', id, result: {} });
   if (method === 'ping') return c.json({ jsonrpc: '2.0', id, result: {} });
 
@@ -149,14 +180,14 @@ app.post('/mcp', requireAgencyToken, async (c) => {
         : undefined;
     const headerSite = c.req.header('X-Mcpwp-Site') ?? undefined;
     const siteHint = paramSite || headerSite;
-    return c.json(await handleToolsList(id, agencyId, c.env, siteHint));
+    return c.json(await handleToolsList(id, agencyId, c.env, siteHint, headerVersion));
   }
 
   if (method === 'tools/call') {
     if (!params || typeof params !== 'object') {
       return c.json({ jsonrpc: '2.0', id, error: { code: -32602, message: 'params required for tools/call' } }, 400);
     }
-    return c.json(await handleToolsCall(id, params as { name: string; arguments: Record<string, unknown> }, agencyId, c.env));
+    return c.json(await handleToolsCall(id, params as { name: string; arguments: Record<string, unknown> }, agencyId, c.env, headerVersion));
   }
 
   return c.json({ jsonrpc: '2.0', id, error: { code: -32601, message: `Unknown method: ${method}` } });

@@ -24,6 +24,9 @@ trait Mcpwp_Api_Auth {
 	 */
 	protected $current_api_key_record = null;
 
+	/** Verified identity for audit attribution only; never used to grant access. */
+	protected $mcpwp_audit_key_id = '';
+
 	/**
 	 * Request-scoped post-reference resolutions (#1030 round-5), keyed by
 	 * the request object itself so the permission check and the handler of
@@ -40,6 +43,11 @@ trait Mcpwp_Api_Auth {
 	 */
 	public function get_current_api_key_record() {
 		return $this->current_api_key_record;
+	}
+
+	/** Audit identity is independent of authorization state and never grants access. */
+	public function get_audit_key_id() {
+		return $this->mcpwp_audit_key_id;
 	}
 
 	/**
@@ -94,6 +102,16 @@ trait Mcpwp_Api_Auth {
 		}
 
 		$key_record = $this->get_current_api_key_record();
+
+		// An OAuth token acting as a user (PR-2 P0): list-level non-public
+		// visibility needs write scope AND what WordPress gives an Editor
+		// for it — reading others' drafts and private posts.  Per-post reads
+		// still ask read_post (requester_can_read_post()).
+		if ( $this->requester_oauth_user_id() > 0 ) {
+			return $key_record && $this->key_has_scope( $key_record, 'write' )
+				&& current_user_can( 'edit_others_posts' ) && current_user_can( 'read_private_posts' );
+		}
+
 		if ( $key_record && $this->key_has_scope( $key_record, 'write' ) ) {
 			return true;
 		}
@@ -109,6 +127,508 @@ trait Mcpwp_Api_Auth {
 	protected function requester_is_webmcp() {
 		$key_record = $this->get_current_api_key_record();
 		return is_array( $key_record ) && isset( $key_record['type'] ) && class_exists( 'Mcpwp_WebMCP' ) && Mcpwp_WebMCP::SOURCE === $key_record['type'];
+	}
+
+	/**
+	 * Whether the current principal ACTS AS A REAL WORDPRESS USER (#1100).
+	 *
+	 * The ONE predicate the route capability map is enforced on.  A user-run
+	 * principal is gated by scope AND the route's WordPress capability; a
+	 * bot-run principal (X-API-Key / ?api_key keys, broker bearer tokens,
+	 * client_credentials OAuth tokens — all running as the mcpwp_api_agent
+	 * service account) by scope alone, because that account deliberately
+	 * lacks manage_woocommerce, edit_theme_options and similar.
+	 *
+	 * A new user-run principal needs exactly one more line here.
+	 *
+	 * @return bool
+	 */
+	protected function requester_acts_as_user() {
+		return $this->requester_oauth_user_id() > 0                                                         // OAuth token minted for a user (#1099).
+			|| $this->requester_is_webmcp()                                                                  // WebMCP principal record (#981).
+			|| ( class_exists( 'Mcpwp_WebMCP' ) && Mcpwp_WebMCP::dispatch_user_id() > 0 )                    // WebMCP cookie + nonce dispatch.
+			|| $this->is_trusted_admin_ajax_request()                                                         // wp-admin Chat tab (admin, nonce).
+			|| ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::applying_as_admin() > 0 ); // Approved delete replayed by an admin.
+	}
+
+	/**
+	 * The capability a user-run principal lacks for a route, or '' when it
+	 * holds every capability the route's row requires. The single decision
+	 * check_user_run_capability() makes on a dispatch and the tool listing
+	 * (principal_may_call_tool()) asks to hide what a call would refuse.
+	 *
+	 * A row may require several capabilities at once ('a+b'); every one
+	 * must be held. Used only where one action spans two post types
+	 * (DELETE /drafts/delete-all: others' posts AND others' pages).
+	 *
+	 * @param string $method HTTP method.
+	 * @param string $route  Route.
+	 * @return string The required capability string when one is missing; ''.
+	 */
+	protected function user_run_capability_shortfall( $method, $route ) {
+		if ( ! class_exists( 'Mcpwp_Route_Capability_Map' ) ) {
+			return 'manage_options';
+		}
+		$capability = Mcpwp_Route_Capability_Map::required_capability( $method, $route );
+		foreach ( '' === $capability ? array() : explode( '+', $capability ) as $one ) {
+			if ( ! current_user_can( $one ) ) {
+				return $capability;
+			}
+		}
+
+		return '';
+	}
+
+	/**
+	 * Enforce the route's WordPress capability on a user-run principal.
+	 *
+	 * Unknown routes and undecided (TODO) rows are admin-only until decided
+	 * (Mcpwp_Route_Capability_Map::UNDECIDED_ADMIN_ONLY_CAPABILITY) — never a
+	 * pass-through.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return true|WP_Error
+	 */
+	protected function check_user_run_capability( $request ) {
+		if ( ! $this->requester_acts_as_user() ) {
+			return true; // bots: scope is their gate (and see check_generic_post_type_access()).
+		}
+		// Fail CLOSED when the map is not loaded (a pruned build, a load-order
+		// bug): a user-run principal is refused rather than passed through.
+		if ( ! $this->route_capability_map_available() ) {
+			return new WP_Error( 'rest_forbidden_capability', __( 'Your WordPress account is not allowed to do this.', 'mcpwp' ), array( 'status' => 403 ) );
+		}
+		$method     = method_exists( $request, 'get_method' ) ? (string) $request->get_method() : 'GET';
+		$route      = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+		$capability = Mcpwp_Route_Capability_Map::required_capability( $method, $route );
+		if ( '' !== $this->user_run_capability_shortfall( $method, $route ) ) {
+			return new WP_Error(
+				'rest_forbidden_capability',
+				__( 'Your WordPress account is not allowed to do this.', 'mcpwp' ),
+				array(
+					'status'              => 403,
+					'required_capability' => $capability,
+				)
+			);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Generic post writes that CREATE a post of a caller-chosen or implied
+	 * type, keyed by normalised route => how the target type is found.
+	 * 'param:<name>=<default>' reads the type from a request parameter;
+	 * 'items:<param>=<default>' reads it from each item of an array param;
+	 * 'type:<type>' is fixed; 'source' is the type of the declared source post.
+	 *
+	 * @return array<string,string>
+	 */
+	protected static function user_run_create_type_routes() {
+		return array(
+			'/posts'                     => 'param:post_type=post',
+			'/posts/bulk'                => 'items:posts=post',
+			'/pages'                     => 'type:page',
+			'/pages/bulk'                => 'type:page',
+			'/elementor/page'            => 'type:page',
+			'/elementor/build-page'      => 'type:page',
+			'/elementor/landing-page'    => 'type:page',
+			'/elementor/clone'           => 'source:source_id', // The handler copies the source's post_type (#1118 P0-3).
+			'/elementor/blueprints/build' => 'type:page',
+		);
+	}
+
+	/**
+	 * The request's params AS THE HANDLERS SEE THEM (#1110): every key any
+	 * bucket carries, each resolved through get_param() — the accessor every
+	 * handler uses. WP_REST_Request::get_params() merges the buckets so a
+	 * null in a higher bucket (a JSON body's {"updates":null}) OVERRIDES a
+	 * value below it (?updates[0][post_id]=X), while get_param() skips the
+	 * null and returns the query value; a gate reading get_params() judged
+	 * nothing while the handler wrote to post X. Every gate reader that
+	 * judges a list or an id a handler will act on reads this instead.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return array<string,mixed> Empty when the request exposes no params.
+	 */
+	protected function gate_params( $request ) {
+		if ( ! is_object( $request ) || ! method_exists( $request, 'get_params' ) ) {
+			return array();
+		}
+		$merged = $request->get_params();
+		if ( ! is_array( $merged ) ) {
+			return array();
+		}
+		if ( ! method_exists( $request, 'get_param' ) ) {
+			return $merged;
+		}
+		$params = array();
+		foreach ( array_keys( $merged ) as $key ) {
+			$params[ $key ] = $request->get_param( $key );
+		}
+		return $params;
+	}
+
+	/**
+	 * Every request item list the gate reads PER ITEM on this route: the
+	 * 'list[].field' post references (get_post_ref_param_map()) and the
+	 * 'items:list' create rules (user_run_create_type_routes()). Derived from
+	 * those two tables, so a bulk door declared there is covered here with
+	 * no second list to keep in step.
+	 *
+	 * @param string $path      Route without the /mcpwp/v1 prefix, lower-cased.
+	 * @param bool   $user_run  Whether the caller acts as a user ('@read-user' refs are then read too).
+	 * @return array<string,string[]> List param => the post-id fields declared in its items.
+	 */
+	protected static function bulk_item_list_params( $path, $user_run = false ) {
+		$lists = array();
+		foreach ( self::post_ref_specs_for_path( $path ) as $declared_spec ) {
+			list( $spec, $class ) = self::post_ref_spec_parts( $declared_spec );
+			if ( 'read-user' === $class && ! $user_run ) {
+				continue;
+			}
+			if ( false !== strpos( $spec, '[].' ) ) {
+				list( $list, $field ) = explode( '[].', $spec, 2 );
+				$lists[ $list ][]     = $field;
+			}
+		}
+		$routes = self::user_run_create_type_routes();
+		if ( isset( $routes[ $path ] ) && 0 === strpos( $routes[ $path ], 'items:' ) ) {
+			$list = (string) strstr( substr( $routes[ $path ], 6 ) . '=', '=', true );
+			if ( ! isset( $lists[ $list ] ) ) {
+				$lists[ $list ] = array();
+			}
+		}
+		return $lists;
+	}
+
+	/**
+	 * Whether a declared per-item post id is one both parsers read the same
+	 * way: empty (the handler skips the item and writes nothing) or a
+	 * canonical positive integer. Anything else — '9402abc', '0x24C2',
+	 * [9402], 9402.0 — the gate's is_numeric() and a handler's absint()
+	 * disagree on ('9402abc': skipped by the gate, post 9402 to absint();
+	 * [9402]: skipped, post 1), so it is refused rather than normalised.
+	 *
+	 * @param mixed $value Item field value.
+	 * @return bool
+	 */
+	protected static function is_unambiguous_item_post_id( $value ) {
+		if ( empty( $value ) ) {
+			return true;
+		}
+		if ( is_int( $value ) ) {
+			return $value > 0;
+		}
+		return is_string( $value ) && 1 === preg_match( '/^[1-9][0-9]*$/', $value );
+	}
+
+	/**
+	 * Bulk item lists must be lists of OBJECTS — refused whole otherwise
+	 * (#1103 round 3, parser differential). The gate reads post types and
+	 * post ids only from array items; the handlers used to json_decode a
+	 * STRING item as well, so `{"posts":["{\"post_type\":\"product\"}"]}`
+	 * passed every check and then created a product, and a string update
+	 * item edited a post the per-post edit_post check never saw. This runs
+	 * before ANY post-type or post-reference extraction, on every verdict
+	 * path (check_gate_entry()); normalize_bulk_items() no longer decodes
+	 * strings either, so there is one parser and it is is_array(). A
+	 * declared per-item post id must be one the gate and the handler read
+	 * identically (is_unambiguous_item_post_id()), or the request is
+	 * refused the same way.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return true|WP_Error 400 invalid_item.
+	 */
+	protected function check_bulk_items_are_objects( $request ) {
+		if ( ! is_object( $request ) || ! method_exists( $request, 'get_route' ) || ! method_exists( $request, 'get_params' ) ) {
+			return true;
+		}
+		$route = $this->normalize_route_for_authorization( (string) $request->get_route() );
+		$path  = strtolower( untrailingslashit( (string) preg_replace( '#^/mcpwp/v[0-9]+#i', '', $route ) ) );
+		$lists = self::bulk_item_list_params( $path, $this->requester_acts_as_user() );
+		if ( empty( $lists ) ) {
+			return true;
+		}
+		$params = $this->gate_params( $request );
+		foreach ( $lists as $list => $id_fields ) {
+			if ( ! array_key_exists( $list, $params ) || null === $params[ $list ] ) {
+				continue;
+			}
+			$items = $params[ $list ];
+			$bad   = is_array( $items ) ? null : -1;
+			if ( null === $bad ) {
+				foreach ( $items as $index => $item ) {
+					if ( ! is_array( $item ) ) {
+						$bad = $index;
+						break;
+					}
+					foreach ( $id_fields as $field ) {
+						if ( array_key_exists( $field, $item ) && ! self::is_unambiguous_item_post_id( $item[ $field ] ) ) {
+							$bad = $index;
+							break 2;
+						}
+					}
+				}
+			}
+			if ( null !== $bad ) {
+				return new WP_Error(
+					'invalid_item',
+					sprintf(
+						/* translators: %s: request parameter name, e.g. "posts". */
+						__( 'Every item in "%s" must be a JSON object, and any post id in it a plain positive integer; nothing was changed.', 'mcpwp' ),
+						$list
+					),
+					array(
+						'status' => 400,
+						'param'  => $list,
+						'index'  => $bad,
+					)
+				);
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * The first check on every verdict path that applies the route rules —
+	 * the main tail (check_post_naming_params_category()) and the trusted
+	 * admin AJAX and approved-destructive-replay early returns: bulk item
+	 * shape first, then the route's user-run capability.
+	 *
+	 * @param WP_REST_Request $request Request object.
+	 * @return true|WP_Error
+	 */
+	protected function check_gate_entry( $request ) {
+		// Tell the meta-write helper whether this request's principal acts as
+		// a real user (#1108); set on every request and sub-request.
+		if ( class_exists( 'Mcpwp_Post_Fields' ) ) {
+			Mcpwp_Post_Fields::set_user_run_principal( $this->requester_acts_as_user() );
+		}
+		$shape = $this->check_bulk_items_are_objects( $request );
+		if ( is_wp_error( $shape ) ) {
+			return $shape;
+		}
+		return $this->check_user_run_capability( $request );
+	}
+
+	/**
+	 * Whether the route capability map class is loaded. One seam, so the
+	 * fail-closed branch of check_user_run_capability() can be tested without
+	 * unloading a class (#1108).
+	 *
+	 * @return bool
+	 */
+	protected function route_capability_map_available() {
+		return class_exists( 'Mcpwp_Route_Capability_Map' );
+	}
+
+	/**
+	 * The generic post doors: routes that write a post whose TYPE the caller
+	 * chooses or that the door infers from an existing post (#1103 round 2).
+	 * A bot is held to post/page there unless it has admin scope; a user is
+	 * held to the type's own capability object.
+	 *
+	 * @param string $path Route without the /mcpwp/v1 prefix, lower-cased.
+	 * @return bool
+	 */
+	protected static function is_generic_post_door( $path ) {
+		return 1 === preg_match( '#^/(posts|pages|content)(/|$)#', (string) $path );
+	}
+
+	/**
+	 * Every (post type, cap key) a write targets. Creates read the type from
+	 * the request (user_run_create_type_routes(), a page clone, a
+	 * translation's source); writes that name declared post references read
+	 * it from each existing post. GET/HEAD/OPTIONS target nothing.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return array{path:string,targets:array<int,array{0:string,1:string}>}
+	 */
+	protected function generic_post_type_targets( $request ) {
+		$method = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'GET';
+		$route  = method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '';
+		$path   = strtolower( untrailingslashit( (string) preg_replace( '#^/mcpwp/v[0-9]+#i', '', $route ) ) );
+		if ( in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true ) ) {
+			return array( 'path' => $path, 'targets' => array() );
+		}
+
+		$checks       = array();
+		$routes       = self::user_run_create_type_routes();
+		$source_param = '';
+
+		if ( 'POST' === $method && isset( $routes[ $path ] ) ) {
+			$rule = $routes[ $path ];
+			if ( 0 === strpos( $rule, 'type:' ) ) {
+				$checks[] = array( substr( $rule, 5 ), 'create_posts' );
+			} elseif ( 0 === strpos( $rule, 'param:' ) ) {
+				list( $param, $default ) = explode( '=', substr( $rule, 6 ), 2 );
+				$value    = $request->get_param( $param );
+				$checks[] = array( ( is_string( $value ) && '' !== $value ) ? sanitize_key( $value ) : ( null === $value || '' === $value ? $default : '' ), 'create_posts' );
+			} elseif ( 0 === strpos( $rule, 'source:' ) ) {
+				// The created type is the declared SOURCE post's type: resolved
+				// below, from the same reference resolution the chokepoint uses.
+				$source_param = substr( $rule, 7 );
+			} elseif ( 0 === strpos( $rule, 'items:' ) ) {
+				list( $param, $default ) = explode( '=', substr( $rule, 6 ), 2 );
+				$items = $request->get_param( $param );
+				foreach ( is_array( $items ) ? $items : array() as $item ) {
+					$type     = is_array( $item ) && array_key_exists( 'post_type', $item ) ? $item['post_type'] : null;
+					$checks[] = array( ( is_string( $type ) && '' !== $type ) ? sanitize_key( $type ) : ( null === $type || '' === $type ? $default : '' ), 'create_posts' );
+				}
+			}
+		}
+
+		if ( 'POST' === $method && preg_match( '#^/pages/\\d+/clone$#', $path ) ) {
+			$checks[] = array( 'page', 'create_posts' );
+		}
+
+		// DELETE /content/{post_type}/{id}: the type is named in the path.
+		if ( preg_match( '#^/content/([a-z0-9_-]+)/\\d+$#', $path, $m ) ) {
+			$checks[] = array( sanitize_key( $m[1] ), 'DELETE' === $method ? 'delete_posts' : 'edit_posts' );
+		}
+
+		// Existing posts named by declared references. A reference the caller
+		// cannot see is skipped: the post-ref chokepoint already answers it
+		// exactly like a missing id, and a type-based refusal for it would be
+		// an existence oracle.
+		$resolution = $this->get_post_ref_resolution( $request );
+		if ( ! is_wp_error( $resolution ) && null !== $resolution['refs'] ) {
+			$is_translation = 'POST' === $method && preg_match( '#^/(posts|pages)/\\d+/translations$#', $path );
+			// Only WRITTEN references charge their type's write capability
+			// (#1101 PR-3c). A read-only reference ('@read' / '@read-user' —
+			// a link target, a featured image, a clone source) is judged by
+			// read_post alone; charging edit_pages for linking to a published
+			// page would refuse an Author a call core allows.
+			$written = array_flip( array_map( 'intval', array_merge( $resolution['refs']['scalar'], $resolution['refs']['items'] ) ) );
+			// 'source:<param>': the create cap of the source's own type. A
+			// hidden or missing source is skipped — the chokepoint answers it
+			// as the canonical 404, and a type verdict here would be an
+			// existence oracle.
+			if ( '' !== $source_param ) {
+				$source_value = $request->get_param( $source_param );
+				$source_id    = is_numeric( $source_value ) ? (int) $source_value : 0;
+				if ( $source_id > 0 && isset( $resolution['rows'][ $source_id ] ) && empty( $resolution['hidden'][ $source_id ] ) ) {
+					$checks[] = array( (string) $resolution['rows'][ $source_id ]['post_type'], 'create_posts' );
+				}
+			}
+			foreach ( $resolution['rows'] as $id => $row ) {
+				if ( ! empty( $resolution['hidden'][ $id ] ) || ! isset( $written[ (int) $id ] ) ) {
+					continue;
+				}
+				$checks[] = array( $row['post_type'], 'DELETE' === $method ? 'delete_posts' : 'edit_posts' );
+				if ( $is_translation ) {
+					$checks[] = array( $row['post_type'], 'create_posts' );
+				}
+			}
+		}
+
+		return array( 'path' => $path, 'targets' => $checks );
+	}
+
+	/**
+	 * THE post-type rule of the generic post doors, for every principal
+	 * (#1100 / #1103 round 2) — one place, two branches:
+	 *
+	 *  - BOT-run principals (API keys, broker bearer, client_credentials —
+	 *    not requester_acts_as_user()): on a generic post door
+	 *    (is_generic_post_door()), a target type other than post or page
+	 *    requires ADMIN scope — on create (the post_type param) and on update
+	 *    and delete (the type of the existing post). Without it a write key
+	 *    holding content + woocommerce created products through POST /posts,
+	 *    around the admin scope on POST /woocommerce/products. This is a
+	 *    scope requirement: it runs in the verdict tail every bot path ends
+	 *    in, after the route-level scope check, so it cannot be skipped.
+	 *  - USER-run principals: the target type's own capability object —
+	 *    create_posts / edit_posts / delete_posts — on EVERY write that names a
+	 *    type (F1), never a fixed string. An unknown type or a missing cap
+	 *    object fails closed.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return true|WP_Error
+	 */
+	protected function check_generic_post_type_access( $request ) {
+		$found = $this->generic_post_type_targets( $request );
+		if ( empty( $found['targets'] ) ) {
+			return true;
+		}
+
+		if ( ! $this->requester_acts_as_user() ) {
+			if ( ! self::is_generic_post_door( $found['path'] ) ) {
+				return true;
+			}
+			foreach ( $found['targets'] as list( $type ) ) {
+				if ( in_array( (string) $type, array( 'post', 'page' ), true ) ) {
+					continue;
+				}
+				$record = $this->get_current_api_key_record();
+				if ( ! is_array( $record ) || ! $this->key_has_scope( $record, 'admin' ) ) {
+					return new WP_Error(
+						'insufficient_scope',
+						__( 'Writing this post type through the generic post endpoints requires an admin-scoped key. Use the post type\'s own endpoints.', 'mcpwp' ),
+						array(
+							'status'         => 403,
+							'required_scope' => 'admin',
+							'post_type'      => (string) $type,
+						)
+					);
+				}
+			}
+			return true;
+		}
+
+		return $this->check_user_run_post_type_capability( $found['targets'] );
+	}
+
+	/**
+	 * The user-run branch of check_generic_post_type_access(): every target
+	 * type's own capability (F1).
+	 *
+	 * @param array<int,array{0:string,1:string}> $targets (type, cap key) pairs.
+	 * @return true|WP_Error
+	 */
+	protected function check_user_run_post_type_capability( array $targets ) {
+		foreach ( $targets as list( $type, $cap_key ) ) {
+			$pto = ( '' !== $type && function_exists( 'get_post_type_object' ) ) ? get_post_type_object( $type ) : null;
+			$cap = ( is_object( $pto ) && isset( $pto->cap ) && is_object( $pto->cap ) && ! empty( $pto->cap->{$cap_key} ) ) ? (string) $pto->cap->{$cap_key} : '';
+			if ( '' === $cap || ! current_user_can( $cap ) ) {
+				return new WP_Error(
+					'rest_forbidden_capability',
+					__( 'Your WordPress account is not allowed to create or change this kind of content.', 'mcpwp' ),
+					array(
+						'status'              => 403,
+						'post_type'           => (string) $type,
+						'required_capability' => '' === $cap ? 'unknown post type' : $cap,
+					)
+				);
+			}
+		}
+		return true;
+	}
+
+	/**
+	 * The WordPress user an OAuth token acts as (PR-2 P0), or 0.
+	 *
+	 * @return int
+	 */
+	protected function requester_oauth_user_id() {
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) || ! isset( $key_record['type'] ) || 'oauth' !== $key_record['type'] || empty( $key_record['acts_as_user'] ) ) {
+			return 0;
+		}
+		return (int) $key_record['acts_as_user'];
+	}
+
+	/**
+	 * Whether a user meets the site's minimum role for OAuth connections.
+	 *
+	 * Fails closed when the resolver is unavailable.
+	 *
+	 * @param int $user_id User id.
+	 * @return bool
+	 */
+	protected function oauth_user_meets_min_role( $user_id ) {
+		return class_exists( 'Mcpwp_OAuth_Well_Known' ) && Mcpwp_OAuth_Well_Known::user_can_connect( (int) $user_id );
 	}
 
 	/**
@@ -131,6 +651,17 @@ trait Mcpwp_Api_Auth {
 
 		if ( $this->requester_is_webmcp() ) {
 			return current_user_can( 'read_post', (int) $post->ID );
+		}
+
+		// OAuth acting as a user: WordPress decides (read_post), and a
+		// non-public post additionally needs write scope — the scope stays a
+		// ceiling, exactly as for an API key.
+		if ( $this->requester_oauth_user_id() > 0 ) {
+			if ( ! current_user_can( 'read_post', (int) $post->ID ) ) {
+				return false;
+			}
+			$key_record = $this->get_current_api_key_record();
+			return $this->is_public_status( $post->post_status ) || $this->key_has_scope( $key_record, 'write' );
 		}
 
 		return $this->is_public_status( $post->post_status ) || $this->requester_can_see_non_public();
@@ -528,11 +1059,18 @@ trait Mcpwp_Api_Auth {
 				// charging silently switch off (#802 round 4).
 				$this->current_api_key_record = self::$mcpwp_verdicts[ $memo_id ][2];
 				$this->mcpwp_metered          = self::$mcpwp_verdicts[ $memo_id ][3];
+				$this->mcpwp_audit_key_id = self::$mcpwp_verdicts[ $memo_id ][4] ?? '';
 				$this->maybe_enter_guardrails_context( self::$mcpwp_verdicts[ $memo_id ][1] );
+				if ( class_exists( 'Mcpwp_WooCommerce_Audit' ) ) {
+					Mcpwp_WooCommerce_Audit::auth_result( $request, self::$mcpwp_verdicts[ $memo_id ][1], $this->mcpwp_audit_key_id );
+				}
 				return self::$mcpwp_verdicts[ $memo_id ][1];
 			}
 
 			$verdict = $this->compute_api_key_verdict( $request );
+			if ( class_exists( 'Mcpwp_WooCommerce_Audit' ) ) {
+				Mcpwp_WooCommerce_Audit::auth_result( $request, $verdict, $this->mcpwp_audit_key_id );
+			}
 
 			// Holding the request keeps its object id from being reused for
 			// another request within this process. Bounded: a long-lived
@@ -541,7 +1079,7 @@ trait Mcpwp_Api_Auth {
 				// Not array_shift(): it renumbers the object-id keys.
 				unset( self::$mcpwp_verdicts[ array_key_first( self::$mcpwp_verdicts ) ] );
 			}
-			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict, $this->current_api_key_record, $this->mcpwp_metered );
+			self::$mcpwp_verdicts[ $memo_id ] = array( $request, $verdict, $this->current_api_key_record, $this->mcpwp_metered, $this->mcpwp_audit_key_id );
 
 			$this->maybe_enter_guardrails_context( $verdict );
 			return $verdict;
@@ -578,7 +1116,7 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Memoised verdicts, keyed by request object id.
 	 *
-	 * @var array<int, array{0:object,1:mixed}>
+	 * @var array<int, array{0:object,1:mixed,2:?array,3:?array,4:string}>
 	 */
 	private static $mcpwp_verdicts = array();
 
@@ -679,6 +1217,9 @@ trait Mcpwp_Api_Auth {
 		// Remembered so a tool that turns out to carry N operations can be
 		// charged the other N-1 before it runs (charge_additional_slots).
 		$this->mcpwp_metered = array( $identifier, $http_method, $key_record );
+		if ( isset( $key_record['id'] ) ) {
+			$this->mcpwp_audit_key_id = (string) $key_record['id'];
+		}
 
 		if ( ! $this->is_diagnostic_request( $request ) ) {
 			return $this->check_rate_limit( $identifier, $http_method, $key_record, $weight );
@@ -702,6 +1243,7 @@ trait Mcpwp_Api_Auth {
 	 * @return bool|WP_Error
 	 */
 	private function compute_api_key_verdict( $request ) {
+		$this->mcpwp_audit_key_id = '';
 		// A persistent process (WP-CLI, a rest_do_request() loop) reuses this
 		// instance across requests; a nested charge must never land on the
 		// previous request's bucket.
@@ -724,7 +1266,11 @@ trait Mcpwp_Api_Auth {
 		// The open apply_filters() bypass was removed: any code that added a filter
 		// returning true could silently skip API-key auth for all requests.
 		if ( $this->is_trusted_admin_ajax_request() ) {
-			return true;
+			$this->mcpwp_audit_key_id = 'wp-user:' . get_current_user_id();
+			// A user-run principal (the logged-in administrator): the route's
+			// capability and the post-type rule still apply (#1100).
+			$capability_check = $this->check_gate_entry( $request );
+			return is_wp_error( $capability_check ) ? $capability_check : $this->check_generic_post_type_access( $request );
 		}
 
 		// An approved destructive operation being applied by an administrator
@@ -752,7 +1298,9 @@ trait Mcpwp_Api_Auth {
 		// path — DestructiveGateOnlyDeletesTest pins the invariant.
 		if ( class_exists( 'Mcpwp_Destructive_Gate' ) && Mcpwp_Destructive_Gate::applying_as_admin() > 0 && function_exists( 'user_can' ) && user_can( Mcpwp_Destructive_Gate::applying_as_admin(), 'activate_plugins' ) ) {
 			wp_set_current_user( Mcpwp_Destructive_Gate::applying_as_admin() );
-			return true;
+			$this->mcpwp_audit_key_id = 'wp-user:' . get_current_user_id();
+			$capability_check = $this->check_gate_entry( $request );
+			return is_wp_error( $capability_check ) ? $capability_check : $this->check_generic_post_type_access( $request );
 		}
 
 		// Skip rate limiting for batch sub-requests (already counted on the outer request).
@@ -793,7 +1341,7 @@ trait Mcpwp_Api_Auth {
 				__( 'API key is required.', 'mcpwp' ),
 				array(
 					'status' => 401,
-					'hint'   => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Settings, or call wp_create_api_key if you have admin access.',
+					'hint'   => 'Include your API key in the X-API-Key header or Authorization: Bearer header. Generate keys in WP Admin > MCPWP > Setup, or call wp_create_api_key if you have admin access.',
 				)
 			);
 		}
@@ -805,7 +1353,7 @@ trait Mcpwp_Api_Auth {
 		$matched_key = $this->find_scoped_api_key( $api_key );
 		$legacy_key  = get_option( 'mcpwp_api_key' );
 
-		if ( ! $matched_key && ! empty( $legacy_key ) && $this->is_api_key_match( $api_key, $legacy_key ) ) {
+		if ( ! $matched_key && ! empty( $legacy_key ) && $this->legacy_api_key_option_is_honoured() && $this->is_api_key_match( $api_key, $legacy_key ) ) {
 			// Auto-migrate legacy plain text keys to hashed storage.
 			if ( hash_equals( $legacy_key, $api_key ) ) {
 				$legacy_key = wp_hash_password( $api_key );
@@ -865,7 +1413,7 @@ trait Mcpwp_Api_Auth {
 					__( 'API key not configured. Please visit the MCPWP settings.', 'mcpwp' ),
 					array(
 						'status' => 500,
-						'hint'   => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Settings to generate an API key.',
+						'hint'   => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Setup to generate an API key.',
 					)
 				);
 			}
@@ -877,7 +1425,7 @@ trait Mcpwp_Api_Auth {
 				__( 'Invalid API key.', 'mcpwp' ),
 				array(
 					'status' => 401,
-					'hint'   => 'The provided API key is not valid. Check for typos or whitespace. Keys start with "mcpwp_". Generate a new key in WP Admin > MCPWP > Settings.',
+					'hint'   => self::invalid_api_key_hint(),
 				)
 			);
 		}
@@ -894,27 +1442,10 @@ trait Mcpwp_Api_Auth {
 			return $rate_limit_check;
 		}
 
+		$this->mcpwp_audit_key_id = isset( $matched_key['id'] ) ? (string) $matched_key['id'] : '';
 		$required_scope = $this->get_required_scope_for_request( $request );
-		if ( ! $this->key_has_scope( $matched_key, $required_scope ) ) {
-			$granted = isset( $matched_key['scopes'] ) ? $matched_key['scopes'] : array();
-			return new WP_Error(
-				'insufficient_scope',
-				sprintf(
-					/* translators: %s: scope name */
-					__( 'API key lacks required scope: %s', 'mcpwp' ),
-					$required_scope
-				),
-				array(
-					'status'         => 403,
-					'required_scope' => $required_scope,
-					'granted_scopes' => $granted,
-					'hint'           => sprintf(
-						'This API key has scopes [%s] but needs "%s". Request a key with the required scope from the site admin, or use wp_create_api_key to create one with appropriate scopes.',
-						implode( ', ', $granted ),
-						$required_scope
-					),
-				)
-			);
+		if ( ! $this->key_has_scope( $matched_key, $required_scope ) && ! $this->mcp_scope_refusal_is_per_call( $request, $matched_key ) ) {
+			return $this->build_insufficient_scope_error( $matched_key, $required_scope, $this->route_category_for_refusal( $request ) );
 		}
 
 		// Store the matched key for downstream use (MCP tool filtering, etc.).
@@ -1011,6 +1542,7 @@ trait Mcpwp_Api_Auth {
 		}
 
 		$record = Mcpwp_WebMCP::principal_record( $user_id );
+		$this->mcpwp_audit_key_id = isset( $record['id'] ) ? (string) $record['id'] : '';
 
 		// Charged once, on the outer request — sub-requests were already
 		// counted there, same rule as API keys.
@@ -1752,6 +2284,40 @@ trait Mcpwp_Api_Auth {
 	 *  - 'name:item'     PER-ITEM: one id that a bulk-shaped door reports in
 	 *                    its per-item results rather than refusing
 	 *
+	 * and carries ONE of four classes (#1101 PR-3c, #1118):
+	 *  - (no suffix)     WRITE target: the request changes that post.  Every
+	 *                    principal gets the hidden check; a user-run principal
+	 *                    also needs edit_post (delete_post on DELETE).
+	 *  - '@read'         READ-only reference: the request only looks at that
+	 *                    post (a link target, a clone or template source).
+	 *                    Every principal gets the hidden check; a user-run
+	 *                    principal needs read_post, not edit_post — so an
+	 *                    Author may reference a published post, never
+	 *                    another user's draft or private post.  A hidden read
+	 *                    ref refuses the whole request, whatever its shape.
+	 *  - '@read-user'    READ-only reference checked for user-run principals
+	 *                    only (read_post, as '@read').  Used for the nested
+	 *                    references this audit found undeclared
+	 *                    (featured_image, media_id, a page's parent): a bot
+	 *                    key keeps exactly the scope-only behaviour it had.
+	 *                    Never on GET/HEAD, where the name is a list filter.
+	 *  - '@source'       As '@read', for a post whose stored content the
+	 *                    handler COPIES into the post it creates (a clone's
+	 *                    or landing page's source). The only read refs that
+	 *                    count toward the #1032 pre-existing-template
+	 *                    exemption (written_post_ref_target_ids()); '@read'
+	 *                    and '@read-user' refs never do (#1118 P0-2). A route
+	 *                    that copies the source's TYPE also declares
+	 *                    'source:<param>' in user_run_create_type_routes().
+	 *
+	 * Every declared value that this guard and a handler's absint() could
+	 * read differently — negative, '12abc', true, an array — is refused 400
+	 * invalid_post_ref (is_ambiguous_post_ref_value()).
+	 *
+	 * A key may contain '*' for one path segment ('/pages/*' + '/clone'), so a
+	 * sub-route can carry a different class than its parent family.  Keys
+	 * are matched in order; the first that matches wins.
+	 *
 	 * Per-item ids are never refused as a request; the bulk handler asks
 	 * post_ref_item_visible() for each one (see
 	 * check_post_naming_params_category()).
@@ -1772,16 +2338,18 @@ trait Mcpwp_Api_Auth {
 			'/elementor/blueprints'               => array(),
 			'/elementor/build-page'               => array(),
 			'/elementor/bulk'                     => array( 'ids:csv' ),
-			'/elementor/clone'                    => array( 'source_id' ),
+			// The clone's source is only read; its parent page too.
+			'/elementor/clone'                    => array( 'source_id@source', 'parent@read' ),
 			'/elementor/custom-code'              => array( 'id' ),
 			// Both shapes are per-item: an id the run cannot touch is reported
 			// in not_touched[], never refused as a whole request.
 			'/elementor/find-replace'             => array( 'id:item', 'ids[]' ),
 			'/elementor/globals'                  => array(),
 			'/elementor/kit-css'                  => array(),
-			'/elementor/landing-page'             => array( 'template_id' ),
+			'/elementor/landing-page'             => array( 'template_id@source' ),
 			'/elementor/parts'                    => array( 'id', 'page_id' ),
-			'/elementor/save-section-as-template' => array( 'page_id' ),
+			// The section is copied FROM page_id into a new template: a read.
+			'/elementor/save-section-as-template' => array( 'page_id@read' ),
 			'/elementor/status'                   => array(),
 			'/elementor/templates'                => array( 'id', 'page_id' ),
 			'/elementor/widget-help'               => array(),
@@ -1801,13 +2369,17 @@ trait Mcpwp_Api_Auth {
 			'/rendered-html'                       => array( 'id' ),
 			'/rendered-copy'                       => array( 'id' ),
 			// `updates` and the original `pages` spelling are both accepted.
-			'/pages/bulk'                          => array( 'updates[].id', 'pages[].id' ),
-			// /pages/{id}, .../clone (the {id} IS the clone source),
-			// .../template, .../translations.
-			'/pages'                               => array( 'id' ),
+			// parent / featured_image: nested references (#1110, PR-3c).
+			'/pages/bulk'                          => array( 'updates[].id', 'pages[].id', 'updates[].parent@read-user', 'pages[].parent@read-user', 'updates[].featured_image@read-user', 'pages[].featured_image@read-user' ),
+			// /pages/{id}/clone: the {id} IS the clone source — only read.
+			'/pages/*/clone'                       => array( 'id@source' ),
+			// /pages/{id}, .../template, .../translations.
+			'/pages'                               => array( 'id', 'parent@read-user', 'featured_image@read-user' ),
 			// `updates` and the original `posts` spelling are both accepted.
-			'/posts/bulk'                          => array( 'updates[].id', 'posts[].id' ),
-			'/posts'                               => array( 'id' ),
+			'/posts/bulk'                          => array( 'updates[].id', 'posts[].id', 'updates[].featured_image@read-user', 'posts[].featured_image@read-user' ),
+			// The attachment set as the featured image is only referenced.
+			'/posts/*/featured-image'              => array( 'id', 'media_id@read-user' ),
+			'/posts'                               => array( 'id', 'featured_image@read-user' ),
 			'/post-meta'                           => array( 'id' ),
 			// Generic CPT door: /content/{post_type}/{id}. GET /content
 			// (list) has no 'id' param, so nothing fires there.
@@ -1815,8 +2387,10 @@ trait Mcpwp_Api_Auth {
 			'/blocks'                              => array( 'id' ),
 
 			// === Content graph ===
-			'/content-graph/apply-link'            => array( 'source_id', 'target_id' ),
-			'/content-graph/suggestions'           => array( 'source_id' ),
+			// The link is written INTO source_id; target_id is only read
+			// (its URL and title).
+			'/content-graph/apply-link'            => array( 'source_id', 'target_id@read' ),
+			'/content-graph/suggestions'           => array( 'source_id@read' ),
 
 			// === SEO — specific plugin/aggregate doors before the /seo/{id} catch-all ===
 			// updates[].id: bulk_update()'s own 'id'→'post_id' alias
@@ -2106,6 +2680,162 @@ trait Mcpwp_Api_Auth {
 	}
 
 	/**
+	 * Split a declared spec into its path and its class (#1101 PR-3c):
+	 * 'write', 'read' ('@read') or 'read-user' ('@read-user').
+	 *
+	 * @param string $spec Declared spec.
+	 * @return array{0:string,1:string}
+	 */
+	public static function post_ref_spec_parts( $spec ) {
+		$spec = (string) $spec;
+		if ( '@read-user' === substr( $spec, -10 ) ) {
+			return array( substr( $spec, 0, -10 ), 'read-user' );
+		}
+		if ( '@read' === substr( $spec, -5 ) ) {
+			return array( substr( $spec, 0, -5 ), 'read' );
+		}
+		if ( '@source' === substr( $spec, -7 ) ) {
+			return array( substr( $spec, 0, -7 ), 'source' );
+		}
+		return array( $spec, 'write' );
+	}
+
+	/**
+	 * Whether a declared ref value is one this guard and a handler's
+	 * absint() / (int) could read differently, and so is refused (400
+	 * invalid_post_ref) rather than skipped:
+	 *  - an array, object or true (absint() reads 1, or the first element);
+	 *  - a non-numeric string that starts like a number ('12abc', '+12x',
+	 *    '-0x1');
+	 *  - #1118 P0-1: ANY negative number, int, float or numeric string
+	 *    ('-5', -5, ' -5', -5.0). The guard skipped values <= 0 as "not an
+	 *    id", and absint() turned -N into N — a page editor cloned another
+	 *    user's draft by sending -id.
+	 * 0, '0', '', null and false are not ids and still pass untouched.
+	 *
+	 * @param mixed $value Raw value.
+	 * @return bool
+	 */
+	public static function is_ambiguous_post_ref_value( $value ) {
+		if ( is_array( $value ) || is_object( $value ) || true === $value ) {
+			return true;
+		}
+		// A float (or float-shaped string) is an id only when it is a whole
+		// number an int holds exactly (< 2^53): then a cast, absint() and the
+		// handlers all read the same integer. 4095.99999999999 (read as 4095,
+		// stored as 4096), 1e19 (wraps), INF and NAN are refused. Values a
+		// handler STORES verbatim (id-metas) take the stricter path in
+		// canonicalize_post_meta_value(), which refuses every float.
+		if ( is_float( $value ) ) {
+			return $value < 0 || ! self::is_exact_whole_number( $value );
+		}
+		if ( is_int( $value ) ) {
+			return $value < 0;
+		}
+		if ( ! is_string( $value ) ) {
+			return false;
+		}
+		// '', ' ' and signed zeros ('0', '-0', '+00') are not ids: every reading is 0.
+		if ( '' === trim( $value ) || 1 === preg_match( '/^\\s*[+-]?0+\\s*$/', $value ) ) {
+			return false;
+		}
+		// A digit-only string is an id (or 0); a string that opens like a
+		// number but is anything else ('12abc', '-5', '1e3', '4.096e3', '5.0')
+		// is read differently by a cast and a store, so it is refused.
+		if ( 1 === preg_match( '/^\s*\+?[0-9]+\s*$/', $value ) ) {
+			return null === self::canonical_post_id_token( $value ) && ! self::is_zero_digits( $value );
+		}
+		if ( is_numeric( $value ) ) {
+			$as_float = (float) $value;
+			return $as_float < 0 || ! self::is_exact_whole_number( $as_float );
+		}
+		return 1 === preg_match( '/^\s*[+-]?[.\d]/', $value );
+	}
+
+	/**
+	 * Whether a float is finite, whole and below 2^53 (exactly an int).
+	 *
+	 * @param float $value Float.
+	 * @return bool
+	 */
+	private static function is_exact_whole_number( $value ) {
+		return is_finite( $value ) && abs( $value ) < 9007199254740992.0 && floor( $value ) === $value;
+	}
+
+	/**
+	 * Whether a digit-only string is zero ('0', '000', ' +0 ').
+	 *
+	 * @param string $value Digit-only string.
+	 * @return bool
+	 */
+	private static function is_zero_digits( $value ) {
+		return '' === ltrim( trim( $value, " \t\n\r\0\x0B+" ), '0' );
+	}
+
+	/**
+	 * The ONE definition of an id token: a PHP int > 0, or a digit-only
+	 * string ('5', ' 7 ', '+7', '007') whose value fits an int and is > 0.
+	 * Anything else (a float, an exponent/decimal/hex string, a bool, null,
+	 * an array, zero, an overflowing number) is null — not an id.
+	 *
+	 * @param mixed $value Raw value.
+	 * @return int|null
+	 */
+	public static function canonical_post_id_token( $value ) {
+		if ( is_int( $value ) ) {
+			return $value > 0 ? $value : null;
+		}
+		if ( ! is_string( $value ) || 1 !== preg_match( '/^\s*\+?([0-9]+)\s*$/', $value, $m ) ) {
+			return null;
+		}
+		$digits = ltrim( $m[1], '0' );
+		if ( '' === $digits || strlen( $digits ) > 19 || ( 19 === strlen( $digits ) && strcmp( $digits, '9223372036854775807' ) > 0 ) ) {
+			return null;
+		}
+		return (int) $digits;
+	}
+
+	/**
+	 * The declared specs for a route path: those of post_ref_map_key_for_path().
+	 *
+	 * @param string $path Route without the /mcpwp/v1 prefix.
+	 * @return string[]
+	 */
+	public static function post_ref_specs_for_path( $path ) {
+		$key = self::post_ref_map_key_for_path( $path );
+		if ( null === $key ) {
+			return array();
+		}
+		$map = self::get_post_ref_param_map();
+		return $map[ $key ];
+	}
+
+	/**
+	 * The map key that governs a route path: the first key that matches it —
+	 * exactly, as a prefix followed by '/', or with '*' standing for one
+	 * segment. Null when none does.
+	 *
+	 * @param string $path Route without the /mcpwp/v1 prefix.
+	 * @return string|null
+	 */
+	public static function post_ref_map_key_for_path( $path ) {
+		$path = (string) $path;
+		foreach ( array_keys( self::get_post_ref_param_map() ) as $prefix ) {
+			if ( false !== strpos( $prefix, '*' ) ) {
+				$pattern = '#^' . str_replace( '\\*', '[^/]+', preg_quote( $prefix, '#' ) ) . '(/|$)#';
+				if ( preg_match( $pattern, $path ) ) {
+					return $prefix;
+				}
+				continue;
+			}
+			if ( $path === $prefix || 0 === strpos( $path, $prefix . '/' ) ) {
+				return $prefix;
+			}
+		}
+		return null;
+	}
+
+	/**
 	 * Most ids a declared per-item param may name in one request. Checked
 	 * before any lookup runs, so an oversized list costs nothing.
 	 */
@@ -2121,7 +2851,7 @@ trait Mcpwp_Api_Auth {
 	 * rest_do_request(), which runs this same check on the real route).
 	 *
 	 * @param WP_REST_Request $request Request object.
-	 * @return array{route_category:string,scalar:int[],items:int[]}|WP_Error|null
+	 * @return array{route_category:string,scalar:int[],items:int[],read:int[]}|WP_Error|null
 	 */
 	protected function collect_post_refs( $request ) {
 		if ( ! is_object( $request ) || ! method_exists( $request, 'get_route' ) ) {
@@ -2132,25 +2862,32 @@ trait Mcpwp_Api_Auth {
 			return null;
 		}
 
-		$params = method_exists( $request, 'get_params' ) ? $request->get_params() : null;
-		if ( ! is_array( $params ) ) {
+		if ( ! method_exists( $request, 'get_params' ) ) {
 			return null;
 		}
+		$params = $this->gate_params( $request );
 
 		$path = ( 0 === strpos( $route, '/mcpwp/v1' ) ) ? substr( $route, strlen( '/mcpwp/v1' ) ) : $route;
 
-		$specs = array();
-		foreach ( self::get_post_ref_param_map() as $prefix => $declared ) {
-			if ( $path === $prefix || 0 === strpos( $path, $prefix . '/' ) ) {
-				$specs = $declared;
-				break;
-			}
-		}
+		$specs     = self::post_ref_specs_for_path( $path );
+		$user_run  = $this->requester_acts_as_user();
+		// '@read-user' refs are payload refs of WRITES (a featured image, a
+		// parent being set). On a GET the same name is a list filter
+		// (GET /pages?parent=) whose results are already clamped to what
+		// the caller may read; judging it would turn "list the published
+		// children" into a 404 an Author never got before.
+		$is_read_method = method_exists( $request, 'get_method' ) && in_array( strtoupper( (string) $request->get_method() ), array( 'GET', 'HEAD' ), true );
 
 		$scalar = array();
 		$items  = array();
+		$read   = array();
+		$source = array(); // '@source' refs: also in $read; the only template-exempt read refs.
 
-		foreach ( $specs as $spec ) {
+		foreach ( $specs as $declared_spec ) {
+			list( $spec, $class ) = self::post_ref_spec_parts( $declared_spec );
+			if ( 'read-user' === $class && ( ! $user_run || $is_read_method ) ) {
+				continue; // A bot key keeps its scope-only behaviour; a GET filter is not a write.
+			}
 			$per_item = self::is_per_item_post_ref_spec( $spec );
 			$raw      = $this->extract_post_ref_values( $params, $spec );
 
@@ -2167,10 +2904,25 @@ trait Mcpwp_Api_Auth {
 			}
 
 			foreach ( $raw as $value ) {
+				// #1101 PR-3c: a value this guard and a handler's absint()
+				// would read differently ('12abc', true, [12]: skipped here,
+				// a real post id there) is refused, not skipped.
+				if ( self::is_ambiguous_post_ref_value( $value ) ) {
+					return new WP_Error(
+						'invalid_post_ref',
+						__( 'Post ids must be plain positive integers.', 'mcpwp' ),
+						array( 'status' => 400 )
+					);
+				}
 				if ( ! is_numeric( $value ) || (int) $value <= 0 ) {
 					continue; // Not an id at all: the door's own validation answers it.
 				}
-				if ( $per_item ) {
+				if ( 'source' === $class ) {
+					$read[]   = (int) $value;
+					$source[] = (int) $value;
+				} elseif ( 'write' !== $class ) {
+					$read[] = (int) $value;
+				} elseif ( $per_item ) {
 					$items[] = (int) $value;
 				} else {
 					$scalar[] = (int) $value;
@@ -2189,6 +2941,30 @@ trait Mcpwp_Api_Auth {
 		// A single item (POST /menus/{id}/items) is a scalar ref; the items[]
 		// of a menu created in one call (POST /menus) are per-item refs.
 		if ( $this->route_matches( $path, '/menus' ) ) {
+			if ( ! $is_read_method && array_key_exists( 'items', $params ) ) {
+				if ( ! is_array( $params['items'] ) ) {
+					return new WP_Error( 'invalid_menu_item', __( 'Menu items must be an array of objects.', 'mcpwp' ), array( 'status' => 400 ) );
+				}
+				foreach ( $params['items'] as $menu_item ) {
+					$valid = self::validate_menu_item_shape( $menu_item );
+					if ( is_wp_error( $valid ) ) {
+						return $valid;
+					}
+				}
+			}
+			// #1118 P0-1: an object_id the guard skips (negative, '12abc') but
+			// absint() reads as a post, under a type that names a post.
+			foreach ( array_merge( array( $params ), isset( $params['items'] ) && is_array( $params['items'] ) ? $params['items'] : array() ) as $menu_item ) {
+				if ( ! $is_read_method && is_array( $menu_item ) && array_key_exists( 'type', $menu_item ) ) {
+					$type = self::normalize_menu_item_type( $menu_item['type'] );
+					if ( is_wp_error( $type ) ) {
+						return $type;
+					}
+				}
+				if ( is_array( $menu_item ) && self::menu_item_type_names_post( $menu_item ) && array_key_exists( 'object_id', $menu_item ) && self::is_ambiguous_post_ref_value( $menu_item['object_id'] ) ) {
+					return new WP_Error( 'invalid_post_ref', __( 'Post ids must be plain positive integers.', 'mcpwp' ), array( 'status' => 400 ) );
+				}
+			}
 			if ( self::menu_item_names_post( $params ) ) {
 				$scalar[] = (int) $params['object_id'];
 			}
@@ -2212,7 +2988,21 @@ trait Mcpwp_Api_Auth {
 			}
 		}
 
-		if ( empty( $scalar ) && empty( $items ) ) {
+		// #1121: POST /post-meta/{id} {key, value} — the value names posts when
+		// the key is a known id meta (get_post_ref_meta_value_keys()). Read-only
+		// references (an attachment set as the thumbnail, a product linked as an
+		// upsell), so '@read-user' semantics: user-run principals, writes only.
+		if ( $user_run && ! $is_read_method && preg_match( '#^/post-meta/\d+$#', $path ) && array_key_exists( 'value', $params ) ) {
+			$meta_ids = self::post_ref_meta_ids( isset( $params['key'] ) ? $params['key'] : '', $params['value'] );
+			if ( is_wp_error( $meta_ids ) ) {
+				return $meta_ids;
+			}
+			foreach ( $meta_ids as $meta_id ) {
+				$read[] = $meta_id;
+			}
+		}
+
+		if ( empty( $scalar ) && empty( $items ) && empty( $read ) ) {
 			return null;
 		}
 
@@ -2220,7 +3010,223 @@ trait Mcpwp_Api_Auth {
 			'route_category' => (string) self::get_category_for_route( '/mcpwp/v1' . $path ),
 			'scalar'         => array_values( array_unique( $scalar ) ),
 			'items'          => array_values( array_unique( $items ) ),
+			// #1101 PR-3c: read-only references — hidden check (read_post
+			// for a user-run principal), never the per-post edit check.
+			'read'           => array_values( array_unique( $read ) ),
+			// #1118 P0-2: the subset of 'read' whose stored content the handler
+			// copies verbatim (a clone's or landing page's source) — the only
+			// read refs the #1032 pre-existing-template exemption may use.
+			'source'         => array_values( array_unique( $source ) ),
 		);
+	}
+
+	/**
+	 * Menu items must be field maps, never scalar values or nested lists.
+	 *
+	 * @param mixed $item Item payload.
+	 * @return true|WP_Error
+	 */
+	public static function validate_menu_item_shape( $item ) {
+		if ( ! is_array( $item ) || empty( $item ) || count( array_filter( array_keys( $item ), 'is_int' ) ) > 0 ) {
+			return new WP_Error( 'invalid_menu_item', __( 'Menu items must be objects with named fields.', 'mcpwp' ), array( 'status' => 400 ) );
+		}
+		return true;
+	}
+
+	/**
+	 * Parse a menu-item type for both the category gate and write handlers.
+	 *
+	 * Do not strip or case-fold input: sanitize_key()/sanitize_text_field()
+	 * can turn an unrecognised value into a type that names a post. Keep the
+	 * existing aliases, but refuse every value outside this exact vocabulary.
+	 * Callers apply the documented custom default only when type is omitted.
+	 *
+	 * @param mixed $type Raw type.
+	 * @return array{type:string,object:string}|WP_Error Canonical type and alias object default.
+	 */
+	public static function normalize_menu_item_type( $type ) {
+		$types = array(
+			'custom'    => array( 'type' => 'custom', 'object' => '' ),
+			'post_type' => array( 'type' => 'post_type', 'object' => '' ),
+			'taxonomy'  => array( 'type' => 'taxonomy', 'object' => '' ),
+			'post'      => array( 'type' => 'post_type', 'object' => 'post' ),
+			'page'      => array( 'type' => 'post_type', 'object' => 'page' ),
+			'category'  => array( 'type' => 'taxonomy', 'object' => 'category' ),
+			'tag'       => array( 'type' => 'taxonomy', 'object' => 'post_tag' ),
+			'post_tag'  => array( 'type' => 'taxonomy', 'object' => 'post_tag' ),
+		);
+		if ( is_string( $type ) && isset( $types[ $type ] ) ) {
+			return $types[ $type ];
+		}
+		return new WP_Error( 'invalid_menu_item_type', __( 'Unrecognised menu item type.', 'mcpwp' ), array( 'status' => 400 ) );
+	}
+
+	/**
+	 * Whether a nav-menu item's type says its object_id is a post.
+	 *
+	 * @param array $item Item payload.
+	 * @return bool
+	 */
+	public static function menu_item_type_names_post( array $item ) {
+		// The gate must never be looser than any reader of the field.
+		// (1) The write handlers parse the type exactly, through
+		// normalize_menu_item_type(): only that vocabulary reaches a post.
+		$type = self::normalize_menu_item_type( array_key_exists( 'type', $item ) ? $item['type'] : 'custom' );
+		if ( ! is_wp_error( $type ) && 'post_type' === $type['type'] ) {
+			return true;
+		}
+		// (2) #1121: a reader that folds the value the way sanitize_key() does
+		// (lowercase, strip) sees 'Page' and ' page ' as 'page'. Those values
+		// are refused by the exact parse above, but the gate still demands the
+		// post capability for them rather than depend on that refusal.
+		$folded = isset( $item['type'] ) && is_string( $item['type'] ) ? self::normalize_post_ref_token( $item['type'] ) : '';
+		return in_array( $folded, array( 'post_type', 'post', 'page' ), true );
+	}
+
+	/**
+	 * sanitize_key() semantics without the WordPress dependency: lowercase,
+	 * then drop everything outside [a-z0-9_-].
+	 *
+	 * @param string $token Raw token.
+	 * @return string
+	 */
+	public static function normalize_post_ref_token( $token ) {
+		return (string) preg_replace( '/[^a-z0-9_\-]/', '', strtolower( (string) $token ) );
+	}
+
+	/**
+	 * Post-meta keys whose VALUE names posts (#1121), and the value's shape:
+	 * 'scalar' (one id), 'csv' ('1,2,3') or 'list' (an array, or a JSON string
+	 * the handler decodes). Keys are lowercase: look one up through
+	 * post_ref_meta_ids(), which lowercases first. Only keys /post-meta can
+	 * write: _elementor_* keys are refused there outright.
+	 *
+	 * @return array<string,string>
+	 */
+	public static function get_post_ref_meta_value_keys() {
+		return array(
+			'_thumbnail_id'          => 'scalar', // Featured image (core).
+			'_product_image_gallery' => 'csv',    // WooCommerce gallery attachment ids.
+			'_upsell_ids'            => 'list',   // WooCommerce linked products.
+			'_crosssell_ids'         => 'list',
+			'_children'              => 'list',   // WooCommerce grouped product children.
+		);
+	}
+
+	/**
+	 * The ONE decoder for a /post-meta value: a string that opens a JSON
+	 * object or array and parses is the structure it encodes (as an
+	 * associative array); anything else is returned unchanged. The handler
+	 * stores what this returns and the guard audits what this returns, so the
+	 * two can never read a value differently (#1121: '{"0":8}' was decoded by
+	 * one and not the other).
+	 *
+	 * @param mixed $value Raw value.
+	 * @return mixed
+	 */
+	public static function decode_post_meta_value( $value ) {
+		if ( is_string( $value ) ) {
+			$head = substr( ltrim( $value ), 0, 1 );
+			if ( '{' === $head || '[' === $head ) {
+				$decoded = json_decode( $value, true );
+				if ( null !== $decoded ) {
+					return $decoded;
+				}
+			}
+		}
+		return $value;
+	}
+
+	/**
+	 * The ONE canonicaliser for an id-meta write: the ids the value names
+	 * AND the canonical value to store, so what the guard checks is by
+	 * construction what the handler stores.
+	 *
+	 * Null when the key is not a known id meta. The key is lowercased first
+	 * (wp_postmeta.meta_key collates case-insensitively), and the value goes
+	 * through decode_post_meta_value(). Accepted: a PHP int > 0, a digit-only
+	 * string ('5', ' 7 ', '+7', '007'), a comma list of those ('5,6'), and
+	 * an array (or JSON array/object) of those. Every float, exponent /
+	 * decimal / hex string, bool, nested array, zero or null inside a list is
+	 * 400 invalid_post_ref; over post_ref_batch_cap() ids is 400 too_many_ids.
+	 * A whole-number float (5.0) is refused too: JSON clients send 5, and a
+	 * float has no single reading across a cast, a store and absint().
+	 *
+	 * 'value' is what to store: an int for the scalar shape, a canonical
+	 * 'a,b' string for csv, a list of ints for list; null (delete) and the
+	 * empty scalars ('', 0, '0' — the clearing forms) pass as they are.
+	 *
+	 * @param mixed $key   Raw key param.
+	 * @param mixed $value Raw value param.
+	 * @return array{ids:int[],value:mixed}|WP_Error|null
+	 */
+	public static function canonicalize_post_meta_value( $key, $value ) {
+		if ( ! is_string( $key ) ) {
+			return null;
+		}
+		$shapes = self::get_post_ref_meta_value_keys();
+		$key    = strtolower( trim( $key ) );
+		if ( ! isset( $shapes[ $key ] ) ) {
+			return null;
+		}
+		$shape   = $shapes[ $key ];
+		$value   = self::decode_post_meta_value( $value );
+		$invalid = new WP_Error( 'invalid_post_ref', __( 'Post ids must be positive integers.', 'mcpwp' ), array( 'status' => 400 ) );
+
+		if ( null === $value ) {
+			return array( 'ids' => array(), 'value' => null );
+		}
+		if ( 'scalar' === $shape ) {
+			if ( '' === $value || 0 === $value || '0' === $value ) {
+				return array( 'ids' => array(), 'value' => $value );
+			}
+			$id = self::canonical_post_id_token( $value );
+			return null === $id ? $invalid : array( 'ids' => array( $id ), 'value' => $id );
+		}
+
+		if ( is_array( $value ) ) {
+			$parts = array_values( $value );
+		} elseif ( is_string( $value ) ) {
+			$parts = '' === trim( $value ) ? array() : explode( ',', $value );
+		} else {
+			$parts = array( $value );
+		}
+		if ( count( $parts ) > self::post_ref_batch_cap() ) {
+			return new WP_Error(
+				'too_many_ids',
+				sprintf(
+					/* translators: %d: cap */
+					__( 'A single request may name at most %d posts.', 'mcpwp' ),
+					self::post_ref_batch_cap()
+				),
+				array( 'status' => 400 )
+			);
+		}
+		$ids = array();
+		foreach ( $parts as $part ) {
+			$id = self::canonical_post_id_token( $part );
+			if ( null === $id ) {
+				return $invalid;
+			}
+			$ids[] = $id;
+		}
+		return array( 'ids' => $ids, 'value' => 'csv' === $shape ? implode( ',', $ids ) : $ids );
+	}
+
+	/**
+	 * The post ids a /post-meta write names (see canonicalize_post_meta_value()),
+	 * empty when the key is not an id meta, or a WP_Error.
+	 *
+	 * @param mixed $key   Raw key param.
+	 * @param mixed $value Raw value param.
+	 * @return int[]|WP_Error
+	 */
+	public static function post_ref_meta_ids( $key, $value ) {
+		$canonical = self::canonicalize_post_meta_value( $key, $value );
+		if ( null === $canonical ) {
+			return array();
+		}
+		return is_wp_error( $canonical ) ? $canonical : $canonical['ids'];
 	}
 
 	/**
@@ -2231,8 +3237,7 @@ trait Mcpwp_Api_Auth {
 	 * @return bool
 	 */
 	public static function menu_item_names_post( array $item ) {
-		$type = isset( $item['type'] ) && is_string( $item['type'] ) ? $item['type'] : '';
-		return in_array( $type, array( 'post_type', 'post', 'page' ), true )
+		return self::menu_item_type_names_post( $item )
 			&& isset( $item['object_id'] ) && is_numeric( $item['object_id'] ) && (int) $item['object_id'] > 0;
 	}
 
@@ -2311,9 +3316,25 @@ trait Mcpwp_Api_Auth {
 				if ( ! current_user_can( 'read_post', (int) $id ) ) {
 					return true;
 				}
+			} elseif ( $this->requester_oauth_user_id() > 0 ) {
+				// OAuth acting as a user (PR-2 P0): WordPress decides, and
+				// a non-public post still needs write scope.
+				if ( ! current_user_can( 'read_post', (int) $id ) ) {
+					return true;
+				}
+				if ( ! $this->is_public_status( $row['post_status'] ) && ! $this->key_has_scope( $this->get_current_api_key_record(), 'write' ) ) {
+					return true;
+				}
 			} elseif ( ! $this->is_public_status( $row['post_status'] ) && ! $this->requester_can_see_non_public() ) {
 				return true;
 			}
+		} elseif ( 'attachment' === $row['post_type'] && ( $this->requester_is_webmcp() || $this->requester_oauth_user_id() > 0 ) && ! current_user_can( 'read_post', (int) $id ) ) {
+			// #1101 PR-3c: an attachment carries no visibility of its own, but
+			// for a user-run principal WordPress still answers read_post for it
+			// through its parent (an unattached file reads as published; one
+			// attached to another user's draft does not).  Without this, a
+			// featured_image / media_id reference would never be checked.
+			return true;
 		}
 
 		if ( in_array( $row['post_type'], array( 'post', 'page' ), true ) ) {
@@ -2321,6 +3342,20 @@ trait Mcpwp_Api_Auth {
 		}
 
 		return ! $this->caller_may_read_category( self::category_for_post_ref( (int) $id, $row['post_type'], $route_category ) );
+	}
+
+	/**
+	 * Whether a resolved row is a revision, or any non-attachment post with
+	 * the 'inherit' status (see get_post_ref_resolution()).
+	 *
+	 * @param array|null $row Resolved row.
+	 * @return bool
+	 */
+	protected static function post_ref_row_is_hidden_inherit( $row ) {
+		if ( ! is_array( $row ) ) {
+			return false;
+		}
+		return 'revision' === $row['post_type'] || ( 'inherit' === $row['post_status'] && 'attachment' !== $row['post_type'] );
 	}
 
 	/**
@@ -2352,10 +3387,24 @@ trait Mcpwp_Api_Auth {
 		);
 
 		if ( null !== $refs ) {
-			$ids  = array_merge( $refs['scalar'], $refs['items'] );
+			$ids  = array_values( array_unique( array_merge( $refs['scalar'], $refs['items'], $refs['read'] ) ) );
 			$rows = self::fetch_post_ref_rows( $ids );
 			foreach ( $ids as $id ) {
 				$resolution['hidden'][ $id ] = $this->post_ref_is_hidden( $id, $rows[ $id ] ?? null, $refs['route_category'] );
+			}
+			// #1118 scope cut, P0: a READ or SOURCE ref naming a revision — or
+			// any other non-attachment 'inherit' post — is hidden for a
+			// user-run principal. A revision carries its parent's full body
+			// but no visibility of its own; post_ref_is_hidden() checks
+			// read_post only for attachments, so cloning a revision of
+			// someone's draft copied the draft. Attachments keep read_post;
+			// bots are unchanged.
+			if ( $this->requester_acts_as_user() ) {
+				foreach ( $refs['read'] as $id ) {
+					if ( self::post_ref_row_is_hidden_inherit( $rows[ $id ] ?? null ) ) {
+						$resolution['hidden'][ $id ] = true;
+					}
+				}
 			}
 			$resolution['rows'] = $rows;
 		}
@@ -2405,20 +3454,91 @@ trait Mcpwp_Api_Auth {
 	 * @return true|WP_Error
 	 */
 	protected function check_post_naming_params_category( $request ) {
+		// #1100: the WordPress capability a user-run principal needs for this
+		// route (Mcpwp_Route_Capability_Map). This is the tail every
+		// verdict-computing path ends in, so the check runs on the main and
+		// the sub-request path alike; it is a no-op for bot-run principals.
+		$capability_check = $this->check_gate_entry( $request );
+		if ( is_wp_error( $capability_check ) ) {
+			return $capability_check;
+		}
+
 		$resolution = $this->get_post_ref_resolution( $request );
 		if ( is_wp_error( $resolution ) ) {
 			return $resolution;
 		}
 
 		if ( null !== $resolution['refs'] ) {
-			foreach ( $resolution['refs']['scalar'] as $id ) {
+			// Scalar write refs and every read-only ref (#1101 PR-3c) answer
+			// a hidden id with the canonical 404 — for a user-run principal
+			// "hidden" includes read_post false, so another user's draft
+			// reads exactly like a missing id.
+			foreach ( array_merge( $resolution['refs']['scalar'], $resolution['refs']['read'] ) as $id ) {
 				if ( ! empty( $resolution['hidden'][ $id ] ) ) {
 					return $this->post_ref_not_found_error( $request );
 				}
 			}
+
+			// PR-2 P0: an OAuth token acting as a user may change only posts
+			// WordPress lets that user change.  MCPWP's write handlers call
+			// wp_update_post()/wp_delete_post(), which check no capability,
+			// so running as the user is not enough on its own — this is the
+			// one chokepoint every declared post reference passes.  Visible-
+			// but-not-editable is a 403, not a 404: the user can already
+			// read the post, so its existence is no secret.
+			//
+			// Per-item refs (ids[], updates[].id, posts[].id, ids:csv …) are
+			// checked too, and ANY failing id fails the WHOLE request — nothing
+			// is partially applied.  A missing or hidden id fails the same way
+			// (WordPress answers edit_post false for both), so the 403 is no
+			// existence oracle.
+			$edit_check = $this->check_oauth_user_can_change_post_refs( $request, array_merge( $resolution['refs']['scalar'], $resolution['refs']['items'] ) );
+			if ( is_wp_error( $edit_check ) ) {
+				return $edit_check;
+			}
+		}
+
+		// The generic post doors' post-type rule, for EVERY principal (bots:
+		// admin scope for types other than post/page; users: the type's own
+		// capability). After the hidden-reference checks above, so it can
+		// never tell a hidden post from a missing one.
+		$post_type_check = $this->check_generic_post_type_access( $request );
+		if ( is_wp_error( $post_type_check ) ) {
+			return $post_type_check;
 		}
 
 		return $this->check_request_template_refs( $request );
+	}
+
+	/**
+	 * Per-post write check for an OAuth token acting as a user (PR-2 P0).
+	 *
+	 * Applies to every non-GET/HEAD request carrying declared scalar post
+	 * references: DELETE needs delete_post, anything else edit_post.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @param int[]           $ids     Declared scalar post ids.
+	 * @return true|WP_Error
+	 */
+	protected function check_oauth_user_can_change_post_refs( $request, $ids ) {
+		if ( $this->requester_oauth_user_id() <= 0 || empty( $ids ) ) {
+			return true;
+		}
+		$method = is_object( $request ) && method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'GET';
+		if ( in_array( $method, array( 'GET', 'HEAD', 'OPTIONS' ), true ) ) {
+			return true;
+		}
+		$cap = 'DELETE' === $method ? 'delete_post' : 'edit_post';
+		foreach ( (array) $ids as $id ) {
+			if ( (int) $id > 0 && ! current_user_can( $cap, (int) $id ) ) {
+				return new WP_Error(
+					'rest_cannot_edit',
+					__( 'Your WordPress account is not allowed to change this content.', 'mcpwp' ),
+					array( 'status' => 403 )
+				);
+			}
+		}
+		return true;
 	}
 
 	/**
@@ -2919,8 +4039,8 @@ trait Mcpwp_Api_Auth {
 			return true;
 		}
 
-		$params = method_exists( $request, 'get_params' ) ? $request->get_params() : null;
-		if ( ! is_array( $params ) || empty( $params ) ) {
+		$params = $this->gate_params( $request );
+		if ( empty( $params ) ) {
 			return true;
 		}
 
@@ -3004,7 +4124,11 @@ trait Mcpwp_Api_Auth {
 	 * @return int[]
 	 */
 	protected function written_post_ref_target_ids( $request, array $refs ) {
-		$scalar = $refs['scalar'];
+		// #1101 PR-3c: read-only refs count here by default as before — a
+		// clone's or landing page's source is copied into the written post
+		// verbatim, so its stored refs were already exempt; the per-route
+		// override below is what excludes a link target.
+		$scalar = array_values( array_unique( array_merge( $refs['scalar'], $refs['source'] ?? array() ) ) );
 
 		if ( is_object( $request ) && method_exists( $request, 'get_route' ) ) {
 			$route = $this->normalize_route_for_authorization( (string) $request->get_route() );
@@ -3012,7 +4136,7 @@ trait Mcpwp_Api_Auth {
 
 			foreach ( self::written_post_ref_scalar_overrides() as $prefix => $written_specs ) {
 				if ( $path === $prefix || 0 === strpos( $path, $prefix . '/' ) ) {
-					$params = method_exists( $request, 'get_params' ) ? $request->get_params() : array();
+					$params = $this->gate_params( $request );
 					$params = is_array( $params ) ? $params : array();
 
 					$scalar = array();
@@ -3120,7 +4244,7 @@ trait Mcpwp_Api_Auth {
 		$matched_key = $this->find_scoped_api_key( $api_key );
 		$legacy_key  = get_option( 'mcpwp_api_key' );
 
-		if ( ! $matched_key && ! empty( $legacy_key ) && $this->is_api_key_match( $api_key, $legacy_key ) ) {
+		if ( ! $matched_key && ! empty( $legacy_key ) && $this->legacy_api_key_option_is_honoured() && $this->is_api_key_match( $api_key, $legacy_key ) ) {
 			$matched_key = $this->migrate_legacy_key_to_scoped_store( $legacy_key );
 		}
 
@@ -3149,21 +4273,17 @@ trait Mcpwp_Api_Auth {
 			return new WP_Error(
 				'invalid_api_key',
 				__( 'Invalid API key.', 'mcpwp' ),
-				array( 'status' => 401 )
+				array(
+					'status' => 401,
+					'hint'   => self::invalid_api_key_hint(),
+				)
 			);
 		}
 
+		$this->mcpwp_audit_key_id = isset( $matched_key['id'] ) ? (string) $matched_key['id'] : '';
 		$required_scope = $this->get_required_scope_for_request( $request );
 		if ( ! $this->key_has_scope( $matched_key, $required_scope ) ) {
-			return new WP_Error(
-				'insufficient_scope',
-				sprintf(
-					/* translators: %s: scope name */
-					__( 'API key lacks required scope: %s', 'mcpwp' ),
-					$required_scope
-				),
-				array( 'status' => 403 )
-			);
+			return $this->build_insufficient_scope_error( $matched_key, $required_scope, $this->route_category_for_refusal( $request ) );
 		}
 
 		// Persist the matched key so downstream identity/role checks (self-approval,
@@ -3275,7 +4395,7 @@ trait Mcpwp_Api_Auth {
 		// reaches this (it takes the unmetered verify_api_key_auth_only() path),
 		// so a tools/call that already charged the weight is not charged twice.
 		if ( class_exists( 'Mcpwp_Operation_Weights' ) && method_exists( $request, 'get_route' ) ) {
-			$params = method_exists( $request, 'get_params' ) ? (array) $request->get_params() : array();
+			$params = $this->gate_params( $request );
 			$graph  = Mcpwp_Operation_Weights::graph_weight( Mcpwp_Operation_Weights::normalize_route( (string) $request->get_route() ), $params );
 			if ( null !== $graph ) {
 				return $graph;
@@ -3302,10 +4422,18 @@ trait Mcpwp_Api_Auth {
 	 * @return string|null API key or null.
 	 */
 	protected function get_api_key_from_request( $request ) {
+		// An OAuth access token (mcpwp_at_ / spai_at_) is a bearer credential
+		// and is accepted ONLY in `Authorization: Bearer` — the one method the
+		// discovery metadata advertises (bearer_methods_supported ["header"],
+		// RFC 6750 §2).  In X-API-Key or the ?api_key= query string it would
+		// end up in access logs and proxies' URL records, so it is not read
+		// from there at all.  API keys are unaffected: every method that
+		// accepted one still does.
+
 		// Check header first (X-API-Key)
 		$api_key = $request->get_header( 'X-API-Key' );
 
-		if ( ! empty( $api_key ) ) {
+		if ( ! empty( $api_key ) && ! $this->looks_like_oauth_access_token( $api_key ) ) {
 			return sanitize_text_field( $api_key );
 		}
 
@@ -3320,7 +4448,10 @@ trait Mcpwp_Api_Auth {
 		// phpcs:ignore WordPress.Security.NonceVerification.Recommended
 		if ( ! empty( $_GET['api_key'] ) ) {
 			// phpcs:ignore WordPress.Security.NonceVerification.Recommended
-			return sanitize_text_field( wp_unslash( $_GET['api_key'] ) );
+			$from_query = sanitize_text_field( wp_unslash( $_GET['api_key'] ) );
+			if ( ! $this->looks_like_oauth_access_token( $from_query ) ) {
+				return $from_query;
+			}
 		}
 
 		return null;
@@ -3352,6 +4483,11 @@ trait Mcpwp_Api_Auth {
 	protected function forward_caller_credential( $outer_request, $internal_request ) {
 		$outer_api_key_header = method_exists( $outer_request, 'get_header' ) ? $outer_request->get_header( 'X-API-Key' ) : null;
 		$outer_auth_header    = method_exists( $outer_request, 'get_header' ) ? $outer_request->get_header( 'Authorization' ) : null;
+		// An OAuth token in X-API-Key was never the credential (see
+		// get_api_key_from_request()); do not forward it as one.
+		if ( ! empty( $outer_api_key_header ) && $this->looks_like_oauth_access_token( $outer_api_key_header ) ) {
+			$outer_api_key_header = null;
+		}
 
 		if ( ! empty( $outer_api_key_header ) ) {
 			$internal_request->set_header( 'X-API-Key', $outer_api_key_header );
@@ -3411,32 +4547,93 @@ trait Mcpwp_Api_Auth {
 	protected function authenticate_oauth_access_token( $token, $request, $metered = true ) {
 		$oauth_settings = $this->get_oauth_settings();
 		if ( empty( $oauth_settings['oauth_enabled'] ) ) {
+			$this->count_oauth_failure( $request, $metered );
+			return self::oauth_disabled_error();
+		}
+
+		// #1101 PR-3b: access tokens live in the hashed token table.  A
+		// token is valid only when its row is found active (an access row,
+		// not revoked, not expired); a missing table finds nothing (fail
+		// closed).  A token with no row at all may be one issued before the
+		// table existed: during the grace window it is looked up in its old
+		// transient — 2.8.x spai_oauth_token_<md5> first for an spai_at_
+		// token, then mcpwp_oauth_token_<md5> — and moved into the table on
+		// this use, or refused if that write fails.
+		$record = false;
+		$row    = Mcpwp_OAuth_Token_Store::find( $token );
+		if ( Mcpwp_OAuth_Token_Store::is_active( $row, Mcpwp_OAuth_Token_Store::TYPE_ACCESS ) ) {
+			$record = Mcpwp_OAuth_Token_Store::to_record( $row );
+			Mcpwp_OAuth_Token_Store::touch( $row );
+		} elseif ( null === $row ) {
+			$legacy_keys = array( $this->get_oauth_token_transient_key( $token ) );
+			if ( 0 === strpos( (string) $token, 'spai_at_' ) ) {
+				array_unshift( $legacy_keys, 'spai_oauth_token_' . md5( (string) $token ) );
+			}
+			foreach ( $legacy_keys as $legacy_key ) {
+				$record = Mcpwp_OAuth_Token_Store::migrate_from_transient( $token, Mcpwp_OAuth_Token_Store::TYPE_ACCESS, $legacy_key, DAY_IN_SECONDS );
+				if ( is_array( $record ) ) {
+					break;
+				}
+			}
+		}
+
+		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
+			if ( ! $this->count_oauth_failure( $request, $metered ) ) {
+				$this->log_auth_failure( $request );
+			}
+			return self::oauth_reconnect_error();
+		}
+
+		// #1101: revoked by epoch (its client was revoked or deleted, its user
+		// revoked or deleted, its refresh family killed, or the whole site
+		// disconnected) at or after the moment it was issued. Checked BEFORE
+		// the audience so a revoked token answers like every other dead one,
+		// whatever else is wrong with it.
+		if ( Mcpwp_OAuth_Revocation::is_revoked( $record ) ) {
+			if ( ! $this->count_oauth_failure( $request, $metered ) ) {
+				$this->log_auth_failure( $request );
+			}
+			return self::oauth_reconnect_error();
+		}
+
+		// RFC 8707 audience binding (PR-2 D2).  Every token issued since PR-2
+		// carries `aud` = this site's MCP endpoint URL; one carrying anything
+		// else (a different site's URL, a value altered in storage, an empty
+		// string) is refused.  The key's PRESENCE decides — array_key_exists,
+		// not isset/empty — so a null or empty `aud` fails closed instead of
+		// passing as "no audience".
+		//
+		// A record with no `aud` key at all was minted before this release.
+		// Access tokens live at most a day (issue_oauth_access_token() clamps
+		// the TTL to 86400), so that grace period ends on its own.
+		if ( array_key_exists( 'aud', $record ) && ! $this->oauth_audience_matches( $record['aud'] ) ) {
+			$this->log_auth_failure( $request );
 			return new WP_Error(
-				'invalid_api_key',
-				__( 'Invalid API key.', 'mcpwp' ),
-				array( 'status' => 401 )
+				'invalid_token',
+				__( 'This access token was issued for a different resource.', 'mcpwp' ),
+				array(
+					'status' => 401,
+					'hint'   => 'This token was issued for a different site address. Connect to this site\'s current MCP URL, or re-add the connector.',
+				)
 			);
 		}
 
-		// For legacy spai_at_ tokens we check the legacy transient namespace first.
-		// 2.8.56 used 'spai_oauth_token_' . md5($token); v3 uses 'mcpwp_oauth_token_' . md5($token).
-		// We try the legacy key first when the token has the spai_ prefix, then fall
-		// through to the standard path in case it was already re-issued under v3 naming.
-		$record = false;
-		if ( 0 === strpos( (string) $token, 'spai_at_' ) ) {
-			$legacy_transient_key = 'spai_oauth_token_' . md5( (string) $token );
-			$record               = get_transient( $legacy_transient_key );
-		}
-		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
-			$record = get_transient( $this->get_oauth_token_transient_key( $token ) );
-		}
-
-		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
+		// PR-2 P0: a token minted for a user ACTS AS that user.  So the user
+		// must still exist and still meet the site's minimum role for AI
+		// connections (Mcpwp_OAuth_Well_Known::get_min_role()); a deleted or
+		// demoted user's token stops working on its next request.  A record
+		// without user_id (client_credentials, pre-identity legacy tokens)
+		// keeps running as the service account — see below.
+		$oauth_user_id = ( isset( $record['user_id'] ) && (int) $record['user_id'] > 0 ) ? (int) $record['user_id'] : 0;
+		if ( $oauth_user_id > 0 && ( ! get_userdata( $oauth_user_id ) || ! $this->oauth_user_meets_min_role( $oauth_user_id ) ) ) {
 			$this->log_auth_failure( $request );
 			return new WP_Error(
-				'invalid_api_key',
-				__( 'Invalid API key.', 'mcpwp' ),
-				array( 'status' => 401 )
+				'invalid_token',
+				__( 'The WordPress user who approved this connection can no longer connect AI apps on this site.', 'mcpwp' ),
+				array(
+					'status' => 401,
+					'hint'   => 'Ask a site administrator to restore this user\'s role (MCPWP -> Setup -> minimum role), or connect as another user.',
+				)
 			);
 		}
 
@@ -3460,12 +4657,26 @@ trait Mcpwp_Api_Auth {
 			$principal_id = 'oauth:' . substr( hash( 'sha256', (string) $token ), 0, 16 );
 		}
 
+		// D8, again at authentication (belt and braces beside the cap at write
+		// in Mcpwp_OAuth_Token_Store::insert()): a token that runs as a user
+		// never acts with `admin`, whatever a stored row says.
+		$record_scopes = (array) $record['scopes'];
+		if ( $oauth_user_id > 0 ) {
+			$record_scopes = Mcpwp_OAuth_Token_Store::cap_user_bound_scopes( $record_scopes );
+		}
 		$key_record = array(
 			'id'     => $principal_id,
 			'type'   => 'oauth',
-			'scopes' => $this->sanitize_scopes( (array) $record['scopes'] ),
+			'scopes' => $this->sanitize_scopes( $record_scopes ),
 		);
+		if ( $oauth_user_id > 0 ) {
+			// Read by requester_oauth_user_id(): this principal is a real
+			// WordPress user, so per-post visibility and write checks ask
+			// WordPress (the WebMCP rule, #981) instead of trusting scope.
+			$key_record['acts_as_user'] = $oauth_user_id;
+		}
 		$this->current_api_key_record = $key_record;
+		$this->mcpwp_audit_key_id = isset( $key_record['id'] ) ? (string) $key_record['id'] : '';
 		$required_scope               = $this->get_required_scope_for_request( $request );
 
 		if ( ! $this->key_has_scope( $key_record, $required_scope ) ) {
@@ -3484,7 +4695,17 @@ trait Mcpwp_Api_Auth {
 			);
 		}
 
-		if ( ! $this->set_api_user_context() ) {
+		// PR-2 P0: run AS THE APPROVING USER, never as the service account.
+		// The service account (mcpwp_api_agent) holds editor-level caps, so
+		// running a user's token as it would hand a low-privilege user an
+		// editor's reach; as the user, WordPress capability checks (and the
+		// per-post read/edit checks below) apply.  The token scope stays a
+		// further ceiling on top.  Only a token with no user — the machine
+		// client_credentials grant and pre-identity legacy tokens — keeps
+		// the service account, unchanged.
+		if ( $oauth_user_id > 0 ) {
+			wp_set_current_user( $oauth_user_id );
+		} elseif ( ! $this->set_api_user_context() ) {
 			return new WP_Error(
 				'api_user_missing',
 				__( 'API user context is not configured. Re-activate MCPWP to provision the service account.', 'mcpwp' ),
@@ -3631,6 +4852,7 @@ trait Mcpwp_Api_Auth {
 			'scopes' => $scopes,
 		);
 		$this->current_api_key_record = $key_record;
+		$this->mcpwp_audit_key_id = isset( $key_record['id'] ) ? (string) $key_record['id'] : '';
 
 		$required_scope = $this->get_required_scope_for_request( $request );
 		if ( ! $this->key_has_scope( $key_record, $required_scope ) ) {
@@ -3720,11 +4942,29 @@ trait Mcpwp_Api_Auth {
 		// explicit opt-in — the same MCPWP_TRUST_PROXY_HEADERS gate the OAuth
 		// well-known scheme check uses; otherwise fall back to REMOTE_ADDR, which
 		// the web server controls.
-		$trust_proxy = defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS;
+		return $this->resolve_client_ip( defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS );
+	}
 
+	/**
+	 * Resolve the client IP under an explicit trust flag.
+	 *
+	 * Split from get_client_ip() so both branches are testable without
+	 * define()-ing MCPWP_TRUST_PROXY_HEADERS (a constant cannot be undefined
+	 * in a single-process suite) — the same shape as
+	 * resolve_logging_client_ip().
+	 *
+	 * Behind a trusted proxy, CF-Connecting-IP is preferred over the first
+	 * X-Forwarded-For hop: Cloudflare sets it to the address it actually
+	 * accepted the connection from, while the first XFF hop is whatever the
+	 * client claimed before Cloudflare appended to the list.
+	 *
+	 * @param bool $trust_proxy Whether proxy-supplied headers may be believed.
+	 * @return string
+	 */
+	protected function resolve_client_ip( $trust_proxy ) {
 		$ip_keys = $trust_proxy
 			? array(
-				'HTTP_CF_CONNECTING_IP', // Cloudflare
+				'HTTP_CF_CONNECTING_IP', // Cloudflare — preferred (see above).
 				'HTTP_X_FORWARDED_FOR',  // Proxy
 				'HTTP_X_REAL_IP',        // Nginx
 				'REMOTE_ADDR',           // Standard
@@ -3826,6 +5066,63 @@ trait Mcpwp_Api_Auth {
 			}
 		}
 
+		return false;
+	}
+
+	/**
+	 * Whether the legacy single-key option `mcpwp_api_key` may authenticate.
+	 *
+	 * Only on a site whose scoped store is still empty: a genuine
+	 * pre-multi-key install, whose key is migrated into the store on first use
+	 * and matched there from then on. Once the store holds any record, every
+	 * live key has a record, so a legacy hash with no live record can only
+	 * belong to a REVOKED key — find_scoped_api_key() skips revoked records,
+	 * and honouring the option here used to re-create a revoked primary key
+	 * as a brand-new active admin record (migrate_legacy_key_to_scoped_store()).
+	 *
+	 * @return bool
+	 */
+	protected function legacy_api_key_option_is_honoured() {
+		return array() === $this->get_scoped_api_keys_raw() && ! $this->scoped_api_key_store_is_unreadable();
+	}
+
+	/**
+	 * Whether the scoped key store holds something that is not a list of keys.
+	 *
+	 * A truncated or otherwise corrupt value reads as an empty store through
+	 * get_scoped_api_keys_raw(), which would make every legacy fallback look
+	 * safe: the legacy single key would be honoured and re-migrated as an
+	 * active admin record, and a spai_ copy of a revoked key would match. While
+	 * the store is unreadable nothing falls back to those; the request fails
+	 * closed (#1096).
+	 *
+	 * @return bool
+	 */
+	protected function scoped_api_key_store_is_unreadable() {
+		if ( ! class_exists( 'Mcpwp_Key_State' ) ) {
+			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
+		}
+		return Mcpwp_Key_State::store_is_unreadable();
+	}
+
+	/**
+	 * Whether a stored hash belongs to a REVOKED record in the scoped store.
+	 *
+	 * Exact string compare: the 2.8 migration copies hashes verbatim, so a
+	 * revoked mcpwp copy of a spai key carries the identical hash (#1097).
+	 *
+	 * @param string $hash Stored hash.
+	 * @return bool
+	 */
+	protected function hash_is_revoked_in_scoped_store( $hash ) {
+		if ( '' === $hash ) {
+			return false;
+		}
+		foreach ( $this->get_scoped_api_keys_raw() as $record ) {
+			if ( is_array( $record ) && ! empty( $record['revoked_at'] ) && isset( $record['hash'] ) && hash_equals( (string) $record['hash'], $hash ) ) {
+				return true;
+			}
+		}
 		return false;
 	}
 
@@ -3991,6 +5288,19 @@ trait Mcpwp_Api_Auth {
 	 * @return array|null Matching (normalized) key record, or null.
 	 */
 	protected function find_legacy_spai_key( $api_key ) {
+		if ( $this->scoped_api_key_store_is_unreadable() ) {
+			return null; // Fail closed: see scoped_api_key_store_is_unreadable().
+		}
+		// #1097: the 2.8 migration copies spai_api_keys / spai_api_key into the
+		// mcpwp stores VERBATIM (same hash) and never deletes the originals. So
+		// a key revoked in the mcpwp store is still live in its spai copy — and
+		// used to authenticate here as admin. A spai credential whose exact hash
+		// belongs to a REVOKED mcpwp record is therefore refused. A spai key with
+		// no mcpwp copy at all (e.g. a single spai_api_key the migration skipped
+		// because the activator had already minted mcpwp_api_key) keeps working,
+		// as before. Checked here, at the chokepoint, so every caller (main
+		// path, sub-request path, rate-limit diagnostics) gets it.
+
 		// 1. Check the spai_api_keys scoped multi-key store.
 		$spai_keys = get_option( 'spai_api_keys', array() );
 		if ( is_array( $spai_keys ) ) {
@@ -4005,6 +5315,9 @@ trait Mcpwp_Api_Auth {
 				if ( empty( $key['hash'] ) ) {
 					continue;
 				}
+				if ( $this->hash_is_revoked_in_scoped_store( (string) $key['hash'] ) ) {
+					continue;
+				}
 				if ( $this->is_api_key_match( $api_key, $key['hash'] ) ) {
 					$record = $this->normalize_api_key_record( $key );
 					return '' === $record['id'] ? null : $record;
@@ -4014,7 +5327,7 @@ trait Mcpwp_Api_Auth {
 
 		// 2. Fall back to the single-key spai_api_key option.
 		$spai_single = get_option( 'spai_api_key' );
-		if ( ! empty( $spai_single ) && $this->is_api_key_match( $api_key, $spai_single ) ) {
+		if ( ! empty( $spai_single ) && ! $this->hash_is_revoked_in_scoped_store( (string) $spai_single ) && $this->is_api_key_match( $api_key, $spai_single ) ) {
 			// Synthesise a minimal key record consistent with normalize_api_key_record().
 			return $this->normalize_api_key_record(
 				array(
@@ -4123,7 +5436,7 @@ trait Mcpwp_Api_Auth {
 		// the caller has not named. Gated here, in the route table, like every
 		// other high-blast-radius op — not only inside the handler (#803).
 		if ( $is_write && preg_match( '#^/mcpwp/v1/elementor/find-replace(/|$)#i', $route ) ) {
-			$params = method_exists( $request, 'get_params' ) ? $request->get_params() : array();
+			$params = $this->gate_params( $request );
 			if ( is_array( $params ) && class_exists( 'Mcpwp_REST_Elementor' ) && Mcpwp_REST_Elementor::find_replace_is_wide( $params ) ) {
 				return 'admin';
 			}
@@ -4149,6 +5462,47 @@ trait Mcpwp_Api_Auth {
 				return 'admin';
 			}
 			return $is_write ? 'write' : 'read';
+		}
+
+		// #1100 interim (before the capability sweep): routes whose handlers
+		// carry no capability check of their own, so scope is the only gate.
+		// Admin scope closes them for every non-admin key and every OAuth
+		// token (OAuth is never admin) until the real WordPress capability
+		// is enforced for user-run principals.
+		//  - Form entries: submitters' names, emails and messages, which an
+		//    Editor cannot see in wp-admin. Every method, prefix match.
+		if ( preg_match( '#^/mcpwp/v1/forms/[^/]+/[^/]+/entries(/|$)#i', $route ) ) {
+			return 'admin';
+		}
+		//  - Widgets and sidebars: writing them needs edit_theme_options in
+		//    wp-admin. Writes only; listing stays at the read default.
+		if ( $is_write && ( $this->route_matches( $route, '/mcpwp/v1/widgets' ) || $this->route_matches( $route, '/mcpwp/v1/sidebars' ) ) ) {
+			return 'admin';
+		}
+		//  - Product creation (POST with no id): no per-post check exists for
+		//    a post that does not exist yet, and Editors lack edit_products.
+		//    Edits by id stay on the publish-gated rules below.
+		if ( 'POST' === $method && '/mcpwp/v1/woocommerce/products' === untrailingslashit( $route ) ) {
+			return 'admin';
+		}
+		//  - Site-wide settings with no capability check (Kasra, #1100 phase 1):
+		//    the site icon (/favicon writes), rewrite flush, page-cache flush,
+		//    site-health signal settings, the site context (brand brief) write,
+		//    the feedback relay, and creating or deleting a stored site
+		//    blueprint. In wp-admin each of these needs manage_options. Reads
+		//    of the same routes stay where they were.
+		$route_exact = untrailingslashit( $route );
+		if ( $is_write && $this->route_matches( $route, '/mcpwp/v1/favicon' ) ) {
+			return 'admin';
+		}
+		if ( 'POST' === $method && in_array( $route_exact, array( '/mcpwp/v1/flush-permalinks', '/mcpwp/v1/cache-flush', '/mcpwp/v1/site-context', '/mcpwp/v1/feedback/relay', '/mcpwp/v1/site-blueprints' ), true ) ) {
+			return 'admin';
+		}
+		if ( $is_write && '/mcpwp/v1/signals/settings' === $route_exact ) {
+			return 'admin';
+		}
+		if ( 'DELETE' === $method && preg_match( '#^/mcpwp/v1/site-blueprints/[^/]+$#i', $route_exact ) ) {
+			return 'admin';
 		}
 
 		// Blanket-admin routes: every method (including GET) requires admin scope.
@@ -4177,6 +5531,14 @@ trait Mcpwp_Api_Auth {
 			// Staging routes: pushing environments (especially →live) is irreversible
 			// without a host-level backup, so all staging endpoints require admin scope.
 			'/mcpwp/v1/staging',
+			// WooCommerce orders and customers (PR-2 round 2, Kasra option A):
+			// customer PII, addresses and order history.  The handlers carry no
+			// capability check of their own (that is #1100), so scope is the
+			// only gate — admin, every method, prefix match (orders/{id},
+			// orders/statuses, customers/{id} and any future sub-route).  An
+			// OAuth token is never admin (D8), so it cannot reach them at all.
+			'/mcpwp/v1/woocommerce/orders',
+			'/mcpwp/v1/woocommerce/customers',
 		);
 
 		foreach ( $admin_routes as $admin_route ) {
@@ -4406,13 +5768,16 @@ trait Mcpwp_Api_Auth {
 	 * therefore now included below, alongside 'publish' and 'private'. See
 	 * param_value_targets_admin_scope().
 	 *
-	 * Deliberately reads get_params() (like the sibling
-	 * find_replace_is_wide() check above) rather than get_json_params(): the
-	 * former is what WP_REST_Request actually exposes as the merged,
-	 * already-decoded body/query/URL params on every real dispatch path this
-	 * plugin uses (direct REST, /batch sub-dispatch, MCP tools/call via
-	 * rest_do_request()), and it degrades safely (empty array) rather than
-	 * null when a request carries no JSON body at all.
+	 * Reads gate_params() (like the sibling find_replace_is_wide() check
+	 * above) rather than get_json_params(): every bucket a handler can read
+	 * — JSON, body, query, URL — on every real dispatch path this plugin
+	 * uses (direct REST, /batch sub-dispatch, MCP tools/call via
+	 * rest_do_request()), degrading safely (empty array) when a request has
+	 * no JSON body. It used to read get_params() for the same reasons, but
+	 * get_params() lets a JSON-body null hide a query-string value that the
+	 * handler's get_param() still reads (#1110): {"status":null} plus
+	 * ?status=publish was judged "no status" and then published. Each key is
+	 * now resolved through get_param(), the handlers' own accessor.
 	 *
 	 * @param WP_REST_Request $request Request object.
 	 * @return bool True when any targeted item would end up 'publish', 'private', or 'future'.
@@ -4422,7 +5787,7 @@ trait Mcpwp_Api_Auth {
 			return false;
 		}
 
-		$params = (array) $request->get_params();
+		$params = $this->gate_params( $request );
 
 		if ( $this->param_value_targets_admin_scope( $params, 'status' ) ) {
 			return true;
@@ -4625,38 +5990,7 @@ trait Mcpwp_Api_Auth {
 				continue;
 			}
 
-			$method = isset( $message['method'] ) ? (string) $message['method'] : '';
-			$scope  = 'read';
-
-			if ( 'tools/call' === $method ) {
-				// #907 BLOCK-1: classify the EFFECTIVE tool — mcpwp_call
-				// unwrapped to the tool it names — never the raw outer
-				// name, or a wrapped admin/write tool is misclassified as
-				// whatever "mcpwp_call" itself would require (nothing).
-				// #1016: pass the raw value through, unconverted — a
-				// premature (string) cast turns an array/object `name`
-				// into the literal string "Array" (a PHP "Array to string
-				// conversion" warning, not caught here) instead of the ''
-				// effective_mcp_tool_call() itself already normalizes a
-				// non-string name to.
-				$outer_name = isset( $message['params']['name'] ) ? $message['params']['name'] : '';
-				$outer_args = isset( $message['params']['arguments'] ) && is_array( $message['params']['arguments'] ) ? $message['params']['arguments'] : array();
-				$effective  = $this->effective_mcp_tool_call( $outer_name, $outer_args );
-				$tool_name  = $effective['name'];
-				$scope = $this->get_required_scope_for_tool_name( $tool_name );
-
-				// The same rule the REST route table applies: a wide
-				// find/replace is admin whichever door it comes through —
-				// including wrapped in mcpwp_call, so this reads the
-				// EFFECTIVE arguments, not the outer wrapper's.
-				if ( 'wp_bulk_find_replace' === $tool_name && class_exists( 'Mcpwp_REST_Elementor' ) ) {
-					if ( Mcpwp_REST_Elementor::find_replace_is_wide( $effective['arguments'] ) ) {
-						$scope = 'admin';
-					}
-				}
-			} elseif ( ! in_array( $method, array( 'initialize', 'tools/list', 'resources/list', 'resources/read', 'ping', 'notifications/initialized' ), true ) ) {
-				$scope = 'write';
-			}
+			$scope = $this->get_required_scope_for_mcp_message( $message );
 
 			if ( $this->scope_rank( $scope ) > $this->scope_rank( $highest ) ) {
 				$highest = $scope;
@@ -4664,6 +5998,352 @@ trait Mcpwp_Api_Auth {
 		}
 
 		return $highest;
+	}
+
+	/**
+	 * Scope one JSON-RPC message needs. The single derivation: the outer
+	 * request check (get_required_scope_for_mcp_request()) and the per-call
+	 * check inside /mcp (tool_call_scope_refusal()) both read it, so the
+	 * two cannot disagree about what a call requires.
+	 *
+	 * @param array $message JSON-RPC message.
+	 * @return string Scope.
+	 */
+	protected function get_required_scope_for_mcp_message( array $message ) {
+		$method = isset( $message['method'] ) ? (string) $message['method'] : '';
+
+		if ( 'tools/call' === $method ) {
+			// #907 BLOCK-1: classify the EFFECTIVE tool — mcpwp_call
+			// unwrapped to the tool it names — never the raw outer
+			// name, or a wrapped admin/write tool is misclassified as
+			// whatever "mcpwp_call" itself would require (nothing).
+			// #1016: pass the raw value through, unconverted — a
+			// premature (string) cast turns an array/object `name`
+			// into the literal string "Array" (a PHP "Array to string
+			// conversion" warning, not caught here) instead of the ''
+			// effective_mcp_tool_call() itself already normalizes a
+			// non-string name to.
+			$outer_name = isset( $message['params']['name'] ) ? $message['params']['name'] : '';
+			$outer_args = isset( $message['params']['arguments'] ) && is_array( $message['params']['arguments'] ) ? $message['params']['arguments'] : array();
+			$effective  = $this->effective_mcp_tool_call( $outer_name, $outer_args );
+			$tool_name  = $effective['name'];
+			$scope      = $this->get_required_scope_for_tool_name( $tool_name );
+
+			// The same rule the REST route table applies: a wide
+			// find/replace is admin whichever door it comes through —
+			// including wrapped in mcpwp_call, so this reads the
+			// EFFECTIVE arguments, not the outer wrapper's.
+			if ( 'wp_bulk_find_replace' === $tool_name && class_exists( 'Mcpwp_REST_Elementor' ) ) {
+				if ( Mcpwp_REST_Elementor::find_replace_is_wide( $effective['arguments'] ) ) {
+					$scope = 'admin';
+				}
+			}
+
+			return $scope;
+		}
+
+		if ( ! in_array( $method, array( 'initialize', 'tools/list', 'resources/list', 'resources/read', 'ping', 'notifications/initialized' ), true ) ) {
+			return 'write';
+		}
+
+		return 'read';
+	}
+
+	/**
+	 * The one answer for an OAuth access token that is not valid: expired,
+	 * unknown, never issued, malformed, revoked (app removed, user revoke,
+	 * revoked refresh family, /oauth/revoke, Disconnect all), covered by a
+	 * revocation epoch, or local OAuth switched off. Identical for every
+	 * cause, so it is no oracle for whether a string was once a real token.
+	 * It never carries the token. The WWW-Authenticate challenge
+	 * (error="invalid_token" plus resource_metadata) is added to the 401 by
+	 * Mcpwp_OAuth_Well_Known::add_www_authenticate_header().
+	 *
+	 * @return WP_Error
+	 */
+	public static function oauth_reconnect_error() {
+		return new WP_Error(
+			'invalid_token',
+			self::oauth_reconnect_message(),
+			array(
+				'status' => 401,
+				'hint'   => self::oauth_reconnect_hint(),
+			)
+		);
+	}
+
+	/**
+	 * Count a failed OAuth token against the same per-address limiter a wrong
+	 * API key uses ('invalid:<ip>'), so the two share ONE budget and the
+	 * failure load is bounded. Unlike the API-key path, going over the limit
+	 * never changes the answer: a dead token still gets the identical 401
+	 * invalid_token (a client refreshes on 401, never on 429, so a shared
+	 * address's exhausted budget must not stall every client's hourly expiry).
+	 * The caller skips only the side effects (the activity-log INSERT) when
+	 * this returns true. Valid tokens never reach this; unmetered
+	 * sub-requests were already charged by their outer request.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @param bool            $metered Whether this call is the outer request.
+	 * @return bool True when the address is over its failure budget.
+	 */
+	protected function count_oauth_failure( $request, $metered ) {
+		if ( ! $metered ) {
+			return false;
+		}
+		$method = method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST';
+		$over   = $this->check_rate_limit( 'invalid:' . $this->get_client_ip(), $method );
+		return is_wp_error( $over );
+	}
+
+	/**
+	 * A token presented while local OAuth sign-in is switched off. On a site
+	 * enrolled with the mumcp.com broker, discovery still points somewhere, so
+	 * it is the ordinary reconnect answer. Otherwise "reconnect" is not
+	 * actionable, so say so. Same answer for every token on such a site; the
+	 * switch is already public (the metadata answers 404).
+	 *
+	 * @return WP_Error
+	 */
+	public static function oauth_disabled_error() {
+		if ( class_exists( 'Mcpwp_OAuth_Well_Known' ) && Mcpwp_OAuth_Well_Known::is_broker_enrolled() ) {
+			return self::oauth_reconnect_error();
+		}
+		return new WP_Error(
+			'invalid_token',
+			self::oauth_disabled_message(),
+			array(
+				'status' => 401,
+				'hint'   => 'OAuth sign-in is switched off on this site (MCPWP -> Setup -> Advanced). Use an API key, or ask the site owner to turn it on.',
+			)
+		);
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function oauth_disabled_message() {
+		return __( 'OAuth sign-in is switched off on this site. Use an API key, or ask the site owner.', 'mcpwp' );
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function oauth_reconnect_message() {
+		return __( 'This connection has expired or was revoked. Reconnect (sign in again) to continue.', 'mcpwp' );
+	}
+
+	/**
+	 * @return string
+	 */
+	public static function oauth_reconnect_hint() {
+		return 'The access token is expired, revoked, or not recognised. Try the refresh token, and if that is refused, reconnect: remove and re-add the connector, or sign in again.';
+	}
+
+	/**
+	 * The hint every invalid-key 401 carries. One text for every cause
+	 * (mistyped, revoked, retired first-activation key, never valid), so the
+	 * answer is never an oracle for whether a string was once a real key.
+	 * Mcpwp_Error_Hints holds the same text for paths that add a hint late.
+	 *
+	 * @return string
+	 */
+	public static function invalid_api_key_hint() {
+		return 'The key is not valid: it may be mistyped, revoked, or a retired first-activation key. Create a new key under MCPWP -> Setup.';
+	}
+
+	/**
+	 * Whether an insufficient-scope refusal on this request is reported
+	 * per call, inside /mcp, instead of as one HTTP 403 for the whole body.
+	 *
+	 * True only for a POST /mcp body whose scope shortfall is confined to
+	 * tools/call messages: every other message in it (initialize, tools/list,
+	 * resources/*, prompts/*, unknown methods) must already be within the
+	 * key's scope. Each tools/call is then judged on its own by
+	 * tool_call_scope_refusal() before it dispatches, with the same scope
+	 * derivation (get_required_scope_for_mcp_message()), so no call that was
+	 * refused is allowed: the refusal moves from the envelope to the call.
+	 * The result is an isError tools/call result (#936) the model can read,
+	 * and the allowed calls of a JSON-RPC batch still run.
+	 *
+	 * @param WP_REST_Request $request    Request.
+	 * @param array           $key_record Matched key record.
+	 * @return bool
+	 */
+	protected function mcp_scope_refusal_is_per_call( $request, $key_record ) {
+		$route = $this->normalize_route_for_authorization( method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '' );
+		if ( 0 !== strpos( $route, '/mcpwp/v1/mcp' ) ) {
+			return false;
+		}
+		$http_method = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'POST';
+		if ( 'POST' !== $http_method ) {
+			return false;
+		}
+		$payload = method_exists( $request, 'get_json_params' ) ? $request->get_json_params() : null;
+		if ( empty( $payload ) || ! is_array( $payload ) ) {
+			return false;
+		}
+
+		$messages  = isset( $payload[0] ) ? $payload : array( $payload );
+		$any_calls = false;
+		foreach ( $messages as $message ) {
+			if ( ! is_array( $message ) ) {
+				continue;
+			}
+			if ( isset( $message['method'] ) && 'tools/call' === $message['method'] ) {
+				$any_calls = true;
+				continue;
+			}
+			if ( ! $this->key_has_scope( $key_record, $this->get_required_scope_for_mcp_message( $message ) ) ) {
+				return false;
+			}
+		}
+
+		return $any_calls;
+	}
+
+	/**
+	 * The scope refusal for ONE tools/call, or null when the caller's scope
+	 * covers it. Reads the message the same way the outer request check does,
+	 * from the params as the client sent them.
+	 *
+	 * @param mixed $params tools/call params.
+	 * @return array{required_scope:string,tool:string}|null
+	 */
+	protected function tool_call_scope_refusal( $params ) {
+		$key_record = $this->get_current_api_key_record();
+		if ( ! is_array( $key_record ) ) {
+			return null; // Trusted admin-AJAX context: no key to hold a scope.
+		}
+
+		$message  = array(
+			'method' => 'tools/call',
+			'params' => is_array( $params ) ? $params : array(),
+		);
+		$required = $this->get_required_scope_for_mcp_message( $message );
+		if ( $this->key_has_scope( $key_record, $required ) ) {
+			return null;
+		}
+
+		$outer_name = isset( $message['params']['name'] ) ? $message['params']['name'] : '';
+		$outer_args = isset( $message['params']['arguments'] ) && is_array( $message['params']['arguments'] ) ? $message['params']['arguments'] : array();
+		$effective  = $this->effective_mcp_tool_call( $outer_name, $outer_args );
+
+		return array(
+			'required_scope' => $required,
+			'tool'           => $effective['name'],
+		);
+	}
+
+	/**
+	 * Whether the record's role can ever be granted a scope. Only the Admin
+	 * role (and a legacy record with no role at all) can hold admin scope:
+	 * create_scoped_api_key() caps every other role (editor, author,
+	 * designer, custom, ...) at read + write.
+	 *
+	 * @param array  $key_record Key record.
+	 * @param string $scope      read|write|admin.
+	 * @return bool
+	 */
+	public static function key_role_can_hold_scope( $key_record, $scope ) {
+		if ( 'admin' !== $scope || ! is_array( $key_record ) ) {
+			return true;
+		}
+		if ( ! array_key_exists( 'role', $key_record ) ) {
+			return true;
+		}
+
+		return 'admin' === (string) $key_record['role'];
+	}
+
+	/**
+	 * The insufficient_scope refusal for an API key, worded for what is true
+	 * and what the caller can do about it. The decision is made by the
+	 * caller; this only describes it.
+	 *
+	 * A key whose role can never hold the required scope (an Admin-only
+	 * action asked of an editor, author, designer or custom key) is told so,
+	 * and told who can fix it: the site owner, with an Admin-role key from
+	 * MCPWP > Setup. Where the action is also outside the key's tool
+	 * categories, that category is named too, as the category refusal did
+	 * before the scope check ran first. The code stays insufficient_scope.
+	 *
+	 * @param array  $key_record     Key record.
+	 * @param string $required_scope Scope the action needs.
+	 * @param string $category       Tool category of the route or tool, '' if none.
+	 * @return WP_Error
+	 */
+	protected function build_insufficient_scope_error( $key_record, $required_scope, $category = '' ) {
+		$key_record = is_array( $key_record ) ? $key_record : array();
+		$granted    = isset( $key_record['scopes'] ) ? (array) $key_record['scopes'] : array();
+		$role       = isset( $key_record['role'] ) ? self::describe_role_for_message( (string) $key_record['role'] ) : '';
+		$can_hold   = self::key_role_can_hold_scope( $key_record, $required_scope );
+
+		$data = array(
+			'status'         => 403,
+			'required_scope' => $required_scope,
+			'granted_scopes' => $granted,
+		);
+
+		$message = sprintf(
+			/* translators: %s: scope name */
+			__( 'API key lacks required scope: %s', 'mcpwp' ),
+			$required_scope
+		);
+
+		if ( $can_hold ) {
+			$hint = sprintf(
+				'This API key has scopes [%s] but needs "%s". Request a key with the required scope from the site admin, or use wp_create_api_key to create one with appropriate scopes.',
+				implode( ', ', $granted ),
+				$required_scope
+			);
+		} else {
+			$message .= sprintf(
+				/* translators: %s: key role */
+				__( '. This key (role: %s) can never hold admin scope: this action needs an Admin-role key with the admin scope.', 'mcpwp' ),
+				'' !== $role ? $role : 'unknown'
+			);
+			$hint = sprintf(
+				'This action needs an Admin-role API key with the admin scope. Keys with the %s role are limited to read and write scope and cannot be upgraded. Ask the site owner to create an Admin-role key under MCPWP -> Setup (WP Admin > MCPWP > Setup) and use that key for this action.',
+				'' !== $role ? '"' . $role . '"' : 'this'
+			);
+			$data['role']              = $role;
+			$data['needs_admin_role']  = true;
+		}
+
+		$allowed = $this->resolve_key_tool_categories( $key_record );
+		if ( '' !== $category && ! empty( $allowed ) && ! in_array( $category, $allowed, true ) ) {
+			$allowed_text = self::describe_allowed_categories_for_message( $allowed );
+			$message     .= sprintf(
+				/* translators: 1: tool category, 2: comma-separated allowed categories */
+				__( ' It is also outside this key\'s tool categories: it is in the "%1$s" category and this key allows: %2$s.', 'mcpwp' ),
+				$category,
+				$allowed_text
+			);
+			$hint                     .= sprintf( ' The new key must also include the "%s" category.', $category );
+			$data['category']           = $category;
+			$data['allowed_categories'] = self::present_tool_categories( $allowed );
+		}
+
+		$data['hint'] = $hint;
+
+		return new WP_Error( 'insufficient_scope', $message, $data );
+	}
+
+	/**
+	 * The tool category of the request's route, for describing a refusal.
+	 * '' for /mcp and /batch (envelopes, not category surfaces).
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return string
+	 */
+	protected function route_category_for_refusal( $request ) {
+		$route = $this->normalize_route_for_authorization( method_exists( $request, 'get_route' ) ? (string) $request->get_route() : '' );
+		if ( $this->route_matches( $route, '/mcpwp/v1/batch' ) || 0 === strpos( $route, '/mcpwp/v1/mcp' ) ) {
+			return '';
+		}
+
+		return (string) $this->get_category_for_route( $route );
 	}
 
 	/**
@@ -4681,6 +6361,28 @@ trait Mcpwp_Api_Auth {
 	 */
 	protected function get_required_scope_for_tool_name( $tool_name ) {
 		$admin_tools = array(
+			// #1100 interim: mirrors the form-entries, widget/sidebar-write
+			// and product-create admin routes in get_required_scope_for_request().
+			'wp_get_form_entries',
+			'wp_add_widget',
+			'wp_update_widget',
+			'wp_delete_widget',
+			'wp_move_widget',
+			'wp_reorder_widgets',
+			'wc_create_product',
+			// #1100 phase 1: mirrors the site-wide setting writes above.
+			'wp_flush_permalinks',
+			'wp_flush_cache',
+			'wp_set_site_context',
+			'wp_create_site_blueprint',
+			// WooCommerce orders/customers: mirrors the blanket-admin
+			// /woocommerce/orders and /woocommerce/customers routes (PR-2 round 2).
+			'wc_list_orders',
+			'wc_get_order',
+			'wc_update_order',
+			'wc_list_order_statuses',
+			'wc_list_customers',
+			'wc_get_customer',
 			'wp_delete_all_drafts',
 			'wp_get_options',
 			'wp_update_options',
@@ -4982,8 +6684,13 @@ trait Mcpwp_Api_Auth {
 	 *               - custom role whose category list resolves empty (#1041):
 	 *                 array{error:'empty_custom_categories', message:string,
 	 *                 invalid_categories:array}
+	 *               - key store busy (#1096): array{error:'keystore_busy',
+	 *                 message:string, retry_after:int}; nothing was written.
+	 *
+	 * The sixth parameter makes the append atomic with revoking every live key
+	 * (key rotation): one store write, so a busy store changes nothing.
 	 */
-	public function create_scoped_api_key( $label = '', $scopes = array(), $role = 'admin', $tool_categories = array(), $allow_destructive = false ) {
+	public function create_scoped_api_key( $label = '', $scopes = array(), $role = 'admin', $tool_categories = array(), $allow_destructive = false, $revoke_existing = false ) {
 		$plain_key = $this->generate_api_key();
 		$key_id    = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true );
 		$now       = current_time( 'mysql' );
@@ -5119,9 +6826,26 @@ trait Mcpwp_Api_Auth {
 			'revoked_at'      => null,
 		);
 
-		$keys   = $this->get_scoped_api_keys_raw();
-		$keys[] = $record;
-		update_option( $this->get_scoped_api_keys_option_name(), $keys );
+		// #1096 P2-4: appended through the key-store write path, to the store
+		// as it is NOW — not a snapshot a migration or revoke could have outrun.
+		$stored = $this->mutate_scoped_api_keys(
+			static function ( array $keys ) use ( $record, $revoke_existing ) {
+				if ( $revoke_existing ) {
+					foreach ( $keys as &$existing ) {
+						if ( is_array( $existing ) && empty( $existing['revoked_at'] ) ) {
+							$existing['revoked_at'] = current_time( 'mysql' );
+						}
+					}
+					unset( $existing );
+				}
+				$keys[] = $record;
+				return array( $keys, true );
+			},
+			true
+		);
+		if ( ! $stored['written'] ) {
+			return $this->keystore_write_refusal( $stored['reason'] );
+		}
 
 		return array(
 			'id'              => $record['id'],
@@ -5141,8 +6865,10 @@ trait Mcpwp_Api_Auth {
 	 * @return array Key metadata list.
 	 */
 	public function list_scoped_api_keys( $include_revoked = false ) {
-		$keys   = $this->get_scoped_api_keys_raw();
-		$output = array();
+		$keys      = $this->get_scoped_api_keys_raw();
+		$output    = array();
+		$last_used = get_option( $this->get_api_key_last_used_option_name(), array() );
+		$last_used = is_array( $last_used ) ? $last_used : array();
 
 		foreach ( $keys as $key ) {
 			$normalized = $this->normalize_api_key_record( $key );
@@ -5170,7 +6896,8 @@ trait Mcpwp_Api_Auth {
 				'tool_categories' => $deny_all ? array() : self::without_reserved_tool_categories( $normalized['tool_categories'] ),
 				'deny_all'        => $deny_all,
 				'created_at'      => $normalized['created_at'],
-				'last_used_at'    => $normalized['last_used_at'],
+				// The separate map wins; a record's own value is pre-#1090 history.
+				'last_used_at'    => isset( $last_used[ $normalized['id'] ] ) ? (string) $last_used[ $normalized['id'] ] : $normalized['last_used_at'],
 				'revoked_at'      => $normalized['revoked_at'],
 			);
 		}
@@ -5181,36 +6908,73 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Revoke a scoped API key.
 	 *
+	 * True ONLY when this call revoked it. False covers "not found or already
+	 * revoked" AND "store busy"; a caller that must tell them apart (anything
+	 * that reports the result to a person, or forgets state on success) uses
+	 * revoke_scoped_api_key_outcome().
+	 *
 	 * @param string $key_id Key identifier.
 	 * @return bool True if revoked.
 	 */
 	public function revoke_scoped_api_key( $key_id ) {
+		return 'revoked' === $this->revoke_scoped_api_key_outcome( $key_id );
+	}
+
+	/**
+	 * Revoke a scoped API key and say what happened (#1096).
+	 *
+	 * @param string $key_id Key identifier.
+	 * @return string 'revoked' (this call revoked it), 'not_found' (no such key,
+	 *                or already revoked: nothing to do), 'busy' (the key store
+	 *                could not be written; the key is NOT revoked, retry) or
+	 *                'unreadable' (the stored keys are corrupt; retrying cannot
+	 *                help and nothing was changed).
+	 */
+	public function revoke_scoped_api_key_outcome( $key_id ) {
 		$key_id = sanitize_key( (string) $key_id );
 		if ( '' === $key_id ) {
-			return false;
+			return 'not_found';
 		}
 
-		$keys     = $this->get_scoped_api_keys_raw();
-		$updated  = false;
+		// #1096 P2-4: flipped through the key-store write path, on the store as
+		// it is now. A busy store answers 'busy', never a silent success.
+		$outcome = $this->mutate_scoped_api_keys(
+			function ( array $keys ) use ( $key_id ) {
+				$updated = false;
+				foreach ( $keys as &$key ) {
+					$normalized = $this->normalize_api_key_record( $key );
+					if ( $normalized['id'] !== $key_id ) {
+						continue;
+					}
 
-		foreach ( $keys as &$key ) {
-			$normalized = $this->normalize_api_key_record( $key );
-			if ( $normalized['id'] !== $key_id ) {
-				continue;
-			}
-
-			if ( empty( $normalized['revoked_at'] ) ) {
-				$key['revoked_at'] = current_time( 'mysql' );
-				$updated = true;
-			}
+					if ( empty( $normalized['revoked_at'] ) ) {
+						$key['revoked_at'] = current_time( 'mysql' );
+						$updated           = true;
+					}
+				}
+				unset( $key );
+				return array( $updated ? $keys : null, $updated );
+			},
+			true
+		);
+		if ( ! $outcome['written'] ) {
+			return 'unreadable' === $outcome['reason'] ? 'unreadable' : 'busy';
 		}
-		unset( $key );
 
-		if ( $updated ) {
-			update_option( $this->get_scoped_api_keys_option_name(), $keys );
+		// The legacy `mcpwp_api_key` hash is deliberately LEFT in place: three
+		// surfaces read it as "this site has been set up" (Setup page, the
+		// activator's first-key mint, test-connection), and deleting it made
+		// the Setup page offer a hero "Generate API Key" that revokes every
+		// key (#1097 review round 2). It cannot authenticate any more —
+		// legacy_api_key_option_is_honoured() refuses it once the scoped store
+		// holds any record, revoked records included.
+		if ( $outcome['result'] ) {
+			// Best effort: an in-flight touch can re-add a display-only entry.
+			$this->forget_api_key_last_used( array( $key_id ) );
+			return 'revoked';
 		}
 
-		return $updated;
+		return 'not_found';
 	}
 
 	/**
@@ -5233,23 +6997,6 @@ trait Mcpwp_Api_Auth {
 			update_option( 'mcpwp_api_key', $legacy_hash );
 		}
 
-		$keys = $this->get_scoped_api_keys_raw();
-		if ( ! empty( $keys ) ) {
-			foreach ( $keys as $key ) {
-				$normalized = $this->normalize_api_key_record( $key );
-				if ( ! empty( $normalized['revoked_at'] ) ) {
-					continue;
-				}
-				$is_existing_match = $legacy_is_hashed
-					? hash_equals( (string) $normalized['hash'], $legacy_hash )
-					: $this->is_api_key_match( $legacy_key, $normalized['hash'] );
-
-				if ( $is_existing_match ) {
-					return $normalized;
-				}
-			}
-		}
-
 		$migrated = array(
 			'id'           => sanitize_key( function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true ) ),
 			'label'        => __( 'Primary API Key (migrated)', 'mcpwp' ),
@@ -5260,14 +7007,151 @@ trait Mcpwp_Api_Auth {
 			'revoked_at'   => null,
 		);
 
-		$keys[] = $migrated;
-		update_option( $this->get_scoped_api_keys_option_name(), $keys );
+		// #1096 P2-4: decided on the store as it is NOW, under the key-store
+		// lock. This used to read the store, then write the whole array back,
+		// so a revoke, a new key or a rotation landing in between was
+		// overwritten. Inside the lock:
+		// - an active record already carrying this key wins (another request
+		//   migrated it first);
+		// - ANY other record means the store is no longer the empty
+		//   pre-multi-key store the legacy option is honoured for (this key may
+		//   well be a revoked one): refuse, never re-create it.
+		$outcome = $this->mutate_scoped_api_keys(
+			function ( array $keys ) use ( $legacy_key, $legacy_is_hashed, $legacy_hash, $migrated ) {
+				foreach ( $keys as $key ) {
+					$normalized = $this->normalize_api_key_record( $key );
+					if ( ! empty( $normalized['revoked_at'] ) ) {
+						continue;
+					}
+					$is_existing_match = $legacy_is_hashed
+						? hash_equals( (string) $normalized['hash'], $legacy_hash )
+						: $this->is_api_key_match( $legacy_key, $normalized['hash'] );
 
-		return $this->normalize_api_key_record( $migrated );
+					if ( $is_existing_match ) {
+						return array( null, $normalized );
+					}
+				}
+				if ( ! empty( $keys ) ) {
+					return array( null, null );
+				}
+
+				$keys[] = $migrated;
+				return array( $keys, $this->normalize_api_key_record( $migrated ) );
+			},
+			false
+		);
+
+		// A store that is busy, or a write that did not verify, is a refusal:
+		// this request fails and the next one retries.
+		return is_array( $outcome['result'] ) ? $outcome['result'] : null;
 	}
 
 	/**
-	 * Update last_used_at on a scoped API key.
+	 * The error shape for a key-store write that was refused (#1096).
+	 *
+	 * @param string $reason Mcpwp_Key_Store::mutate() reason.
+	 * @return array{error:string,message:string,retry_after?:int}
+	 */
+	protected function keystore_write_refusal( $reason ) {
+		switch ( $reason ) {
+			case 'unsupported_characters':
+				return array(
+					'error'   => 'unsupported_characters',
+					'message' => __( 'The database table that stores API keys cannot hold some of the characters in this key (for example in the label). Nothing was saved. Use only characters your database table supports; plain Latin letters always work.', 'mcpwp' ),
+				);
+			case 'unreadable':
+				if ( ! class_exists( 'Mcpwp_Key_State' ) ) {
+					require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
+				}
+				return array(
+					'error'   => 'keystore_unreadable',
+					'message' => Mcpwp_Key_State::unreadable_message(),
+				);
+			case 'unwritable':
+				return array(
+					'error'   => 'keystore_write_failed',
+					'message' => __( 'Writing the API key store failed and was rolled back. Nothing was changed.', 'mcpwp' ),
+				);
+			default:
+				return array(
+					'error'       => 'keystore_busy',
+					'message'     => __( 'The API key store is busy. Nothing was saved; try again in a moment.', 'mcpwp' ),
+					'retry_after' => 1,
+				);
+		}
+	}
+
+	/**
+	 * Read-modify-write the scoped key store without losing a concurrent write.
+	 *
+	 * Delegates to Mcpwp_Key_Store::mutate(), the single write path: store lock,
+	 * a read of the database row (never the options cache), and a
+	 * compare-and-swap write. See that class for the full argument. Fails
+	 * closed: a busy store or a swap that keeps missing changes nothing and says
+	 * so in `reason`.
+	 *
+	 * @param callable $mutator Receives (array $keys, bool $exists); returns array( $new_keys_or_null, $result ).
+	 * @param bool     $patient Retry the lock for ~1.5 s (admin writes).
+	 * @return array{locked:bool,written:bool,result:mixed,reason:string}
+	 */
+	protected function mutate_scoped_api_keys( callable $mutator, $patient ) {
+		if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
+			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-store.php';
+		}
+		return Mcpwp_Key_Store::mutate( $mutator, $patient );
+	}
+
+	/**
+	 * Drop last-used entries for keys that were revoked or removed.
+	 *
+	 * Without this the map only ever grew: a revoked key's id stayed in it for
+	 * good. Best effort and lock-free by design: it only touches the timestamp
+	 * map, where a lost update costs a timestamp, never a key.
+	 *
+	 * @param array $key_ids Key ids to forget.
+	 */
+	protected function forget_api_key_last_used( array $key_ids ) {
+		$name = $this->get_api_key_last_used_option_name();
+		$map  = get_option( $name, array() );
+		if ( ! is_array( $map ) || empty( $map ) ) {
+			return;
+		}
+		$pruned = array_diff_key( $map, array_flip( array_map( 'strval', $key_ids ) ) );
+		if ( count( $pruned ) !== count( $map ) ) {
+			update_option( $name, $pruned, false );
+		}
+	}
+
+	/**
+	 * Option holding last-used timestamps, keyed by scoped key id.
+	 *
+	 * Kept OUT of the key store on purpose. touch_api_key_last_used() runs on
+	 * every authenticated request; when it rewrote the whole key array from the
+	 * snapshot read before the password-hash loop, a request in flight across a
+	 * revoke wrote `revoked_at = null` back and resurrected the key (adversarial
+	 * review of #1090, P1-2). Losing a timestamp to a race is harmless; losing a
+	 * revocation is not, so the request path never writes the key store.
+	 *
+	 * NOT autoloaded, on purpose (#1096). In core, update_option() on an
+	 * autoloaded option force-loads `alloptions` and then wp_cache_set()s it. The
+	 * key store lives in that same `alloptions` entry, so a touch (which runs on
+	 * every authenticated request) stalled between that load and that set could
+	 * write a PRE-revoke copy of the key store back over a revoke's cache
+	 * refresh, and a revoked key would stay live on a persistent cache. A
+	 * non-autoloaded option never writes `alloptions`. The cost is one option
+	 * read per request on a site WITHOUT a persistent object cache; with one it
+	 * is cached under its own key.
+	 *
+	 * @return string
+	 */
+	protected function get_api_key_last_used_option_name() {
+		return 'mcpwp_api_keys_last_used';
+	}
+
+	/**
+	 * Record that a scoped API key was just used.
+	 *
+	 * Writes only the separate last-used map, at most once a minute per key.
 	 *
 	 * @param string $key_id Key identifier.
 	 */
@@ -5277,25 +7161,16 @@ trait Mcpwp_Api_Auth {
 			return;
 		}
 
-		$keys = $this->get_scoped_api_keys_raw();
-		$now  = current_time( 'mysql' );
-		$changed = false;
+		$map = get_option( $this->get_api_key_last_used_option_name(), array() );
+		$map = is_array( $map ) ? $map : array();
+		$now = current_time( 'mysql' );
 
-		foreach ( $keys as &$key ) {
-			$normalized = $this->normalize_api_key_record( $key );
-			if ( $normalized['id'] !== $key_id ) {
-				continue;
-			}
-
-			$key['last_used_at'] = $now;
-			$changed = true;
-			break;
+		if ( isset( $map[ $key_id ] ) && ( strtotime( $now ) - strtotime( (string) $map[ $key_id ] ) ) < 60 ) {
+			return;
 		}
-		unset( $key );
 
-		if ( $changed ) {
-			update_option( $this->get_scoped_api_keys_option_name(), $keys );
-		}
+		$map[ $key_id ] = $now;
+		update_option( $this->get_api_key_last_used_option_name(), $map, false );
 	}
 
 	/**
@@ -5879,8 +7754,14 @@ trait Mcpwp_Api_Auth {
 			$cc_max_scope = 'write';
 		}
 
+		// D10: absent means ON; a stored value (on or off) is respected.  One
+		// resolver for every reader — see Mcpwp_OAuth_Well_Known::resolve_oauth_enabled().
+		$oauth_enabled = class_exists( 'Mcpwp_OAuth_Well_Known' )
+			? Mcpwp_OAuth_Well_Known::resolve_oauth_enabled( $settings )
+			: ( ! array_key_exists( 'oauth_enabled', $settings ) || ! empty( $settings['oauth_enabled'] ) );
+
 		return array(
-			'oauth_enabled'                      => ! empty( $settings['oauth_enabled'] ),
+			'oauth_enabled'                      => $oauth_enabled,
 			'oauth_client_id'                    => isset( $settings['oauth_client_id'] ) ? sanitize_key( (string) $settings['oauth_client_id'] ) : 'site_pilot_ai',
 			'oauth_client_secret_hash'           => isset( $settings['oauth_client_secret_hash'] ) ? (string) $settings['oauth_client_secret_hash'] : '',
 			'oauth_token_ttl'                    => isset( $settings['oauth_token_ttl'] ) ? max( 300, min( 86400, absint( $settings['oauth_token_ttl'] ) ) ) : 3600,
@@ -5912,9 +7793,13 @@ trait Mcpwp_Api_Auth {
 	/**
 	 * Issue an OAuth bearer access token.
 	 *
+	 * #1101 PR-3b: the token is written to the hashed token table (never a
+	 * transient).  If that write fails nothing is issued: the caller gets a
+	 * WP_Error, never a token that would not validate (fail closed).
+	 *
 	 * @param array $scopes Scopes to grant.
 	 * @param int   $ttl    Token TTL in seconds.
-	 * @return array Token response payload.
+	 * @return array|WP_Error Token response payload, or 503 when it could not be stored.
 	 */
 	public function issue_oauth_access_token( $scopes, $ttl, $context = array() ) {
 		$ttl    = max( 300, min( 86400, absint( $ttl ) ) );
@@ -5923,7 +7808,16 @@ trait Mcpwp_Api_Auth {
 
 		$payload = array(
 			'scopes'     => $scopes,
+			// RFC 8707 audience (PR-2 D1/D2): always this site's MCP endpoint,
+			// whatever `resource` form the client used.  Enforced on every
+			// request in authenticate_oauth_access_token().
+			'aud'        => $this->get_oauth_canonical_resource(),
 			'created_at' => time(),
+			// #1101: what revocation epochs are compared against
+			// (Mcpwp_OAuth_Revocation::is_revoked()) — integer microseconds,
+			// the moment the issuing request checked revocation when it
+			// passes one (context issued_at), else now.
+			'issued_at'  => isset( $context['issued_at'] ) && is_int( $context['issued_at'] ) ? $context['issued_at'] : Mcpwp_OAuth_Revocation::now(),
 			'expires_at' => time() + $ttl,
 		);
 
@@ -5937,8 +7831,15 @@ trait Mcpwp_Api_Auth {
 		if ( ! empty( $context['client_id'] ) ) {
 			$payload['client_id'] = sanitize_key( (string) $context['client_id'] );
 		}
+		// #1101: the refresh family this token was issued with, so revoking
+		// the family (RFC 7009, or refresh-token reuse) kills it too.
+		if ( ! empty( $context['family_id'] ) && is_string( $context['family_id'] ) ) {
+			$payload['family_id'] = $context['family_id'];
+		}
 
-		set_transient( $this->get_oauth_token_transient_key( $token ), $payload, $ttl );
+		if ( ! Mcpwp_OAuth_Token_Store::insert( $token, Mcpwp_OAuth_Token_Store::TYPE_ACCESS, $payload ) ) {
+			return new WP_Error( 'temporarily_unavailable', __( 'The token could not be stored. Try again.', 'mcpwp' ), array( 'status' => 503 ) );
+		}
 
 		return array(
 			'access_token' => $token,
@@ -5946,6 +7847,34 @@ trait Mcpwp_Api_Auth {
 			'expires_in'   => $ttl,
 			'scope'        => implode( ' ', $scopes ),
 		);
+	}
+
+	/**
+	 * The canonical OAuth resource / token audience: the MCP endpoint URL.
+	 *
+	 * @return string
+	 */
+	protected function get_oauth_canonical_resource() {
+		if ( class_exists( 'Mcpwp_OAuth_Well_Known' ) ) {
+			return Mcpwp_OAuth_Well_Known::get_canonical_resource();
+		}
+		return (string) rest_url( 'mcpwp/v1/mcp' );
+	}
+
+	/**
+	 * Whether a stored token audience names this site's MCP endpoint.
+	 *
+	 * Fails closed when the comparison helper is unavailable: an `aud` that
+	 * cannot be checked is not accepted.
+	 *
+	 * @param mixed $aud Stored audience.
+	 * @return bool
+	 */
+	protected function oauth_audience_matches( $aud ) {
+		if ( ! class_exists( 'Mcpwp_OAuth_Well_Known' ) ) {
+			return false;
+		}
+		return Mcpwp_OAuth_Well_Known::audience_matches( $aud );
 	}
 
 	/**
@@ -6067,18 +7996,17 @@ trait Mcpwp_Api_Auth {
 	 * @return string New API key (plain text).
 	 */
 	public function regenerate_api_key() {
-		$keys = $this->get_scoped_api_keys_raw();
-
-		foreach ( $keys as &$key ) {
-			if ( empty( $key['revoked_at'] ) ) {
-				$key['revoked_at'] = current_time( 'mysql' );
-			}
+		// #1096: revoke-all and the new record are ONE store write, so a busy
+		// store changes nothing (every old key stays live) and returns ''.
+		$created = $this->create_scoped_api_key( __( 'Primary API Key', 'mcpwp' ), $this->get_default_api_key_scopes(), 'admin', array(), false, true );
+		if ( isset( $created['error'] ) && 'unsupported_characters' === $created['error'] ) {
+			// A translated label the table cannot hold: rotation must still work.
+			$created = $this->create_scoped_api_key( 'Primary API Key', $this->get_default_api_key_scopes(), 'admin', array(), false, true );
 		}
-		unset( $key );
-
-		update_option( $this->get_scoped_api_keys_option_name(), $keys );
-
-		$created = $this->create_scoped_api_key( __( 'Primary API Key', 'mcpwp' ), $this->get_default_api_key_scopes() );
+		if ( ! isset( $created['key'] ) ) {
+			return '';
+		}
+		delete_option( $this->get_api_key_last_used_option_name() );
 		update_option( 'mcpwp_api_key', wp_hash_password( $created['key'] ) );
 
 		return $created['key'];

@@ -106,6 +106,7 @@ final class StagedStatusValueAuditTest extends TestCase {
 	 * value as admin-requiring).
 	 */
 	private const AUDITED = array(
+		'core/class-mcpwp-custom-code-conditions.php' => 'The status field is a Site Health result; stored options contain condition cache entries and skipped snippet IDs.',
 		// ── The actual finding this fix closes ──────────────────────────
 		'pro/api/class-mcpwp-rest-woocommerce.php' => 'WAS the gap: create_product_archetype()/update_product_archetype() ' .
 			'update_option() a record whose product_data[\'status\'] is later consumed by apply_product_archetype() -> ' .
@@ -135,6 +136,9 @@ final class StagedStatusValueAuditTest extends TestCase {
 			'purely for graph filtering/display) — the update_option() calls in this file are unrelated backfill-cursor/' .
 			'dirty-set bookkeeping, and the graph write path never calls wp_insert_post()/->set_status() or anything else ' .
 			'that would let a stored graph value change a post\'s or product\'s actual visibility. #943 S1.',
+		'core/class-mcpwp-oauth-clients.php' => 'no staged status at all: the quoted \'status\' literals are the HTTP ' .
+			'status codes in WP_Error data (400/429/500) for the DCR endpoint, and the update_option() calls store OAuth ' .
+			'client registrations (mcpwp_oauth_clients). Nothing here reaches a post/product status write. PR-2 D3/D5.',
 		'core/class-mcpwp-seo-audit-store.php' => 'staged value is a stored SEO issue\'s open/resolved/dismissed status — ' .
 			'never fed into a WordPress or WooCommerce post/product status write.',
 		'core/class-mcpwp-design-references.php' => 'staged value is a design-reference library entry\'s own metadata ' .
@@ -143,6 +147,9 @@ final class StagedStatusValueAuditTest extends TestCase {
 			'health flag, unrelated to post/product visibility.',
 		'core/class-mcpwp-signals.php' => 'staged value is a site-health signal\'s computed status (ok/warn/critical) — ' .
 			'read-only computed output, never caller-supplied and never consumed by a write.',
+		'core/class-mcpwp-woocommerce-audit.php' => 'the quoted status fields are HTTP outcomes and Site Health diagnostics; ' .
+			'update_option() stores audit failure timestamps only. No value is staged for a post/product publication write; ' .
+			'those writes still pass the existing WooCommerce route permission and publish gates.',
 		'core/class-mcpwp-action-log.php' => 'staged value is an action-log entry\'s own bookkeeping status — the file is ' .
 			'already blanket-admin-gated for every method via the /mcpwp/v1/action-log entry in $admin_write_routes ' .
 			'(see PublishStatusHandlerAuditTest::AUDITED), so no lower-scoped path reaches it regardless of this field.',
@@ -160,6 +167,8 @@ final class StagedStatusValueAuditTest extends TestCase {
 		// record is stored through the approvals store (Mcpwp_Approvals::
 		// insert_request() since #1042). The disposition is unchanged: a staging push's progress
 		// status, on a surface blanket-admin-gated for every method.
+		'pro/core/class-mcpwp-site-manager.php' => 'false positive: status literals describe HTTP validation and ' .
+			'creation error responses; update_option() stores site settings, not a caller-supplied post visibility status.',
 		'pro/core/class-mcpwp-theme-builder.php' => 'staged value is a theme-builder template\'s condition/assignment ' .
 			'status, not post_status — the file\'s actual post_status writes are hardcoded to \'publish\' with no caller ' .
 			'input at all (see PublishStatusHandlerAuditTest::AUDITED\'s disposition for this same file).',

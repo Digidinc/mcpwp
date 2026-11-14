@@ -180,6 +180,14 @@ class WP_Error
         return $this->data;
     }
 
+    /** Replace data for the active code, as WP_Error::add_data() does. */
+    public function add_data($data, $code = '')
+    {
+        if ('' === $code || $this->code === $code) {
+            $this->data = $data;
+        }
+    }
+
     /**
      * Real WP_Error::remove() drops every message and the data recorded
      * under $code. This double only ever holds one code, so "remove the
@@ -250,15 +258,41 @@ class WP_REST_Response
     }
 }
 
+/**
+ * WP_REST_Request double that models core's parameter BUCKETS (#1110):
+ * JSON, POST (body), GET (query), URL, defaults — checked in
+ * get_parameter_order()'s order, exactly as wp-includes/rest-api/
+ * class-wp-rest-request.php does in WP 6.9 (unchanged through 7.1):
+ *  - get_param() returns the first bucket whose value isset() — a null
+ *    skips to the next bucket;
+ *  - get_params() merges the buckets lowest-priority first, so a null in a
+ *    higher bucket OVERRIDES a value below it;
+ *  - has_param() is array_key_exists() over the ordered buckets;
+ *  - set_param() writes every non-default bucket that has the key, else
+ *    the first bucket in the order.
+ * The JSON bucket is in the order only for a JSON content type (header
+ * Content-Type: application/json), as in core, or once set_json_params()
+ * (a test-only setter) is called.
+ *
+ * Constructor compatibility (core's 3rd argument is $attributes, not
+ * params): the $params argument lands in the bucket a real request of that
+ * method carries them in — POST (body) for POST/PUT/PATCH/DELETE, GET
+ * (query) otherwise — so every existing one-bucket caller reads the same
+ * values as before.
+ */
 class WP_REST_Request
 {
     private $method;
     private $route;
-    private $params;
     private $headers;
-    private $json_params;
-    private $query_params = array();
-    private $body_params = array();
+    private $params = array(
+        'JSON'     => null,
+        'POST'     => array(),
+        'GET'      => array(),
+        'URL'      => array(),
+        'defaults' => array(),
+    );
+    private $json_forced = false;
 
     public function __construct(
         $method = 'GET',
@@ -267,14 +301,12 @@ class WP_REST_Request
         $headers = array(),
         $json_params = null
     ) {
-        $this->method     = strtoupper($method);
-        $this->route      = $route;
-        $this->params     = is_array($params) ? $params : array();
-        // Constructor params model the request body (what a POST/PUT carries);
-        // query params are added with set_query_params().
-        $this->body_params = $this->params;
-        $this->headers    = is_array($headers) ? $headers : array();
-        $this->json_params = $json_params;
+        $this->method  = strtoupper($method);
+        $this->route   = $route;
+        $this->headers = is_array($headers) ? $headers : array();
+        $bucket        = in_array($this->method, array( 'POST', 'PUT', 'PATCH', 'DELETE' ), true) ? 'POST' : 'GET';
+        $this->params[ $bucket ] = is_array($params) ? $params : array();
+        $this->params['JSON']    = $json_params;
     }
 
     public function get_method()
@@ -287,9 +319,55 @@ class WP_REST_Request
         return $this->route;
     }
 
+    /** Mirrors WP_REST_Request::get_content_type(), including parameter separation. */
+    public function get_content_type()
+    {
+        $value = $this->get_header('Content-Type');
+        if (empty($value)) {
+            return null;
+        }
+        $parameters = '';
+        if (strpos($value, ';')) {
+            list($value, $parameters) = explode(';', $value, 2);
+        }
+        $value = strtolower($value);
+        if (false === strpos($value, '/')) {
+            return null;
+        }
+        list($type, $subtype) = explode('/', $value, 2);
+        return array_map('trim', compact('value', 'type', 'subtype', 'parameters'));
+    }
+
+    protected function is_json_content_type()
+    {
+        $type = $this->get_content_type();
+        return isset($type['value']) && wp_is_json_media_type($type['value']);
+    }
+
+    /** Core's order (WP_REST_Request::get_parameter_order()), filter included. */
+    public function get_parameter_order()
+    {
+        $order = array();
+        if ($this->json_forced || $this->is_json_content_type()) {
+            $order[] = 'JSON';
+        }
+        if (in_array($this->method, array( 'POST', 'PUT', 'PATCH', 'DELETE' ), true)) {
+            $order[] = 'POST';
+        }
+        $order[] = 'GET';
+        $order[] = 'URL';
+        $order[] = 'defaults';
+        return function_exists('apply_filters') ? apply_filters('rest_request_parameter_order', $order, $this) : $order;
+    }
+
     public function get_param($key)
     {
-        return isset($this->params[ $key ]) ? $this->params[ $key ] : null;
+        foreach ($this->get_parameter_order() as $type) {
+            if (isset($this->params[ $type ][ $key ])) {
+                return $this->params[ $type ][ $key ];
+            }
+        }
+        return null;
     }
 
     public function has_param($key)
@@ -300,24 +378,45 @@ class WP_REST_Request
         // "the caller sent this field, even empty" from "the caller never
         // mentioned it" (e.g. Mcpwp_REST_Elementor_Pro::
         // has_elementor_payload_in_request(), RC review finding #1).
-        return array_key_exists($key, $this->params);
+        foreach ($this->get_parameter_order() as $type) {
+            if (is_array($this->params[ $type ]) && array_key_exists($key, $this->params[ $type ])) {
+                return true;
+            }
+        }
+        return false;
     }
 
     public function set_param($key, $value)
     {
-        $this->params[ $key ] = $value;
+        $order = $this->get_parameter_order();
+        $found = false;
+        foreach ($order as $type) {
+            if ('defaults' !== $type && is_array($this->params[ $type ]) && array_key_exists($key, $this->params[ $type ])) {
+                $this->params[ $type ][ $key ] = $value;
+                $found                         = true;
+            }
+        }
+        if (! $found) {
+            $this->params[ $order[0] ][ $key ] = $value;
+        }
     }
 
     public function get_params()
     {
-        return $this->params;
+        $params = array();
+        foreach (array_reverse($this->get_parameter_order(), true) as $type) {
+            foreach ((array) $this->params[ $type ] as $key => $value) {
+                $params[ $key ] = $value;
+            }
+        }
+        return $params;
     }
 
     public function get_header($name)
     {
-        $target = strtolower($name);
+        $target = strtolower(str_replace('-', '_', $name));
         foreach ($this->headers as $header => $value) {
-            if (strtolower($header) === $target) {
+            if (strtolower(str_replace('-', '_', $header)) === $target) {
                 return $value;
             }
         }
@@ -329,35 +428,57 @@ class WP_REST_Request
         $this->headers[ $name ] = $value;
     }
 
+    // Core's setters REPLACE their bucket.
     public function set_body_params($params)
     {
-        if (is_array($params)) {
-            $this->body_params = array_merge($this->body_params, $params);
-            $this->params      = array_merge($this->params, $params);
-        }
+        $this->params['POST'] = $params;
     }
 
     public function set_query_params($params)
     {
-        if (is_array($params)) {
-            $this->query_params = array_merge($this->query_params, $params);
-            $this->params       = array_merge($this->params, $params);
-        }
+        $this->params['GET'] = $params;
+    }
+
+    public function set_url_params($params)
+    {
+        $this->params['URL'] = $params;
+    }
+
+    public function set_default_params($params)
+    {
+        $this->params['defaults'] = $params;
+    }
+
+    /** Test-only: a parsed JSON body, consulted first as for a JSON content type. */
+    public function set_json_params($params)
+    {
+        $this->params['JSON'] = $params;
+        $this->json_forced    = true;
     }
 
     public function get_query_params()
     {
-        return $this->query_params;
+        return $this->params['GET'];
     }
 
     public function get_body_params()
     {
-        return $this->body_params;
+        return $this->params['POST'];
+    }
+
+    public function get_url_params()
+    {
+        return $this->params['URL'];
+    }
+
+    public function get_default_params()
+    {
+        return $this->params['defaults'];
     }
 
     public function get_json_params()
     {
-        return $this->json_params;
+        return $this->params['JSON'];
     }
 
     // Real WP_REST_Request parses a JSON body into get_json_params() when
@@ -370,7 +491,7 @@ class WP_REST_Request
         $this->body = (string) $body;
         $decoded    = json_decode($this->body, true);
         if (is_array($decoded)) {
-            $this->json_params = $decoded;
+            $this->params['JSON'] = $decoded;
         }
     }
 
@@ -381,12 +502,64 @@ class WP_REST_Request
 
 }
 
+// WordPress's JSON detector remains independent of PHP's POST body handler.
+function wp_is_json_media_type($media_type)
+{
+    return (bool) preg_match('/(^|\s|,)application\/([\w!#\$&-\^\.\+]+\+)?json(\+oembed)?($|\s|;|,)/i', $media_type);
+}
+
 class WP_REST_Server
 {
     public const READABLE  = 'GET';
     public const CREATABLE = 'POST';
     public const EDITABLE  = 'POST,PUT,PATCH';
     public const DELETABLE = 'DELETE';
+
+    // Core's WP_REST_Server::error_to_response(): the response a route that
+    // answers WP_Error becomes (code/message/data body, data.status as HTTP
+    // status), before rest_post_dispatch filters see it.
+    public function error_to_response($error)
+    {
+        $data   = $error->get_error_data();
+        $status = is_array($data) && isset($data['status']) ? (int) $data['status'] : 500;
+        return new WP_REST_Response(
+            array(
+                'code'    => $error->get_error_code(),
+                'message' => $error->get_error_message(),
+                'data'    => $data,
+            ),
+            $status
+        );
+    }
+
+    // Reconstruct core's route table from the registration spy. Registrations
+    // append endpoint arrays; they must never overwrite an earlier handler.
+    public function get_routes()
+    {
+        $routes = array();
+        foreach ($GLOBALS['_mcpwp_test_registered_routes'] ?? array() as $registration) {
+            $route = '/' . trim($registration['namespace'], '/') . '/' . trim($registration['route'], '/');
+            $args = $registration['args'];
+            if (isset($args['callback'])) {
+                $args = array($args);
+            }
+            foreach ($args as $key => $endpoint) {
+                if (!is_int($key)) {
+                    continue;
+                }
+                $methods = $endpoint['methods'] ?? 'GET';
+                if (is_string($methods)) {
+                    $methods = explode(',', $methods);
+                }
+                $endpoint['methods'] = array();
+                foreach ($methods as $method) {
+                    $endpoint['methods'][strtoupper(trim($method))] = true;
+                }
+                $routes[$route][] = $endpoint;
+            }
+        }
+        return $routes;
+    }
 }
 
 function __($text, $domain = 'default')
@@ -402,6 +575,10 @@ function __($text, $domain = 'default')
             'text'   => $text,
             'domain' => $domain,
         );
+    }
+    // A test arms a translation (#1096), e.g. a label the column cannot hold.
+    if (isset($GLOBALS['mcpwp_test_translations'][ $text ])) {
+        return $GLOBALS['mcpwp_test_translations'][ $text ];
     }
     return $text;
 }
@@ -452,14 +629,13 @@ if (! function_exists('maybe_serialize')) {
 }
 
 if (! function_exists('maybe_unserialize')) {
+    // Core's: anything is_serialized() accepts is unserialised, and a failure is
+    // FALSE, not the original string (so a value cut short at a ';' or '}' reads
+    // as false, #1096).
     function maybe_unserialize($data)
     {
-        if (is_string($data)) {
-            $trimmed = trim($data);
-            if (preg_match('/^[aOs]:[0-9]+:/', $trimmed) || 'b:0;' === $trimmed || 'b:1;' === $trimmed || 'N;' === $trimmed) {
-                $out = @unserialize($trimmed);
-                return (false === $out && 'b:0;' !== $trimmed) ? $data : $out;
-            }
+        if (is_string($data) && is_serialized($data)) {
+            return @unserialize(trim($data));
         }
         return $data;
     }
@@ -488,6 +664,11 @@ function sanitize_textarea_field($value)
 if (! function_exists('wp_create_nonce')) {
     function wp_create_nonce($action = -1)
     {
+        // Strict mode (#1101 PR-3b): a nonce bound to its action, so a test
+        // can prove a nonce for one action (user A) fails for another (user B).
+        if (! empty($GLOBALS['mcpwp_test_nonce_strict'])) {
+            return 'nonce|' . $action;
+        }
         return 'test-nonce';
     }
 }
@@ -495,6 +676,9 @@ if (! function_exists('wp_create_nonce')) {
 if (! function_exists('wp_verify_nonce')) {
     function wp_verify_nonce($nonce, $action = -1)
     {
+        if (! empty($GLOBALS['mcpwp_test_nonce_strict'])) {
+            return is_string($nonce) && 'nonce|' . $action === $nonce ? 1 : false;
+        }
         return 'test-nonce' === $nonce ? 1 : false;
     }
 }
@@ -502,7 +686,7 @@ if (! function_exists('wp_verify_nonce')) {
 if (! function_exists('wp_nonce_field')) {
     function wp_nonce_field($action = -1, $name = '_wpnonce', $referer = true, $echo = true)
     {
-        $field = '<input type="hidden" name="' . $name . '" value="test-nonce" />';
+        $field = '<input type="hidden" name="' . $name . '" value="' . wp_create_nonce($action) . '" />';
         if ($echo) {
             echo $field;
         }
@@ -536,6 +720,24 @@ function sanitize_user($value)
 function absint($value)
 {
     return abs((int) $value);
+}
+
+if (! function_exists('esc_url')) {
+    /**
+     * Lenient by default (what several older tests were written against).
+     * A test that asserts escaping sets $GLOBALS['mcpwp_test_strict_esc_url']
+     * for its duration: then, like WordPress, it removes the characters that
+     * can break out of an attribute and encodes "&" as "&#038;".
+     */
+    function esc_url($url)
+    {
+        $clean = filter_var((string) $url, FILTER_SANITIZE_URL);
+        if (! empty($GLOBALS['mcpwp_test_strict_esc_url'])) {
+            $clean = str_replace(array( '<', '>', '"', "'" ), '', $clean);
+            $clean = str_replace('&', '&#038;', $clean);
+        }
+        return $clean;
+    }
 }
 
 function esc_url_raw($value)
@@ -641,11 +843,27 @@ function get_users($args = array())
     return $filtered;
 }
 
-function current_user_can($capability)
+function current_user_can($capability, ...$args)
 {
     $user_id = (int) $GLOBALS['mcpwp_test_current_user'];
     if (0 === $user_id) {
         return false;
+    }
+
+    // A post that does not exist yet (id 0): WordPress resolves it to the
+    // global $post, which the create path sets to a prospective post (#1108).
+    // Answered by mcpwp_test_prospective_cap(), which mirrors map_meta_cap()
+    // for that case, including a key's auth filters for edit_post_meta.
+    if (in_array($capability, array( 'edit_post', 'read_post', 'delete_post', 'edit_post_meta' ), true) && isset($args[0]) && 0 === (int) $args[0] && ! isset($GLOBALS['mcpwp_test_post_caps'][ $user_id ][ $capability ][0])) {
+        return mcpwp_test_prospective_cap($capability, $user_id, isset($args[1]) ? (string) $args[1] : '');
+    }
+
+    // Per-object meta caps (edit_post / delete_post / read_post with a post
+    // id), when a test seeds them: $GLOBALS['mcpwp_test_post_caps'][user][cap][post_id].
+    // Absent entries fall through to the per-user map below, so no existing
+    // test changes behaviour.
+    if (isset($args[0]) && isset($GLOBALS['mcpwp_test_post_caps'][ $user_id ][ $capability ]) && array_key_exists((int) $args[0], $GLOBALS['mcpwp_test_post_caps'][ $user_id ][ $capability ])) {
+        return (bool) $GLOBALS['mcpwp_test_post_caps'][ $user_id ][ $capability ][ (int) $args[0] ];
     }
 
     // If per-user caps are configured for this user_id, check them.
@@ -677,6 +895,38 @@ function current_user_can($capability)
  * before these filters existed. It is what lets a test observe a *scoped*
  * capability grant actually taking effect rather than merely being registered.
  */
+function mcpwp_test_prospective_cap($capability, $user_id, $key)
+{
+    $post = $GLOBALS['post'] ?? null;
+    if (! $post instanceof WP_Post || (int) $post->post_author !== (int) $user_id) {
+        return false; // no post to judge, or not the user's own: core says no.
+    }
+    $caps = $GLOBALS['mcpwp_test_user_caps'][ $user_id ] ?? array();
+    if (empty($caps['edit_posts'])) {
+        return false;
+    }
+    if ('edit_post_meta' !== $capability) {
+        return true;
+    }
+    $allowed = '_' !== substr($key, 0, 1);
+    $subtype = 'auth_post_meta_' . $key . '_for_' . $post->post_type;
+    $tag     = has_filter($subtype) ? $subtype : 'auth_post_meta_' . $key;
+    $allowed = (bool) apply_filters($tag, $allowed, $key, 0, $user_id, 'edit_post_meta', array());
+    $old     = 'auth_post_' . $post->post_type . '_meta_' . $key;
+    if ($allowed && has_filter($old)) {
+        $allowed = (bool) apply_filters($old, $allowed, $key, 0, $user_id, 'edit_post_meta', array());
+    }
+    if (! $allowed) {
+        return false;
+    }
+    foreach ((array) apply_filters('map_meta_cap', array( 'edit_posts' ), 'edit_post_meta', $user_id, array( 0, $key )) as $cap) {
+        if ('do_not_allow' === $cap || empty($caps[ $cap ])) {
+            return false;
+        }
+    }
+    return true;
+}
+
 function mcpwp_test_cap_filters_grant($capability, $user_id)
 {
     $caps = apply_filters('map_meta_cap', array( $capability ), $capability, $user_id, array());
@@ -702,17 +952,34 @@ function mcpwp_test_cap_filters_grant($capability, $user_id)
 
 function get_option($name, $default = false)
 {
-    if (array_key_exists($name, $GLOBALS['mcpwp_test_options'])) {
-        return $GLOBALS['mcpwp_test_options'][ $name ];
+	$pre = apply_filters('pre_option_' . $name, false, $name, $default);
+	if (false !== $pre) {
+		return $pre;
+	}
+	$value = $default;
+    // Core's `notoptions` cache: a name this process already found missing
+    // answers $default from the object cache without asking the database,
+    // until update_option()/add_option() for that name (or a delete of the
+    // `notoptions` key) clears it. Only populated by a test (#1101 round 2),
+    // so no other test's reads change.
+    if (isset($GLOBALS['mcpwp_test_object_cache']['options:notoptions'][ $name ])) {
+        return apply_filters('option_' . $name, $default, $name);
+    } elseif (isset($GLOBALS['mcpwp_test_option_cache_stale']) && array_key_exists($name, $GLOBALS['mcpwp_test_option_cache_stale'])) {
+        // A stale object-cache copy (#1096): a test arms this to model the cached
+        // snapshot a reader gets from the options API while the database row has
+        // moved on. Dropped by wp_cache_delete() of the option, or of `alloptions`.
+        $value = $GLOBALS['mcpwp_test_option_cache_stale'][ $name ];
+    } elseif (array_key_exists($name, $GLOBALS['mcpwp_test_options'])) {
+        $value = $GLOBALS['mcpwp_test_options'][ $name ];
     }
     // One options table in real WordPress: a row created behind the options
     // API (a first-writer-wins INSERT, #845) is what get_option() returns for
     // a name the options API has not stored. The options-API value still wins
     // when both exist, so every test that seeds through it reads what it seeded.
-    if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
-        return maybe_unserialize($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
+    elseif (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+        $value = maybe_unserialize($GLOBALS['mcpwp_test_wpdb_options'][ $name ]);
     }
-    return $default;
+    return apply_filters('option_' . $name, $value, $name);
 }
 
 if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
@@ -771,6 +1038,13 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
                 $GLOBALS['wpdb']->queries = array();
             }
             mcpwp_test_reset_rate_limiter();
+            if (class_exists('Mcpwp_WooCommerce_Audit', false)) {
+                foreach (array('budgets', 'contexts', 'auth_requests', 'active_contexts') as $property) {
+                    $ref = new ReflectionProperty(Mcpwp_WooCommerce_Audit::class, $property);
+                    $ref->setAccessible(true);
+                    $ref->setValue(null, 'active_contexts' === $property ? array() : null);
+                }
+            }
             // The fake database: raw option rows (a lock, a first-writer-wins
             // record) and posts/meta. Every test that needs rows seeds them;
             // one left behind decided another test's outcome by run order.
@@ -781,12 +1055,33 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
             // Elementor "active" for later tests. 'init' is re-seeded before
             // every test by Mcpwp_Test_Approvals_Table_Reset.
             $GLOBALS['mcpwp_test_did_action'] = array();
+            // The meta-write helper's per-request principal flag (#1108): the
+            // permission chokepoint sets it on every request in production; a
+            // test that left it on must not decide another test's outcome.
+            if (class_exists('Mcpwp_Post_Fields', false)) {
+                Mcpwp_Post_Fields::set_user_run_principal(false);
+            }
+			if (class_exists('Mcpwp_Custom_Code_Conditions', false)) {
+				foreach (array(
+					'request_skipped' => array(), 'cache_bypass' => false,
+					'raw_read_depth' => 0, 'inspection' => array(),
+					'condition_lengths' => array(), 'meta_cache_guard' => false,
+					'legacy_cache_too_large' => false, 'entry_overlay' => null, 'request_invalid_entries' => array(), 'filtered_views' => array(), 'view_dirty' => false, 'view_refreshing' => false, 'view_input' => null, 'active_view' => null, 'pro_rebuild_candidate' => false, 'safe_meta_ids' => array(), 'oversized_meta_ids' => null, 'pre_view_read' => null, 'view_errors' => array(), 'view_failed' => false,
+					'request_invalid_entries' => array(),
+				) as $name => $value) {
+					$property = new ReflectionProperty('Mcpwp_Custom_Code_Conditions', $name);
+					$property->setAccessible(true);
+					$property->setValue(null, $value);
+				}
+			}
         }
     }
 }
 
 function update_option($name, $value, $autoload = null)
 {
+    // WordPress sanitizes option values before update_option()/add_option().
+    $value = apply_filters('sanitize_option_' . $name, $value, $name, $value);
     // Test-only: mimic WordPress's sanitize_option() — a hook may alter the
     // value before storage, or refuse it (null = refused, nothing stored).
     if (isset($GLOBALS['mcpwp_test_option_store_hook']) && is_callable($GLOBALS['mcpwp_test_option_store_hook'])) {
@@ -800,9 +1095,11 @@ function update_option($name, $value, $autoload = null)
         return false;
     }
     $GLOBALS['mcpwp_test_options'][ $name ] = $value;
-    if ('elementor_pro_theme_builder_conditions' === $name) {
+    // Options API and raw CAS helpers address the same database row.
+    if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
         $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = maybe_serialize($value);
     }
+    unset($GLOBALS['mcpwp_test_object_cache']['options:notoptions'][ $name ]);
     // Recorded so tests can assert a caller passed autoload=false explicitly
     // (e.g. a large/rarely-read option that must not load on every request).
     $GLOBALS['mcpwp_test_options_autoload'][ $name ] = $autoload;
@@ -814,6 +1111,7 @@ function update_option($name, $value, $autoload = null)
 
 function add_option($name, $value = '', $deprecated = '', $autoload = 'yes')
 {
+    $value = apply_filters('sanitize_option_' . $name, $value, $name, $value);
     // NOT an atomic primitive, and not one in WordPress either: core's
     // add_option() is a cached read-then-write over INSERT ... ON DUPLICATE
     // KEY UPDATE. Claims go through Mcpwp_Idempotency_Claim / $wpdb->insert.
@@ -840,8 +1138,10 @@ function is_serialized($data, $strict = true)
     if (! preg_match('/^([adObis]):/', $data, $m)) {
         return false;
     }
+    // Core (strict): the last byte is ';' or '}' whatever the token is, so a
+    // store cut short at a ';' still counts as serialised (#1096).
     $last = substr($data, -1);
-    return in_array($m[1], array('a', 'O'), true) ? '}' === $last : ';' === $last;
+    return ';' === $last || '}' === $last;
 }
 
 function wp_delete_post($post_id, $force_delete = false)
@@ -906,6 +1206,10 @@ function wp_trash_post($post_id)
 
 function delete_option($name)
 {
+    // Test-only: simulate a DB delete that does not take effect.
+    if (! empty($GLOBALS['mcpwp_test_delete_option_fail'][ $name ])) {
+        return false;
+    }
     unset($GLOBALS['mcpwp_test_options'][ $name ]);
     return true;
 }
@@ -960,12 +1264,24 @@ function get_transient($name)
 
 function delete_transient($name)
 {
+    // Like core: true only when this call removed something. The OAuth code
+    // and refresh-token exchanges use that answer as their atomic claim.
+    $existed = isset($GLOBALS['mcpwp_test_transients'][ $name ]);
     unset($GLOBALS['mcpwp_test_transients'][ $name ]);
-    return true;
+    // Test-only: runs AFTER the delete, so a test can land a concurrent
+    // request between a claim and what the claimant does next.
+    if (isset($GLOBALS['mcpwp_test_transient_delete_hook']) && is_callable($GLOBALS['mcpwp_test_transient_delete_hook'])) {
+        call_user_func($GLOBALS['mcpwp_test_transient_delete_hook'], $name, $existed);
+    }
+    return $existed;
 }
 
 function get_user_meta($user_id, $key = '', $single = false)
 {
+    // Test-only: observe a read (e.g. the moment a revocation is checked).
+    if (isset($GLOBALS['mcpwp_test_user_meta_read_hook']) && is_callable($GLOBALS['mcpwp_test_user_meta_read_hook'])) {
+        call_user_func($GLOBALS['mcpwp_test_user_meta_read_hook'], (int) $user_id, $key);
+    }
     $user_id = (int) $user_id;
     if ('' === $key) {
         return isset($GLOBALS['mcpwp_test_user_meta'][ $user_id ]) ? $GLOBALS['mcpwp_test_user_meta'][ $user_id ] : array();
@@ -976,6 +1292,18 @@ function get_user_meta($user_id, $key = '', $single = false)
 
 function update_user_meta($user_id, $key, $value)
 {
+    // Test-only: a write that does not land (a failed UPDATE, a filter).
+    if (! empty($GLOBALS['mcpwp_test_user_meta_write_fails'][ $key ])) {
+        return false;
+    }
+    // Like core: a scalar is stored — and read back — as a string (a float
+    // through PHP's 14-digit `precision`), an array/object serialized.
+    // #1101 round 2: a microsecond epoch stored as a float came back rounded.
+    if (is_bool($value)) {
+        $value = $value ? '1' : '';
+    } elseif (is_scalar($value)) {
+        $value = (string) $value;
+    }
     $GLOBALS['mcpwp_test_user_meta'][ (int) $user_id ][ $key ] = $value;
     return true;
 }
@@ -984,6 +1312,20 @@ function delete_user_meta($user_id, $key)
 {
     unset($GLOBALS['mcpwp_test_user_meta'][ (int) $user_id ][ $key ]);
     return true;
+}
+
+if (! function_exists('delete_metadata')) {
+    // Only the shape the uninstaller uses: every user's value of one key.
+    function delete_metadata($meta_type, $object_id, $meta_key, $meta_value = '', $delete_all = false)
+    {
+        if ('user' !== $meta_type || ! $delete_all) {
+            return false;
+        }
+        foreach (array_keys($GLOBALS['mcpwp_test_user_meta'] ?? array()) as $uid) {
+            unset($GLOBALS['mcpwp_test_user_meta'][ $uid ][ $meta_key ]);
+        }
+        return true;
+    }
 }
 
 // -------------------------------------------------------------------------
@@ -995,6 +1337,12 @@ $GLOBALS['mcpwp_test_actions'] = array();
 
 function add_filter($tag, $callback, $priority = 10, $accepted_args = 1)
 {
+    foreach ((array)($GLOBALS['mcpwp_test_filters'][$tag][(int)$priority] ?? array()) as $index => $item) {
+        if ($item['callback'] === $callback) {
+            $GLOBALS['mcpwp_test_filters'][$tag][(int)$priority][$index]['accepted_args'] = (int)$accepted_args;
+            return true;
+        }
+    }
     $GLOBALS['mcpwp_test_filters'][ $tag ][ (int) $priority ][] = array(
         'callback'      => $callback,
         'accepted_args' => (int) $accepted_args,
@@ -1207,7 +1555,10 @@ if (! function_exists('wp_list_pluck')) {
 
 function rest_url($path = '')
 {
-    return 'https://example.com/wp-json/' . ltrim($path, '/');
+    // A test can set $GLOBALS['mcpwp_test_rest_scheme'] = 'http' to model a
+    // site whose REST URL is not HTTPS; it must reset it in tearDown().
+    $scheme = isset($GLOBALS['mcpwp_test_rest_scheme']) ? (string) $GLOBALS['mcpwp_test_rest_scheme'] : 'https';
+    return $scheme . '://example.com/wp-json/' . ltrim($path, '/');
 }
 
 function get_bloginfo($show = '')
@@ -1366,6 +1717,11 @@ function wp_parse_url($url, $component = -1)
     return parse_url($url, $component);
 }
 
+function rest_get_server()
+{
+    return new WP_REST_Server();
+}
+
 function register_rest_route($namespace = '', $route = '', $args = array())
 {
     if (! isset($GLOBALS['_mcpwp_test_registered_routes'])) {
@@ -1379,6 +1735,13 @@ function register_rest_route($namespace = '', $route = '', $args = array())
     );
 
     return true;
+}
+
+if (! function_exists('rest_ensure_response')) {
+    function rest_ensure_response($response)
+    {
+        return $response instanceof WP_REST_Response ? $response : new WP_REST_Response($response);
+    }
 }
 
 function rest_do_request($request = null)
@@ -2043,10 +2406,232 @@ if (! function_exists('mcpwp_test_sql_find')) {
     }
 }
 
+
+/**
+ * In-memory double of the OAuth token table (#1101 PR-3b).  Answers exactly
+ * the statement shapes Mcpwp_OAuth_Token_Store issues; anything else falls
+ * through.  token_hash is UNIQUE (a duplicate INSERT fails), every UPDATE
+ * returns its affected-row count, and the table can be made missing
+ * ($GLOBALS['mcpwp_test_oauth_tokens_exists'] = false) so every statement
+ * fails as a real missing table would.  `mcpwp_test_oauth_tokens_before`
+ * runs a callable before a statement, so a test can land a concurrent
+ * request first.
+ */
+final class Mcpwp_Test_OAuth_Tokens_Table
+{
+    public static function reset()
+    {
+        $GLOBALS['mcpwp_test_oauth_tokens']        = array();
+        $GLOBALS['mcpwp_test_oauth_tokens_exists'] = true;
+        $GLOBALS['mcpwp_test_oauth_tokens_fail']   = null;
+        $GLOBALS['mcpwp_test_oauth_tokens_before'] = null;
+        $GLOBALS['mcpwp_test_oauth_tokens_seq']    = 0;
+    }
+
+    private static function quoted($text)
+    {
+        return stripslashes($text);
+    }
+
+    private static function fails($kind)
+    {
+        $fail = $GLOBALS['mcpwp_test_oauth_tokens_fail'] ?? null;
+        return empty($GLOBALS['mcpwp_test_oauth_tokens_exists']) || (is_callable($fail) ? (bool) $fail($kind) : true === $fail);
+    }
+
+    private static function before($kind, $sql)
+    {
+        $hook = $GLOBALS['mcpwp_test_oauth_tokens_before'] ?? null;
+        if (is_callable($hook)) {
+            $hook($kind, $sql);
+        }
+    }
+
+    /** @return array{0:bool,1:mixed} */
+    public static function insert($table, array $data)
+    {
+        if (! preg_match('/mcpwp_oauth_tokens$/', (string) $table)) {
+            return array(false, null);
+        }
+        self::before('insert', '');
+        if (self::fails('insert')) {
+            return array(true, false);
+        }
+        foreach ($GLOBALS['mcpwp_test_oauth_tokens'] as $row) {
+            if ($row['token_hash'] === $data['token_hash']) {
+                return array(true, false); // UNIQUE token_hash.
+            }
+        }
+        $row       = array();
+        foreach (array('token_hash', 'type', 'client_id', 'user_id', 'family_id', 'scopes', 'aud', 'issued_at', 'expires_at', 'last_used_at', 'revoked_at') as $col) {
+            $v          = $data[ $col ] ?? null;
+            $row[ $col ] = null === $v ? null : (string) $v; // MySQL hands back strings.
+        }
+        $row['id'] = (string) ++$GLOBALS['mcpwp_test_oauth_tokens_seq'];
+        $GLOBALS['mcpwp_test_oauth_tokens'][ $row['id'] ] = $row;
+        return array(true, 1);
+    }
+
+    /** @return array{0:bool,1:mixed} */
+    public static function run($method, $sql, $wpdb)
+    {
+        $sql = trim((string) $sql);
+        if ('get_var' === $method && preg_match("/^SHOW TABLES LIKE '(.*)'$/s", $sql, $m) && false !== strpos($m[1], 'oauth') ) {
+            $name = str_replace('\\', '', $m[1]);
+            if (! preg_match('/mcpwp_oauth_tokens$/', $name)) {
+                return array(false, null);
+            }
+            self::before($method, $sql);
+            return array(true, empty($GLOBALS['mcpwp_test_oauth_tokens_exists']) ? null : $name);
+        }
+        if (preg_match('/^SELECT ([a-z_, ]+) FROM (\S*mcpwp_oauth_tokens) WHERE (.+)$/s', $sql, $sel) && 'get_results' === $method) {
+            self::before($method, $sql);
+            if (self::fails($method)) {
+                return array(true, null);
+            }
+            $want = array_map('trim', explode(',', $sel[1]));
+            $out  = array();
+            foreach ($GLOBALS['mcpwp_test_oauth_tokens'] as $row) {
+                foreach (preg_split('/\s+AND\s+/', trim($sel[3])) as $cond) {
+                    $cond = trim($cond);
+                    if ('revoked_at IS NULL' === $cond) {
+                        if (null !== $row['revoked_at']) {
+                            continue 2;
+                        }
+                    } elseif (preg_match("/^(\w+) = (\d+)$/", $cond, $c) || preg_match("/^(\w+) = '((?:[^'\\\\]|\\\\.)*)'$/", $cond, $c)) {
+                        if ((string) $row[ $c[1] ] !== stripslashes($c[2])) {
+                            continue 2;
+                        }
+                    } elseif (preg_match('/^(\w+) > (\d+)$/', $cond, $c)) {
+                        if ((int) $row[ $c[1] ] <= (int) $c[2]) {
+                            continue 2;
+                        }
+                    } elseif (preg_match("/^(\w+) IN \((.+)\)$/", $cond, $c)) {
+                        $set = array_map(function ($v) { return trim($v, " '"); }, explode(',', $c[2]));
+                        if (! in_array((string) $row[ $c[1] ], $set, true)) {
+                            continue 2;
+                        }
+                    } else {
+                        return array(false, null);
+                    }
+                }
+                $out[] = array_intersect_key($row, array_flip($want));
+            }
+            return array(true, $out);
+        }
+        if (! preg_match('/^(SELECT \* FROM|UPDATE|DELETE FROM|DROP TABLE IF EXISTS) (\S*mcpwp_oauth_tokens)\b(.*)$/s', $sql, $m)) {
+            return array(false, null);
+        }
+        self::before($method, $sql);
+        $rest = $m[3];
+        if (0 === strpos($sql, 'DROP TABLE')) {
+            $GLOBALS['mcpwp_test_oauth_tokens']        = array();
+            $GLOBALS['mcpwp_test_oauth_tokens_exists'] = false;
+            return array(true, true);
+        }
+        if (self::fails($method)) {
+            return array(true, 'query' === $method ? false : null);
+        }
+        $rows = &$GLOBALS['mcpwp_test_oauth_tokens'];
+
+        if (0 === strpos($sql, 'SELECT') && preg_match("/^ WHERE token_hash = '([0-9a-f]+)' LIMIT 1$/", $rest, $w)) {
+            foreach ($rows as $row) {
+                if ($row['token_hash'] === $w[1]) {
+                    return array(true, $row);
+                }
+            }
+            return array(true, null);
+        }
+        if (0 === strpos($sql, 'DELETE') && preg_match('/^ WHERE expires_at < (\d+)$/', $rest, $w)) {
+            $n = 0;
+            foreach ($rows as $id => $row) {
+                if ((int) $row['expires_at'] < (int) $w[1]) {
+                    unset($rows[ $id ]);
+                    ++$n;
+                }
+            }
+            return array(true, $n);
+        }
+        if (0 === strpos($sql, 'UPDATE') && preg_match("/^ SET (.+?) WHERE (.+)$/s", $rest, $w)) {
+            $sets = array();
+            foreach (preg_split('/,\s*/', $w[1]) as $assign) {
+                if (preg_match("/^(\w+) = (?:'((?:[^'\\\\]|\\\\.)*)'|(\d+))$/", trim($assign), $a)) {
+                    $sets[ $a[1] ] = isset($a[3]) && '' !== $a[3] ? $a[3] : self::quoted($a[2]);
+                }
+            }
+            $conds = array();
+            $live  = false;
+            foreach (preg_split('/\s+AND\s+/', $w[2]) as $cond) {
+                $cond = trim($cond);
+                if ('revoked_at IS NULL' === $cond) {
+                    $live = true;
+                } elseif (preg_match("/^(\w+) = (?:'((?:[^'\\\\]|\\\\.)*)'|(\d+))$/", $cond, $c)) {
+                    $conds[ $c[1] ] = isset($c[3]) && '' !== $c[3] ? $c[3] : self::quoted($c[2]);
+                } else {
+                    return array(false, null);
+                }
+            }
+            $n = 0;
+            foreach ($rows as $id => $row) {
+                if ($live && null !== $row['revoked_at']) {
+                    continue;
+                }
+                foreach ($conds as $col => $val) {
+                    if ((string) $row[ $col ] !== (string) $val) {
+                        continue 2;
+                    }
+                }
+                foreach ($sets as $col => $val) {
+                    $rows[ $id ][ $col ] = (string) $val;
+                }
+                ++$n;
+            }
+            return array(true, $n);
+        }
+        return array(false, null);
+    }
+}
+Mcpwp_Test_OAuth_Tokens_Table::reset();
+
+/** The OAuth token table row for a token (#1101 PR-3b), or null. */
+function mcpwp_test_oauth_row($token)
+{
+    $hash = hash('sha256', (string) $token);
+    foreach ($GLOBALS['mcpwp_test_oauth_tokens'] as $row) {
+        if ($row['token_hash'] === $hash) {
+            return $row;
+        }
+    }
+    return null;
+}
+
+/** The token record a row stands for (Mcpwp_OAuth_Token_Store::to_record()), or false. */
+function mcpwp_test_oauth_record($token)
+{
+    $row = mcpwp_test_oauth_row($token);
+    return is_array($row) ? Mcpwp_OAuth_Token_Store::to_record($row) : false;
+}
+
+/** Overwrite columns of a token's row, as a direct database edit would. */
+function mcpwp_test_oauth_set($token, array $columns)
+{
+    $hash = hash('sha256', (string) $token);
+    foreach ($GLOBALS['mcpwp_test_oauth_tokens'] as $id => $row) {
+        if ($row['token_hash'] === $hash) {
+            foreach ($columns as $col => $val) {
+                $GLOBALS['mcpwp_test_oauth_tokens'][ $id ][ $col ] = null === $val ? null : (string) $val;
+            }
+        }
+    }
+}
+
 if (! function_exists('dbDelta')) {
     function dbDelta($queries = '', $execute = true)
     {
         $GLOBALS['mcpwp_test_dbdelta'][] = $queries;
+        if (is_string($queries) && preg_match('/CREATE TABLE \S*mcpwp_oauth_tokens\b/', $queries)) {
+            $GLOBALS['mcpwp_test_oauth_tokens_exists'] = true;
+        }
         if (is_string($queries) && preg_match('/CREATE TABLE \S*mcpwp_approvals\b/', $queries)) {
             $GLOBALS['mcpwp_test_approvals_table_exists'] = true;
         }
@@ -2061,6 +2646,7 @@ if (interface_exists('PHPUnit\Runner\BeforeTestHook')) {
         public function executeBeforeTest(string $test): void
         {
             Mcpwp_Test_Approvals_Table::reset();
+            Mcpwp_Test_OAuth_Tokens_Table::reset();
         }
     }
 }
@@ -2125,6 +2711,10 @@ if (! isset($GLOBALS['wpdb'])) {
             if ($approvals[0]) {
                 return $approvals[1];
             }
+            $tokens = Mcpwp_Test_OAuth_Tokens_Table::run('get_results', $query, $this);
+            if ($tokens[0]) {
+                return $tokens[1];
+            }
             // Test-scoped interceptor (#943 S2 graph read surface): a test may
             // install a callable that sees every query and either answers it
             // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
@@ -2134,6 +2724,59 @@ if (! isset($GLOBALS['wpdb'])) {
                 if (MCPWP_TEST_WPDB_PASS !== $answer) {
                     return $answer;
                 }
+            }
+            if (0 === strpos(trim((string)$query), 'SELECT post_id') && false !== strpos($query, 'postmeta') && (preg_match('/post_id IN \(([0-9, ]+)\)/', $query, $meta_ids) || false !== strpos($query, 'OCTET_LENGTH(meta_value) > '))) {
+                $this->queries[] = (string)$query;
+                preg_match("/meta_key = '([^']+)'/", $query, $key_filter);
+                preg_match('/OCTET_LENGTH\(meta_value\) <= (\d+)/', $query, $meta_bound);
+                $rows = array();
+                foreach (isset($meta_ids[1]) ? array_map('intval', explode(',', $meta_ids[1])) : array_keys($GLOBALS['_mcpwp_test_meta'] ?? array()) as $post_id) {
+                    foreach ((array)($GLOBALS['_mcpwp_test_meta'][$post_id] ?? array()) as $key => $value) {
+                        if (isset($key_filter[1]) && $key !== $key_filter[1]) { continue; }
+                        $raw = maybe_serialize($value);
+                        $bytes = strlen((string)$raw);
+                        if (preg_match('/OCTET_LENGTH\(meta_value\) > (\d+)/', $query, $minimum) && ($bytes <= (int)$minimum[1] || ($GLOBALS['_mcpwp_test_posts'][$post_id]->post_type ?? '') !== 'elementor_snippet')) { continue; }
+                        $row = array('post_id'=>$post_id, 'meta_key'=>$key, 'bytes'=>$bytes, 'meta_value'=>isset($meta_bound[1]) && '_elementor_conditions' === $key && $bytes > (int)$meta_bound[1] ? null : $raw);
+                        $rows[] = ARRAY_A === $output ? $row : (object)$row;
+                    }
+                }
+                $this->last_error = '';
+                return $rows;
+            }
+            if (preg_match('/^SELECT option_name, (?:option_value|CASE WHEN OCTET_LENGTH\(option_value\))/', trim((string) $query)) && false !== strpos($query, 'WHERE option_name LIKE ')) {
+                $this->queries[] = (string) $query;
+                preg_match('/OCTET_LENGTH\(option_value\) <= (\d+)/', $query, $bound);
+                preg_match('/AS UNSIGNED\) > (\d+)/', $query, $after);
+                preg_match('/LIMIT (\d+)$/', $query, $page);
+                $prefix = 'mcpwp_custom_code_cache_entry_';
+                $all = array();
+                foreach ((array) ($GLOBALS['mcpwp_test_options'] ?? array()) as $name => $value) { $all[$name] = maybe_serialize($value); }
+                foreach ((array) ($GLOBALS['mcpwp_test_wpdb_options'] ?? array()) as $name => $value) { $all[$name] = $value; }
+                $rows = array();
+                foreach ($all as $name => $raw) {
+                    if (0 === strpos($name, $prefix) && (int) substr($name, strlen($prefix)) > (int) ($after[1] ?? 0)) {
+                        $bytes = strlen((string) $raw);
+                        $rows[$name] = array('option_name'=>$name, 'option_value'=>isset($bound[1]) && $bytes > (int) $bound[1] ? null : $raw, 'entry_bytes'=>$bytes);
+                    }
+                }
+                ksort($rows);
+                return isset($page[1]) ? array_slice(array_values($rows), 0, (int) $page[1]) : array_values($rows);
+            }
+            if (preg_match("/^SELECT post_id, OCTET_LENGTH\\(meta_value\\) AS bytes(?:, (?:meta_value|CASE WHEN OCTET_LENGTH\\(meta_value\\) <= \\d+ THEN meta_value ELSE NULL END AS meta_value))? FROM \\S*postmeta WHERE meta_key = '([^']*)' AND post_id IN \\(([^)]*)\\)$/", trim((string) $query), $m)) {
+                $key = str_replace("\\'", "'", $m[1]);
+                preg_match('/OCTET_LENGTH\(meta_value\) <= (\d+)/', $query, $bound);
+				$include_value = false !== strpos($query, 'meta_value FROM') || false !== strpos($query, 'ELSE NULL END AS meta_value');
+                $rows = array();
+                foreach (array_filter(array_map('intval', explode(',', $m[2]))) as $post_id) {
+                    if (! array_key_exists($key, $GLOBALS['_mcpwp_test_meta'][ $post_id ] ?? array())) {
+                        continue;
+                    }
+                    $raw = maybe_serialize($GLOBALS['_mcpwp_test_meta'][ $post_id ][ $key ]);
+					$row = array('post_id'=>(string)$post_id, 'bytes'=>(string)strlen($raw));
+					if ($include_value) { $row['meta_value'] = isset($bound[1]) && strlen($raw) > (int)$bound[1] ? null : $raw; }
+					$rows[] = $row;
+                }
+                return $rows;
             }
             // #1030 round-5: Mcpwp_Api_Auth::fetch_post_ref_rows() — the
             // declared post-reference guard's one direct lookup. Answered
@@ -2226,6 +2869,10 @@ if (! isset($GLOBALS['wpdb'])) {
             if ($approvals[0]) {
                 return $approvals[1];
             }
+            $tokens = Mcpwp_Test_OAuth_Tokens_Table::run('get_row', $query, $this);
+            if ($tokens[0]) {
+                return $tokens[1];
+            }
             // Test-scoped interceptor (#943 S2 graph read surface): a test may
             // install a callable that sees every query and either answers it
             // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
@@ -2235,6 +2882,66 @@ if (! isset($GLOBALS['wpdb'])) {
                 if (MCPWP_TEST_WPDB_PASS !== $answer) {
                     return $answer;
                 }
+            }
+            if (false !== strpos($query, 'AS snapshot_bytes') && false !== strpos($query, 'LEFT JOIN')) {
+                $name = 'mcpwp_custom_code_conditions_view_v1';
+                $raw = $GLOBALS['mcpwp_test_wpdb_options'][$name] ?? (isset($GLOBALS['mcpwp_test_options'][$name]) ? maybe_serialize($GLOBALS['mcpwp_test_options'][$name]) : null);
+                if (null===$raw) { return null; }
+                $gen = $GLOBALS['mcpwp_test_options']['mcpwp_custom_code_conditions_view_generation'] ?? '';
+                $row=array('option_value'=>strlen($raw)<=1048576?$raw:null,'snapshot_bytes'=>strlen($raw),'generation'=>strlen((string)$gen)<=64?(string)$gen:null);
+                return ARRAY_A===$output?$row:(object)$row;
+            }
+            if (preg_match("/^SELECT CASE WHEN OCTET_LENGTH\\(option_value\\) <= 64 THEN option_value ELSE NULL END AS generation FROM \\S*options WHERE option_name = '([^']+)' LIMIT 1$/",trim((string)$query),$m)) {
+                $raw=$GLOBALS['mcpwp_test_wpdb_options'][$m[1]] ?? ($GLOBALS['mcpwp_test_options'][$m[1]] ?? null);
+                $this->last_error='';
+                if (null===$raw) { return null; }
+                $row=array('generation'=>strlen((string)$raw)<=64 ? (string)$raw : null);
+                return ARRAY_A===$output ? $row : (object)$row;
+            }
+            if (false !== strpos($query, ') AS mcpwp_custom_code_view_rows')) {
+                $accumulator = str_repeat("\0", 16);
+                $count = 0;
+                foreach ((array)($GLOBALS['_mcpwp_test_meta'] ?? array()) as $id => $meta) {
+                    $post = $GLOBALS['_mcpwp_test_posts'][$id] ?? null;
+                    if (!$post || !in_array($post->post_type ?? '', array('elementor_snippet','elementor_library'), true)) { continue; }
+                    foreach ($meta as $key => $value) {
+                        if (!in_array($key, array('_elementor_conditions','_elementor_location','_elementor_template_type'), true)) { continue; }
+                        $raw = (string)maybe_serialize($value);
+                        $bounded = strlen($raw)>16384 ? 'oversize:'.strlen($raw) : $raw;
+                        $digest = hash('sha256','meta|'.$id.'|'.$post->post_type.'|'.($post->post_status ?? '').'|'.$key.'|'.$bounded,true);
+                        $accumulator = $accumulator ^ substr($digest,0,16); ++$count;
+                    }
+                }
+                $all = array();
+                foreach ((array)($GLOBALS['mcpwp_test_options'] ?? array()) as $name=>$value) { $all[$name]=maybe_serialize($value); }
+                foreach ((array)($GLOBALS['mcpwp_test_wpdb_options'] ?? array()) as $name=>$value) { $all[$name]=$value; }
+                foreach ($all as $name=>$raw) {
+                    if (0!==strpos($name,'mcpwp_custom_code_cache_entry_')) { continue; }
+                    $bounded = strlen((string)$raw)>17408 ? 'oversize:'.strlen((string)$raw) : $raw;
+                    $accumulator = $accumulator ^ substr(hash('sha256','entry|'.$name.'|'.$bounded,true),0,16); ++$count;
+                }
+                $hex = bin2hex($accumulator);
+                $row = array('row_count'=>(string)$count,'xor_a'=>substr($hex,0,16),'xor_b'=>substr($hex,16,16));
+                $this->last_error='';
+                return ARRAY_A===$output ? $row : (object)$row;
+            }
+            if (preg_match("/^SELECT CASE WHEN OCTET_LENGTH\\(option_value\\) <= (\\d+) THEN option_value ELSE NULL END AS option_value, OCTET_LENGTH\\(option_value\\) AS snapshot_bytes FROM \\S*options WHERE option_name = '([^']+)' LIMIT 1$/",trim((string)$query),$m)) {
+                $raw=$GLOBALS['mcpwp_test_wpdb_options'][$m[2]] ?? (array_key_exists($m[2],$GLOBALS['mcpwp_test_options'] ?? array()) ? maybe_serialize($GLOBALS['mcpwp_test_options'][$m[2]]) : null);
+                $this->last_error='';
+                if (null===$raw) { return null; }
+                $row=array('option_value'=>strlen((string)$raw)<=(int)$m[1] ? $raw : null,'snapshot_bytes'=>strlen((string)$raw));
+                return ARRAY_A===$output ? $row : (object)$row;
+            }
+            if (preg_match("/^SELECT CASE WHEN OCTET_LENGTH\\(option_value\\) <= (\\d+) THEN option_value ELSE NULL END AS option_value, OCTET_LENGTH\\(option_value\\) AS entry_bytes, SHA2\\(option_value, 256\\) AS option_hash FROM \\S*options WHERE option_name = '([^']+)' LIMIT 1$/", trim((string) $query), $m)) {
+                $this->last_error = '';
+                $fails = $GLOBALS['mcpwp_test_wpdb_read_fails'] ?? false;
+                if (is_callable($fails)) { $fails = $fails($m[2]); }
+                if (true === $fails) { $this->last_error = 'WordPress database error: Lost connection'; return null; }
+                if ('silent' === $fails) { return null; }
+                $raw = $GLOBALS['mcpwp_test_wpdb_options'][$m[2]] ?? (array_key_exists($m[2], $GLOBALS['mcpwp_test_options'] ?? array()) ? maybe_serialize($GLOBALS['mcpwp_test_options'][$m[2]]) : null);
+                if (null === $raw) { return null; }
+                $row = array('option_value'=>strlen((string)$raw) <= (int)$m[1] ? $raw : null, 'entry_bytes'=>strlen((string)$raw), 'option_hash'=>hash('sha256',(string)$raw));
+                return ARRAY_A === $output ? $row : (object)$row;
             }
             // Site graph (#943 S1): the hash-skip check that decides whether
             // rebuild_post_node() has anything to do.
@@ -2298,6 +3005,10 @@ if (! isset($GLOBALS['wpdb'])) {
             if ($approvals[0]) {
                 return $approvals[1];
             }
+            $tokens = Mcpwp_Test_OAuth_Tokens_Table::run('get_var', $query, $this);
+            if ($tokens[0]) {
+                return $tokens[1];
+            }
             // Test-scoped interceptor (#943 S2 graph read surface): a test may
             // install a callable that sees every query and either answers it
             // (any value other than MCPWP_TEST_WPDB_PASS) or lets it fall
@@ -2307,6 +3018,17 @@ if (! isset($GLOBALS['wpdb'])) {
                 if (MCPWP_TEST_WPDB_PASS !== $answer) {
                     return $answer;
                 }
+            }
+            if (preg_match("/^SELECT (OCTET_LENGTH\\(meta_value\\)|meta_value) FROM \\S*postmeta WHERE post_id = (\\d+) AND meta_key = '((?:[^'\\\\]|\\\\.)*)'/s", trim((string)$query), $m)) {
+                $id=(int)$m[2];$key=str_replace("\\'","'",$m[3]);
+                if (! array_key_exists($key,$GLOBALS['_mcpwp_test_meta'][$id]??array())) {return null;}
+                $raw=(string)maybe_serialize($GLOBALS['_mcpwp_test_meta'][$id][$key]);
+                if ('meta_value'===$m[1] && preg_match('/OCTET_LENGTH\\(meta_value\\) <= (\\d+)/',$query,$bound) && strlen($raw)>(int)$bound[1]) {return null;}
+                return 'meta_value'===$m[1]?$raw:strlen($raw);
+            }
+            if (preg_match("/^SELECT OCTET_LENGTH\\(option_value\\) FROM \\S*options WHERE option_name = '([^']+)'/", trim((string)$query), $m)) {
+                $raw=$GLOBALS['mcpwp_test_wpdb_options'][$m[1]]??(array_key_exists($m[1],$GLOBALS['mcpwp_test_options'])?maybe_serialize($GLOBALS['mcpwp_test_options'][$m[1]]):null);
+                return null===$raw?null:strlen((string)$raw);
             }
             // MySQL named locks (#981 review round 2; since #1042 only the
             // approvals create path, Mcpwp_Approvals::insert_new(), takes one).
@@ -2368,7 +3090,15 @@ if (! isset($GLOBALS['wpdb'])) {
             }
 
             if (preg_match("/SELECT option_value FROM \\S*options WHERE option_name = '([^']+)'/", (string) $query, $m)) {
-                return $GLOBALS['mcpwp_test_wpdb_options'][ $m[1] ] ?? null;
+                if (array_key_exists($m[1], $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                    return $GLOBALS['mcpwp_test_wpdb_options'][ $m[1] ];
+                }
+                // One options table in real WordPress (#1096): a row written through
+                // the options API is what a direct SELECT returns, as stored bytes.
+                if (array_key_exists($m[1], $GLOBALS['mcpwp_test_options'] ?? array())) {
+                    return maybe_serialize($GLOBALS['mcpwp_test_options'][ $m[1] ]);
+                }
+                return null;
             }
             // Answer the one query the Elementor writer depends on.
             //
@@ -2523,6 +3253,10 @@ if (! isset($GLOBALS['wpdb'])) {
             $approvals = Mcpwp_Test_Approvals_Table::run('query', $query, $this);
             if ($approvals[0]) {
                 return $approvals[1];
+            }
+            $tokens = Mcpwp_Test_OAuth_Tokens_Table::run('query', $query, $this);
+            if ($tokens[0]) {
+                return $tokens[1];
             }
             $trimmed         = trim((string) $query);
 
@@ -2736,11 +3470,25 @@ if (! isset($GLOBALS['wpdb'])) {
                 return $deleted;
             }
 
+            // Conditional write comparing the row as connection-charset text (#1096):
+            // the collation decides equality, as in MySQL.
+            if (preg_match("/^UPDATE (\\S*options) SET option_value = '((?:[^'\\\\]|\\\\.)*)' WHERE option_name = '((?:[^'\\\\]|\\\\.)*)' AND option_value = '((?:[^'\\\\]|\\\\.)*)'$/s", trim((string) $query), $m)) {
+                $un = static function ($v) {
+                    return str_replace(array("\\'", '\\\\'), array("'", '\\'), $v);
+                };
+                return $this->update($m[1], array('option_value' => $un($m[2])), array('option_name' => $un($m[3]), 'option_value' => $un($m[4])));
+            }
+
             // The byte-exact compare-and-swap on an options row (#845 review):
             // HEX(option_value) is immune to the column's case-insensitive,
             // pad-space collation. Evaluated through update(), so every
             // concurrency hook a test arms still applies, with an exact compare.
             if (preg_match("/^UPDATE (\\S*options) SET option_value = '((?:[^'\\\\]|\\\\.)*)' WHERE option_name = '((?:[^'\\\\]|\\\\.)*)' AND HEX\\(option_value\\) = '([0-9A-Fa-f]*)'$/s", trim((string) $query), $m)) {
+                // A latin1 table read over a utf8mb4 connection (#1096): the byte-exact
+                // compare can never match, though the row is unchanged.
+                if (! empty($GLOBALS['mcpwp_test_wpdb_hex_compare_blind'])) {
+                    return 0;
+                }
                 $this->exact_option_value_compare = true;
                 try {
                     return $this->update(
@@ -2753,7 +3501,31 @@ if (! isset($GLOBALS['wpdb'])) {
                 }
             }
 
+            // Per-document cache rows compare only a short SHA-256 digest.
+            if (preg_match("/^UPDATE (\\S*options) SET option_value = '((?:[^'\\\\]|\\\\.)*)' WHERE option_name = '((?:[^'\\\\]|\\\\.)*)' AND SHA2\\(option_value, 256\\) = '([0-9A-Fa-f]{64})'$/s", trim((string) $query), $m)) {
+                $name = str_replace("\\'", "'", $m[3]);
+                $raw = array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())
+                    ? $GLOBALS['mcpwp_test_wpdb_options'][$name]
+                    : (array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array()) ? maybe_serialize($GLOBALS['mcpwp_test_options'][$name]) : null);
+                if (null === $raw || hash('sha256', (string) $raw) !== strtolower($m[4])) { return 0; }
+                $this->exact_option_value_compare = true;
+                try {
+                    return $this->update($m[1], array('option_value' => str_replace("\\'", "'", $m[2])), array('option_name' => $name, 'option_value' => $raw));
+                } finally { $this->exact_option_value_compare = false; }
+            }
+            if (preg_match("/^DELETE FROM (\\S*options) WHERE option_name = '((?:[^'\\\\]|\\\\.)*)' AND SHA2\\(option_value, 256\\) = '([0-9A-Fa-f]{64})'$/s", trim((string) $query), $m)) {
+                $name = str_replace("\\'", "'", $m[2]);
+                $raw = $GLOBALS['mcpwp_test_wpdb_options'][$name] ?? null;
+                if (null === $raw || hash('sha256', (string) $raw) !== strtolower($m[3])) { return 0; }
+                return $this->delete($m[1], array('option_name' => $name, 'option_value' => $raw));
+            }
+
             return 0;
+        }
+        public function get_col_charset($table, $column)
+        {
+            // A test arms a narrower column charset (#1096), e.g. 'latin1'.
+            return $GLOBALS['mcpwp_test_wpdb_col_charset'] ?? 'utf8mb4';
         }
         public function insert($table, $data, $format = null)
         {
@@ -2777,14 +3549,37 @@ if (! isset($GLOBALS['wpdb'])) {
                     return false;
                 }
                 $name = (string) $data['option_name'];
+                // The API key store (#1096) is an options-API value in this
+                // double: a created row must stay visible to get_option() and
+                // survive a test resetting the raw-row table.
+                if ('mcpwp_api_keys' === $name) {
+                    if (array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array()) || array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+                        $this->last_error = "Duplicate entry '" . $name . "' for key 'option_name'";
+                        return false;
+                    }
+                    $stored_value = (string) $data['option_value'];
+                    if (! empty($GLOBALS['mcpwp_test_force_truncate_insert'])) {
+                        $stored_value = substr($stored_value, 0, 60); // The column cut the row short.
+                    }
+                    $GLOBALS['mcpwp_test_options'][ $name ] = maybe_unserialize($stored_value);
+                    $this->last_error = '';
+                    return 1;
+                }
                 if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
                     // A localized server or the SQLite driver word it differently.
                     $this->last_error = $GLOBALS['mcpwp_test_wpdb_duplicate_message'] ?? ("Duplicate entry '" . $name . "' for key 'option_name'");
                     return false;
                 }
                 $GLOBALS['mcpwp_test_wpdb_options'][ $name ] = (string) $data['option_value'];
+                if (isset($GLOBALS['mcpwp_test_raw_option_after_write']) && is_callable($GLOBALS['mcpwp_test_raw_option_after_write'])) {
+                    call_user_func($GLOBALS['mcpwp_test_raw_option_after_write'], $name, maybe_unserialize((string) $data['option_value']));
+                }
                 $this->last_error = '';
                 return 1;
+            }
+            $tokens = Mcpwp_Test_OAuth_Tokens_Table::insert($table, (array) $data);
+            if ($tokens[0]) {
+                return $tokens[1];
             }
             // A test may make inserts into one table fail (e.g. the action
             // log, #981 review round 5: no audit row → no removal).
@@ -2840,6 +3635,9 @@ if (! isset($GLOBALS['wpdb'])) {
                 } else {
                     $GLOBALS['mcpwp_test_options'][ $name ] = maybe_unserialize((string) $data['option_value']);
                 }
+                if (isset($GLOBALS['mcpwp_test_raw_option_after_write']) && is_callable($GLOBALS['mcpwp_test_raw_option_after_write'])) {
+                    call_user_func($GLOBALS['mcpwp_test_raw_option_after_write'], $name, maybe_unserialize((string) $data['option_value']));
+                }
                 // One-shot hook after a successful write, so a test can alter
                 // what was stored before the caller reads it back.
                 if (isset($GLOBALS['mcpwp_test_wpdb_after_update']) && is_callable($GLOBALS['mcpwp_test_wpdb_after_update'])) {
@@ -2853,8 +3651,19 @@ if (! isset($GLOBALS['wpdb'])) {
         }
         public function delete($table, $where, $where_format = null)
         {
+            $fails = $GLOBALS['mcpwp_test_wpdb_delete_fails'] ?? false;
+            if (is_callable($fails)) { $fails = $fails($table, $where); }
+            if ($fails) { return false; }
             if ($table === $this->options && isset($where['option_name'])) {
                 $name = (string) $where['option_name'];
+                // An options-API row (the key store, #1096): same compare-and-delete.
+                if (! array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array()) && array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array())) {
+                    if (isset($where['option_value']) && (string) $where['option_value'] !== (string) maybe_serialize($GLOBALS['mcpwp_test_options'][ $name ])) {
+                        return 0;
+                    }
+                    unset($GLOBALS['mcpwp_test_options'][ $name ]);
+                    return 1;
+                }
                 if (array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
                     // Like the real DELETE ... WHERE option_value = %s: a
                     // compare-and-delete that misses removes nothing.
@@ -2919,9 +3728,9 @@ if (! class_exists('WP_Post')) {
         public $post_author       = 0;
         public $post_password     = '';
 
-        public function __construct(array $data = array())
+        public function __construct($data = array())
         {
-            foreach ($data as $key => $value) {
+            foreach ((array) $data as $key => $value) {
                 $this->{$key} = $value;
             }
         }
@@ -2940,6 +3749,10 @@ function get_post($id)
     // post" — off unless a test explicitly sets it.
     if (isset($GLOBALS['mcpwp_test_throw_for_post_id']) && (int) $GLOBALS['mcpwp_test_throw_for_post_id'] === $id) {
         throw new \RuntimeException('seeded test throw for post ' . $id);
+    }
+    // Like core: an empty id answers the global $post (the loop's post).
+    if (0 === $id && isset($GLOBALS['post']) && $GLOBALS['post'] instanceof WP_Post) {
+        return $GLOBALS['post'];
     }
     return isset($GLOBALS['_mcpwp_test_posts'][ $id ]) ? $GLOBALS['_mcpwp_test_posts'][ $id ] : null;
 }
@@ -3111,10 +3924,25 @@ if (! function_exists('wp_schedule_single_event')) {
 if (! function_exists('wp_cache_delete')) {
     function wp_cache_delete($key, $group = '')
     {
+        // #1096: a stale options-cache copy armed by a test goes with the entry.
+        if ('options' === $group) {
+            if ('alloptions' === $key) {
+                $GLOBALS['mcpwp_test_option_cache_stale'] = array();
+            } else {
+                unset($GLOBALS['mcpwp_test_option_cache_stale'][ (string) $key ]);
+            }
+        }
         // Deletes from the object cache double below, as core does. A no-op
         // delete made every cache invalidation unobservable: removing one
         // could not fail a test (#845 review).
         unset($GLOBALS['mcpwp_test_object_cache'][ (string) $group . ':' . (string) $key ]);
+        // A raw row becomes visible after its options cache is invalidated.
+        if ('options' === $group && array_key_exists($key, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())) {
+            unset($GLOBALS['mcpwp_test_options'][ $key ]);
+        }
+        // Observable: which cache entries were dropped, and whether the OAuth
+        // client-store lock was held at the time.
+        $GLOBALS['mcpwp_test_cache_deletes'][] = array((string) $group, (string) $key, isset($GLOBALS['mcpwp_test_wpdb_options']['mcpwp_oauth_clients_lock']));
         return true;
     }
 }
@@ -3204,6 +4032,46 @@ if (! function_exists('wp_cache_add')) {
             'ttl'     => (int) $expire,
         );
         return true;
+    }
+}
+
+if (! function_exists('wp_cache_set')) {
+    function wp_cache_set($key, $data, $group = '', $expire = 0)
+    {
+        $GLOBALS['mcpwp_test_object_cache'][ (string) $group . ':' . (string) $key ] = array(
+            'value'   => $data,
+            'expires' => (int) $expire > 0 ? time() + (int) $expire : 0,
+            'ttl'     => (int) $expire,
+        );
+        // A set replaces whatever stale copy a test armed (#1096).
+        if ('options' === $group) {
+            if ('alloptions' === $key) {
+                $GLOBALS['mcpwp_test_option_cache_stale'] = array();
+            } else {
+                unset($GLOBALS['mcpwp_test_option_cache_stale'][ (string) $key ]);
+            }
+        }
+        return true;
+    }
+}
+
+if (! function_exists('wp_load_alloptions')) {
+    /**
+     * Core's alloptions: every option as stored bytes, cached under one key.
+     * $force_cache re-reads the "database" (the options double) and re-caches.
+     */
+    function wp_load_alloptions($force_cache = false)
+    {
+        $cached = wp_cache_get('alloptions', 'options');
+        if (! $force_cache && is_array($cached)) {
+            return $cached;
+        }
+        $all = array();
+        foreach (($GLOBALS['mcpwp_test_options'] ?? array()) as $name => $value) {
+            $all[ $name ] = maybe_serialize($value);
+        }
+        wp_cache_set('alloptions', $all, 'options');
+        return $all;
     }
 }
 
@@ -3517,6 +4385,7 @@ function get_post_type_object($post_type)
             array(
                 'create_posts' => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
                 'edit_posts'   => 'page' === (string) $post_type ? 'edit_pages' : 'edit_posts',
+                'delete_posts' => 'page' === (string) $post_type ? 'delete_pages' : 'delete_posts',
             ),
             (array) ($GLOBALS['mcpwp_test_post_type_caps'][ (string) $post_type ] ?? array())
         ),
@@ -4092,6 +4961,17 @@ function wp_create_nav_menu($name)
     return $id;
 }
 
+// Match core's menu removal; record cleanup for menu-creation failure tests.
+function wp_delete_nav_menu($menu_id)
+{
+    $GLOBALS['_mcpwp_test_nav_menu_deletions'][] = (int) $menu_id;
+    if (! isset($GLOBALS['_mcpwp_test_nav_menus'][$menu_id])) {
+        return false;
+    }
+    unset($GLOBALS['_mcpwp_test_nav_menus'][$menu_id]);
+    return true;
+}
+
 // A nav menu exists only when registered in $GLOBALS['_mcpwp_test_nav_menus'].
 function wp_get_nav_menu_object($menu)
 {
@@ -4111,7 +4991,25 @@ function wp_update_nav_menu_item($menu_id, $item_id, $item_data)
         'item_id' => (int) $item_id,
         'data'    => $item_data,
     );
+    if (isset($GLOBALS['_mcpwp_test_nav_menu_item_write_result'])) {
+        return call_user_func($GLOBALS['_mcpwp_test_nav_menu_item_write_result']);
+    }
     return 1000 + count($GLOBALS['_mcpwp_test_nav_menu_item_writes']);
+}
+
+if (!function_exists('update_meta_cache')) {
+    function update_meta_cache($meta_type, $object_ids) {
+        $check = apply_filters('update_' . $meta_type . '_metadata_cache', null, $object_ids);
+        if (null !== $check) { return (bool)$check; }
+        global $wpdb;
+        $ids = array_values(array_unique(array_map('intval', (array)$object_ids)));
+        if (empty($ids)) { return array(); }
+        $rows = $wpdb->get_results('SELECT post_id, meta_key, meta_value FROM ' . $wpdb->postmeta . ' WHERE post_id IN (' . implode(',', $ids) . ')', ARRAY_A);
+        $cache = array_fill_keys($ids, array());
+        foreach ((array)$rows as $row) { $cache[(int)$row['post_id']][$row['meta_key']][] = $row['meta_value']; }
+        foreach ($cache as $id => $values) { wp_cache_set($id, $values, $meta_type . '_meta'); }
+        return $cache;
+    }
 }
 
 function get_post_meta($post_id, $key = '', $single = false)
@@ -4153,7 +5051,13 @@ function mcpwp_test_write_post_meta($post_id, $key, $value, $mode)
     // unfiltered_html grant when the write throws rather than returns. Off
     // unless a test asks for it.
     if (! empty($GLOBALS['mcpwp_test_update_post_meta_throws'])) {
-        throw new \RuntimeException('seeded meta failure');
+        $fails = $GLOBALS['mcpwp_test_update_post_meta_throws'];
+        if (is_callable($fails)) {
+            $fails = $fails($post_id, $key, $value);
+        }
+        if ($fails) {
+            throw new \RuntimeException('seeded meta failure');
+        }
     }
 
     $post_id_int = (int) $post_id;
@@ -4616,6 +5520,7 @@ require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-api-auth.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-sanitization.php';
 require_once dirname(__DIR__) . '/includes/traits/trait-mcpwp-logging.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-agent-text.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-guides.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-rate-limiter.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-operation-weights.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-spend-budget.php';
@@ -4658,6 +5563,8 @@ require_once dirname(__DIR__) . '/includes/mcp/traits/trait-mcpwp-pro-tools-stag
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-mcp-pro-tools.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-integration.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-mcp.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-action-log.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-woocommerce-audit.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-webmcp.php';
 require_once dirname(__DIR__) . '/includes/mcp/class-mcpwp-webmcp-integration.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-webmcp.php';
@@ -4711,13 +5618,24 @@ require_once dirname(__DIR__) . '/includes/pro/class-mcpwp-pro-bootstrap.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-signals.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-signals.php';
 // OAuth 2.1 server (#531).
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-clients.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-revocation.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-token-store.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-route-capability-map.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-oauth.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-site-settings.php';
 require_once dirname(__DIR__) . '/includes/class-mcpwp-oauth-well-known.php';
 // Encryption + migration classes.
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-encryption.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-custom-code-cache-entry.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-custom-code-conditions.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-integration-manager.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-encryption-migration.php';
+
+// Production registers these during plugins_loaded. The unit harness loads
+// classes directly, so install the same runtime filters once for option/meta
+// behavior tests.
+Mcpwp_Custom_Code_Conditions::register_hooks();
 
 // Escaping helpers — no-ops for tests, but required by any class that renders
 // output (Site Health results, admin notices).

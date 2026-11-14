@@ -166,7 +166,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 					),
 				),
 				array(
-					'methods'             => WP_REST_Server::EDITABLE,
+					'methods'             => 'PUT,PATCH',
 					'callback'            => array( $this, 'bulk_update_posts' ),
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(

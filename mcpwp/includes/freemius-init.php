@@ -298,6 +298,16 @@ if ( $mcpwp_fs_instance && method_exists( $mcpwp_fs_instance, 'add_action' ) ) {
  * Cleanup on uninstall.
  */
 function mcpwp_fs_uninstall_cleanup() {
+	// Another installed copy (e.g. a Free `mcpwp/` while `mcpwp-premium/` is
+	// deleted) shares these tables and options — leave them alone (#995).
+	if ( ! class_exists( 'Mcpwp_Uninstaller' ) ) {
+		require_once __DIR__ . '/class-mcpwp-uninstaller.php';
+	}
+	if ( ! method_exists( 'Mcpwp_Uninstaller', 'other_copy_present' )
+		|| Mcpwp_Uninstaller::other_copy_present( plugin_basename( dirname( __DIR__ ) . '/mcpwp.php' ), dirname( __DIR__ ), MCPWP_PLUGIN_DIR ) ) {
+		return;
+	}
+
 	if ( is_multisite() ) {
 		// W3: number => 0 — every site in the network, not the default-limited page.
 		$sites = get_sites( array( 'fields' => 'ids', 'number' => 0 ) );
@@ -315,35 +325,12 @@ function mcpwp_fs_uninstall_cleanup() {
  * Cleanup a single site's MCPWP data.
  */
 function mcpwp_fs_uninstall_cleanup_site() {
-	// Clean up options.
-	delete_option( 'mcpwp_api_key' );
-	delete_option( 'mcpwp_api_keys' );
-	delete_option( 'mcpwp_settings' );
-	delete_option( 'mcpwp_version' );
-	delete_option( 'mcpwp_db_version' );
-	delete_option( 'mcpwp_rate_limit_settings' );
-	delete_option( 'mcpwp_first_activation' );
-	delete_option( 'mcpwp_premium_preferred' );
-	delete_option( 'mcpwp_last_update_flush' );
-
-	// Clean up transients.
-	delete_transient( 'mcpwp_capabilities_cache' );
-	delete_transient( 'mcpwp_new_api_key' );
-
-	// Clear scheduled events.
-	wp_clear_scheduled_hook( 'mcpwp_cleanup_logs' );
-	wp_clear_scheduled_hook( 'mcpwp_check_alerts' );
-
-	// Clean up tables.
-	global $wpdb;
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
-	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_activity_log" );
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
-	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_webhooks" );
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
-	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_webhook_logs" );
-	// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.InterpolatedNotPrepared -- $wpdb->prefix is safe.
-	$wpdb->query( "DROP TABLE IF EXISTS {$wpdb->prefix}mcpwp_feedback" );
+	// The older tables, core options, transients and cron (#995) — the SAME
+	// helper uninstall.php calls on the Free/Agency builds.
+	if ( ! class_exists( 'Mcpwp_Uninstaller' ) ) {
+		require_once __DIR__ . '/class-mcpwp-uninstaller.php';
+	}
+	Mcpwp_Uninstaller::drop_legacy_data_for_current_site();
 
 	// Site graph tables/options/schedules (#943 S1 review round 2, BLOCK-1b):
 	// this is the SAME helper uninstall.php calls — the two lists cannot

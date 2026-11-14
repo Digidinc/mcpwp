@@ -14,6 +14,7 @@
   "scripts": {
     "build": "bun build src/index.ts --target=node --outfile=dist/index.js --format=esm",
     "build:tsc": "tsc",
+    "test": "node --test test/*.test.mjs",
     "start": "node dist/index.js",
     "dev": "bun run src/index.ts"
   },
@@ -46,7 +47,7 @@
     "model-context-protocol"
   ],
   "devDependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.32.1",
     "@types/node": "^20.11.0",
     "dotenv": "^16.4.5",
     "typescript": "^5.3.3"

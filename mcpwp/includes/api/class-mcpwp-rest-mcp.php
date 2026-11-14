@@ -854,6 +854,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		try {
 			return $this->handle_mcp_messages( $request );
 		} finally {
+			$this->forget_raw_parameter_sources( $request );
 			Mcpwp_Spend_Budget::close( $spend_token );
 		}
 	}
@@ -923,7 +924,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// request in it is answered with the refusal, notifications are not.
 			$price    = 0;
 			$tool_map = $this->get_all_tool_map();
-			foreach ( $body as $single_request ) {
+			foreach ( $body as $message_index => $single_request ) {
 				// A batched tools/call wrapped in mcpwp_call (#907) prices as
 				// the INNER tool it names — the same rewrite process_single_request
 				// applies before dispatch — so wrapping an expensive call in
@@ -939,7 +940,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 						$priced_request['params'] = $resolved['params'];
 					}
 				}
-				$price += $this->message_spend_price( $priced_request, $tool_map );
+				$price += $this->with_raw_body_path( $request, array( $message_index ), function () use ( $priced_request, $tool_map, $request ) {
+					return $this->message_spend_price( $priced_request, $tool_map, $request );
+				} );
 			}
 			$whole = Mcpwp_Spend_Budget::refuse_whole( $price );
 			if ( is_wp_error( $whole ) ) {
@@ -959,8 +962,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			}
 
 			$responses = array();
-			foreach ( $body as $single_request ) {
-				$response = $this->process_single_request( $single_request, $request );
+			foreach ( $body as $message_index => $single_request ) {
+				$response = $this->with_raw_body_path( $request, array( $message_index ), function () use ( $single_request, $request ) {
+					return $this->process_single_request( $single_request, $request );
+				} );
 				// Notifications return null, don't include in response
 				if ( $response !== null ) {
 					$responses[] = $this->attach_result_meta( $response );
@@ -1324,18 +1329,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param WP_REST_Request $request Request.
 	 * @return array
 	 */
-	private function handle_tools_call_idempotent( $id, $params, $request, $depth = 0 ) {
+	private function handle_tools_call_idempotent( $id, $params, $request, $depth = 0, $audit_context = null ) {
 		$request_id = isset( $params['_meta']['request_id'] ) ? $params['_meta']['request_id'] : null;
 
 		if ( null === $request_id ) {
-			return $this->handle_tools_call( $id, $params, $request );
+			return $this->handle_tools_call( $id, $params, $request, $audit_context );
 		}
 
 		// Two re-entries at most: a store that answers differently on
 		// consecutive reads must not turn into unbounded recursion. Past
 		// that, the call runs unprotected and says so.
 		if ( $depth >= 2 ) {
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'claim store inconsistent' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_stored', 'claim store inconsistent' );
 		}
 
 		if ( ! is_string( $request_id ) || '' === $request_id || strlen( $request_id ) > 128 || ! preg_match( '/^[A-Za-z0-9_\-:.]+$/', $request_id ) ) {
@@ -1357,19 +1362,19 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// tools alike) does not know cannot be classified, so it is not
 		// pinned — and the client is told.
 		if ( '' === $tool_name || ! isset( $tool_map[ $tool_name ] ) ) {
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_applicable', 'tool not in the built-in map' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_applicable', 'tool not in the built-in map' );
 		}
 
 		$tool_method = isset( $tool_map[ $tool_name ]['method'] ) ? strtoupper( (string) $tool_map[ $tool_name ]['method'] ) : 'POST';
 
 		if ( 'GET' === $tool_method ) {
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_applicable', 'read tool' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_applicable', 'read tool' );
 		}
 
 		// A tool whose result cannot prove completion (a deploy that absorbs
 		// failures into a success body) opts out in the map.
 		if ( isset( $tool_map[ $tool_name ]['pin'] ) && false === $tool_map[ $tool_name ]['pin'] ) {
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_applicable', 'result cannot prove completion' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_applicable', 'result cannot prove completion' );
 		}
 
 		// No principal, no pinning. 'anon' would be a namespace shared by
@@ -1379,7 +1384,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$scope      = self::principal_scope( $key_record );
 
 		if ( '' === $scope ) {
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'no per-user principal id on this session' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_stored', 'no per-user principal id on this session' );
 		}
 
 		$store_key = self::idempotency_key( $scope, $request_id );
@@ -1390,7 +1395,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// carrying the caller's original spelling) is what actually reaches
 		// handle_tools_call() below, which re-derives and re-validates its
 		// own arguments independently, so this does not skip validation.
-		$args_hash = hash( 'sha256', $tool_name . '|' . wp_json_encode( self::canonicalize( $this->canonical_tool_arguments( $tool_name, $tool_map[ $tool_name ], $arguments ) ) ) );
+		$args_hash = $this->tool_arguments_hash( $tool_name, $tool_map[ $tool_name ], $arguments, $request );
 		$existing  = get_transient( $store_key );
 
 		if ( is_array( $existing ) && isset( $existing['state'] ) && 'done' === $existing['state'] ) {
@@ -1419,7 +1424,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// re-checked here: a category disabled or a key downgraded since
 			// the first call must not keep being served the old result.
 			if ( ! $this->tool_currently_permitted( $tool_name, $key_record ) ) {
-				return $this->handle_tools_call( $id, $params, $request );
+				return $this->handle_tools_call( $id, $params, $request, $audit_context );
 			}
 
 			if ( isset( $existing['response'] ) && is_array( $existing['response'] ) ) {
@@ -1466,10 +1471,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			// runs; only then is the call run unprotected, and said so.
 			$done = get_transient( $store_key );
 			if ( is_array( $done ) && isset( $done['state'] ) && 'done' === $done['state'] ) {
-				return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1 );
+				return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1, $audit_context );
 			}
 
-			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request ), 'not_stored', 'claim store unavailable' );
+			return $this->with_idempotency_note( $this->handle_tools_call( $id, $params, $request, $audit_context ), 'not_stored', 'claim store unavailable' );
 		}
 
 		if ( Mcpwp_Idempotency_Claim::HELD === $claim ) {
@@ -1480,7 +1485,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			if ( null === $lease ) {
 				$done = get_transient( $store_key );
 				if ( is_array( $done ) && isset( $done['state'] ) && 'done' === $done['state'] ) {
-					return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1 );
+					return $this->handle_tools_call_idempotent( $id, $params, $request, $depth + 1, $audit_context );
 				}
 				$claim = Mcpwp_Idempotency_Claim::acquire( $lease_name, $now, $args_hash );
 				if ( Mcpwp_Idempotency_Claim::ACQUIRED !== $claim ) {
@@ -1514,7 +1519,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			}
 		}
 
-		$response = $this->handle_tools_call( $id, $params, $request );
+		$response = $this->handle_tools_call( $id, $params, $request, $audit_context );
 
 		try {
 			$completed = is_array( $response )
@@ -1833,6 +1838,44 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		return Mcpwp_Operation_Weights::tool_weight( $tool_name, $arguments );
 	}
 
+	/** Audit outside idempotency and validation so every attempt has an outcome. */
+	private function handle_audited_tool_call( $id, $params, $request ) {
+		$params = is_array( $params ) ? $params : array();
+		$callback = function ( $audit_context = null ) use ( $id, $params, $request ) {
+			// mcpwp_call (#907) is rewritten to an ordinary tools/call on the tool
+			// it names — one rewrite point, before anything else sees $params — so
+			// every downstream gate runs against the INNER tool.
+			$resolved = $this->resolve_mcpwp_call( $params );
+			if ( null !== $resolved['error'] ) {
+				// A malformed wrapper still answers to the key's scope first: the
+				// scope refusal wins over invalid_arguments for a key that could
+				// not have called it anyway.
+				$wrapper_refusal = $this->tool_call_scope_refusal( $params );
+				if ( null !== $wrapper_refusal ) {
+					return $this->scope_refusal_result( $id, $wrapper_refusal );
+				}
+				$this->fire_tool_called( 'mcpwp_call', microtime( true ), $this->analytics_code_for_client_code( $resolved['error']['code'] ) );
+				return $this->tool_error_result( $id, $resolved['error']['code'], $resolved['error']['message'], $resolved['error']['data'] );
+			}
+			$params = $resolved['params'];
+			// A call the key's scope does not cover is refused HERE, per call, as an
+			// in-protocol tool result (#936), before dispatch and the idempotent
+			// replay. Same derivation as the envelope check.
+			$scope_refusal = $this->tool_call_scope_refusal( $params );
+			if ( null !== $scope_refusal ) {
+				return $this->scope_refusal_result( $id, $scope_refusal );
+			}
+			return $this->conform_tool_call_result(
+				$this->handle_tools_call_idempotent( $id, $params, $request, 0, $audit_context ),
+				isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '',
+				isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array()
+			);
+		};
+		$actor = $this->get_audit_key_id();
+		$response = Mcpwp_WooCommerce_Audit::run_call( $params, $request, $actor, $callback );
+		return is_wp_error( $response ) ? $this->tool_error_result( $id, $response->get_error_code(), $response->get_error_message(), $response->get_error_data() ) : $response;
+	}
+
 	/**
 	 * Process a single JSON-RPC request.
 	 *
@@ -1870,23 +1913,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				return $this->handle_tools_list( $id, $params );
 
 			case 'tools/call':
-				// mcpwp_call (#907) is rewritten to an ordinary tools/call on
-				// the tool it names — one rewrite point, before anything
-				// else sees `$params` — so every downstream gate (category,
-				// role, Pro, spend, idempotency) and conform_tool_call_result's
-				// outputSchema lookup runs against the INNER tool, exactly as
-				// a direct call to it would, never against "mcpwp_call".
-				$resolved = $this->resolve_mcpwp_call( is_array( $params ) ? $params : array() );
-				if ( null !== $resolved['error'] ) {
-					$this->fire_tool_called( 'mcpwp_call', microtime( true ), $this->analytics_code_for_client_code( $resolved['error']['code'] ) );
-					return $this->tool_error_result( $id, $resolved['error']['code'], $resolved['error']['message'], $resolved['error']['data'] );
-				}
-				$params = $resolved['params'];
-				return $this->conform_tool_call_result(
-					$this->handle_tools_call_idempotent( $id, $params, $request ),
-					is_array( $params ) && isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '',
-					is_array( $params ) && isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array()
-				);
+				// Everything for a tools/call (the mcpwp_call rewrite, the per-call
+				// scope refusal, dispatch) runs inside the audit wrapper, handed the
+				// ORIGINAL params: Mcpwp_WooCommerce_Audit::target() unwraps
+				// mcpwp_call, so the attempt is logged against the inner tool even
+				// when the wrapper is malformed or the key's scope refuses it.
+				return $this->handle_audited_tool_call( $id, $params, $request );
 
 			case 'resources/list':
 				return $this->handle_resources_list( $id );
@@ -2695,33 +2727,84 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $tools; // No key context (shouldn't happen), return all.
 		}
 
-		$allowed_categories = $this->resolve_key_tool_categories( $key_record );
-
-		// Empty = unrestricted (admin role, or legacy/migrated key). A custom
-		// role with nothing granted resolves to the deny-all sentinel, never a
-		// bare array() (#1041), so it always falls through to the per-tool
-		// filter below, which lists only the discovery-exempt tools for it.
-		if ( empty( $allowed_categories ) ) {
-			return $tools;
-		}
-
 		$all_categories = $this->get_all_tool_categories();
+		$tool_map       = $this->get_all_tool_map();
 
 		return array_values(
 			array_filter(
 				$tools,
-				function ( $tool ) use ( $all_categories, $key_record ) {
+				function ( $tool ) use ( $all_categories, $key_record, $tool_map ) {
 					$name = isset( $tool['name'] ) ? $tool['name'] : '';
 					// The single per-key decision (#1064 review round 2):
 					// the discovery allowlist (#1007 WARN-2) and the two meta
 					// tools by NAME pass; everything else needs its category
 					// granted, and an uncategorised tool is denied (#802
 					// round 6) — the handler's own gate is the same call.
+					// An unrestricted key (admin role, legacy) has no
+					// category restriction at all; a custom role with
+					// nothing granted resolves to the deny-all sentinel
+					// (#1041) and so lists only the discovery-exempt tools.
 					$category = isset( $all_categories[ $name ] ) ? (string) $all_categories[ $name ] : '';
-					return $this->key_role_permits_tool( $name, $category, $key_record );
+					return $this->principal_may_call_tool( $name, $category, $key_record, isset( $tool_map[ $name ] ) ? $tool_map[ $name ] : null );
 				}
 			)
 		);
+	}
+
+	/**
+	 * Whether the current principal can call a tool right now — the one
+	 * predicate tools/list, mcpwp_find_tools, introspection and the
+	 * next-step hints list by (#1106). Each part asks the same function the
+	 * call path asks, so a listed tool is one the call path does not refuse
+	 * for the principal itself:
+	 *
+	 *  - the key's role/category gate (key_role_permits_tool());
+	 *  - the scope the call needs (get_required_scope_for_mcp_message(), the
+	 *    derivation the /mcp envelope check and the per-call refusal use);
+	 *  - for a user-run principal (OAuth user, WebMCP, admin chat), the
+	 *    route's WordPress capability (user_run_capability_shortfall(), the
+	 *    function check_user_run_capability() uses on the dispatch).
+	 *
+	 * The two meta tools are gateways: what they wrap is judged when it is
+	 * named, so they are never hidden by scope.
+	 *
+	 * @param string     $tool_name     Tool.
+	 * @param string     $tool_category Its enforced category ('' if none).
+	 * @param array      $key_record    The caller's key record.
+	 * @param array|null $mapping       The tool's map entry, if it has one.
+	 * @return bool
+	 */
+	private function principal_may_call_tool( $tool_name, $tool_category, $key_record, $mapping = null ) {
+		if ( ! $this->key_role_permits_tool( $tool_name, $tool_category, $key_record ) ) {
+			return false;
+		}
+
+		if ( in_array( $tool_name, self::get_key_exempt_tool_names(), true ) ) {
+			return true;
+		}
+
+		$required = $this->get_required_scope_for_mcp_message(
+			array(
+				'method' => 'tools/call',
+				'params' => array( 'name' => $tool_name ),
+			)
+		);
+		if ( ! $this->key_has_scope( $key_record, $required ) ) {
+			return false;
+		}
+
+		if ( is_array( $mapping ) && $this->requester_acts_as_user() && ! isset( $mapping['callback'] ) ) {
+			$route = isset( $mapping['route'] ) ? (string) $mapping['route'] : ( isset( $mapping['rest_path'] ) ? (string) $mapping['rest_path'] : '' );
+			if ( '' !== $route ) {
+				$route = str_replace( '{type}', 'post', $route );
+				$route = (string) preg_replace( '/\{[A-Za-z0-9_]+\}/', '1', $route );
+				if ( '' !== $this->user_run_capability_shortfall( isset( $mapping['method'] ) ? (string) $mapping['method'] : 'GET', $route ) ) {
+					return false;
+				}
+			}
+		}
+
+		return true;
 	}
 
 	/**
@@ -4116,6 +4199,20 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * The in-protocol insufficient_scope tool result for a refused call.
+	 *
+	 * @param mixed $id      JSON-RPC id.
+	 * @param array $refusal tool_call_scope_refusal() result.
+	 * @return array
+	 */
+	private function scope_refusal_result( $id, array $refusal ) {
+		$this->fire_tool_called( $refusal['tool'], microtime( true ), 'scope_denied' );
+		$category = in_array( $refusal['tool'], self::get_discovery_allowlist_tool_names(), true ) ? '' : $this->tool_category_for( $refusal['tool'] );
+		$error    = $this->build_insufficient_scope_error( $this->get_current_api_key_record(), $refusal['required_scope'], $category );
+		return $this->tool_error_result( $id, 'insufficient_scope', $error->get_error_message(), (array) $error->get_error_data() );
+	}
+
+	/**
 	 * If `$params` names the mcpwp_call meta tool (#907), resolve it to the
 	 * params of the REAL tool it wraps — the single rewrite point so every
 	 * gate downstream of it (category toggle, role category, Pro gating,
@@ -4382,7 +4479,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param WP_REST_Request $request Original REST request.
 	 * @return array JSON-RPC response.
 	 */
-	private function handle_tools_call( $id, $params, $request ) {
+	private function handle_tools_call( $id, $params, $request, $audit_context = null ) {
 		$start         = microtime( true );
 		$raw_tool_name = isset( $params['name'] ) ? $params['name'] : null;
 
@@ -4406,6 +4503,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 
 		$tool_name = $raw_tool_name;
 		$arguments = isset( $params['arguments'] ) ? $params['arguments'] : array();
+		$raw_arguments = $arguments;
 
 		$this->log_mcp_activity(
 			'mcp_tool_call',
@@ -4761,6 +4859,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				? $route
 				: '/mcpwp/v1' . $route;
 			$internal_request = new WP_REST_Request( $method, $full_route );
+			Mcpwp_WooCommerce_Audit::bind( $audit_context, $internal_request );
 
 			// Set remaining arguments as params.
 			// For write methods, also set body params so get_param() finds them
@@ -4798,8 +4897,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				Mcpwp_REST_Batch::$is_batch_sub_request = true;
 			}
 			try {
+				$this->forward_raw_parameter_bags( $request, $internal_request, is_array( $raw_arguments ) ? array( $raw_arguments ) : array() );
 				$response = rest_do_request( $internal_request );
 			} finally {
+				$this->forget_raw_parameter_bags( $internal_request );
 				if ( $batch_class_exists ) {
 					Mcpwp_REST_Batch::$is_batch_sub_request = $previous_sub_request;
 				}
@@ -4854,6 +4955,19 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 				'code'   => $error_code,
 				'status' => $status,
 			);
+			$rest_error_data = isset( $data['data'] ) && is_array( $data['data'] ) ? $data['data'] : array();
+
+			// A Custom Code conditions save can have persisted its post/meta
+			// before Elementor Pro rejects the conditions. These two values are
+			// a deliberately narrow receipt, not a general pass-through of REST
+			// error data: callers need the affected resource and an explicit
+			// signal to repair it rather than retry a create through any MCP door.
+			if ( isset( $rest_error_data['resource_id'] ) && is_scalar( $rest_error_data['resource_id'] ) && (int) $rest_error_data['resource_id'] > 0 ) {
+				$error_data['resource_id'] = (int) $rest_error_data['resource_id'];
+			}
+			if ( isset( $rest_error_data['partial_write'] ) && true === $rest_error_data['partial_write'] ) {
+				$error_data['partial_write'] = true;
+			}
 
 			// Carry forward hint and guide from the REST error response.
 			if ( isset( $data['data']['hint'] ) ) {
@@ -5204,7 +5318,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param array $tool_map Merged tool map, built once for the whole batch.
 	 * @return int
 	 */
-	private function message_spend_price( $message, array $tool_map ) {
+	private function message_spend_price( $message, array $tool_map, $request = null ) {
 		if ( ! is_array( $message ) || ! isset( $message['method'] ) || ! is_string( $message['method'] ) ) {
 			return 0;
 		}
@@ -5223,7 +5337,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		$tool_name = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
 		$arguments = isset( $params['arguments'] ) && is_array( $params['arguments'] ) ? $params['arguments'] : array();
 
-		if ( '' === $tool_name || ! isset( $tool_map[ $tool_name ] ) || $this->has_stored_result( $params, $tool_map ) ) {
+		if ( '' === $tool_name || ! isset( $tool_map[ $tool_name ] ) || $this->has_stored_result( $params, $tool_map, $request ) ) {
 			return 0;
 		}
 
@@ -5252,7 +5366,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @param array $tool_map Merged tool map.
 	 * @return bool
 	 */
-	private function has_stored_result( $params, $tool_map ) {
+	private function has_stored_result( $params, $tool_map, $request = null ) {
 		$request_id = isset( $params['_meta']['request_id'] ) ? $params['_meta']['request_id'] : null;
 		$tool_name  = isset( $params['name'] ) && is_string( $params['name'] ) ? $params['name'] : '';
 
@@ -5270,14 +5384,13 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// arguments to STORE a result, so a batched replay check agrees with
 		// the stored hash regardless of which near-miss spelling either call
 		// used (#911 review round 1, WARN-2's NIT).
-		$arguments = $this->canonical_tool_arguments( $tool_name, $tool_map[ $tool_name ], $arguments );
 		$existing  = get_transient( self::idempotency_key( $scope, $request_id ) );
 
 		return is_array( $existing )
 			&& isset( $existing['state'], $existing['args_hash'], $existing['response'] )
 			&& 'done' === $existing['state']
 			&& is_array( $existing['response'] )
-			&& hash( 'sha256', $tool_name . '|' . wp_json_encode( self::canonicalize( $arguments ) ) ) === $existing['args_hash'];
+			&& $this->tool_arguments_hash( $tool_name, $tool_map[ $tool_name ], $arguments, $request ) === $existing['args_hash'];
 	}
 
 	/**
@@ -5417,33 +5530,14 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Small, explicit synonym groups for #911's "known synonyms" case —
-	 * concepts different tools spell differently. A near-miss key is mapped
-	 * onto the schema's own member of its group only when the tool's schema
-	 * carries EXACTLY one member of that group (see remap_near_miss_params());
-	 * with more than one present, which one the caller meant is a guess this
-	 * issue asks not to make, so it is refused instead (a tie, not a map).
+	 * Empty extension point for parameter synonyms (#911, #994).
 	 *
-	 * Empty today (adversarial review of PR #986, round 1, BLOCK-1). The
-	 * `id`/`page_id`/`post_id` group this started with was removed entirely:
-	 * across the 295-tool schema dump, `id` is the sole group member on ~105
-	 * tools, and it means a completely different resource on each — a term,
-	 * a menu, a webhook, a WooCommerce order, a course, a sidebar widget —
-	 * never uniformly "a post or page". `wp_delete_term({post_id: 12})` would
-	 * have silently mapped `post_id` onto `id` and deleted TERM 12, which is
-	 * not what a caller typing "post_id" out of habit meant. #831's per-tool
-	 * `param_aliases` (curated, one tool at a time) is the correct place for
-	 * a genuine `page_id` -> `id` rename; this generic table is not, for any
-	 * pairing where the target's meaning varies by tool.
-	 *
-	 * `content`/`content_html` was considered and also dropped: the schema
-	 * shows `content` meaning a post/page body on some tools but a course,
-	 * lesson, quiz or event DESCRIPTION, a translation, or raw Gutenberg
-	 * block markup on others — not uniformly "post content" either, so it
-	 * does not clear the bar a synonym entry here needs to clear. Kept as an
-	 * empty table, not deleted outright, for a future pairing that a schema
-	 * check actually clears — e.g. a synonym that means the exact same thing
-	 * on every tool that has one of its members.
+	 * Active near-miss mapping handles case and separator variants only.
+	 * The former id/page_id/post_id and content/content_html groups were
+	 * removed because their meanings differ across tools. Per-tool renames
+	 * belong in param_aliases. Any future synonym group must have the same
+	 * meaning on every tool that declares one of its members, and mapping
+	 * must still require exactly one candidate in that tool's schema.
 	 *
 	 * @var string[][]
 	 */
@@ -5517,9 +5611,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * Normalize a parameter key for case/separator-insensitive matching
 	 * (#911's generic normalizer) — `postId`, `post-id`, `POST_ID` and
 	 * `post_id` all reduce to `postid`. Word-level synonyms (`content_html`
-	 * vs `content`) are NOT caught here on purpose — they normalize to
-	 * different strings and are handled only by the explicit
-	 * PARAM_SYNONYM_GROUPS table above, never guessed generically.
+	 * vs `content`) normalize to different strings and are not mapped.
+	 * PARAM_SYNONYM_GROUPS is an empty extension point, not an active set
+	 * of synonym mappings.
 	 *
 	 * @param string $key Raw parameter key.
 	 * @return string Normalized form, lowercase alphanumeric only.
@@ -5573,9 +5667,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * where the caller's key is an unambiguous near-miss (#911).
 	 *
 	 * For each key in $arguments that is not already a known param:
-	 *  - a case/separator variant of exactly one known param, or a member of
-	 *    a PARAM_SYNONYM_GROUPS group of which the schema carries exactly one
-	 *    other member, is the key's sole candidate;
+	 *  - a case/separator variant of exactly one known param is the key's
+	 *    sole candidate. The synonym loop is reserved for future entries in
+	 *    PARAM_SYNONYM_GROUPS, which is currently empty;
 	 *  - a key with zero candidates is left alone (genuinely unknown — the
 	 *    caller gets a fuzzy did-you-mean instead, from validate_tool_arguments());
 	 *  - a key with more than one candidate is a tie and is never mapped —
@@ -5738,6 +5832,18 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			return $result; // No schema to validate against.
 		}
 
+		// Template intent must reach the core unchanged. Validate the other
+		// keys normally; never deduplicate or numerically compare these flags.
+		$raw_preview_flags = array();
+		if ( 'wp_create_theme_template' === $tool_name && class_exists( 'Mcpwp_Theme_Builder' ) ) {
+			foreach ( $arguments as $key => $value ) {
+				if ( Mcpwp_Theme_Builder::is_dry_run_key( $key ) ) {
+					$raw_preview_flags[ $key ] = $value;
+					unset( $arguments[ $key ] );
+				}
+			}
+		}
+
 		// Get properties as an array (may be stdClass if empty).
 		$properties = isset( $schema['properties'] ) ? (array) $schema['properties'] : array();
 		$required   = isset( $schema['required'] ) ? $schema['required'] : array();
@@ -5825,6 +5931,7 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			$result['error'] = implode( ' ', $parts );
 		}
 
+		$result['arguments'] = array_merge( $arguments, $raw_preview_flags );
 		return $result;
 	}
 
@@ -5870,6 +5977,70 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Replay identity includes raw intent evidence, without deciding what it
+	 * means. Never replay a publish for different shadowed source flags.
+	 * Protocol ids/metadata are excluded, so an ordinary retry stays stable.
+	 *
+	 * @param string          $tool_name Tool name.
+	 * @param array           $mapping  Dispatch mapping.
+	 * @param array           $arguments Raw arguments.
+	 * @param WP_REST_Request $request  Outer request, when available.
+	 * @return string SHA-256 fingerprint.
+	 */
+	private function tool_arguments_hash( $tool_name, $mapping, $arguments, $request = null ) {
+		$canonical = $this->canonical_tool_arguments( $tool_name, $mapping, $arguments );
+		$payload   = $tool_name . '|' . wp_json_encode( self::canonicalize( $canonical ) );
+		if ( is_object( $request ) && in_array( $tool_name, array( 'wp_create_theme_template', 'wp_batch' ), true ) && class_exists( 'Mcpwp_Theme_Builder' ) ) {
+			$evidence = array();
+			foreach ( Mcpwp_Theme_Builder::intent_parameter_bags( $this->raw_parameter_bags( $request ) ) as $bag ) {
+				if ( $bag instanceof Mcpwp_Raw_Parameter_Source ) {
+					$raw_sources = array( $bag );
+					if ( 'wp_batch' === $tool_name && isset( $canonical['operations'] ) && is_array( $canonical['operations'] ) ) {
+						foreach ( $canonical['operations'] as $index => $operation ) {
+							foreach ( Mcpwp_Theme_Builder::INTENT_PARAMETER_PATHS as $path ) {
+								$raw_sources[] = $bag->at( array_merge( $path, array( 'operations', $index, 'body' ) ) );
+							}
+						}
+					}
+					$documents = Mcpwp_Theme_Builder::raw_intent_documents( $raw_sources );
+					foreach ( $documents as $document ) {
+						$occurrences = $documents[ $document ];
+						if ( ! empty( $occurrences ) ) {
+							$evidence[] = array( 'raw_intent' => array_values( $occurrences ) );
+						}
+					}
+					continue;
+				}
+				$sources = array( $bag );
+				// wp_batch pins the WHOLE batch. Template calls inspect only
+				// their own top-level sources, never another operation's flags.
+				if ( 'wp_batch' === $tool_name && isset( $bag['operations'] ) && is_array( $bag['operations'] ) ) {
+					foreach ( $bag['operations'] as $operation ) {
+						if ( isset( $operation['body'] ) && is_array( $operation['body'] ) ) {
+							$sources[] = $operation['body'];
+						}
+					}
+				}
+				foreach ( $sources as $source ) {
+					$flags = array();
+					foreach ( $source as $key => $value ) {
+						if ( Mcpwp_Theme_Builder::is_dry_run_key( $key ) ) {
+							$flags[ $key ] = $value;
+						}
+					}
+					if ( ! empty( $flags ) ) {
+						$evidence[] = $flags;
+					}
+				}
+			}
+			if ( ! empty( $evidence ) ) {
+				$payload .= '|' . wp_json_encode( self::canonicalize( $evidence ) );
+			}
+		}
+		return hash( 'sha256', $payload );
+	}
+
+	/**
 	 * The arguments a tools/call for $tool_name will actually dispatch with,
 	 * once #831's deprecated-alias table and #911's forgiving-params remap
 	 * both run — the identical transform handle_tools_call() applies before
@@ -5880,6 +6051,10 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * call must not be a different price or a different idempotency identity
 	 * just because of which near-miss spelling reached the server (adversarial
 	 * review of PR #986, round 1, WARN-2 and its NIT).
+	 *
+	 * Records stored with a deprecated alias before canonical hashing was
+	 * introduced can return idempotency_conflict on retry until their TTL
+	 * expires; those older records are not rewritten (#994).
 	 *
 	 * Deliberately reuses validate_tool_arguments() itself, not a re-fetch of
 	 * the schema plus a second call to remap_near_miss_params() — one
@@ -5983,6 +6158,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 			}
 			$lines[] = '';
 		}
+
+		// #1073: from a tool to the full concept page in one fetch. No tool
+		// name is spelled out here, so a category-restricted key keeps the
+		// section (lines_naming_only_callable_tools() drops lines that name
+		// a tool it cannot call).
+		$lines[] = '## Documentation';
+		$lines[] = '';
+		$lines[] = 'Full docs: ' . Mcpwp_Guides::DOCS_BASE_URL . '. An agent-readable index of every page, in Markdown, is at ' . Mcpwp_Guides::DOCS_LLMS_URL . '. A guide returned by the guide tool carries a `docs_url` to its full page.';
+		$lines[] = '';
 
 		// --- WordPress primer ---
 		$lines[] = '## WordPress Concepts';
@@ -6303,6 +6487,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		}
 		if ( ! empty( $error['guide'] ) && is_string( $error['guide'] ) ) {
 			$lines[] = 'Next: ' . $error['guide'];
+		}
+		if ( isset( $error['resource_id'] ) ) {
+			$lines[] = 'Resource ID: ' . $error['resource_id'];
+		}
+		if ( ! empty( $error['partial_write'] ) ) {
+			$lines[] = 'Partial write: true';
 		}
 
 		return array(

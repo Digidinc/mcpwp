@@ -157,11 +157,15 @@ final class WpBatchToolTest extends TestCase {
 		$this->assertSame( $scope->invoke( $controller, 'wp_batch_update' ), $scope->invoke( $controller, 'wp_batch' ) );
 
 		// And the gate uses it: a write-scoped key is refused at the door.
-		$writer  = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'writer', array( 'write' ) );
-		$verdict = ( new Mcpwp_REST_MCP() )->verify_api_key( $this->request( 'wp_batch', array( 'operations' => $this->reads( 1 ) ), null, $writer['key'] ) );
+		$writer     = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'writer', array( 'write' ) );
+		$controller = new Mcpwp_REST_MCP();
+		$request    = $this->request( 'wp_batch', array( 'operations' => $this->reads( 1 ) ), null, $writer['key'] );
 
-		$this->assertInstanceOf( WP_Error::class, $verdict );
-		$this->assertSame( 'insufficient_scope', $verdict->get_error_code() );
+		$this->assertTrue( $controller->verify_api_key( $request ), 'The envelope admits the message; the call itself is refused.' );
+		$result = $controller->handle_mcp( $request )->get_data()['result'];
+
+		$this->assertTrue( $result['isError'] );
+		$this->assertSame( 'insufficient_scope', $result['structuredContent']['error']['code'] );
 	}
 
 	// ---------------------------------------------------------------

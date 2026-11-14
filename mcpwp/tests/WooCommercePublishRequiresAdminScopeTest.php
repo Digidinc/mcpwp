@@ -112,7 +112,13 @@ final class WooCommercePublishRequiresAdminScopeTest extends TestCase {
 		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
 	}
 
-	public function test_write_key_can_create_an_explicit_draft_product(): void {
+	/**
+	 * #1100 interim (was: a write key can create an explicit draft product).
+	 * Product creation is admin scope for every status: no per-post check
+	 * exists for a product that does not exist yet, and Editors lack
+	 * edit_products in wp-admin.
+	 */
+	public function test_write_key_cannot_create_even_a_draft_product(): void {
 		$controller = $this->controller();
 		$key        = $this->write_key( $controller );
 
@@ -126,7 +132,9 @@ final class WooCommercePublishRequiresAdminScopeTest extends TestCase {
 			array( 'X-API-Key' => $key )
 		);
 
-		$this->assertTrue( $controller->verify_api_key( $request ) );
+		$result = $controller->verify_api_key( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
 	}
 
 	public function test_admin_key_can_create_a_published_product(): void {

@@ -234,14 +234,35 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$this->assertSame( 'Original template body.', $GLOBALS['_mcpwp_test_posts'][ self::ARCHETYPE_ID ]->post_content );
 	}
 
-	public function test_update_post_product_allowed_for_woocommerce_key(): void {
+	/** #1103 round 2 (was: allowed for a woocommerce key): admin scope now, admin key still works. */
+	public function test_update_post_product_needs_admin_scope_even_for_a_woocommerce_key(): void {
 		$c       = $this->controller();
 		$created = $this->scoped_key( $c, array( 'content', 'woocommerce' ) );
+		$this->assert_needs_admin_scope( $c, $created['key'], 'PUT', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'title' => 'New Hoodie Name' ), 'write key' );
+		$this->assertSame( 'Woolly Hoodie', $GLOBALS['_mcpwp_test_posts'][ self::PRODUCT_ID ]->post_title );
+
+		$created = $this->admin_key( $c );
 		$request = $this->authed_request( $c, $created['key'], 'PUT', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'title' => 'New Hoodie Name' ) );
 
 		$result = $c->update_post( $request );
 		$this->assertNotInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'New Hoodie Name', $GLOBALS['_mcpwp_test_posts'][ self::PRODUCT_ID ]->post_title );
+	}
+
+	/**
+	 * #1103 round 2: on the generic post endpoints a non-admin key may write
+	 * only posts and pages; any other type needs admin scope, whatever
+	 * categories the key holds.
+	 */
+	private function assert_needs_admin_scope( Mcpwp_REST_Posts $c, string $key, string $method, string $route, array $params, string $context ): void {
+		$result = $c->check_permission( new WP_REST_Request( $method, $route, $params, array( 'X-API-Key' => $key ) ) );
+		$this->assertInstanceOf( WP_Error::class, $result, $context );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code(), $context );
+		$this->assertSame( 'admin', $result->get_error_data()['required_scope'], $context );
+	}
+
+	private function admin_key( Mcpwp_REST_Posts $c ): array {
+		return $c->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ) );
 	}
 
 	public function test_update_post_ordinary_post_unaffected_for_content_only_key(): void {
@@ -265,9 +286,14 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$this->assertArrayHasKey( self::PRODUCT_ID, $GLOBALS['_mcpwp_test_posts'], 'The product must still exist.' );
 	}
 
-	public function test_delete_post_product_allowed_for_woocommerce_key(): void {
+	/** #1103 round 2 (was: allowed for a woocommerce key): admin scope now, admin key still works. */
+	public function test_delete_post_product_needs_admin_scope_even_for_a_woocommerce_key(): void {
 		$c       = $this->controller();
 		$created = $this->scoped_key( $c, array( 'content', 'woocommerce' ) );
+		$this->assert_needs_admin_scope( $c, $created['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ), 'write key' );
+		$this->assertArrayHasKey( self::PRODUCT_ID, $GLOBALS['_mcpwp_test_posts'] );
+
+		$created = $this->admin_key( $c );
 		$request = $this->authed_request( $c, $created['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID ) );
 
 		$result = $c->delete_post( $request );
@@ -373,10 +399,16 @@ final class PostWriteCategoryGateTest extends TestCase {
 		$this->assertSame( count( $missing->get_data()['updated'] ), count( $gated->get_data()['updated'] ) );
 	}
 
-	public function test_bulk_create_posts_refuses_a_product_item_and_creates_the_rest(): void {
+	/**
+	 * #1103 round 2 (was: the product item is refused and the rest created):
+	 * a non-admin key naming a product anywhere in a bulk create is refused
+	 * whole, at the scope gate, before anything is written.
+	 */
+	public function test_bulk_create_posts_with_a_product_item_needs_admin_scope_and_creates_nothing(): void {
 		$c       = $this->controller();
 		$created = $this->scoped_key( $c, array( 'content' ) );
-		$request = $this->authed_request(
+		$before  = count( $GLOBALS['_mcpwp_test_posts'] );
+		$this->assert_needs_admin_scope(
 			$c,
 			$created['key'],
 			'POST',
@@ -386,15 +418,10 @@ final class PostWriteCategoryGateTest extends TestCase {
 					array( 'post_type' => 'product', 'title' => 'Sneaky New Product' ),
 					array( 'title' => 'A legit new post' ),
 				),
-			)
+			),
+			'bulk'
 		);
-
-		$resp = $c->bulk_create_posts( $request );
-		$this->assertInstanceOf( WP_REST_Response::class, $resp );
-		$data = $resp->get_data();
-
-		$this->assertCount( 1, $data['errors'], 'Exactly the product item must be refused.' );
-		$this->assertCount( 1, $data['created'], 'The ordinary post item must still be created.' );
+		$this->assertCount( $before, $GLOBALS['_mcpwp_test_posts'] );
 		foreach ( $GLOBALS['_mcpwp_test_posts'] as $post ) {
 			$this->assertNotSame( 'Sneaky New Product', $post->post_title, 'No product must have been created.' );
 		}
@@ -402,17 +429,20 @@ final class PostWriteCategoryGateTest extends TestCase {
 
 	// ── BLOCK-1: POST /posts (create) — this controller's own audit finding ─
 
+	/** #1103 round 2: refused at the scope gate now (it was refused later, by the handler's category check). */
 	public function test_create_post_of_type_product_denied_for_content_only_key(): void {
 		$c       = $this->controller();
 		$created = $this->scoped_key( $c, array( 'content' ) );
-		$request = $this->authed_request( $c, $created['key'], 'POST', '/mcpwp/v1/posts', array( 'post_type' => 'product', 'title' => 'Sneaky New Product' ) );
-
-		$this->assert_forbidden_category( $c->create_post( $request ), 'A content-only key must not be able to CREATE a product through the generic post endpoint.' );
+		$this->assert_needs_admin_scope( $c, $created['key'], 'POST', '/mcpwp/v1/posts', array( 'post_type' => 'product', 'title' => 'Sneaky New Product' ), 'A content-only key must not be able to CREATE a product through the generic post endpoint.' );
 	}
 
-	public function test_create_post_of_type_product_allowed_for_woocommerce_key(): void {
+	/** #1103 round 2 (was: allowed for a woocommerce key): admin scope now, admin key still works. */
+	public function test_create_post_of_type_product_needs_admin_scope_even_for_a_woocommerce_key(): void {
 		$c       = $this->controller();
 		$created = $this->scoped_key( $c, array( 'content', 'woocommerce' ) );
+		$this->assert_needs_admin_scope( $c, $created['key'], 'POST', '/mcpwp/v1/posts', array( 'post_type' => 'product', 'title' => 'Legit New Product' ), 'write key' );
+
+		$created = $this->admin_key( $c );
 		$request = $this->authed_request( $c, $created['key'], 'POST', '/mcpwp/v1/posts', array( 'post_type' => 'product', 'title' => 'Legit New Product' ) );
 
 		$result = $c->create_post( $request );
@@ -664,7 +694,7 @@ final class PostWriteCategoryGateTest extends TestCase {
 
 	public function test_deferred_delete_title_names_the_post_type(): void {
 		$c       = $this->controller();
-		$created = $this->scoped_key( $c, array( 'content', 'woocommerce' ) );
+		$created = $this->admin_key( $c ); // #1103 round 2: deleting a product via /posts needs admin scope.
 		$request = $this->authed_request( $c, $created['key'], 'DELETE', '/mcpwp/v1/posts/' . self::PRODUCT_ID, array( 'id' => self::PRODUCT_ID, 'force' => true ) );
 
 		$resp = $c->delete_post( $request );

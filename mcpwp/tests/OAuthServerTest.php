@@ -186,13 +186,31 @@ class Mcpwp_OAuth_Test_Controller extends Mcpwp_REST_OAuth {
 
 final class OAuthServerTest extends TestCase {
 
+	/**
+	 * A WordPress Editor's capabilities, as far as these tests care.  Since
+	 * PR-2 P0b an OAuth user must meet the minimum role (default Editor =
+	 * edit_others_posts) to consent, redeem a code or refresh; fixtures that
+	 * meant "an editor" by edit_posts alone now say so in full.
+	 */
+	const EDITOR_CAPS = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true );
+
+	/** @var array */
+	private $saved_users;
+
 	protected function setUp(): void {
+		// PR-2 P1-A: a grant needs a LIVE user (get_userdata), so every user
+		// these fixtures name exists.
+		$this->saved_users = $GLOBALS['mcpwp_test_users'];
+		foreach ( array( 1, 7, 10, 20, 30, 31, 32, 33, 34, 35, 36 ) as $mcpwp_uid ) {
+			$GLOBALS['mcpwp_test_users'][] = (object) array( 'ID' => $mcpwp_uid, 'roles' => array(), 'user_login' => 'user' . $mcpwp_uid );
+		}
 		$GLOBALS['mcpwp_test_options']         = array();
 		$GLOBALS['mcpwp_test_transients']      = array();
 		$GLOBALS['mcpwp_test_current_user']    = 0;
 		$GLOBALS['_mcpwp_test_redirected_to']  = null;
 		$GLOBALS['_mcpwp_test_valid_nonces']   = array();
-		$GLOBALS['mcpwp_test_user_caps']       = array();
+		// User 1 redeems every seeded code (seed_auth_code()): an Editor.
+		$GLOBALS['mcpwp_test_user_caps']       = array( 1 => self::EDITOR_CAPS );
 		$_GET                                  = array();
 
 		// Enable OAuth with a known client ID and redirect URI.
@@ -203,6 +221,10 @@ final class OAuthServerTest extends TestCase {
 			'oauth_token_ttl'          => 3600,
 			'oauth_redirect_uris'      => array( 'https://client.example.com/callback' ),
 		) );
+	}
+
+	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_users'] = $this->saved_users;
 	}
 
 	// ── Helpers ────────────────────────────────────────────────────────────
@@ -280,14 +302,14 @@ final class OAuthServerTest extends TestCase {
 
 	/** Scopes actually persisted for an issued access token. */
 	private function stored_access_token_scopes( string $access_token ): array {
-		$record = get_transient( $this->controller()->access_token_transient_key( $access_token ) );
+		$record = mcpwp_test_oauth_record( $access_token ); // #1101 PR-3b: the token table.
 		$this->assertIsArray( $record, 'Issued access token must have a stored record' );
 		return $record['scopes'];
 	}
 
 	/** Scopes actually persisted for an issued refresh token. */
 	private function stored_refresh_token_scopes( string $refresh_token ): array {
-		$record = get_transient( $this->controller()->get_oauth_refresh_token_transient_key( $refresh_token ) );
+		$record = mcpwp_test_oauth_record( $refresh_token ); // #1101 PR-3b: the token table.
 		$this->assertIsArray( $record, 'Issued refresh token must have a stored record' );
 		return $record['scopes'];
 	}
@@ -502,6 +524,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -529,6 +552,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => 'wrong_verifier_that_does_not_match',
@@ -550,6 +574,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -574,6 +599,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -593,6 +619,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://evil.example.com/steal', // mismatch
 			'code_verifier' => $seed['verifier'],
@@ -612,6 +639,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'   => 'authorization_code',
+			'client_id'    => 'test_client',
 			'code'         => $code,
 			'redirect_uri' => 'https://client.example.com/callback',
 			// code_verifier intentionally absent
@@ -661,9 +689,11 @@ final class OAuthServerTest extends TestCase {
 	}
 
 	/**
-	 * P0-A: An administrator (manage_options) requesting admin scope gets admin.
+	 * PR-2 D8 (was: "admin requesting admin gets admin"): OAuth never grants
+	 * admin, even to a manage_options user.  A requested admin is clamped to
+	 * write — not refused — so a client asking for every scope still connects.
 	 */
-	public function test_scope_escalation_admin_requesting_admin_gets_admin(): void {
+	public function test_scope_escalation_admin_requesting_admin_gets_write_never_admin(): void {
 		$GLOBALS['mcpwp_test_current_user'] = 1;
 		$GLOBALS['mcpwp_test_user_caps'][1] = array(
 			'edit_posts'     => true,
@@ -673,7 +703,7 @@ final class OAuthServerTest extends TestCase {
 		$ctrl   = $this->controller();
 		$result = $ctrl->clamp_scope_to_user_capability( 'admin' );
 
-		$this->assertContains( 'admin', $result, 'Admin must receive admin scope' );
+		$this->assertSame( array( 'read', 'write' ), $result, 'D8: an administrator is capped at write over OAuth' );
 	}
 
 	/**
@@ -743,6 +773,7 @@ final class OAuthServerTest extends TestCase {
 
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -785,26 +816,38 @@ final class OAuthServerTest extends TestCase {
 	}
 
 	/**
-	 * P0-C: A public client with NO client_id AND no client_secret must also
-	 * succeed — fully anonymous public PKCE exchange.
+	 * #1101 (was P0-C "fully anonymous public PKCE exchange succeeds"): a
+	 * code redeemed with no client_id is refused with invalid_request — the
+	 * client check is never skipped (RFC 6749 §4.1.3) — and the code is left
+	 * unconsumed, so the real client can still redeem it.
 	 */
-	public function test_public_client_no_client_id_no_secret_succeeds(): void {
+	public function test_code_redemption_without_client_id_is_invalid_request_and_leaves_the_code(): void {
 		$ctrl = $this->controller();
 		$seed = $this->seed_auth_code();
 
-		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
+		foreach ( array( null, '' ) as $missing ) {
+			$params = array(
+				'grant_type'    => 'authorization_code',
+				'code'          => $seed['code'],
+				'redirect_uri'  => 'https://client.example.com/callback',
+				'code_verifier' => $seed['verifier'],
+			);
+			if ( null !== $missing ) {
+				$params['client_id'] = $missing;
+			}
+			$response = $ctrl->handle_token( $this->make_request( 'POST', '/mcpwp/v1/oauth/token', $params ) );
+			$this->assertSame( 400, $response->get_status() );
+			$this->assertSame( 'invalid_request', $response->get_data()['error'] );
+		}
+
+		$params              = array(
 			'grant_type'    => 'authorization_code',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
-			// No client_id, no client_secret
-		) );
-
-		$response = $ctrl->handle_token( $request );
-
-		$this->assertSame( 200, $response->get_status(), 'Fully anonymous PKCE exchange must succeed' );
-		$data = $response->get_data();
-		$this->assertArrayHasKey( 'access_token', $data );
+			'client_id'     => 'test_client',
+		);
+		$this->assertSame( 200, $ctrl->handle_token( $this->make_request( 'POST', '/mcpwp/v1/oauth/token', $params ) )->get_status(), 'The code was not burned.' );
 	}
 
 	/**
@@ -850,6 +893,7 @@ final class OAuthServerTest extends TestCase {
 		// First: exchange auth code to get tokens.
 		$token_request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -865,6 +909,7 @@ final class OAuthServerTest extends TestCase {
 		// Second: use the refresh token — must succeed and give a new token.
 		$refresh_request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'refresh_token',
+			'client_id'     => 'test_client',
 			'refresh_token' => $refresh_token,
 		) );
 
@@ -892,6 +937,7 @@ final class OAuthServerTest extends TestCase {
 		// Get initial tokens.
 		$token_response = $ctrl->handle_token( $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'authorization_code',
+			'client_id'     => 'test_client',
 			'code'          => $seed['code'],
 			'redirect_uri'  => 'https://client.example.com/callback',
 			'code_verifier' => $seed['verifier'],
@@ -902,6 +948,7 @@ final class OAuthServerTest extends TestCase {
 		// First use: get new tokens.
 		$rotate_response = $ctrl->handle_token( $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'refresh_token',
+			'client_id'     => 'test_client',
 			'refresh_token' => $refresh_token,
 		) ) );
 
@@ -910,6 +957,7 @@ final class OAuthServerTest extends TestCase {
 		// Second use: new refresh token must succeed.
 		$second_response = $ctrl->handle_token( $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type'    => 'refresh_token',
+			'client_id'     => 'test_client',
 			'refresh_token' => $new_refresh_token,
 		) ) );
 
@@ -1043,6 +1091,7 @@ final class OAuthServerTest extends TestCase {
 		$ctrl    = $this->controller();
 		$request = $this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 			'grant_type' => 'authorization_code',
+			'client_id'  => 'test_client',
 		) );
 		$response = $ctrl->handle_token( $request );
 		$this->assertSame( 501, $response->get_status() );
@@ -1429,7 +1478,7 @@ final class OAuthServerTest extends TestCase {
 
 	public function test_consent_screen_hidden_scope_field_is_the_clamped_string_not_array(): void {
 		update_option( 'permalink_structure', '/%postname%/' );
-		$this->login_as( 7, array( 'edit_posts' => true ) ); // Editor: ceiling is write.
+		$this->login_as( 7, self::EDITOR_CAPS ); // Editor: ceiling is write.
 
 		$html = $this->render_consent( $this->controller(), 'read write admin' );
 
@@ -1447,7 +1496,7 @@ final class OAuthServerTest extends TestCase {
 
 	public function test_consent_screen_never_stringifies_an_array_scope(): void {
 		update_option( 'permalink_structure', '/%postname%/' );
-		$this->login_as( 7, array( 'edit_posts' => true ) );
+		$this->login_as( 7, self::EDITOR_CAPS );
 
 		// Defence in depth: even handed the raw string[] that
 		// clamp_scope_to_user_capability() returns, the renderer must emit real
@@ -1463,7 +1512,7 @@ final class OAuthServerTest extends TestCase {
 	}
 
 	public function test_consent_response_sends_clickjacking_and_cache_headers(): void {
-		$this->login_as( 7, array( 'edit_posts' => true ) );
+		$this->login_as( 7, self::EDITOR_CAPS );
 
 		$response = $this->controller()->handle_authorize_get(
 			$this->make_request( 'GET', '/mcpwp/v1/oauth/authorize', $this->base_authorize_params() )
@@ -1478,13 +1527,17 @@ final class OAuthServerTest extends TestCase {
 
 	public function test_consent_round_trip_preserves_clamped_scope_in_auth_code(): void {
 		update_option( 'permalink_structure', '/%postname%/' );
-		$this->login_as( 7, array( 'edit_posts' => true ) ); // Editor: ceiling is write.
+		$this->login_as( 7, self::EDITOR_CAPS ); // Editor: ceiling is write.
 
 		$ctrl = $this->controller();
 		$html = $this->render_consent( $ctrl, 'read write admin' );
 
-		$post_params           = $this->hidden_fields_from( $html );
-		$post_params['action'] = 'approve';
+		$post_params                = $this->hidden_fields_from( $html );
+		$post_params['action']      = 'approve';
+		// PR-2: write is a consent-screen checkbox, ticked by default.  A
+		// browser submits it only while ticked, and hidden_fields_from()
+		// collects hidden inputs only, so the tick is posted explicitly here.
+		$post_params['scope_write'] = '1';
 
 		$response = $ctrl->handle_authorize_post(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $post_params )
@@ -1510,27 +1563,33 @@ final class OAuthServerTest extends TestCase {
 		$this->assertSame( 'test_client', $stored['client_id'] );
 	}
 
-	public function test_consent_round_trip_clamps_admin_request_for_subscriber(): void {
-		$this->login_as( 10, array() ); // Subscriber: ceiling is read.
-
+	/**
+	 * PR-2 P0b (was: a Subscriber's consent round trip clamps to read). A
+	 * Subscriber is below the minimum role, so there is no consent screen to
+	 * round-trip: GET and POST both answer the plain refusal page, never a
+	 * redirect carrying a code.
+	 */
+	public function test_consent_refuses_a_subscriber_on_get_and_post(): void {
+		$this->login_as( 10, array() );
 		$ctrl = $this->controller();
-		$html = $this->render_consent( $ctrl, 'admin' );
 
-		$post_params           = $this->hidden_fields_from( $html );
-		$post_params['action'] = 'approve';
+		$params          = $this->base_authorize_params();
+		$params['scope'] = 'admin';
+		$get             = $ctrl->handle_authorize_get( $this->make_request( 'GET', '/mcpwp/v1/oauth/authorize', $params ) );
+		$this->assertSame( 403, $get->get_status() );
+		$this->assertStringContainsString( 'Your WordPress role can&#039;t connect AI apps on this site; ask an administrator.', (string) $get->get_data() );
+		$this->assertArrayNotHasKey( 'Location', $get->get_headers() );
 
-		$response = $ctrl->handle_authorize_post(
-			$this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $post_params )
-		);
-
-		parse_str( (string) wp_parse_url( $response->get_headers()['Location'], PHP_URL_QUERY ), $query );
-		$stored = get_transient( 'mcpwp_oauth_code_' . $query['code'] );
-
-		$this->assertSame( 'read', $stored['scope'] );
+		$post = $ctrl->handle_authorize_post( $this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', array_merge( $params, array( 'action' => 'approve', '_mcpwp_oauth_nonce' => 'test-nonce', 'scope_write' => '1' ) ) ) );
+		$this->assertSame( 403, $post->get_status() );
+		$this->assertArrayNotHasKey( 'Location', $post->get_headers() );
+		$this->assertSame( array(), array_filter( array_keys( $GLOBALS['mcpwp_test_transients'] ), function ( $k ) {
+			return 0 === strpos( $k, 'mcpwp_oauth_code_' );
+		} ) );
 	}
 
 	public function test_consent_deny_issues_no_code(): void {
-		$this->login_as( 7, array( 'edit_posts' => true ) );
+		$this->login_as( 7, self::EDITOR_CAPS );
 
 		$ctrl = $this->controller();
 		$html = $this->render_consent( $ctrl, 'read write' );
@@ -1563,7 +1622,7 @@ final class OAuthServerTest extends TestCase {
 	 * empty string — which handed out a code nobody consented to.
 	 */
 	public function test_consent_post_without_action_denies_and_issues_no_code(): void {
-		$this->login_as( 7, array( 'edit_posts' => true ) );
+		$this->login_as( 7, self::EDITOR_CAPS );
 
 		$ctrl = $this->controller();
 		$html = $this->render_consent( $ctrl, 'read write' );
@@ -1593,7 +1652,7 @@ final class OAuthServerTest extends TestCase {
 	 * Same fail-closed rule for an action value that is neither approve nor deny.
 	 */
 	public function test_consent_post_with_unknown_action_denies_and_issues_no_code(): void {
-		$this->login_as( 7, array( 'edit_posts' => true ) );
+		$this->login_as( 7, self::EDITOR_CAPS );
 
 		$ctrl = $this->controller();
 		$html = $this->render_consent( $ctrl, 'read write' );
@@ -1618,7 +1677,7 @@ final class OAuthServerTest extends TestCase {
 	}
 
 	public function test_consent_post_rejects_bad_nonce_and_issues_no_code(): void {
-		$this->login_as( 7, array( 'edit_posts' => true ) );
+		$this->login_as( 7, self::EDITOR_CAPS );
 
 		$params                       = $this->base_authorize_params();
 		$params['action']             = 'approve';
@@ -1631,6 +1690,33 @@ final class OAuthServerTest extends TestCase {
 		$this->assertSame( 400, $response->get_status() );
 		$this->assertSame( 'invalid_request', $response->get_data()['error'] );
 		$this->assertSame( array(), $GLOBALS['mcpwp_test_transients'] );
+	}
+
+	/**
+	 * The nonce must hold on its own.  The test above posts no consent
+	 * binding, so the binding check would refuse it even with the nonce
+	 * check gone (a mutation of the nonce check survived it).  Here the form
+	 * is exactly what the screen rendered — valid binding, write ticked —
+	 * and only the nonce is wrong.
+	 */
+	public function test_consent_post_with_a_valid_form_but_a_forged_nonce_mints_nothing(): void {
+		update_option( 'permalink_structure', '/%postname%/' );
+		$this->login_as( 7, self::EDITOR_CAPS );
+		$ctrl = $this->controller();
+
+		$fields                       = $this->hidden_fields_from( $this->render_consent( $ctrl, 'read write' ) );
+		$fields['action']             = 'approve';
+		$fields['scope_write']        = '1';
+		$fields['_mcpwp_oauth_nonce'] = 'forged-' . $fields['_mcpwp_oauth_nonce'];
+
+		$response = $ctrl->handle_authorize_post( $this->make_request( 'POST', '/mcpwp/v1/oauth/authorize', $fields ) );
+
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'Invalid or expired nonce.', $response->get_data()['error_description'] );
+		$this->assertArrayNotHasKey( 'Location', $response->get_headers() );
+		$this->assertSame( array(), array_filter( array_keys( $GLOBALS['mcpwp_test_transients'] ), function ( $k ) {
+			return 0 === strpos( $k, 'mcpwp_oauth_code_' );
+		} ) );
 	}
 
 	public function test_consent_post_requires_login(): void {
@@ -1712,12 +1798,13 @@ final class OAuthServerTest extends TestCase {
 	 * user_id 30 is an editor: edit_posts yes, manage_options no.
 	 */
 	public function test_refresh_token_reclamps_to_current_user_capability(): void {
-		$GLOBALS['mcpwp_test_user_caps'][30] = array( 'edit_posts' => true, 'manage_options' => false );
+		$GLOBALS['mcpwp_test_user_caps'][30] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => false );
 		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 30 );
 
 		$response = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		);
@@ -1730,12 +1817,13 @@ final class OAuthServerTest extends TestCase {
 
 	/** The clamp must ratchet: the NEW refresh token cannot carry the old, wider scope. */
 	public function test_refresh_token_rotation_does_not_carry_forward_stale_scope(): void {
-		$GLOBALS['mcpwp_test_user_caps'][31] = array( 'edit_posts' => true, 'manage_options' => false );
+		$GLOBALS['mcpwp_test_user_caps'][31] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => false );
 		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 31 );
 
 		$data = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		)->get_data();
@@ -1747,20 +1835,26 @@ final class OAuthServerTest extends TestCase {
 		);
 	}
 
-	/** Subscriber-equivalent: no caps at all clamps to read. */
-	public function test_refresh_token_reclamps_capless_user_to_read(): void {
+	/**
+	 * PR-2 P0b (was: a capless user's refresh clamps to read). A user demoted
+	 * below the minimum role cannot refresh at all: invalid_grant.
+	 */
+	public function test_refresh_token_for_a_demoted_user_is_invalid_grant(): void {
 		$GLOBALS['mcpwp_test_user_caps'][32] = array();
 		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 32 );
 
-		$data = $this->controller()->handle_token(
+		$response = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
-		)->get_data();
+		);
 
-		$this->assertSame( 'read', $data['scope'] );
-		$this->assertSame( array( 'read' ), $this->stored_access_token_scopes( $data['access_token'] ) );
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'invalid_grant', $response->get_data()['error'] );
+		$this->assertFalse( get_transient( $this->controller()->get_oauth_refresh_token_transient_key( $refresh ) ), 'The presented (pre-table) refresh token left its transient.' );
+		$this->assertNotNull( mcpwp_test_oauth_row( $refresh )['revoked_at'], 'And its row is revoked: burned either way.' );
 	}
 
 	/**
@@ -1768,17 +1862,20 @@ final class OAuthServerTest extends TestCase {
 	 * This test exists specifically to fail if someone reintroduces a
 	 * `if ( $user_id > 0 )` guard around the clamp.
 	 */
-	public function test_refresh_token_without_user_id_clamps_to_read(): void {
+	public function test_refresh_token_without_user_id_is_refused(): void {
+		// PR-2 P0b (was: clamps to read): a user-less refresh record has no
+		// one to act as, so it cannot meet the minimum role — invalid_grant.
 		$refresh = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 0 );
 
-		$data = $this->controller()->handle_token(
+		$response = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
-		)->get_data();
+		);
 
-		$this->assertSame( 'read', $data['scope'], 'A user-less refresh record must clamp to read' );
+		$this->assertSame( 'invalid_grant', $response->get_data()['error'], 'A user-less refresh record must not renew' );
 	}
 
 	// ── Refresh grant must not fail open on a junk scope list ─────────────
@@ -1793,12 +1890,13 @@ final class OAuthServerTest extends TestCase {
 	 * while the others pass, both halves of the refresh fix are really in place.
 	 */
 	public function test_refresh_token_with_unrecognised_scopes_does_not_fail_open(): void {
-		$GLOBALS['mcpwp_test_user_caps'][33] = array( 'edit_posts' => true, 'manage_options' => true );
+		$GLOBALS['mcpwp_test_user_caps'][33] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
 		$refresh                             = $this->seed_refresh_token( array( 'bogus' ), 33 );
 
 		$response = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		);
@@ -1809,19 +1907,25 @@ final class OAuthServerTest extends TestCase {
 		$this->assertSame( array( 'read' ), $this->stored_access_token_scopes( $data['access_token'] ) );
 	}
 
-	/** A legitimate admin refresh still works — the fix must not clamp everyone to read. */
-	public function test_refresh_token_admin_user_keeps_admin_scope(): void {
-		$GLOBALS['mcpwp_test_user_caps'][34] = array( 'edit_posts' => true, 'manage_options' => true );
+	/**
+	 * A legitimate admin refresh still works — the fix must not clamp everyone
+	 * to read.  PR-2 D8: it works at write; a pre-PR-2 admin refresh token is
+	 * narrowed to write on its next use (was: keeps admin).
+	 */
+	public function test_refresh_token_admin_user_keeps_write_scope_never_admin(): void {
+		$GLOBALS['mcpwp_test_user_caps'][34] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
 		$refresh                             = $this->seed_refresh_token( array( 'read', 'write', 'admin' ), 34 );
 
 		$data = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		)->get_data();
 
-		$this->assertSame( 'read write admin', $data['scope'] );
+		$this->assertSame( 'read write', $data['scope'] );
+		$this->assertSame( array( 'read', 'write' ), $this->stored_access_token_scopes( $data['access_token'] ) );
 	}
 
 	// ── Refresh grant scope-list shape handling ───────────────────────────
@@ -1837,24 +1941,28 @@ final class OAuthServerTest extends TestCase {
 	 * grant is exactly the admin scope it implies.
 	 */
 	public function test_refresh_token_filters_non_string_scope_members(): void {
-		$GLOBALS['mcpwp_test_user_caps'][35] = array( 'edit_posts' => true, 'manage_options' => true );
+		$GLOBALS['mcpwp_test_user_caps'][35] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
 		$refresh                             = $this->seed_refresh_token( array( array( 'admin' ), 5, null, 'admin' ), 35 );
 
 		$response = $this->controller()->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $refresh,
 			) )
 		);
 
 		$this->assertSame( 200, $response->get_status() );
 		$data = $response->get_data();
+		// PR-2 D8: the surviving "admin" is then capped at write by the
+		// clamp (was 'read write admin').  Still discriminating: had the
+		// filter dropped every member, the grant would be bare 'read'.
 		$this->assertSame(
-			'read write admin',
+			'read write',
 			$data['scope'],
-			'Only the string scope member "admin" may survive the is_string filter'
+			'Only the string scope member "admin" may survive the is_string filter (then capped at write, D8)'
 		);
-		$this->assertSame( array( 'read', 'write', 'admin' ), $this->stored_access_token_scopes( $data['access_token'] ) );
+		$this->assertSame( array( 'read', 'write' ), $this->stored_access_token_scopes( $data['access_token'] ) );
 	}
 
 	/**
@@ -1866,7 +1974,7 @@ final class OAuthServerTest extends TestCase {
 	 * The bound user is an administrator so the clamp is a no-op.
 	 */
 	public function test_refresh_token_accepts_a_plain_string_scope_list(): void {
-		$GLOBALS['mcpwp_test_user_caps'][36] = array( 'edit_posts' => true, 'manage_options' => true );
+		$GLOBALS['mcpwp_test_user_caps'][36] = array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true );
 
 		$ctrl  = $this->controller();
 		$token = 'mcpwp_rt_' . bin2hex( random_bytes( 16 ) );
@@ -1884,18 +1992,21 @@ final class OAuthServerTest extends TestCase {
 		$response = $ctrl->handle_token(
 			$this->make_request( 'POST', '/mcpwp/v1/oauth/token', array(
 				'grant_type'    => 'refresh_token',
+				'client_id'     => 'test_client',
 				'refresh_token' => $token,
 			) )
 		);
 
 		$this->assertSame( 200, $response->get_status() );
 		$data = $response->get_data();
+		// PR-2 D8: parsed to read+write+admin, then capped at write (was
+		// 'read write admin').  A failed parse would yield bare 'read'.
 		$this->assertSame(
-			'read write admin',
+			'read write',
 			$data['scope'],
-			'A bare-string stored scope list must parse to read+write+admin'
+			'A bare-string stored scope list must parse (then cap at write, D8)'
 		);
-		$this->assertSame( array( 'read', 'write', 'admin' ), $this->stored_access_token_scopes( $data['access_token'] ) );
+		$this->assertSame( array( 'read', 'write' ), $this->stored_access_token_scopes( $data['access_token'] ) );
 	}
 
 	// ── client_credentials server-side scope ceiling ──────────────────────

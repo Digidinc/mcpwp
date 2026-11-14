@@ -40,32 +40,16 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		// MENUS
 		// =====================================================================
 
-		// List all menus.
+		// Create menus. Free owns the list, locations, items and settings routes.
 		register_rest_route(
 			$this->namespace,
 			'/menus',
 			array(
 				array(
-					'methods'             => WP_REST_Server::READABLE,
-					'callback'            => array( $this, 'get_menus' ),
-					'permission_callback' => array( $this, 'check_permission' ),
-				),
-				array(
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_menu' ),
 					'permission_callback' => array( $this, 'check_permission' ),
 				),
-			)
-		);
-
-		// Menu locations.
-		register_rest_route(
-			$this->namespace,
-			'/menus/locations',
-			array(
-				'methods'             => WP_REST_Server::READABLE,
-				'callback'            => array( $this, 'get_menu_locations' ),
-				'permission_callback' => array( $this, 'check_permission' ),
 			)
 		);
 
@@ -82,61 +66,6 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 				array(
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_menu' ),
-					'permission_callback' => array( $this, 'check_permission' ),
-				),
-				array(
-					'methods'             => WP_REST_Server::DELETABLE,
-					'callback'            => array( $this, 'delete_menu' ),
-					'permission_callback' => array( $this, 'check_permission' ),
-				),
-			)
-		);
-
-		// Menu items.
-		register_rest_route(
-			$this->namespace,
-			'/menus/(?P<menu_id>[\d]+)/items',
-			array(
-				'methods'             => WP_REST_Server::CREATABLE,
-				'callback'            => array( $this, 'add_menu_item' ),
-				'permission_callback' => array( $this, 'check_permission' ),
-			)
-		);
-
-		// Single menu item.
-		register_rest_route(
-			$this->namespace,
-			'/menus/(?P<menu_id>[\d]+)/items/(?P<item_id>[\d]+)',
-			array(
-				array(
-					'methods'             => WP_REST_Server::EDITABLE,
-					'callback'            => array( $this, 'update_menu_item' ),
-					'permission_callback' => array( $this, 'check_permission' ),
-				),
-				array(
-					'methods'             => WP_REST_Server::DELETABLE,
-					'callback'            => array( $this, 'delete_menu_item' ),
-					'permission_callback' => array( $this, 'check_permission' ),
-				),
-			)
-		);
-
-		// =====================================================================
-		// SITE SETTINGS
-		// =====================================================================
-
-		register_rest_route(
-			$this->namespace,
-			'/settings',
-			array(
-				array(
-					'methods'             => WP_REST_Server::READABLE,
-					'callback'            => array( $this, 'get_settings' ),
-					'permission_callback' => array( $this, 'check_permission' ),
-				),
-				array(
-					'methods'             => WP_REST_Server::EDITABLE,
-					'callback'            => array( $this, 'update_settings' ),
 					'permission_callback' => array( $this, 'check_permission' ),
 				),
 			)
@@ -196,16 +125,6 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 
 		register_rest_route(
 			$this->namespace,
-			'/templates/page',
-			array(
-				'methods'             => WP_REST_Server::READABLE,
-				'callback'            => array( $this, 'get_page_templates' ),
-				'permission_callback' => array( $this, 'check_permission' ),
-			)
-		);
-
-		register_rest_route(
-			$this->namespace,
 			'/pages/(?P<id>[\d]+)/template',
 			array(
 				array(
@@ -214,7 +133,7 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 					'permission_callback' => array( $this, 'check_permission' ),
 				),
 				array(
-					'methods'             => WP_REST_Server::EDITABLE,
+					'methods'             => 'PUT,PATCH',
 					'callback'            => array( $this, 'set_page_template' ),
 					'permission_callback' => array( $this, 'check_permission' ),
 				),
@@ -366,7 +285,8 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 		$data = array(
 			'title'       => $request->get_param( 'title' ),
 			'url'         => $request->get_param( 'url' ),
-			'type'        => $request->get_param( 'type' ),
+			'type'        => array_key_exists( 'type', $request->get_params() ) ? $request->get_param( 'type' ) : 'custom',
+			'object'      => $request->get_param( 'object' ),
 			'object_id'   => $request->get_param( 'object_id' ),
 			'parent_id'   => $request->get_param( 'parent_id' ),
 			'position'    => $request->get_param( 'position' ),
@@ -375,7 +295,9 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 			'description' => $request->get_param( 'description' ),
 		);
 
-		$item_id = $this->manager->add_menu_item( $menu_id, $data );
+		$item_id = $this->manager->add_menu_item( $menu_id, $data, function ( $object_id ) use ( $request ) {
+			return $this->post_ref_item_visible( $request, $object_id );
+		} );
 
 		if ( is_wp_error( $item_id ) ) {
 			return $this->error_response_from_wp_error( $item_id );
@@ -406,6 +328,10 @@ class Mcpwp_REST_Site_Manager extends Mcpwp_REST_API {
 			'target'    => $request->get_param( 'target' ),
 			'classes'   => $request->get_param( 'classes' ),
 		);
+
+		if ( array_key_exists( 'type', $request->get_params() ) ) {
+			$data['type'] = $request->get_param( 'type' );
+		}
 
 		$result = $this->manager->update_menu_item( $menu_id, $item_id, $data );
 

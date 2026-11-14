@@ -82,7 +82,7 @@ Protocol round-trip is ~3 seconds. The "<10 min first tool call" claim holds: th
 
 | Test | HTTP status | Code | Message |
 |------|-------------|------|---------|
-| Bad key (`mcpwp_thisisafakebadkey123`) | **401** | `invalid_api_key` | "Invalid API key. Check for typos or whitespace. Keys start with mcpwp_." |
+| Bad key (`mcpwp_thisisafakebadkey123`) | **401** | `invalid_api_key` | "Invalid API key." with the hint "The key is not valid: it may be mistyped, revoked, or a retired first-activation key. Create a new key under MCPWP -> Setup." |
 | No key (header absent) | **401** | `missing_api_key` | "API key is required. Include your API key in the X-API-Key header or Authorization: Bearer header." |
 
 RESULT: PASS — both gate correctly at 401, error codes and hints are user-actionable.
@@ -113,9 +113,8 @@ Two equivalent methods:
 
 **Method A — `claude mcp add` (command line):**
 ```bash
-claude mcp add mcpwp \
-  --transport http \
-  --url "https://YOUR-SITE.com/wp-json/mcpwp/v1/mcp" \
+claude mcp add --transport http mcpwp \
+  "https://YOUR-SITE.com/wp-json/mcpwp/v1/mcp" \
   --header "X-API-Key: mcpwp_YOUR_KEY"
 ```
 
@@ -147,10 +146,10 @@ Claude Desktop supports two methods:
 WP Admin > MCPWP > Setup copies the URL. Then in Claude Desktop > Settings > Connectors > Add custom connector:
 
 - Name: `mcpwp-mysite` (or your site name)
-- Remote MCP server URL: `https://YOUR-SITE.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_YOUR_KEY`
-- Leave OAuth fields empty
+- Remote MCP server URL: `https://YOUR-SITE.com/wp-json/mcpwp/v1/mcp` (no key in the URL)
+- Leave the OAuth client fields empty: Claude opens your WordPress login to authorize, so no key is stored in the client
 
-Note: Custom Connector uses the `?api_key=` query param because the Desktop UI does not expose a custom headers field. The server accepts this equally (verified — see Authentication section in API.md).
+Note: this needs WordPress sign-in (OAuth) enabled in the plugin. A `?api_key=` query string also works but writes the key into server and proxy access logs, so prefer OAuth. If you want an API key, use Method B (the `mcp-remote` / `mcpwp` bridge sends it as a header).
 
 **Method B — `claude_desktop_config.json` (stdio proxy via npm, for users who prefer file config):**
 ```json

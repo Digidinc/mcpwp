@@ -690,9 +690,13 @@ final class PostTypeCategoryGateTest extends TestCase {
 		$this->assert_not_found( $result, '#1020 door: a content-only key must not set a product\'s featured image.' );
 	}
 
-	public function test_set_featured_image_on_product_allowed_for_woocommerce_key(): void {
+	/** #1103 round 2 (was: a woocommerce key): a product via the generic door needs admin scope. */
+	public function test_set_featured_image_on_product_allowed_for_an_admin_key(): void {
 		$controller = new Mcpwp_REST_Posts();
-		$created    = $this->scoped_key( $controller, array( 'content', 'woocommerce' ) );
+		$woo        = $this->scoped_key( $controller, array( 'content', 'woocommerce' ) );
+		$refused    = $controller->check_permission( new WP_REST_Request( 'POST', '/mcpwp/v1/posts/' . self::PRODUCT_ID . '/featured-image', array( 'id' => self::PRODUCT_ID, 'media_id' => self::MEDIA_ID ), array( 'X-API-Key' => $woo['key'] ) ) );
+		$this->assertSame( 'insufficient_scope', $refused->get_error_code() );
+		$created    = $controller->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ) );
 		$request    = $this->auth_request(
 			$controller,
 			$created['key'],
@@ -702,7 +706,7 @@ final class PostTypeCategoryGateTest extends TestCase {
 		);
 
 		$resp = $controller->set_featured_image( $request );
-		$this->assertInstanceOf( WP_REST_Response::class, $resp, 'A woocommerce-scoped key must still be able to set a product\'s featured image.' );
+		$this->assertInstanceOf( WP_REST_Response::class, $resp, 'An admin key must still be able to set a product\'s featured image.' );
 	}
 
 	// ── Already-safe doors named in the issue (evidence, not a behavior change) ─

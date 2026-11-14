@@ -155,7 +155,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 					),
 				),
 				array(
-					'methods'             => WP_REST_Server::EDITABLE,
+					'methods'             => 'PUT,PATCH',
 					'callback'            => array( $this, 'bulk_update_pages' ),
 					'permission_callback' => array( $this, 'check_permission' ),
 					'args'                => array(

@@ -77,6 +77,14 @@ final class GraphBuilderTest extends TestCase
             'post_modified_gmt' => '2026-01-01 00:00:00',
         ), $overrides));
         $GLOBALS['_mcpwp_test_posts'][ $id ] = $post;
+        // A published post or page has a pretty permalink on a real site;
+        // the bootstrap's plain ?p=ID default is the unpublished shape. A
+        // test that needs another structure declares its own afterwards.
+        if (in_array($post->post_type, array('post', 'page'), true) && 'publish' === $post->post_status && 0 === (int) $post->post_parent) {
+            $GLOBALS['mcpwp_test_permalinks'][ $id ] = 'https://example.com/' . $post->post_name . '/';
+        } else {
+            unset($GLOBALS['mcpwp_test_permalinks'][ $id ]);
+        }
         return $post;
     }
 
@@ -1135,6 +1143,145 @@ final class GraphBuilderTest extends TestCase
         ));
 
         $this->assertSame(array(630), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    // ---------------------------------------------------------------------
+    // #1000: single-segment links get the same permalink check as nested
+    // paths, and the url_to_postid() fallback is limited to covered types.
+    // ---------------------------------------------------------------------
+
+    public function test_single_segment_link_does_not_resolve_to_a_post_with_a_prefixed_permalink(): void
+    {
+        // Date-based permalinks: the post named "news" lives at
+        // /2026/09/news/, so /news/ is not its URL.
+        $this->post(640, array('post_type' => 'post', 'post_name' => 'news'));
+        $GLOBALS['mcpwp_test_permalinks'][640] = 'https://example.com/2026/09/news/';
+
+        $source = $this->post(641, array(
+            'post_content' => '<a href="https://example.com/news/">news</a>',
+        ));
+
+        $this->assertSame(array(), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_single_segment_link_resolves_when_it_is_the_posts_own_permalink(): void
+    {
+        $this->post(642, array('post_type' => 'post', 'post_name' => 'news'));
+        $GLOBALS['mcpwp_test_permalinks'][642] = 'https://example.com/news/';
+
+        $source = $this->post(643, array(
+            'post_content' => '<a href="https://example.com/news/">news</a>',
+        ));
+
+        $this->assertSame(array(642), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_single_segment_link_to_an_unpublished_post_keeps_its_slug_match(): void
+    {
+        // A draft has no pretty permalink (plain ?p=ID), so there is
+        // nothing to compare and the slug match stands, as it always has.
+        $this->post(644, array('post_type' => 'post', 'post_name' => 'coming-soon', 'post_status' => 'draft'));
+        $GLOBALS['mcpwp_test_permalinks'][644] = 'https://example.com/?p=644';
+
+        $source = $this->post(645, array(
+            'post_content' => '<a href="https://example.com/coming-soon/">soon</a>',
+        ));
+
+        $this->assertSame(array(644), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_single_segment_link_with_a_query_string_keeps_its_edge(): void
+    {
+        $this->post(660, array('post_type' => 'post', 'post_name' => 'news'));
+        $source = $this->post(661, array('post_content' => '<a href="https://example.com/news/?ref=nav">a</a>'));
+        $this->assertSame(array(660), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_single_segment_link_with_a_page_suffix_keeps_its_edge(): void
+    {
+        $this->post(662, array('post_type' => 'post', 'post_name' => 'guide'));
+        $source = $this->post(663, array('post_content' => '<a href="https://example.com/guide/page/2/">a</a>'));
+        $this->assertSame(array(662), Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_many_single_segment_links_with_query_strings_all_keep_their_edges(): void
+    {
+        // More links than the url_to_postid() fallback cap: none of them
+        // may depend on the fallback, so none may be lost to the cap.
+        $html     = '';
+        $expected = array();
+        for ($i = 0; $i < 30; $i++) {
+            $id = 700 + $i;
+            $this->post($id, array('post_type' => 'post', 'post_name' => 'perf-' . $i));
+            $html      .= '<a href="https://example.com/perf-' . $i . '/?ref=nav">l</a>';
+            $expected[] = $id;
+        }
+        $source = $this->post(740, array('post_content' => $html));
+
+        $got = Mcpwp_Graph_Builder::extract_post_link_targets($source);
+        sort($got);
+        $this->assertSame($expected, $got);
+    }
+
+    public function test_slug_coincidence_links_do_not_starve_a_nested_ambiguous_link_of_the_fallback_budget(): void
+    {
+        // Date-prefixed permalinks: 30 single-segment links share a slug
+        // with a post whose URL is dated (a mismatch, queued last), and one
+        // nested link is genuinely ambiguous (a post and a page share the
+        // slug). The nested link must still reach url_to_postid().
+        $html = '';
+        for ($i = 0; $i < 30; $i++) {
+            $id = 760 + $i;
+            $this->post($id, array('post_type' => 'post', 'post_name' => 'dated-' . $i));
+            $GLOBALS['mcpwp_test_permalinks'][ $id ] = 'https://example.com/2026/09/dated-' . $i . '/';
+            $html .= '<a href="https://example.com/dated-' . $i . '/">l</a>';
+        }
+        $this->post(800, array('post_type' => 'page', 'post_name' => 'events'));
+        $this->post(801, array('post_type' => 'post', 'post_name' => 'events'));
+        $GLOBALS['mcpwp_test_permalinks'][801] = 'https://example.com/2026/09/events/';
+        $GLOBALS['mcpwp_test_url_to_postid']   = array('https://example.com/2026/09/events/' => 801);
+        $html .= '<a href="https://example.com/2026/09/events/">events</a>';
+
+        $source = $this->post(802, array('post_content' => $html));
+
+        $this->assertContains(801, Mcpwp_Graph_Builder::extract_post_link_targets($source));
+    }
+
+    public function test_content_hash_carries_the_resolver_version_so_old_edges_are_re_resolved(): void
+    {
+        $post = $this->post(670, array('post_content' => 'x'));
+        $legacy = sha1(implode("\x1f", array('x', '', $post->post_title, 'publish', $post->post_name, '0', '', '', '0', '')));
+
+        $this->assertNotSame($legacy, Mcpwp_Graph_Builder::content_hash($post), 'The hash must change with the resolver version.');
+
+        // A node stored under the pre-version hash is queued by the reconcile scan.
+        Mcpwp_Graph_Builder::rebuild_post_node(670);
+        $GLOBALS['mcpwp_test_graph_nodes']['post:670']['content_hash'] = $legacy;
+        update_option(Mcpwp_Graph_Builder::RECONCILE_STATUS_OPTION, 'pending', false);
+        update_option(Mcpwp_Graph_Builder::RECONCILE_CURSOR_OPTION, 0, false);
+        $GLOBALS['mcpwp_test_graph_queue'] = array();
+        Mcpwp_Graph_Builder::run_worker_batch();
+        Mcpwp_Graph_Builder::on_shutdown();
+        $this->assertArrayHasKey('post:670', $GLOBALS['mcpwp_test_graph_queue']);
+    }
+
+    public function test_fallback_result_that_is_not_a_covered_type_creates_no_edge(): void
+    {
+        // Two covered rows share the slug (ambiguous -> fallback), and the
+        // fallback answers with an attachment, which has no graph node.
+        $this->post(650, array('post_type' => 'post', 'post_name' => 'gallery'));
+        $GLOBALS['mcpwp_test_public_post_types'][] = 'sm_team';
+        $this->post(651, array('post_type' => 'sm_team', 'post_name' => 'gallery'));
+        $this->post(652, array('post_type' => 'attachment', 'post_name' => 'gallery-img', 'post_status' => 'inherit'));
+        $GLOBALS['mcpwp_test_url_to_postid'] = array(
+            'https://example.com/gallery/' => 652,
+        );
+
+        $source = $this->post(653, array(
+            'post_content' => '<a href="https://example.com/gallery/">gallery</a>',
+        ));
+
+        $this->assertSame(array(), Mcpwp_Graph_Builder::extract_post_link_targets($source));
     }
 
     /**

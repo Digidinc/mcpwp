@@ -15,7 +15,7 @@
  * Plugin URI:        https://mcpwp.net/
  * Description:       Connect WordPress to AI assistants via the Model Context Protocol (MCP). Manage posts, pages, media, and Elementor through natural language.
  * x-release-please-start-version
- * Version:           3.14.10
+ * Version:           3.14.12
  * x-release-please-end
  * Requires at least: 6.1
  * Requires PHP:      7.4
@@ -71,7 +71,7 @@ if ( defined( 'MCPWP_VERSION' ) ) {
 /**
  * Plugin version.
  */
-define( 'MCPWP_VERSION', '3.14.10' ); // x-release-please-version
+define( 'MCPWP_VERSION', '3.14.12' ); // x-release-please-version
 
 /**
  * Whether custom MCP tool scope filtering is supported.
@@ -223,7 +223,15 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		return;
 	}
 
+	if ( ! get_option( 'mcpwp_custom_code_cache_lock_retired' ) ) {
+		delete_option( 'mcpwp_custom_code_cache_write_lock' );
+		update_option( 'mcpwp_custom_code_cache_lock_retired', 1, true );
+	}
+
 	// Load traits first
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-state.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-store.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-key-store-health.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-api-auth.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-sanitization.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-logging.php';
@@ -315,8 +323,13 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-workflows.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-feedback.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-custom-code-cache-entry.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-custom-code-conditions.php';
+	Mcpwp_Custom_Code_Conditions::initialize_legacy_cache_storage();
+	Mcpwp_Custom_Code_Conditions::register_hooks();
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption-migration.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-integration-manager.php';
+	Mcpwp_Integration_Manager::register_option_guard();
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-design-references.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-event-store.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-site-state.php';
@@ -330,6 +343,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-jev.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-jev-triage.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-action-log.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-woocommerce-audit.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-audit-store.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-seo-autofix.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-search-performance.php';
@@ -442,6 +456,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-integrations.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-cloudflare.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-figma.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-oauth-clients.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-oauth-revocation.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-oauth-token-store.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-route-capability-map.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-oauth.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/api/class-mcpwp-rest-broker.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-broker-auth.php';
@@ -463,6 +481,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-mupot-profile.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-integrations-admin.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-broker-admin.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-chatgpt-connector.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-oauth-local-admin.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-oauth-apps-admin.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/admin/class-mcpwp-tools-admin.php';
 
 	// Bridge migration: copy spai_* options + tables → mcpwp_* (idempotent).
@@ -533,6 +554,14 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 			}
 		}
 	);
+
+	// One-time (PR-2 D10): a stored oauth_enabled=false written by an older
+	// version's settings save is not an opt-out — remove it so the default
+	// (on) applies.  Runs here, before admin_init registers the settings
+	// sanitizer, which would otherwise put the stored false back.
+	if ( ! get_option( Mcpwp_OAuth_Local_Admin::MIGRATED_FLAG ) ) {
+		Mcpwp_OAuth_Local_Admin::migrate_default_on();
+	}
 
 	// One-time reset of the destructive-approval switch. An early build of
 	// the gate exposed destructive_requires_approval through the settings
@@ -698,6 +727,22 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		Mcpwp_OAuth_Well_Known::init();
 	}
 
+	// OAuth revocation epochs (#1101): a deleted user's tokens stay dead even
+	// if the database later reuses the user id.
+	if ( class_exists( 'Mcpwp_OAuth_Revocation' ) ) {
+		Mcpwp_OAuth_Revocation::init();
+	}
+
+	// OAuth token table (#1101 PR-3b): created/upgraded on its OWN schema
+	// option (Mcpwp_OAuth_Token_Store::SCHEMA_OPTION), not the
+	// mcpwp_db_version compare — an already-current site must still get
+	// it.  One autoloaded option read once current.  Expired rows go daily.
+	if ( class_exists( 'Mcpwp_OAuth_Token_Store' ) ) {
+		Mcpwp_OAuth_Token_Store::ensure_table();
+		add_action( Mcpwp_OAuth_Token_Store::CLEANUP_CRON_HOOK, array( 'Mcpwp_OAuth_Token_Store', 'cleanup' ) );
+		Mcpwp_OAuth_Token_Store::schedule_cleanup();
+	}
+
 	// Initialize white-label (shortcode, branding hooks, Elementor widget).
 	if ( class_exists( 'Mcpwp_White_Label' ) ) {
 		Mcpwp_White_Label::init();
@@ -801,7 +846,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 			Mcpwp_Approvals::LATE_IMPORT_CRON_HOOK,
 			static function () {
 				require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
-				Mcpwp_Activator::migrate_approvals_to_table();
+				// Migration / late import, then (only if it answered cleanly)
+				// the age-gated, fail-closed shrink of the pre-3.14.9
+				// recovery backup (#1053). Cron only, never a public request.
+				Mcpwp_Activator::run_approvals_late_import_tick();
 				// And retry any visibility categories still pending (#1042).
 				Mcpwp_Approvals::rederive_pending( 500 );
 			}
@@ -822,6 +870,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	if ( class_exists( 'Mcpwp_Update_Channel_Health' ) ) {
 		Mcpwp_Update_Channel_Health::init();
 	}
+
+	// An unreadable API key store refuses every key; say so to an admin (#1096).
+	Mcpwp_Key_Store_Health::init();
 
 	}
 }
@@ -851,6 +902,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 		foreach ( $sites as $blog_id ) {
 			switch_to_blog( $blog_id );
 			Mcpwp_Activator::activate();
+			Mcpwp_Activator::repair_custom_code_conditions( 0.0 );
 			Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 			try {
 				Mcpwp_Migrate::run();
@@ -869,6 +921,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 		}
 	} else {
 		Mcpwp_Activator::activate();
+		Mcpwp_Activator::repair_custom_code_conditions( 0.0 );
 		Mcpwp_Graph_Builder::on_upgrade_schedule_backfill();
 		try {
 			Mcpwp_Migrate::run();
@@ -952,3 +1005,6 @@ register_deactivation_hook( __FILE__, 'mcpwp_deactivate' );
 
 // Load plugin after WordPress is loaded
 add_action( 'plugins_loaded', 'mcpwp_load_plugin' );
+
+// The administrator-only cached diagnostic refresh also advances bounded
+// metadata/cache backfill. API reads and writes do not run maintenance scans.
