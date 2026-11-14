@@ -186,7 +186,9 @@ class Mcpwp_OAuth_Transport {
 		}
 		if ( '' !== (string) $cf_visitor ) {
 			$visitor = json_decode( (string) $cf_visitor, true );
-			if ( is_array( $visitor ) && isset( $visitor['scheme'] ) && 'https' === strtolower( (string) $visitor['scheme'] ) ) {
+			// A header value is anyone's to send: only a string scheme counts
+			// (an array or object here must never reach a string cast).
+			if ( is_array( $visitor ) && isset( $visitor['scheme'] ) && is_string( $visitor['scheme'] ) && 'https' === strtolower( $visitor['scheme'] ) ) {
 				return true;
 			}
 		}

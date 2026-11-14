@@ -6205,7 +6205,8 @@ trait Mcpwp_Api_Auth {
 
 	/**
 	 * Charge a refused plain-HTTP bearer to 'insecure:<ip>' and say whether
-	 * the address is over that budget. Headers are suppressed, as in
+	 * the address is over that budget. By design this bucket now limits only
+	 * the Site Health record writes; the token lookup and revocation always run. Headers are suppressed, as in
 	 * count_oauth_failure(), so the 403 is identical under and over budget.
 	 * An unmetered sub-request was charged by its outer request.
 	 *

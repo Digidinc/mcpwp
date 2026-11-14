@@ -433,6 +433,47 @@ final class OAuthTransportSecurityTest extends TestCase {
 		$this->assertSame( $proxy ? 'critical' : 'recommended', Mcpwp_OAuth_Transport::run_site_status_test()['status'] );
 	}
 
+	/** @return array<string, array{0: string}> */
+	public static function odd_cf_visitor_values(): array {
+		return array(
+			'array scheme'     => array( '{"scheme":["https"]}' ),
+			'object scheme'    => array( '{"scheme":{}}' ),
+			'nested scheme'    => array( '{"scheme":{"value":"https"}}' ),
+			'number scheme'    => array( '{"scheme":443}' ),
+			'bool scheme'      => array( '{"scheme":true}' ),
+			'null scheme'      => array( '{"scheme":null}' ),
+			'top-level array'  => array( '["https"]' ),
+			'top-level string' => array( '"https"' ),
+			'too deep'         => array( str_repeat( '[', 600 ) . str_repeat( ']', 600 ) ),
+		);
+	}
+
+	/**
+	 * @dataProvider odd_cf_visitor_values
+	 */
+	public function test_an_odd_cf_visitor_value_raises_no_warning_and_gets_the_http_wording( string $value ): void {
+		set_error_handler(
+			static function ( $severity, $message, $file, $line ) {
+				throw new ErrorException( $message, 0, $severity, $file, $line );
+			}
+		);
+		try {
+			$this->assertFalse( Mcpwp_OAuth_Transport::proxy_header_claims_https( '', $value, '' ) );
+			$token = $this->live_token();
+			$this->over_http();
+			$_SERVER['HTTP_CF_VISITOR'] = $value;
+			$error = $this->verify( $token );
+			$this->assert_https_required( $error );
+			$this->assertSame( Mcpwp_OAuth_Transport::message( false ), $error->get_error_message() );
+			$this->assertStringContainsString( 'http:// URL', $error->get_error_message() );
+			unset( $_SERVER['HTTP_CF_VISITOR'] );
+			$this->over_https();
+			$this->assertSame( 'recommended', Mcpwp_OAuth_Transport::run_site_status_test()['status'] );
+		} finally {
+			restore_error_handler();
+		}
+	}
+
 	public function test_an_https_site_without_proxy_headers_gets_the_plain_text(): void {
 		$this->over_http();
 		$error = $this->verify( 'mcpwp_at_' . str_repeat( 'n', 40 ) );
