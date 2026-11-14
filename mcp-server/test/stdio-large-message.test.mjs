@@ -60,6 +60,13 @@ function startProxy(port, home) {
   });
   let stderr = "";
   child.stderr.on("data", (d) => (stderr += d));
+  // After an over-cap line the transport closes, and the test then kills the
+  // child while that write may still be flushing. The resulting EPIPE is
+  // expected; unhandled, it surfaces as an uncaughtException after the test
+  // ended and fails the file under load. Any other stdin error stays visible.
+  child.stdin.on("error", (err) => {
+    if (err.code !== "EPIPE") stderr += `\n[test] stdin error: ${err.message}`;
+  });
   const waiters = new Map();
   let out = "";
   child.stdout.on("data", (d) => {
