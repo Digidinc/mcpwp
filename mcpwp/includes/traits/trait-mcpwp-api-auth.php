@@ -5073,8 +5073,7 @@ trait Mcpwp_Api_Auth {
 			return false;
 		}
 		// The stored value itself is never the key, whatever a verifier (or a
-		// `check_password` filter) would say about it: presenting a hash read
-		// from the database must not authenticate.
+		// `check_password` filter) would say about it.
 		if ( hash_equals( $hash, (string) $api_key ) ) {
 			return false;
 		}
@@ -5100,11 +5099,11 @@ trait Mcpwp_Api_Auth {
 	 * (`mcpwp_api_key`, `spai_api_key`): a hash, or on a pre-1.0.14 install the
 	 * key in plaintext.
 	 *
-	 * A stored VERIFIER (password hash of any algorithm, or MD5) is only ever
-	 * verified by hashing the presented key; it used to fall through to a
-	 * string compare too, so presenting the stored hash itself authenticated.
-	 * Only a value that is not a verifier is a plaintext key, compared in
-	 * constant time — and callers replace it with a hash on first use.
+	 * A stored VERIFIER (password hash of any algorithm, or MD5) is checked
+	 * solely by hashing/verifying the presented key; it is never string-compared
+	 * with the presented key. Only a value that is not a verifier is a
+	 * plaintext key, compared in constant time — and callers replace it with
+	 * a hash on first use.
 	 *
 	 * @param string $api_key    Incoming API key.
 	 * @param string $stored_key Stored API key value.

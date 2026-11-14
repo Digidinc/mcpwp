@@ -1,13 +1,11 @@
 <?php
 /**
- * A stored credential verifier must never authenticate as itself.
+ * Legacy credentials are verified against their hash.
  *
  * The legacy single-key options (`mcpwp_api_key`, `spai_api_key`) hold a
- * wp_hash_password() hash, or on very old installs the key in plaintext. The
- * match used to be "wp_check_password(), else hash_equals( stored, presented )"
- * — so presenting the stored HASH STRING itself matched the plaintext branch
- * and authenticated as admin. Anyone able to read one option row (a backup, an
- * export, a read-only SQL injection) had an admin key without cracking anything.
+ * wp_hash_password() hash, or on very old installs the key in plaintext. A
+ * stored verifier is checked only by hashing/verifying the presented key, and
+ * stored verifier values are never accepted as the credential itself.
  *
  * Covered here, for every hash shape WordPress has produced (`$wp$2y$`, `$2y$`,
  * `$P$`, `$argon2id$`, MD5) and every store and carrier (legacy option, spai

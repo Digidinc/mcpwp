@@ -133,10 +133,9 @@ class Mcpwp_Key_State {
 	 * than the key itself: a password hash or an MD5-era hash.
 	 *
 	 * A verifier is only ever checked by hashing the presented key, never by
-	 * comparing the presented string to it. Otherwise the stored value read
-	 * from the database (a backup, an export, a read-only SQL injection)
-	 * authenticates as the key it protects. Only a value that is neither is a
-	 * pre-hash plaintext key, compared as a string.
+	 * comparing the presented string to it, and a stored verifier value is
+	 * never accepted as the credential itself. Only a value that is neither is
+	 * a pre-hash plaintext key, compared as a string.
 	 *
 	 * @param mixed $value Stored value.
 	 * @return bool

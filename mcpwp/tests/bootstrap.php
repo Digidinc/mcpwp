@@ -1698,8 +1698,7 @@ function wp_hash_password($password)
  * Mirrors core's wp_check_password() (WordPress 6.8+), branch for branch:
  * <= 32 chars is MD5, `$wp` is the 6.8 sha384+bcrypt form, `$P$` is phpass,
  * anything else goes to password_verify(). There is NO plaintext fallback —
- * core has none, and a looser stub would hide a stored value authenticating
- * as itself.
+ * core has none, and the stub must verify exactly as core does.
  */
 function wp_check_password($password, $hash)
 {
