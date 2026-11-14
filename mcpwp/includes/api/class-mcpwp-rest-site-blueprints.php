@@ -14,6 +14,12 @@ if ( ! defined( 'ABSPATH' ) ) {
  */
 class Mcpwp_REST_Site_Blueprints extends Mcpwp_REST_API {
 
+	/**
+	 * Literal /site-blueprints/{segment} routes, which the id route can never
+	 * reach for GET.
+	 */
+	const RESERVED_IDS = array( 'extract' );
+
 	public function register_routes() {
 		// List all blueprints.
 		register_rest_route(
@@ -34,6 +40,24 @@ class Mcpwp_REST_Site_Blueprints extends Mcpwp_REST_API {
 					'callback'            => array( $this, 'create_blueprint' ),
 					'permission_callback' => array( $this, 'check_permission' ),
 				),
+			)
+		);
+
+		// Extract blueprint from current site.
+		//
+		// Registered BEFORE the (?P<id>...) route below on purpose (#1104):
+		// WordPress matches routes in registration order, and that id pattern
+		// also matches the literal "extract", so registering this second sent
+		// GET /site-blueprints/extract to get_blueprint() ("Blueprint
+		// 'extract' not found."). "extract" is therefore a reserved id — see
+		// create_blueprint().
+		register_rest_route(
+			$this->namespace,
+			'/site-blueprints/extract',
+			array(
+				'methods'             => WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'extract_blueprint' ),
+				'permission_callback' => array( $this, 'check_permission' ),
 			)
 		);
 
@@ -77,19 +101,6 @@ class Mcpwp_REST_Site_Blueprints extends Mcpwp_REST_API {
 			)
 		);
 
-		// Extract blueprint from current site.
-		register_rest_route(
-			$this->namespace,
-			'/site-blueprints/extract',
-			array(
-				'methods'             => WP_REST_Server::READABLE,
-				'callback'            => array( $this, 'extract_blueprint' ),
-				'permission_callback' => array( $this, 'check_permission' ),
-				'args'                => array(
-					'save' => array( 'type' => 'boolean', 'default' => false, 'description' => 'Save as a custom blueprint after extracting.' ),
-				),
-			)
-		);
 	}
 
 	public function list_blueprints( WP_REST_Request $request ): WP_REST_Response {
@@ -109,6 +120,12 @@ class Mcpwp_REST_Site_Blueprints extends Mcpwp_REST_API {
 		$body = $request->get_json_params();
 		if ( ! is_array( $body ) || empty( $body['name'] ) || empty( $body['pages'] ) ) {
 			return new WP_REST_Response( array( 'success' => false, 'message' => 'name and pages are required.' ), 400 );
+		}
+
+		// GET /site-blueprints/extract is its own route, so a blueprint stored
+		// under that id could be listed and deleted but never fetched (#1104).
+		if ( ! empty( $body['id'] ) && in_array( sanitize_key( $body['id'] ), self::RESERVED_IDS, true ) ) {
+			return new WP_REST_Response( array( 'success' => false, 'message' => "'" . sanitize_key( $body['id'] ) . "' is a reserved blueprint id." ), 400 );
 		}
 
 		$blueprint = Mcpwp_Site_Blueprints::save( $body );
@@ -181,13 +198,29 @@ class Mcpwp_REST_Site_Blueprints extends Mcpwp_REST_API {
 		return $this->success_response( $result, $status );
 	}
 
+	/**
+	 * Extract a blueprint from the current site. Read-only.
+	 *
+	 * Storing the result is POST /site-blueprints (wp_create_site_blueprint),
+	 * which is admin scope like every other blueprint write. This GET used to
+	 * take `save`, which would have made a read-scope route write
+	 * mcpwp_site_blueprints; a truthy `save` (any value rest_sanitize_boolean()
+	 * reads as true — 1, true, yes, on) is now refused for every caller rather
+	 * than silently ignored, so nobody believes a blueprint was stored.
+	 */
 	public function extract_blueprint( WP_REST_Request $request ): WP_REST_Response {
-		$blueprint = Mcpwp_Site_Blueprints::extract();
-
-		if ( $request->get_param( 'save' ) ) {
-			$blueprint = Mcpwp_Site_Blueprints::save( $blueprint );
+		$save = $request->get_param( 'save' );
+		if ( null !== $save && rest_sanitize_boolean( $save ) ) {
+			return new WP_REST_Response(
+				array(
+					'success' => false,
+					'code'    => 'save_not_supported',
+					'message' => 'Extracting is read-only. To store the extracted blueprint, send it to POST /site-blueprints (wp_create_site_blueprint).',
+				),
+				400
+			);
 		}
 
-		return new WP_REST_Response( array( 'blueprint' => $blueprint, 'saved' => (bool) $request->get_param( 'save' ) ), 200 );
+		return new WP_REST_Response( array( 'blueprint' => Mcpwp_Site_Blueprints::extract(), 'saved' => false ), 200 );
 	}
 }

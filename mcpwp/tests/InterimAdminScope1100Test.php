@@ -147,6 +147,54 @@ final class InterimAdminScope1100Test extends TestCase {
 		$this->assertSame( $scope, $probe->scope( new WP_REST_Request( $method, $route, $params ) ) );
 	}
 
+	/**
+	 * #1104: GET /site-blueprints/extract is reachable now, and stays read
+	 * scope because it is read-only. Storing a blueprint is POST
+	 * /site-blueprints (admin); a truthy `save` on the GET is refused by the
+	 * handler for EVERY principal — read key, admin key, OAuth user — so no
+	 * principal gets a blueprint write through a read-scope route.
+	 */
+	public function test_extract_blueprint_is_read_scope_and_never_stores(): void {
+		require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-site-blueprints.php';
+		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-blueprints.php';
+		$route      = '/mcpwp/v1/site-blueprints/extract';
+		$controller = new Mcpwp_REST_Site_Blueprints();
+
+		// An OAuth (user-run) Editor is unchanged: the route's capability-map
+		// row is still undecided, so it is admin-only for user-run principals
+		// with or without `save`.
+		foreach ( array( array(), array( 'save' => '1' ) ) as $params ) {
+			$refused = $this->check( 'GET', $route, $this->editor_token( array( 'read', 'write' ) ), $params );
+			$this->assertInstanceOf( WP_Error::class, $refused );
+			$this->assertSame( 'rest_forbidden_capability', $refused->get_error_code() );
+		}
+
+		$principals = array(
+			'read key'  => $this->key( array( 'read' ) ),
+			'admin key' => $this->key( array( 'read', 'write', 'admin' ), 'admin' ),
+		);
+		foreach ( $principals as $who => $headers ) {
+			$this->assertTrue( $this->check( 'GET', $route, $headers ), "$who: extracting is read scope" );
+			$this->assertSame( 200, $controller->extract_blueprint( new WP_REST_Request( 'GET', $route ) )->get_status(), "$who: plain extract" );
+
+			foreach ( array( true, '1', 'true', 'yes', 'on' ) as $save ) {
+				$params = array( 'save' => $save );
+				$this->assertSame( 'read', ( new class() extends Mcpwp_Api_Auth_Test_Harness {
+					public function scope( $request ) {
+						return $this->get_required_scope_for_request( $request );
+					}
+				} )->scope( new WP_REST_Request( 'GET', $route, $params ) ), "$who save=" . var_export( $save, true ) );
+				$response = $controller->extract_blueprint( new WP_REST_Request( 'GET', $route, $params, $headers ) );
+				$this->assertSame( 400, $response->get_status(), "$who save=" . var_export( $save, true ) );
+			}
+		}
+		$this->assertFalse( get_option( Mcpwp_Site_Blueprints::OPTION_KEY, false ), 'No principal stored a blueprint through the GET.' );
+
+		$this->assertSame( 'read', $this->harness()->required_scope_for_tool( 'wp_extract_site_blueprint' ) );
+		$this->assertSame( 'admin', $this->harness()->required_scope_for_tool( 'wp_create_site_blueprint' ), 'Storing stays admin.' );
+		$this->assert_admin_required( $this->check( 'POST', '/mcpwp/v1/site-blueprints', $this->key( array( 'read', 'write' ) ), array( 'name' => 'x' ) ), 'create blueprint with a write key' );
+	}
+
 	public function test_tools_resolve_to_admin_in_parity_with_their_routes(): void {
 		foreach ( array( 'wp_get_form_entries', 'wp_add_widget', 'wp_update_widget', 'wp_delete_widget', 'wp_move_widget', 'wp_reorder_widgets', 'wc_create_product', 'wp_flush_permalinks', 'wp_flush_cache', 'wp_set_site_context', 'wp_create_site_blueprint' ) as $tool ) {
 			$this->assertSame( 'admin', $this->harness()->required_scope_for_tool( $tool ), $tool );
