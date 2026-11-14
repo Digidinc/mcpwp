@@ -118,6 +118,46 @@ class Mcpwp_Key_State {
 	}
 
 	/**
+	 * Whether a stored value is an MD5-era verifier: 32 hex digits, the shape
+	 * wp_check_password() itself verifies as md5( $key ).
+	 *
+	 * @param mixed $value Stored value.
+	 * @return bool
+	 */
+	public static function is_md5_shaped( $value ) {
+		return is_string( $value ) && 1 === preg_match( '/\A[a-f0-9]{32}\z/i', $value );
+	}
+
+	/**
+	 * Whether a stored credential value is a VERIFIER (a hash of the key) rather
+	 * than the key itself: a password hash or an MD5-era hash.
+	 *
+	 * A verifier is only ever checked by hashing the presented key, never by
+	 * comparing the presented string to it, and a stored verifier value is
+	 * never accepted as the credential itself. Only a value that is neither is
+	 * a pre-hash plaintext key, compared as a string.
+	 *
+	 * @param mixed $value Stored value.
+	 * @return bool
+	 */
+	public static function is_stored_verifier( $value ) {
+		return self::is_password_hash_shaped( $value ) || self::is_md5_shaped( $value );
+	}
+
+	/**
+	 * The canonical form of a stored verifier, for carrying it into the key
+	 * store and for comparing two stored values: an MD5 hash in lower case
+	 * (hex case is not significant), anything else unchanged.
+	 *
+	 * @param mixed $value Stored value.
+	 * @return string
+	 */
+	public static function canonical_verifier( $value ) {
+		$value = (string) $value;
+		return self::is_md5_shaped( $value ) ? strtolower( $value ) : $value;
+	}
+
+	/**
 	 * Raw scoped records.
 	 *
 	 * @return array
