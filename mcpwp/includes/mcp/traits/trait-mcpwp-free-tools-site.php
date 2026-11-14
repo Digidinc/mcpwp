@@ -1525,7 +1525,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_fetch',
-			'Fetch a single post or page by its WordPress ID or public URL. Returns content, status, metadata, and edit URL.',
+			'Fetch a post or page by ID or URL. An archive URL of this site (category, tag, taxonomy, author, date, search, or the blog page, which returns its post list, not the empty page) returns the archive and a page of posts; a /wp-json/ URL returns the logged-out visitor\'s REST response.',
 			array(
 				'id' => array(
 					'type'        => 'number',
@@ -1533,7 +1533,7 @@ trait Mcpwp_Free_Tools_Site_Trait {
 				),
 				'url' => array(
 					'type'        => 'string',
-					'description' => 'Canonical URL (use id or url)',
+					'description' => 'This site\'s URL: a post, an archive, or a /wp-json/ route (use id or url)',
 				),
 				'post_type' => array(
 					'type'        => 'string',

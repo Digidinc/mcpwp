@@ -1,0 +1,379 @@
+<?php
+/**
+ * #989: a write's render_verified is a DOM assertion. After a clean save
+ * pipeline the writer renders the page and checks the HTML against the
+ * stored tree; a placeholder, an element that rendered nothing, or a failed
+ * render makes render_verified false with the reason in render_errors.
+ *
+ * Each test runs in a separate process because the fixture declares
+ * \Elementor\Plugin (#757).
+ *
+ * @package MCPWP
+ */
+
+use PHPUnit\Framework\TestCase;
+
+final class RenderVerifiedDomCheckTest extends TestCase {
+
+	private const PAGE_ID = 6262;
+
+	protected function setUp(): void {
+		$GLOBALS['_mcpwp_test_posts']    = array();
+		$GLOBALS['_mcpwp_test_meta']     = array();
+		$GLOBALS['mcpwp_test_options']   = array();
+		$GLOBALS['mcpwp_test_dom_seen']  = array();
+		$GLOBALS['mcpwp_test_dom_html']  = '';
+		$GLOBALS['mcpwp_test_dom_throw'] = false;
+		Mcpwp_Render_Inspector::reset_time_spent();
+	}
+
+	protected function tearDown(): void {
+		$path = sys_get_temp_dir() . '/mcpwp-test-uploads/elementor/css/post-' . self::PAGE_ID . '.css';
+		if ( file_exists( $path ) ) {
+			unlink( $path );
+		}
+		$GLOBALS['mcpwp_test_filters'] = array();
+	}
+
+	public static function page_id(): int {
+		return self::PAGE_ID;
+	}
+
+	private function install( array $post = array() ): Mcpwp_Elementor_Basic {
+		if ( ! defined( 'ELEMENTOR_VERSION' ) ) {
+			define( 'ELEMENTOR_VERSION', '4.2.4' );
+		}
+
+		require_once __DIR__ . '/fixtures/elementor-dom-check-doubles.php';
+
+		\Elementor\Plugin::$instance = new \Elementor\Plugin();
+
+		$GLOBALS['wpdb'] = new class() extends Mcpwp_Test_WPDB {
+			public function get_var( $query = '', $x = 0, $y = 0 ) {
+				if ( false !== strpos( (string) $query, '_elementor_data' ) ) {
+					return $GLOBALS['_mcpwp_test_meta'][ RenderVerifiedDomCheckTest::page_id() ]['_elementor_data'] ?? null;
+				}
+				return null;
+			}
+		};
+
+		$GLOBALS['_mcpwp_test_posts'][ self::PAGE_ID ] = new WP_Post(
+			array_merge(
+				array(
+					'ID'          => self::PAGE_ID,
+					'post_type'   => 'page',
+					'post_title'  => 'DOM check fixture',
+					'post_status' => 'publish',
+				),
+				$post
+			)
+		);
+
+		return new Mcpwp_Elementor_Basic();
+	}
+
+	private function tree( array $heading_settings ): array {
+		return array(
+			array(
+				'id'       => 'sec0001',
+				'elType'   => 'section',
+				'settings' => array(),
+				'elements' => array(
+					array(
+						'id'       => 'col0001',
+						'elType'   => 'column',
+						'settings' => array( '_column_size' => 100 ),
+						'elements' => array(
+							array(
+								'id'         => 'hed0001',
+								'elType'     => 'widget',
+								'widgetType' => 'heading',
+								'settings'   => $heading_settings,
+							),
+						),
+					),
+				),
+			),
+		);
+	}
+
+	private function rendered( string $heading_text, bool $with_heading = true ): string {
+		return '<div class="elementor" data-elementor-type="wp-page" data-elementor-id="' . self::PAGE_ID . '">'
+			. '<section data-id="sec0001"><div data-id="col0001">'
+			. ( $with_heading ? '<div class="elementor-widget-heading" data-id="hed0001"><h2>' . $heading_text . '</h2></div>' : '' )
+			. '</div></section></div>';
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_matching_render_is_verified(): void {
+		$basic                          = $this->install();
+		$GLOBALS['mcpwp_test_dom_html'] = $this->rendered( 'Welcome' );
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertNotInstanceOf( WP_Error::class, $result );
+		$this->assertTrue( $result['render_verified'], wp_json_encode( $result['render_errors'] ?? array() ) );
+		$this->assertSame( 'passed', $result['dom_check']['status'] );
+		$this->assertSame( 3, $result['dom_check']['elements_rendered'] );
+
+		// Rendered once, as the front end renders the body: the page is the
+		// current post, so dynamic tags resolve to it, and no CSS is inlined.
+		$this->assertSame( array( array( self::PAGE_ID, false, self::PAGE_ID ) ), $GLOBALS['mcpwp_test_dom_seen'] );
+		$this->assertArrayNotHasKey( 'post', $GLOBALS, 'The global post must be restored after the check.' );
+	}
+
+	/**
+	 * The #804 acceptance criterion: render_verified is false when a
+	 * placeholder string is present.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_placeholder_on_the_rendered_page_fails_render_verified(): void {
+		$basic                          = $this->install();
+		$GLOBALS['mcpwp_test_dom_html'] = $this->rendered( 'Add Your Heading Text Here' );
+
+		// Wrong control key: the heading's title is never set.
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'text' => 'Welcome' ) ) ) ) );
+
+		$this->assertNotInstanceOf( WP_Error::class, $result );
+		$this->assertTrue( $result['success'], 'The data was written; the caller must not be told to retry the write.' );
+		$this->assertFalse( $result['render_verified'] );
+		$this->assertSame( 'failed', $result['dom_check']['status'] );
+		$this->assertStringContainsString( 'Add Your Heading Text Here', implode( ' ', $result['render_errors'] ) );
+		$this->assertStringContainsString( 'does not match', $result['message'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_element_missing_from_the_render_fails_render_verified(): void {
+		$basic                          = $this->install();
+		$GLOBALS['mcpwp_test_dom_html'] = $this->rendered( '', false );
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertFalse( $result['render_verified'] );
+		$this->assertSame( array( 'hed0001' ), $result['dom_check']['missing_element_ids'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_render_that_throws_fails_render_verified_without_failing_the_write(): void {
+		$basic                           = $this->install();
+		$GLOBALS['mcpwp_test_dom_throw'] = true;
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertNotInstanceOf( WP_Error::class, $result );
+		$this->assertTrue( $result['success'] );
+		$this->assertFalse( $result['render_verified'] );
+		$this->assertSame( 'render_failed', $result['dom_check']['reason'] );
+		$this->assertStringContainsString( 'render exploded', implode( ' ', $result['render_errors'] ) );
+		$this->assertArrayNotHasKey( 'post', $GLOBALS, 'The global post must be restored even when the render throws.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_check_can_be_turned_off_and_says_so(): void {
+		$basic                          = $this->install();
+		$GLOBALS['mcpwp_test_dom_html'] = $this->rendered( 'Add Your Heading Text Here' );
+		add_filter(
+			'mcpwp_verify_rendered_dom',
+			static function () {
+				return false;
+			}
+		);
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'text' => 'Welcome' ) ) ) ) );
+
+		$this->assertTrue( $result['render_verified'] );
+		$this->assertSame( 'skipped', $result['dom_check']['status'] );
+		$this->assertSame( 'disabled', $result['dom_check']['reason'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dom_seen'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_password_protected_page_is_skipped_not_failed(): void {
+		$basic = $this->install( array( 'post_password' => 'secret' ) );
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertTrue( $result['render_verified'] );
+		$this->assertSame( 'password_protected', $result['dom_check']['reason'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dom_seen'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_theme_builder_template_is_skipped(): void {
+		$basic = $this->install( array( 'post_type' => 'elementor_library' ) );
+		update_post_meta( self::PAGE_ID, '_elementor_template_type', 'header' );
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertSame( 'template_document', $result['dom_check']['reason'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dom_seen'] );
+	}
+
+	/**
+	 * Surgical writes report through the same decorate_render_status().
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_edit_widget_is_checked_too(): void {
+		$basic = $this->install();
+		update_post_meta( self::PAGE_ID, '_elementor_data', wp_json_encode( $this->tree( array( 'title' => 'Old' ) ) ) );
+		update_post_meta( self::PAGE_ID, '_elementor_edit_mode', 'builder' );
+		$GLOBALS['mcpwp_test_dom_html'] = $this->rendered( 'Old' );
+
+		$result = $basic->edit_widget( self::PAGE_ID, 'hed0001', array( 'title' => 'New' ) );
+
+		$this->assertNotInstanceOf( WP_Error::class, $result );
+		$this->assertFalse( $result['render_verified'], 'The render still shows the old title.' );
+		$this->assertSame( 'hed0001', $result['dom_check']['text_mismatches'][0]['element_id'] );
+	}
+
+	/**
+	 * A /batch request does not render every page it writes.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_batch_operation_is_skipped(): void {
+		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
+		$basic                                    = $this->install();
+		$GLOBALS['mcpwp_test_dom_html']           = $this->rendered( 'Add Your Heading Text Here' );
+		Mcpwp_REST_Batch::$batch_operation_depth = 1;
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'text' => 'Welcome' ) ) ) ) );
+
+		$this->assertSame( 'batch_operation', $result['dom_check']['reason'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dom_seen'] );
+	}
+
+	/**
+	 * /mcp sets the sub-request flag around every tool call; that alone must
+	 * not skip the check, or no MCP write would ever be checked.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_single_mcp_tool_call_is_still_checked(): void {
+		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
+		$basic                                  = $this->install();
+		$GLOBALS['mcpwp_test_dom_html']         = $this->rendered( 'Welcome' );
+		Mcpwp_REST_Batch::$is_batch_sub_request = true;
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertSame( 'passed', $result['dom_check']['status'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_exhausted_time_budget_skips_the_check(): void {
+		$basic = $this->install();
+		add_filter(
+			'mcpwp_dom_check_time_budget',
+			static function () {
+				return 1.0;
+			}
+		);
+		// Earlier checks in this request spent the budget.
+		Mcpwp_Render_Inspector::add_time_spent( 1.5 );
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertTrue( $result['render_verified'] );
+		$this->assertSame( 'time_budget_exhausted', $result['dom_check']['reason'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dom_seen'] );
+	}
+
+	/**
+	 * The budget is checked before a render and charged after: the check
+	 * that crosses it still runs, and the next one is skipped.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_time_budget_is_checked_before_and_charged_after(): void {
+		$basic                          = $this->install();
+		$GLOBALS['mcpwp_test_dom_html'] = $this->rendered( 'Welcome' );
+		add_filter(
+			'mcpwp_dom_check_time_budget',
+			static function () {
+				return 1.0;
+			}
+		);
+		Mcpwp_Render_Inspector::add_time_spent( 0.999999 );
+
+		$first = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+		$this->assertSame( 'passed', $first['dom_check']['status'], 'Budget left when the check starts: it runs.' );
+
+		Mcpwp_Render_Inspector::add_time_spent( 0.01 );
+		$second = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+		$this->assertSame( 'time_budget_exhausted', $second['dom_check']['reason'] );
+		$this->assertCount( 1, $GLOBALS['mcpwp_test_dom_seen'] );
+	}
+
+	/**
+	 * Every limit reads 0 as "no limit"; mcpwp_verify_rendered_dom is the
+	 * off switch.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_zero_means_no_limit_for_every_limit_filter(): void {
+		$basic                          = $this->install();
+		$GLOBALS['mcpwp_test_dom_html'] = $this->rendered( 'Welcome' );
+		foreach ( array( 'mcpwp_dom_check_time_budget', 'mcpwp_dom_check_max_elements', 'mcpwp_dom_check_max_bytes' ) as $filter ) {
+			add_filter(
+				$filter,
+				static function () {
+					return 0;
+				}
+			);
+		}
+		Mcpwp_Render_Inspector::add_time_spent( 100.0 );
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertSame( 'passed', $result['dom_check']['status'], wp_json_encode( $result['dom_check'] ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_tree_over_the_element_limit_skips_the_check(): void {
+		$basic = $this->install();
+		add_filter(
+			'mcpwp_dom_check_max_elements',
+			static function () {
+				return 2;
+			}
+		);
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertSame( 'tree_too_large', $result['dom_check']['reason'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dom_seen'] );
+	}
+}

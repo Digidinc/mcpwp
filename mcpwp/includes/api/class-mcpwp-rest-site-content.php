@@ -357,6 +357,14 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			$type = 'any';
 		}
 
+		// This site's own REST URLs (#989): answered as a logged-out visitor.
+		if ( 0 === $id && 'any' === $type && class_exists( 'Mcpwp_Site_Url_Resolver' ) && self::is_same_site_origin( $url ) ) {
+			$rest = Mcpwp_Site_Url_Resolver::rest_route( $url );
+			if ( null !== $rest ) {
+				return $this->fetch_rest_url( $url, $rest['route'], $rest['query'] );
+			}
+		}
+
 		$post = null;
 		if ( $id > 0 ) {
 			$post = get_post( $id );
@@ -364,6 +372,45 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			$resolved_id = $this->resolve_content_id_from_url( $url, $type );
 			if ( $resolved_id > 0 ) {
 				$post = get_post( $resolved_id );
+			}
+
+			// This site's own archive URLs (#989): category, tag, custom
+			// taxonomy, author, date, post type archive, search, blog index.
+			// The posts page resolves to its (empty) page post above, so it
+			// is answered as the blog index it actually renders.
+			if ( 'any' === $type && class_exists( 'Mcpwp_Site_Url_Resolver' ) && self::is_same_site_origin( $url ) ) {
+				$posts_page = 'page' === get_option( 'show_on_front' ) ? (int) get_option( 'page_for_posts' ) : 0;
+
+				// Answered as the blog index only when the caller may read the
+				// posts page itself; otherwise the guards below answer it, the
+				// same way as any other page.
+				if ( $post instanceof WP_Post && $posts_page > 0 && (int) $post->ID === $posts_page
+					&& $this->requester_can_read_post( $post ) && null === $this->guard_post_type_category( $post, '' ) ) {
+					$request_path = Mcpwp_Site_Url_Resolver::request_path( $url );
+					$paged        = 1;
+					if ( null !== $request_path && preg_match( '#/page/([0-9]+)$#', '/' . $request_path['path'], $m ) ) {
+						$paged = max( 1, (int) $m[1] );
+					}
+
+					return $this->fetch_archive(
+						$url,
+						array(
+							'type'  => 'home',
+							'paged' => $paged,
+						)
+					);
+				}
+
+				if ( ! $post instanceof WP_Post ) {
+					$parsed  = Mcpwp_Site_Url_Resolver::query_vars( $url );
+					$archive = null === $parsed ? null : Mcpwp_Site_Url_Resolver::classify( $parsed['vars'], $parsed['path'] );
+
+					if ( is_array( $archive ) && 'front_page' === $archive['type'] ) {
+						$post = get_post( (int) $archive['post_id'] );
+					} elseif ( is_array( $archive ) ) {
+						return $this->fetch_archive( $url, $archive );
+					}
+				}
 			}
 		}
 
@@ -413,6 +460,578 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		return $this->success_response(
 			$this->format_content_item( $post, $include_content )
 		);
+	}
+
+	/**
+	 * Answer an archive URL of this site with the archive and one page of its
+	 * posts (#989).
+	 *
+	 * Lists only published posts without a password, the same as a logged-out
+	 * visitor sees, and leaves out any post this key's categories do not
+	 * cover. Mcpwp_Site_Url_Resolver::listing_args() builds the query from the
+	 * classified archive alone.
+	 *
+	 * @param string $url     Requested URL.
+	 * @param array  $archive Mcpwp_Site_Url_Resolver::classify() result.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	private function fetch_archive( $url, array $archive ) {
+		$per_page = (int) get_option( 'posts_per_page', 10 );
+		if ( $per_page < 1 ) {
+			$per_page = 10;
+		}
+
+		$args  = Mcpwp_Site_Url_Resolver::listing_args( $archive, $per_page );
+		$query = new WP_Query( $args );
+
+		$items = array();
+		foreach ( (array) $query->posts as $post ) {
+			if ( ! $post instanceof WP_Post || 'publish' !== $post->post_status || '' !== (string) $post->post_password
+				|| ! Mcpwp_Site_Url_Resolver::is_viewable_post_type( $post->post_type ) ) {
+				continue;
+			}
+			if ( ! $this->requester_can_read_post( $post ) || $this->guard_post_type_category( $post, '' ) ) {
+				continue;
+			}
+			$items[] = $this->format_content_item( $post, false );
+		}
+
+		$response = array(
+			'resource'     => 'archive',
+			'archive_type' => $archive['type'],
+			'url'          => $url,
+			'title'        => '',
+		);
+
+		switch ( $archive['type'] ) {
+			case 'category':
+			case 'tag':
+			case 'taxonomy':
+				$term                 = $archive['term'];
+				$response['title']    = isset( $term->name ) ? (string) $term->name : '';
+				$response['term']     = array(
+					'id'          => (int) $term->term_id,
+					'name'        => isset( $term->name ) ? (string) $term->name : '',
+					'slug'        => isset( $term->slug ) ? (string) $term->slug : '',
+					'taxonomy'    => (string) $archive['taxonomy'],
+					'description' => isset( $term->description ) ? (string) $term->description : '',
+					'parent'      => isset( $term->parent ) ? (int) $term->parent : 0,
+					'count'       => isset( $term->count ) ? (int) $term->count : null,
+				);
+				break;
+
+			case 'author':
+				// Only an author with published posts has a public archive;
+				// anything else reads as not found, so the door cannot be
+				// used to list user names by id.
+				$user = (int) $query->found_posts > 0 ? get_userdata( (int) $archive['author_id'] ) : false;
+				if ( ! is_object( $user ) ) {
+					return $this->error_response( 'not_found', __( 'Content not found.', 'mcpwp' ), 404 );
+				}
+				$response['title']  = isset( $user->display_name ) ? (string) $user->display_name : '';
+				$response['author'] = array(
+					'id'           => (int) $user->ID,
+					'display_name' => isset( $user->display_name ) ? (string) $user->display_name : '',
+					'slug'         => isset( $user->user_nicename ) ? (string) $user->user_nicename : '',
+				);
+				break;
+
+			case 'post_type_archive':
+				$type_object           = get_post_type_object( $archive['post_type'] );
+				$response['title']     = is_object( $type_object ) && isset( $type_object->labels->name ) ? (string) $type_object->labels->name : (string) $archive['post_type'];
+				$response['post_type'] = (string) $archive['post_type'];
+				break;
+
+			case 'date':
+				$response['date']  = $archive['date'];
+				$response['title'] = implode( '-', array_map( 'strval', array_values( $archive['date'] ) ) );
+				break;
+
+			case 'search':
+				$response['search'] = (string) $archive['search'];
+				$response['title']  = sprintf(
+					/* translators: %s: search terms */
+					__( 'Search results for "%s"', 'mcpwp' ),
+					(string) $archive['search']
+				);
+				break;
+
+			default:
+				$response['title'] = __( 'Latest posts', 'mcpwp' );
+
+				// The posts page is named only to a caller who may read it.
+				$posts_page_id = 'page' === get_option( 'show_on_front' ) ? (int) get_option( 'page_for_posts' ) : 0;
+				$posts_page    = $posts_page_id > 0 ? get_post( $posts_page_id ) : null;
+				if ( $posts_page instanceof WP_Post && $this->requester_can_read_post( $posts_page ) && null === $this->guard_post_type_category( $posts_page, '' ) ) {
+					$response['posts_page_id'] = (int) $posts_page->ID;
+					$response['title']         = get_the_title( $posts_page );
+					$response['edit_url']      = admin_url( 'post.php?post=' . (int) $posts_page->ID . '&action=edit' );
+				}
+		}
+
+		$response['items']      = $items;
+		$response['pagination'] = array(
+			'page'        => (int) $args['paged'],
+			'per_page'    => (int) $args['posts_per_page'],
+			'total'       => (int) $query->found_posts,
+			'total_pages' => (int) $query->max_num_pages,
+		);
+		$response['note']       = __( 'Archive of published posts, as a logged-out visitor sees it. Pass a post id or post URL to fetch one post with its content.', 'mcpwp' );
+
+		return $this->success_response( $response );
+	}
+
+	/**
+	 * Answer a REST URL of this site the way a logged-out visitor gets it
+	 * (#989).
+	 *
+	 * The request is dispatched internally with no current user and outside
+	 * any MCP/batch sub-request, so it gets exactly the public answer: this
+	 * key's own privileges never apply to it. This plugin's own namespace is
+	 * refused outright, because its routes authenticate by API key and are
+	 * reached through their own tools.
+	 *
+	 * @param string $url   Requested URL.
+	 * @param string $route REST route.
+	 * @param array  $query Query args from the URL.
+	 * @return WP_REST_Response|WP_Error
+	 */
+	private function fetch_rest_url( $url, $route, array $query ) {
+		if ( preg_match( '#^/mcpwp(?:/|$)#i', (string) $route ) ) {
+			return $this->error_response(
+				'own_namespace',
+				__( 'MCPWP\'s own REST routes need an API key, so wp_fetch does not request them as a visitor. Call the matching MCPWP tool instead.', 'mcpwp' ),
+				400
+			);
+		}
+
+		$category_denied = $this->rest_route_category_denial( (string) $route, $query );
+		if ( $category_denied ) {
+			return $category_denied;
+		}
+
+		foreach ( array( '_method', '_envelope', '_jsonp', 'rest_route' ) as $reserved ) {
+			unset( $query[ $reserved ] );
+		}
+
+		$request = new WP_REST_Request( 'GET', $route );
+		$request->set_query_params( $query );
+
+		$previous_user = get_current_user_id();
+		$batch_flag    = class_exists( 'Mcpwp_REST_Batch' ) ? Mcpwp_REST_Batch::$is_batch_sub_request : null;
+		$user_switched = false;
+		$visitor       = array(
+			'server'   => array(),
+			'globals'  => array(),
+			'wp'       => null,
+			'detached' => array(),
+		);
+
+		try {
+			// Every state change happens inside the try, and each records
+			// itself before it is made, so the finally restores exactly what
+			// changed even when one of them throws part-way (a throwing
+			// set_current_user callback, for one).
+			$this->enter_visitor_request( $url, (string) $route, $visitor );
+
+			if ( null !== $batch_flag ) {
+				Mcpwp_REST_Batch::$is_batch_sub_request = false;
+			}
+
+			$user_switched = true;
+			wp_set_current_user( 0 );
+
+			// rest_do_request() skips WP_REST_Server::serve_request(), which is
+			// where core applies rest_authentication_errors. A site that locks
+			// anonymous REST access (or one route of it) does so there, so it
+			// is applied here, as the visitor this request stands in for: no
+			// user, and the request URI, method and rest_route of the TARGET
+			// route (enter_visitor_request()), so a lock that decides by URL
+			// judges this route, not the outer /mcp request.
+			$auth_error = apply_filters( 'rest_authentication_errors', null );
+
+			$response = is_wp_error( $auth_error ) ? $auth_error : rest_do_request( $request );
+		} finally {
+			// Callback-free restores first, so a throwing set_current_user
+			// callback below cannot leave them changed.
+			$this->leave_visitor_request( $visitor );
+			if ( null !== $batch_flag ) {
+				Mcpwp_REST_Batch::$is_batch_sub_request = $batch_flag;
+			}
+			if ( $user_switched ) {
+				wp_set_current_user( $previous_user );
+			}
+		}
+
+		if ( isset( $auth_error ) && is_wp_error( $auth_error ) ) {
+			$error_data = $auth_error->get_error_data();
+			$status     = is_array( $error_data ) && isset( $error_data['status'] ) ? (int) $error_data['status'] : 401;
+
+			return $this->error_response(
+				'rest_visitor_refused',
+				sprintf(
+					/* translators: %s: the site's own refusal message */
+					__( 'This site refuses this REST request from a logged-out visitor: %s', 'mcpwp' ),
+					$auth_error->get_error_message()
+				),
+				$status >= 400 ? $status : 401
+			);
+		}
+
+		$status = 200;
+		$data   = null;
+		if ( $response instanceof WP_REST_Response ) {
+			$status = (int) $response->get_status();
+			$server = function_exists( 'rest_get_server' ) ? rest_get_server() : null;
+			$data   = ( is_object( $server ) && method_exists( $server, 'response_to_data' ) )
+				? $server->response_to_data( $response, false )
+				: $response->get_data();
+		} elseif ( is_wp_error( $response ) ) {
+			$error_data = $response->get_error_data();
+			$status     = is_array( $error_data ) && isset( $error_data['status'] ) ? (int) $error_data['status'] : 500;
+			$data       = array(
+				'code'    => $response->get_error_code(),
+				'message' => $response->get_error_message(),
+			);
+		}
+
+		$encoded = wp_json_encode( $data );
+		if ( is_string( $encoded ) && strlen( $encoded ) > self::RENDERED_HTML_MAX_BYTES_CEILING ) {
+			return $this->error_response(
+				'response_too_large',
+				sprintf(
+					/* translators: 1: response size in bytes, 2: limit in bytes */
+					__( 'The REST response is %1$d bytes, over the %2$d byte limit. Narrow it with per_page or _fields in the URL.', 'mcpwp' ),
+					strlen( $encoded ),
+					self::RENDERED_HTML_MAX_BYTES_CEILING
+				),
+				413
+			);
+		}
+
+		$result = array(
+			'resource'    => 'rest',
+			'url'         => $url,
+			'route'       => $route,
+			'status_code' => $status,
+			'data'        => $data,
+			'note'        => __( 'Requested internally as a logged-out visitor, so this is the public response, whatever this API key may do.', 'mcpwp' ),
+		);
+
+		if ( $response instanceof WP_REST_Response && method_exists( $response, 'get_headers' ) ) {
+			$headers = (array) $response->get_headers();
+			foreach ( array( 'X-WP-Total' => 'total', 'X-WP-TotalPages' => 'total_pages' ) as $header => $key ) {
+				if ( isset( $headers[ $header ] ) ) {
+					$result[ $key ] = (int) $headers[ $header ];
+				}
+			}
+		}
+
+		return $this->success_response( $result );
+	}
+
+	/**
+	 * Make the request look like the visitor's request for $url while the
+	 * REST authentication filters and the dispatch run.
+	 *
+	 * Sets REQUEST_URI (path and query of the target URL), REQUEST_METHOD
+	 * (GET), $_GET and $_REQUEST (the target URL's query: a visitor's GET
+	 * carries no body) and the global WP query var rest_route, and detaches
+	 * core's two credential checks: rest_cookie_check_errors re-verifies the
+	 * OUTER request's nonce against user 0 and always fails a browser
+	 * session, and rest_application_password_check_errors answers true for an
+	 * outer request that used an application password, which would end the
+	 * filter chain before a site's own lock runs. Neither credential belongs
+	 * to the visitor.
+	 *
+	 * Each change is recorded in $state BEFORE it is made, so
+	 * leave_visitor_request() restores exactly what changed, even if this
+	 * stops part-way.
+	 *
+	 * @param string $url   Target URL.
+	 * @param string $route Target REST route.
+	 * @param array  $state Saved state, filled in by reference.
+	 */
+	private function enter_visitor_request( $url, $route, array &$state ) {
+		$parts = wp_parse_url( (string) $url );
+		$uri   = ( is_array( $parts ) && isset( $parts['path'] ) ) ? (string) $parts['path'] : '/';
+		$query = array();
+		if ( is_array( $parts ) && isset( $parts['query'] ) && '' !== $parts['query'] ) {
+			$uri .= '?' . $parts['query'];
+			parse_str( (string) $parts['query'], $query );
+		}
+
+		foreach ( array( 'REQUEST_URI' => $uri, 'REQUEST_METHOD' => 'GET' ) as $key => $value ) {
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- saved verbatim, restored verbatim.
+			$state['server'][ $key ] = array_key_exists( $key, $_SERVER ) ? array( $_SERVER[ $key ] ) : null;
+			$_SERVER[ $key ]         = $value;
+		}
+
+		// phpcs:disable WordPress.Security.NonceVerification -- saved and restored verbatim, never read here.
+		$state['globals']['get']     = array( $_GET );
+		$_GET                        = is_array( $query ) ? $query : array();
+		$state['globals']['request'] = array( $_REQUEST );
+		$_REQUEST                    = $_GET;
+		// phpcs:enable
+
+		if ( isset( $GLOBALS['wp'] ) && is_object( $GLOBALS['wp'] ) ) {
+			$had_vars    = isset( $GLOBALS['wp']->query_vars ) && is_array( $GLOBALS['wp']->query_vars );
+			$vars        = $had_vars ? $GLOBALS['wp']->query_vars : array();
+			$state['wp'] = array(
+				'had_vars' => $had_vars,
+				'vars'     => $vars,
+			);
+
+			$vars['rest_route']        = (string) $route;
+			$GLOBALS['wp']->query_vars = $vars;
+		}
+
+		// Detaching and re-adding a callback moves it to the END of its
+		// priority slot: after leave_visitor_request(), another callback at
+		// priority 90 or 100 that used to run after core's check now runs
+		// before it. Both core checks pass an earlier error through
+		// unchanged, so only a same-priority callback that depends on running
+		// after them can see a difference.
+		foreach ( array( 'rest_cookie_check_errors', 'rest_application_password_check_errors' ) as $callback ) {
+			$priority = has_filter( 'rest_authentication_errors', $callback );
+			if ( false !== $priority ) {
+				$state['detached'][ $callback ] = (int) $priority;
+				remove_filter( 'rest_authentication_errors', $callback, (int) $priority );
+			}
+		}
+	}
+
+	/**
+	 * Undo enter_visitor_request(), for whatever part of it ran.
+	 *
+	 * @param array $state Saved state.
+	 */
+	private function leave_visitor_request( array $state ) {
+		foreach ( $state['server'] as $key => $value ) {
+			if ( null === $value ) {
+				unset( $_SERVER[ $key ] );
+			} else {
+				$_SERVER[ $key ] = $value[0];
+			}
+		}
+
+		if ( isset( $state['globals']['get'] ) ) {
+			$_GET = $state['globals']['get'][0];
+		}
+		if ( isset( $state['globals']['request'] ) ) {
+			$_REQUEST = $state['globals']['request'][0];
+		}
+
+		if ( is_array( $state['wp'] ) && isset( $GLOBALS['wp'] ) && is_object( $GLOBALS['wp'] ) ) {
+			if ( $state['wp']['had_vars'] ) {
+				$GLOBALS['wp']->query_vars = $state['wp']['vars'];
+			} else {
+				unset( $GLOBALS['wp']->query_vars );
+			}
+		}
+
+		foreach ( $state['detached'] as $callback => $priority ) {
+			if ( false === has_filter( 'rest_authentication_errors', $callback ) ) {
+				add_filter( 'rest_authentication_errors', $callback, $priority );
+			}
+		}
+	}
+
+	/**
+	 * Refuse a REST route that returns something this key's categories do
+	 * not cover (#1020 rule, applied to the REST door of wp_fetch).
+	 *
+	 * @param string $route REST route.
+	 * @param array  $query Query args of the request.
+	 * @return WP_Error|null
+	 */
+	private function rest_route_category_denial( $route, array $query = array() ) {
+		foreach ( $this->categories_for_rest_route( $route, $query ) as $category ) {
+			if ( $this->caller_may_read_category( $category ) ) {
+				continue;
+			}
+
+			return new WP_Error(
+				'forbidden_category',
+				sprintf(
+					/* translators: 1: REST route, 2: tool category */
+					__( 'The REST route %1$s returns data in the "%2$s" tool category, which this API key does not have access to, or which has been disabled by the site administrator.', 'mcpwp' ),
+					(string) $route,
+					$category
+				),
+				array(
+					'status'   => 403,
+					'category' => $category,
+				)
+			);
+		}
+
+		return null;
+	}
+
+	/**
+	 * Tool categories a REST route's response belongs to. Fails closed: a
+	 * route this map does not know needs the `admin` category.
+	 *
+	 * - `/` and the `wp/v2` index list routes only: `content`.
+	 * - `wp/v2`: a post type or taxonomy route by its post type; `search`,
+	 *   and `comments` without `post=`, span every public type;
+	 *   `comments?post=` by that post's type; `users` is `admin`, the same
+	 *   category MCPWP's own /users needs; `types`, `taxonomies` and
+	 *   `statuses` are `content`; any other `wp/v2` route is `admin`.
+	 * - `oembed/1.0/embed?url=`: by the type of the post it embeds; `admin`
+	 *   when the URL does not resolve to a post on this site.
+	 * - `wc/*`, `wc-*`: WooCommerce. `elementor*`: Elementor templates.
+	 * - A post type or taxonomy under its own rest_namespace: its post type.
+	 * - Any other namespace: `admin`.
+	 *
+	 * @param string $route REST route.
+	 * @param array  $query Query args of the request.
+	 * @return string[]
+	 */
+	private function categories_for_rest_route( $route, array $query = array() ) {
+		$route    = strtolower( '/' . trim( (string) $route, '/' ) );
+		$segments = array_values( array_filter( explode( '/', trim( $route, '/' ) ), 'strlen' ) );
+
+		$for_types = static function ( array $types ) {
+			$categories = array();
+			foreach ( $types as $type ) {
+				$categories[] = self::category_for_post_type( (string) $type );
+			}
+
+			return array_values( array_unique( $categories ) );
+		};
+
+		$public_types = static function () {
+			$types = array();
+			foreach ( (array) get_post_types( array( 'public' => true ) ) as $type ) {
+				$types[] = is_object( $type ) ? (string) $type->name : (string) $type;
+			}
+
+			return $types;
+		};
+
+		if ( empty( $segments ) ) {
+			return array( 'content' );
+		}
+
+		if ( preg_match( '#^/wc(?:/|-|$)#', $route ) ) {
+			return $for_types( array( 'product' ) );
+		}
+
+		if ( preg_match( '#^/elementor(?:-pro)?(?:/|$)#', $route ) ) {
+			return $for_types( array( 'elementor_library' ) );
+		}
+
+		$namespace = isset( $segments[1] ) ? $segments[0] . '/' . $segments[1] : $segments[0];
+		$base      = isset( $segments[2] ) ? $segments[2] : '';
+
+		if ( 'oembed/1.0' === $namespace ) {
+			if ( 'embed' !== $base ) {
+				return array( 'admin' );
+			}
+			$target = ( isset( $query['url'] ) && is_string( $query['url'] ) && function_exists( 'url_to_postid' ) )
+				? get_post( absint( url_to_postid( $query['url'] ) ) )
+				: null;
+
+			// An embed URL that does not resolve to a post here may still be
+			// answered (an oembed_request_post_id filter, another site of a
+			// network), so what it returns is unknown: admin.
+			return $target instanceof WP_Post ? $for_types( array( $target->post_type ) ) : array( 'admin' );
+		}
+
+		if ( 'wp/v2' === $namespace ) {
+			switch ( $base ) {
+				case '':
+				case 'types':
+				case 'taxonomies':
+				case 'statuses':
+					return array( 'content' );
+				case 'users':
+					return array( 'admin' );
+				case 'search':
+					return $for_types( $public_types() );
+				case 'comments':
+					$raw      = isset( $query['post'] ) ? $query['post'] : array();
+					$post_ids = array_filter( array_map( 'absint', is_array( $raw ) ? $raw : preg_split( '/[,\s]+/', (string) $raw ) ) );
+					if ( empty( $post_ids ) ) {
+						return $for_types( $public_types() );
+					}
+					$types = array();
+					foreach ( $post_ids as $post_id ) {
+						$post    = get_post( $post_id );
+						$types[] = $post instanceof WP_Post ? $post->post_type : 'post';
+					}
+
+					return $for_types( $types );
+			}
+		}
+
+		$types = $this->post_types_for_rest_route( $route );
+		if ( ! empty( $types ) ) {
+			return $for_types( $types );
+		}
+
+		return array( 'admin' );
+	}
+
+	/**
+	 * Post types whose posts a REST route returns, matched by each post
+	 * type's and taxonomy's own rest_namespace/rest_base.
+	 *
+	 * @param string $route REST route.
+	 * @return string[]
+	 */
+	private function post_types_for_rest_route( $route ) {
+		$route = strtolower( '/' . trim( (string) $route, '/' ) );
+		$types = array();
+
+		$core_bases = array(
+			'post'       => 'posts',
+			'page'       => 'pages',
+			'attachment' => 'media',
+		);
+
+		$matches = static function ( $namespace, $base ) use ( $route ) {
+			$prefix = strtolower( '/' . trim( (string) $namespace, '/' ) . '/' . trim( (string) $base, '/' ) );
+
+			return $route === $prefix || 0 === strpos( $route, $prefix . '/' );
+		};
+
+		foreach ( (array) get_post_types( array(), 'objects' ) as $type ) {
+			$object = is_object( $type ) ? $type : get_post_type_object( (string) $type );
+			if ( ! is_object( $object ) || empty( $object->name ) ) {
+				continue;
+			}
+			$name      = (string) $object->name;
+			$namespace = ! empty( $object->rest_namespace ) ? $object->rest_namespace : 'wp/v2';
+			$base      = ! empty( $object->rest_base ) ? $object->rest_base : ( $core_bases[ $name ] ?? $name );
+			if ( $matches( $namespace, $base ) ) {
+				$types[] = $name;
+			}
+		}
+
+		if ( function_exists( 'get_taxonomies' ) ) {
+			foreach ( (array) get_taxonomies( array(), 'objects' ) as $taxonomy ) {
+				if ( ! is_object( $taxonomy ) || empty( $taxonomy->name ) ) {
+					continue;
+				}
+				$namespace = ! empty( $taxonomy->rest_namespace ) ? $taxonomy->rest_namespace : 'wp/v2';
+				$base      = ! empty( $taxonomy->rest_base ) ? $taxonomy->rest_base : (string) $taxonomy->name;
+				if ( 'category' === $taxonomy->name && empty( $taxonomy->rest_base ) ) {
+					$base = 'categories';
+				} elseif ( 'post_tag' === $taxonomy->name && empty( $taxonomy->rest_base ) ) {
+					$base = 'tags';
+				}
+				if ( $matches( $namespace, $base ) ) {
+					foreach ( (array) ( $taxonomy->object_type ?? array() ) as $object_type ) {
+						$types[] = (string) $object_type;
+					}
+				}
+			}
+		}
+
+		return array_values( array_unique( array_filter( $types ) ) );
 	}
 
 	private function format_content_item( $post, $include_content ) {
@@ -785,7 +1404,8 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Whether a URL is on this site's own origin (home_url() or site_url()).
+	 * Whether a URL is on this site's own origin (home_url() or site_url()),
+	 * and, for a site installed in a subdirectory, under that directory.
 	 *
 	 * @param string $url URL.
 	 * @return bool
@@ -795,8 +1415,27 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		if ( '' === $origin ) {
 			return false;
 		}
+		$path = (string) wp_parse_url( trim( (string) $url ), PHP_URL_PATH );
+		$path = trim( rawurldecode( $path ), '/' );
+
 		foreach ( array( home_url( '/' ), site_url( '/' ) ) as $own ) {
-			if ( $origin === self::origin_of_url( $own ) ) {
+			if ( $origin !== self::origin_of_url( $own ) ) {
+				continue;
+			}
+
+			// A site installed in a subdirectory (a subdirectory multisite
+			// subsite, or WordPress in /blog/) owns only the paths under
+			// that directory; the rest of the origin belongs to other sites.
+			$own_path = trim( (string) wp_parse_url( $own, PHP_URL_PATH ), '/' );
+			if ( '' === $own_path ) {
+				return true;
+			}
+
+			if ( in_array( '..', explode( '/', $path ), true ) ) {
+				continue;
+			}
+
+			if ( $path === $own_path || 0 === strpos( $path . '/', $own_path . '/' ) ) {
 				return true;
 			}
 		}
@@ -819,6 +1458,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 
 		$post_id   = $request->get_param( 'id' );
 		$url       = $request->get_param( 'url' );
+		$post      = null;
 		$selector  = $request->get_param( 'selector' );
 		$max_bytes = min(
 			absint( $request->get_param( 'max_bytes' ) ?: self::RENDERED_HTML_DEFAULT_MAX_BYTES ),
@@ -864,7 +1504,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				// it before WordPress even runs. Render in-process instead — no
 				// network hop, so neither problem applies. Note: this returns the
 				// Elementor content only, not the surrounding theme header/footer.
-				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset );
+				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset, '', $post );
 			} else {
 				// Draft/pending — use Elementor preview URL or plain preview.
 				$url = add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) );
@@ -914,6 +1554,14 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		$status_code = wp_remote_retrieve_response_code( $response );
 		$html        = wp_remote_retrieve_body( $response );
 
+		// Read from the whole document, before any selector narrows it: the
+		// templates a page used are only visible in its full markup (#989).
+		$effective_template = $this->effective_template_report(
+			$post instanceof WP_Post ? $post : $this->readable_post_for_url( (string) $url ),
+			class_exists( 'Mcpwp_Effective_Template' ) ? Mcpwp_Effective_Template::rendered_from_html( (string) $html ) : null,
+			'The response is not a full HTML document, so the templates it rendered could not be read.'
+		);
+
 		$selector_used  = null;
 		$selector_found = true;
 
@@ -946,10 +1594,91 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				'truncated'      => $window['truncated'],
 				'next_offset'    => $window['next_offset'],
 				'note'           => $window['note'],
-				'selector_used'  => $selector_used,
-				'selector_found' => $selector_found,
+				'selector_used'      => $selector_used,
+				'selector_found'     => $selector_found,
+				'effective_template' => $effective_template,
 			)
 		);
+	}
+
+	/**
+	 * The post a same-site URL points at, when this caller may read it.
+	 *
+	 * @param string $url URL.
+	 * @return WP_Post|null
+	 */
+	private function readable_post_for_url( $url ) {
+		if ( '' === $url || ! function_exists( 'url_to_postid' ) ) {
+			return null;
+		}
+
+		$post = get_post( absint( url_to_postid( $url ) ) );
+		if ( ! $post instanceof WP_Post || ! $this->requester_can_read_post( $post ) ) {
+			return null;
+		}
+
+		if ( $this->guard_post_type_category( $post, '' ) ) {
+			return null;
+		}
+
+		return $post;
+	}
+
+	/**
+	 * The effective-template block of a rendered-HTML response (#989).
+	 *
+	 * `assigned` is what the post is set to use (page template, and the Theme
+	 * Builder templates Elementor Pro's conditions pick for it). `rendered` is
+	 * what the fetched document shows. `warnings` names every disagreement,
+	 * such as an assigned header template that did not render.
+	 *
+	 * Theme Builder template ids this caller cannot read are left out, the
+	 * same rule every other post reference follows.
+	 *
+	 * @param WP_Post|null $post          Post the page renders, when known.
+	 * @param array|null   $rendered      Mcpwp_Effective_Template::rendered_from_html() result.
+	 * @param string       $rendered_note Why $rendered is null, when it is.
+	 * @return array|null Null when the reporter is not loaded.
+	 */
+	private function effective_template_report( $post, $rendered, $rendered_note ) {
+		if ( ! class_exists( 'Mcpwp_Effective_Template' ) ) {
+			return null;
+		}
+
+		$assigned = $post instanceof WP_Post ? Mcpwp_Effective_Template::assigned_for_post( $post ) : null;
+
+		if ( is_array( $assigned ) && ! empty( $assigned['theme_builder']['locations'] ) ) {
+			foreach ( $assigned['theme_builder']['locations'] as $location => $ids ) {
+				$visible = array_values(
+					array_filter(
+						(array) $ids,
+						function ( $id ) {
+							return $this->post_ref_readable( (int) $id, 'elementor-theme' );
+						}
+					)
+				);
+				if ( empty( $visible ) ) {
+					unset( $assigned['theme_builder']['locations'][ $location ] );
+				} else {
+					$assigned['theme_builder']['locations'][ $location ] = $visible;
+				}
+			}
+		}
+
+		$warnings = is_array( $rendered ) && ! empty( $rendered['warnings'] ) ? $rendered['warnings'] : array();
+		$warnings = array_merge( $warnings, Mcpwp_Effective_Template::compare( $assigned, $rendered ) );
+
+		$report = array(
+			'assigned' => $assigned,
+			'rendered' => $rendered,
+			'warnings' => array_values( array_unique( $warnings ) ),
+		);
+
+		if ( null === $rendered ) {
+			$report['rendered_note'] = $rendered_note;
+		}
+
+		return $report;
 	}
 
 	/**
@@ -1196,9 +1925,11 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	 *                                     for the #1032 nested-template
 	 *                                     redaction — see
 	 *                                     render_elementor_in_process().
+	 * @param WP_Post|null $post          The resolved post, for the
+	 *                                     effective-template report.
 	 * @return WP_REST_Response
 	 */
-	private function get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset = 0, $route_category = '' ) {
+	private function get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset = 0, $route_category = '', $post = null ) {
 		$html = $this->render_elementor_in_process( $post_id, $route_category, true );
 
 		$selector_used  = null;
@@ -1231,6 +1962,11 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			'selector_found' => $selector_found,
 			'render_method'  => 'internal_elementor',
 			'render_note'    => 'Rendered in-process from Elementor data — this is the Elementor content only, not the surrounding theme header/footer, and did not require an HTTP round trip to the site.',
+			'effective_template' => $this->effective_template_report(
+				$post instanceof WP_Post ? $post : get_post( (int) $post_id ),
+				null,
+				'This post is not published, so it was rendered in-process without the theme. Only the assigned templates are known; publish it (or fetch its public URL) to see which templates render.'
+			),
 		);
 
 		// This method exists BECAUSE host-level gates intercept a loopback

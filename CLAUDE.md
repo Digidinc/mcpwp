@@ -445,7 +445,7 @@ All endpoints require `X-API-Key` header. Namespace: `mcpwp/v1`.
 | `/settings` | GET/PUT | Plugin settings |
 | `/options` | GET | WordPress reading options |
 | `/plugins` | GET | Active plugins + capabilities |
-| `/fetch` | GET | Fetch arbitrary external URL |
+| `/fetch` | GET | Fetch a post by id/URL, or one of this site's archive or `/wp-json/` URLs (#989) |
 | `/rate-limit` | GET | Rate limit status |
 | `/rate-limit/reset` | POST | Reset rate limit |
 | `/analytics` | GET | Usage analytics |
@@ -819,6 +819,45 @@ container → container(s) → widget(s)  # Flexbox layout (check elementor_layo
   }
 }
 ```
+
+### Render verification (#989)
+
+`meta_verified` still means only that `_elementor_data` was stored. `render_verified` now also
+checks the rendered DOM: once the save pipeline is clean, the writer renders the page body in-process
+(`Frontend::get_builder_content()`, the page as the current post) and `Mcpwp_Render_Inspector`
+compares the HTML with the stored tree. It fails, with the reason in `render_errors`, when a saved
+element id has no `data-id` in the HTML, Elementor's default text or `placeholder.png` is showing
+(unless the saved data asked for that text), an unrendered `[et_pb_` / `[elementor-template]`
+shortcode is visible, or a heading title / button label is not in that element's text. Buttons
+linking to `#` are warnings only. Placeholder and shortcode scans cover only the page's own markup
+(not nested Template/Global/Loop documents, not code/pre/script), and widgets that may render nothing
+(Shortcode, HTML, Loop Grid, Nav Menu, `wp-widget-*`, `theme-*`, ...) are not counted missing. The
+report is `dom_check` (`status` passed/failed/skipped); it is skipped, with a `reason`, for
+password-protected posts, Theme Builder documents, a failed pipeline, `/batch` operations
+(`Mcpwp_REST_Batch::$batch_operation_depth`, not the `/mcp` sub-request flag), Element Caching
+placeholders, HTML over `mcpwp_dom_check_max_bytes` (2 MB), trees over `mcpwp_dom_check_max_elements`
+(3000), a spent per-request `mcpwp_dom_check_time_budget` (5 s), or when the
+`mcpwp_verify_rendered_dom` filter returns false. All three limit filters read 0 as "no limit"; the
+off switch is `mcpwp_verify_rendered_dom`. The time budget is checked before a render and charged
+after it (it caps how many checks start); the element limit is the guard that runs before a render.
+
+`wp_get_rendered_html` returns `effective_template`: `assigned` (page template, and the Theme Builder
+templates Elementor Pro's conditions pick for the post) and `rendered` (from the fetched document:
+body-class page template, every `data-elementor-type` document and its location, theme header/footer
+markup outside Elementor), plus `warnings` where they disagree. `Mcpwp_Effective_Template`.
+
+`wp_fetch` also takes this site's archive URLs (category, tag, taxonomy, author, date, post type
+archive, search, blog index; returns `resource: archive` and one page of published posts) and REST
+URLs (`/wp-json/...`, `?rest_route=`; dispatched internally as a logged-out visitor, outside the
+MCP sub-request flag, after `rest_authentication_errors` is applied as that visitor, because
+`rest_do_request()` skips it — with `REQUEST_URI`/`REQUEST_METHOD`/`$_GET`/`$_REQUEST`/
+`$wp->query_vars['rest_route']` set to the target route and core's cookie and application-password
+checks detached, all restored in one `finally` that tolerates a part-way failure;
+`mcpwp/*` refused; route categories fail closed — post type/taxonomy routes, `wc/*`, `elementor/*`,
+`/wp/v2/search`, `/wp/v2/comments?post=` and `oembed/1.0/embed?url=` by the post type they return
+(an embed URL that resolves to no post here is `admin`), `/wp/v2/users` and every unknown route or
+namespace `admin`; denied is a 403 `forbidden_category`). A subdirectory site only owns URLs under its home path
+(`is_same_site_origin()`). `Mcpwp_Site_Url_Resolver`.
 
 ## Version Bumping
 

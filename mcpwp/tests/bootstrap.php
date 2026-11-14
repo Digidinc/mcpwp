@@ -791,6 +791,8 @@ function wp_unslash($value)
 function wp_set_current_user($user_id)
 {
     $GLOBALS['mcpwp_test_current_user'] = (int) $user_id;
+    // Like core: the user is set first, then set_current_user fires (#989).
+    do_action('set_current_user');
 }
 
 function user_can($user, $capability)
@@ -1522,9 +1524,12 @@ if (! function_exists('wp_get_environment_type')) {
 }
 
 if (! function_exists('home_url')) {
+    // $GLOBALS['mcpwp_test_home_url'] models a site installed in a
+    // subdirectory, e.g. 'https://example.com/site2' (#989).
     function home_url($path = '', $scheme = null)
     {
-        return 'https://example.com' . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
+        $base = rtrim((string) ($GLOBALS['mcpwp_test_home_url'] ?? 'https://example.com'), '/');
+        return $base . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
     }
 }
 
@@ -5443,7 +5448,8 @@ if (! function_exists('wp_get_post_revisions')) {
 if (! function_exists('site_url')) {
     function site_url($path = '', $scheme = null)
     {
-        return 'https://example.com' . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
+        $base = rtrim((string) ($GLOBALS['mcpwp_test_home_url'] ?? 'https://example.com'), '/');
+        return $base . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
     }
 }
 
@@ -5611,6 +5617,9 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-id
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-template-refs.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-stored-tree.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-meta-write.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-render-inspector.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-effective-template.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-site-url-resolver.php';
 // Site graph (#943 S1): class-mcpwp-rest-api.php's content-graph extraction
 // helpers below delegate to these — loaded before that require so every test
 // exercising them (build_content_graph_data() and friends) has a real target.
@@ -5741,13 +5750,55 @@ if (! function_exists('get_taxonomy')) {
         if (null === $tax) {
             return false;
         }
-        return (object) array(
-            'name' => $taxonomy,
-            'cap'  => (object) array_merge(
-                array( 'assign_terms' => 'edit_posts', 'edit_terms' => 'manage_categories' ),
-                (array) ($tax['cap'] ?? array())
-            ),
+        // Any other registry key (publicly_queryable, query_var,
+        // object_type, ...) is passed through as a property, like the real
+        // WP_Taxonomy object carries it (#989).
+        $extra = array_diff_key((array) $tax, array_flip(array( 'cap', 'terms', 'name' )));
+        return (object) array_merge(
+            $extra,
+            array(
+                'name' => $taxonomy,
+                'cap'  => (object) array_merge(
+                    array( 'assign_terms' => 'edit_posts', 'edit_terms' => 'manage_categories' ),
+                    (array) ($tax['cap'] ?? array())
+                ),
+            )
         );
+    }
+}
+if (! function_exists('get_taxonomies')) {
+    // Registry-backed (#989). Honours exact-match args against registry keys,
+    // and the 'names'/'objects' output, which is all production passes.
+    // category and post_tag always exist, as in core.
+    function get_taxonomies($args = array(), $output = 'names')
+    {
+        $builtin = array(
+            'category' => array( 'public' => true, 'publicly_queryable' => true, 'query_var' => 'category_name', 'object_type' => array( 'post' ) ),
+            'post_tag' => array( 'public' => true, 'publicly_queryable' => true, 'query_var' => 'tag', 'object_type' => array( 'post' ) ),
+        );
+        $registry = (array) ($GLOBALS['_mcpwp_test_taxonomies'] ?? array());
+        $out      = array();
+        foreach (array_merge($builtin, $registry) as $name => $tax) {
+            foreach ((array) $args as $key => $value) {
+                if ((bool) ($tax[ $key ] ?? false) !== (bool) $value) {
+                    continue 2;
+                }
+            }
+            if ('objects' !== $output) {
+                $out[ $name ] = $name;
+            } elseif (isset($registry[ $name ])) {
+                $out[ $name ] = get_taxonomy($name);
+            } else {
+                $out[ $name ] = (object) array_merge($tax, array( 'name' => $name ));
+            }
+        }
+        return $out;
+    }
+}
+if (! function_exists('rest_get_url_prefix')) {
+    function rest_get_url_prefix()
+    {
+        return 'wp-json';
     }
 }
 if (! function_exists('term_exists')) {

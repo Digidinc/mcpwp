@@ -309,6 +309,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// caller did not change (#829). Booted here, before rest_api_init.
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-meta-write.php';
 	Mcpwp_Elementor_Meta_Write::boot();
+	// Checks rendered HTML against the saved tree and reports which templates rendered (#989).
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-render-inspector.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-effective-template.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-site-url-resolver.php';
 	// Shared suspend/restore for Elementor's content-sanitizer (#828 part 2 /
 	// #759 residual gap) — loaded before anything that calls it, trait or not.
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-sanitizer-guard.php';

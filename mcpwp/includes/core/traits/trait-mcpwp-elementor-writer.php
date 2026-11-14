@@ -1187,6 +1187,41 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		}
 
+		// Whether the rendered page matches what was saved (#989).
+		//
+		// A pipeline that did not throw is still not a page that shows the
+		// data: #804 recorded render_verified:true on pages showing Elementor's
+		// "Add Your Heading Text Here" default and placeholder.png. So once the
+		// pipeline is clean, render the page and check the DOM. A pipeline
+		// failure is already a false verdict, and rendering again would only
+		// repeat it, so the DOM check is skipped then and says why.
+		$pipeline_failed = ! empty( $render_errors );
+		$page_id         = isset( $result['page_id'] ) ? (int) $result['page_id'] : 0;
+		$dom_failures    = array();
+
+		if ( $page_id > 0 ) {
+			$dom_check = $pipeline_failed
+				? array(
+					'status' => 'skipped',
+					'reason' => 'render_pipeline_failed',
+					'note'   => 'The render pipeline reported errors (see render_errors), so the rendered page was not checked.',
+				)
+				: $this->verify_rendered_dom( $page_id );
+
+			if ( ! empty( $dom_check['warnings'] ) ) {
+				$warnings           = isset( $result['warnings'] ) && is_array( $result['warnings'] ) ? $result['warnings'] : array();
+				$result['warnings'] = array_merge( $warnings, $dom_check['warnings'] );
+			}
+
+			if ( 'failed' === ( $dom_check['status'] ?? '' ) ) {
+				$dom_failures = isset( $dom_check['failures'] ) ? (array) $dom_check['failures'] : array();
+			}
+
+			$result['dom_check'] = $dom_check;
+		}
+
+		$render_errors = array_merge( $render_errors, $dom_failures );
+
 		$result['render_verified'] = empty( $render_errors );
 
 		if ( empty( $render_errors ) ) {
@@ -1194,13 +1229,24 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		$result['render_errors'] = $render_errors;
-		$result['message']       = __( 'Elementor data saved, but the page did not finish rendering — see render_errors.', 'mcpwp' );
 
-		$warning = sprintf(
-			/* translators: %s: semicolon-separated list of Elementor errors. */
-			__( 'Elementor could not complete the render pipeline, so this page is saved but may not display as an Elementor layout. Verify it before treating the change as delivered. Errors: %s', 'mcpwp' ),
-			implode( '; ', $render_errors )
-		);
+		if ( $pipeline_failed ) {
+			$result['message'] = __( 'Elementor data saved, but the page did not finish rendering — see render_errors.', 'mcpwp' );
+
+			$warning = sprintf(
+				/* translators: %s: semicolon-separated list of Elementor errors. */
+				__( 'Elementor could not complete the render pipeline, so this page is saved but may not display as an Elementor layout. Verify it before treating the change as delivered. Errors: %s', 'mcpwp' ),
+				implode( '; ', $render_errors )
+			);
+		} else {
+			$result['message'] = __( 'Elementor data saved and rendered, but the rendered page does not match it — see render_errors and dom_check.', 'mcpwp' );
+
+			$warning = sprintf(
+				/* translators: %s: semicolon-separated list of DOM check failures. */
+				__( 'The page rendered, but the rendered HTML does not show what was saved. Fix the data before treating the change as delivered. Failures: %s', 'mcpwp' ),
+				implode( '; ', $render_errors )
+			);
+		}
 
 		$warnings   = isset( $result['warnings'] ) && is_array( $result['warnings'] ) ? $result['warnings'] : array();
 		$warnings[] = $warning;
@@ -1208,6 +1254,159 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$result['warnings'] = $warnings;
 
 		return $result;
+	}
+
+	/**
+	 * Render a just-written page in-process and check the HTML against its
+	 * stored tree (#989). See Mcpwp_Render_Inspector for what is asserted.
+	 *
+	 * The page body is rendered the way the front end renders it, through
+	 * Frontend::get_builder_content() with the page as the current post, so
+	 * dynamic tags and theme widgets resolve to this page. Theme chrome
+	 * (header, footer) is not part of this render; wp_get_rendered_html
+	 * reports which templates a published page actually used.
+	 *
+	 * Never throws. A check that cannot run says so with status "skipped" and
+	 * a reason, and leaves the verdict to the pipeline checks.
+	 *
+	 * @param int $page_id Post id just written.
+	 * @return array dom_check report.
+	 */
+	private function verify_rendered_dom( $page_id ) {
+		$page_id = (int) $page_id;
+
+		$skip = static function ( $reason, $note ) {
+			return array(
+				'status' => 'skipped',
+				'reason' => $reason,
+				'note'   => $note,
+			);
+		};
+
+		/**
+		 * Filters whether a write renders the page again to check its DOM.
+		 *
+		 * @param bool $verify  Default true.
+		 * @param int  $page_id Post id just written.
+		 */
+		if ( ! apply_filters( 'mcpwp_verify_rendered_dom', true, $page_id ) ) {
+			return $skip( 'disabled', 'The mcpwp_verify_rendered_dom filter turned this check off.' );
+		}
+
+		if ( ! class_exists( 'Mcpwp_Render_Inspector' ) || ! class_exists( '\Elementor\Plugin' )
+			|| empty( \Elementor\Plugin::$instance ) || empty( \Elementor\Plugin::$instance->frontend )
+			|| ! method_exists( \Elementor\Plugin::$instance->frontend, 'get_builder_content' ) ) {
+			return $skip( 'renderer_unavailable', 'Elementor\'s frontend renderer is not loaded in this request, so the rendered page was not checked.' );
+		}
+
+		$post = get_post( $page_id );
+		if ( ! $post instanceof WP_Post ) {
+			return $skip( 'post_not_found', 'The post could not be read back, so the rendered page was not checked.' );
+		}
+
+		// Elementor renders nothing for a password-protected post unless the
+		// request carries the visitor's password cookie.
+		if ( '' !== (string) $post->post_password ) {
+			return $skip( 'password_protected', 'The post is password-protected and Elementor does not render it without the password, so the rendered page was not checked.' );
+		}
+
+		// Theme Builder documents (header, footer, single, archive, loop item)
+		// render inside another page's query; rendered on their own, dynamic
+		// widgets come out empty and would read as missing elements.
+		if ( 'elementor_library' === $post->post_type ) {
+			$template_type = (string) get_post_meta( $page_id, '_elementor_template_type', true );
+			if ( ! in_array( $template_type, array( 'page', 'section', 'container' ), true ) ) {
+				return $skip( 'template_document', sprintf( 'This is a "%s" template, which renders inside another page, so it was not checked on its own.', '' === $template_type ? 'unknown' : $template_type ) );
+			}
+		}
+
+		// One render per operation of a /batch request multiplies the cost of
+		// the whole batch; check pages one tool call at a time instead.
+		if ( class_exists( 'Mcpwp_REST_Batch' ) && Mcpwp_REST_Batch::$batch_operation_depth > 0 ) {
+			return $skip( 'batch_operation', 'This write ran inside a /batch request, where the rendered page is not checked. Check it with wp_get_rendered_html, or write it on its own.' );
+		}
+
+		// Checked before the render, charged after it (see
+		// Mcpwp_Render_Inspector::time_budget_left()): this caps how many
+		// checks START in one request. The element limit below is the guard
+		// that bounds a single render before it runs.
+		if ( ! Mcpwp_Render_Inspector::time_budget_left() ) {
+			return $skip( 'time_budget_exhausted', 'Earlier DOM checks in this request used up its time budget, so the rendered page was not checked.' );
+		}
+
+		$tree = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( ! is_array( $tree['elements'] ) ) {
+			return $skip( 'unreadable_tree', 'The stored Elementor data could not be read back, so the rendered page was not checked.' );
+		}
+
+		/**
+		 * Filters the largest saved tree, in elements, the DOM check renders.
+		 * 0 or less means no limit, like the byte and time limits.
+		 *
+		 * @param int $max Default Mcpwp_Render_Inspector::DEFAULT_MAX_ELEMENTS.
+		 */
+		$max_elements = (int) apply_filters( 'mcpwp_dom_check_max_elements', Mcpwp_Render_Inspector::DEFAULT_MAX_ELEMENTS );
+		$element_count = Mcpwp_Render_Inspector::count_elements( $tree['elements'] );
+		if ( $max_elements > 0 && $element_count > $max_elements ) {
+			return $skip( 'tree_too_large', sprintf( 'The page has %1$d elements, over the %2$d element limit for this check, so the rendered page was not checked.', $element_count, $max_elements ) );
+		}
+
+		$started_at = microtime( true );
+
+		$frontend    = \Elementor\Plugin::$instance->frontend;
+		$render_bag  = array();
+		$had_post    = array_key_exists( 'post', $GLOBALS );
+		$previous    = $had_post ? $GLOBALS['post'] : null;
+		$gate_render = function () use ( $frontend, $page_id ) {
+			return $this->render_with_template_gate(
+				$page_id,
+				static function () use ( $frontend, $page_id ) {
+					return $frontend->get_builder_content( $page_id, false );
+				}
+			);
+		};
+
+		// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited -- restored in finally.
+		$GLOBALS['post'] = $post;
+
+		try {
+			$attempt = $this->attempt_elementor_call( $gate_render, $render_bag, 'dom_render' );
+		} finally {
+			if ( $had_post ) {
+				// phpcs:ignore WordPress.WP.GlobalVariablesOverride.Prohibited
+				$GLOBALS['post'] = $previous;
+			} else {
+				unset( $GLOBALS['post'] );
+			}
+		}
+
+		if ( ! $attempt['ok'] ) {
+			Mcpwp_Render_Inspector::add_time_spent( microtime( true ) - $started_at );
+
+			$detail = '';
+			if ( isset( $render_bag['dom_render_exception']['class'], $render_bag['dom_render_exception']['message'] ) ) {
+				$detail = $render_bag['dom_render_exception']['class'] . ': ' . $render_bag['dom_render_exception']['message'];
+			} elseif ( isset( $render_bag['dom_render_error'] ) && is_string( $render_bag['dom_render_error'] ) ) {
+				$detail = 'WP_Error: ' . $render_bag['dom_render_error'];
+			} else {
+				$detail = 'the render call returned false';
+			}
+
+			return array(
+				'status'   => 'failed',
+				'reason'   => 'render_failed',
+				'failures' => array( 'dom_check: Rendering the page to check it failed: ' . $detail ),
+			);
+		}
+
+		$html   = is_string( $attempt['value'] ) ? $attempt['value'] : '';
+		$report = Mcpwp_Render_Inspector::inspect_elementor_output( $html, $tree['elements'] );
+
+		Mcpwp_Render_Inspector::add_time_spent( microtime( true ) - $started_at );
+
+		$report['rendered_bytes'] = strlen( $html );
+
+		return $report;
 	}
 
 	/**
