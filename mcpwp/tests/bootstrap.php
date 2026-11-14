@@ -791,6 +791,8 @@ function wp_unslash($value)
 function wp_set_current_user($user_id)
 {
     $GLOBALS['mcpwp_test_current_user'] = (int) $user_id;
+    // Like core: the user is set first, then set_current_user fires (#989).
+    do_action('set_current_user');
 }
 
 function user_can($user, $capability)

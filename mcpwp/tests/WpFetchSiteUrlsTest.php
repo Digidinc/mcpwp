@@ -636,4 +636,115 @@ final class WpFetchSiteUrlsTest extends TestCase {
 			$this->assertSame( 'rest', $this->data( $this->fetch( array( 'url' => 'https://example.com' . $path ) ) )['resource'], $path );
 		}
 	}
+
+	// ── Round-3 review (#989) ───────────────────────────────────────────
+
+	/**
+	 * A set_current_user callback that throws while switching to the visitor
+	 * must not leave the request URI, query globals, rest_route, the
+	 * sub-request flag, the user or core's credential checks changed.
+	 */
+	public function test_a_throw_while_entering_the_visitor_request_restores_everything(): void {
+		$this->capture_dispatch();
+		$_SERVER['REQUEST_URI']                 = '/wp-json/mcpwp/v1/mcp';
+		$_SERVER['REQUEST_METHOD']              = 'POST';
+		$_GET                                   = array( 'outer' => '1' );
+		$_REQUEST                               = array( 'outer' => '1', 'body' => 'x' );
+		$GLOBALS['wp']                          = (object) array( 'query_vars' => array( 'rest_route' => '/mcpwp/v1/mcp' ) );
+		Mcpwp_REST_Batch::$is_batch_sub_request = true;
+		add_filter( 'rest_authentication_errors', 'rest_cookie_check_errors', 100 );
+
+		$controller = new Mcpwp_REST_Site_Content();
+		$created    = $controller->create_scoped_api_key( 'test key', array( 'read' ), 'custom', array( 'content' ) );
+		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/fetch', array( 'url' => 'https://example.com/wp-json/wp/v2/posts?per_page=3' ), array( 'X-API-Key' => $created['key'] ) );
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+		$key_user = get_current_user_id();
+
+		$thrown = 0;
+		add_action(
+			'set_current_user',
+			static function () use ( &$thrown ) {
+				if ( 0 === get_current_user_id() && 0 === $thrown ) {
+					++$thrown;
+					throw new RuntimeException( 'set_current_user callback exploded' );
+				}
+			}
+		);
+
+		try {
+			$controller->fetch_content( $request );
+			$this->fail( 'The callback\'s exception should propagate.' );
+		} catch ( RuntimeException $e ) {
+			$this->assertSame( 'set_current_user callback exploded', $e->getMessage() );
+		} finally {
+			unset( $GLOBALS['mcpwp_test_actions']['set_current_user'] );
+		}
+
+		$this->assertSame( '/wp-json/mcpwp/v1/mcp', $_SERVER['REQUEST_URI'] );
+		$this->assertSame( 'POST', $_SERVER['REQUEST_METHOD'] );
+		$this->assertSame( array( 'outer' => '1' ), $_GET );
+		$this->assertSame( array( 'outer' => '1', 'body' => 'x' ), $_REQUEST );
+		$this->assertSame( '/mcpwp/v1/mcp', $GLOBALS['wp']->query_vars['rest_route'] );
+		$this->assertTrue( Mcpwp_REST_Batch::$is_batch_sub_request );
+		$this->assertSame( $key_user, get_current_user_id() );
+		$this->assertSame( 100, has_filter( 'rest_authentication_errors', 'rest_cookie_check_errors' ) );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatch_seen'] );
+
+		unset( $GLOBALS['wp'], $_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD'] );
+		$_GET     = array();
+		$_REQUEST = array();
+	}
+
+	/**
+	 * $_GET and $_REQUEST carry the TARGET query while the lock and the
+	 * dispatch run, and are put back after.
+	 */
+	public function test_query_globals_are_the_target_query_during_the_visitor_request(): void {
+		$_GET     = array( 'outer' => '1' );
+		$_REQUEST = array( 'outer' => '1', 'body' => 'x' );
+		$seen     = array();
+		add_filter(
+			'rest_authentication_errors',
+			static function ( $result ) use ( &$seen ) {
+				$seen['auth'] = array( $_GET, $_REQUEST );
+				return $result;
+			}
+		);
+		add_filter(
+			'rest_dispatch_request',
+			static function ( $result, $request ) use ( &$seen ) {
+				$seen['dispatch'] = array( $_GET, $_REQUEST );
+				return new WP_REST_Response( array(), 200 );
+			},
+			10,
+			2
+		);
+
+		$this->data( $this->fetch( array( 'url' => 'https://example.com/?rest_route=/wp/v2/posts&per_page=3' ) ) );
+
+		$target = array( 'rest_route' => '/wp/v2/posts', 'per_page' => '3' );
+		$this->assertSame( array( $target, $target ), $seen['auth'] );
+		$this->assertSame( array( $target, $target ), $seen['dispatch'] );
+		$this->assertSame( array( 'outer' => '1' ), $_GET );
+		$this->assertSame( array( 'outer' => '1', 'body' => 'x' ), $_REQUEST );
+
+		$_GET     = array();
+		$_REQUEST = array();
+	}
+
+	/**
+	 * An embed URL that does not resolve to a post on this site may still
+	 * be answered (an oembed_request_post_id filter, another network site),
+	 * so it needs admin.
+	 */
+	public function test_oembed_of_an_unresolved_url_needs_admin(): void {
+		$this->capture_dispatch();
+		$url = 'https://example.com/wp-json/oembed/1.0/embed?url=' . rawurlencode( 'https://example.com/elsewhere/thing/' );
+
+		$denied = $this->fetch( array( 'url' => $url ) );
+		$this->assertInstanceOf( WP_Error::class, $denied );
+		$this->assertSame( 'admin', $denied->get_error_data()['category'] );
+
+		$this->assertSame( 'rest', $this->data( $this->fetch( array( 'url' => $url ), array( 'content', 'admin' ) ) )['resource'] );
+	}
 }

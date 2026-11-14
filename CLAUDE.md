@@ -850,11 +850,13 @@ markup outside Elementor), plus `warnings` where they disagree. `Mcpwp_Effective
 archive, search, blog index; returns `resource: archive` and one page of published posts) and REST
 URLs (`/wp-json/...`, `?rest_route=`; dispatched internally as a logged-out visitor, outside the
 MCP sub-request flag, after `rest_authentication_errors` is applied as that visitor, because
-`rest_do_request()` skips it — with `REQUEST_URI`/`REQUEST_METHOD`/`$wp->query_vars['rest_route']` set
-to the target route and core's cookie and application-password checks detached, all restored after;
+`rest_do_request()` skips it — with `REQUEST_URI`/`REQUEST_METHOD`/`$_GET`/`$_REQUEST`/
+`$wp->query_vars['rest_route']` set to the target route and core's cookie and application-password
+checks detached, all restored in one `finally` that tolerates a part-way failure;
 `mcpwp/*` refused; route categories fail closed — post type/taxonomy routes, `wc/*`, `elementor/*`,
-`/wp/v2/search`, `/wp/v2/comments?post=` and `oembed/1.0/embed?url=` by the post type they return,
-`/wp/v2/users` and every unknown route or namespace `admin`; denied is a 403 `forbidden_category`). A subdirectory site only owns URLs under its home path
+`/wp/v2/search`, `/wp/v2/comments?post=` and `oembed/1.0/embed?url=` by the post type they return
+(an embed URL that resolves to no post here is `admin`), `/wp/v2/users` and every unknown route or
+namespace `admin`; denied is a 403 `forbidden_category`). A subdirectory site only owns URLs under its home path
 (`is_same_site_origin()`). `Mcpwp_Site_Url_Resolver`.
 
 ## Version Bumping

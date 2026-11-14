@@ -619,14 +619,28 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 
 		$previous_user = get_current_user_id();
 		$batch_flag    = class_exists( 'Mcpwp_REST_Batch' ) ? Mcpwp_REST_Batch::$is_batch_sub_request : null;
-		$visitor       = $this->enter_visitor_request( $url, (string) $route );
-
-		wp_set_current_user( 0 );
-		if ( null !== $batch_flag ) {
-			Mcpwp_REST_Batch::$is_batch_sub_request = false;
-		}
+		$user_switched = false;
+		$visitor       = array(
+			'server'   => array(),
+			'globals'  => array(),
+			'wp'       => null,
+			'detached' => array(),
+		);
 
 		try {
+			// Every state change happens inside the try, and each records
+			// itself before it is made, so the finally restores exactly what
+			// changed even when one of them throws part-way (a throwing
+			// set_current_user callback, for one).
+			$this->enter_visitor_request( $url, (string) $route, $visitor );
+
+			if ( null !== $batch_flag ) {
+				Mcpwp_REST_Batch::$is_batch_sub_request = false;
+			}
+
+			$user_switched = true;
+			wp_set_current_user( 0 );
+
 			// rest_do_request() skips WP_REST_Server::serve_request(), which is
 			// where core applies rest_authentication_errors. A site that locks
 			// anonymous REST access (or one route of it) does so there, so it
@@ -638,11 +652,15 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 
 			$response = is_wp_error( $auth_error ) ? $auth_error : rest_do_request( $request );
 		} finally {
-			wp_set_current_user( $previous_user );
+			// Callback-free restores first, so a throwing set_current_user
+			// callback below cannot leave them changed.
+			$this->leave_visitor_request( $visitor );
 			if ( null !== $batch_flag ) {
 				Mcpwp_REST_Batch::$is_batch_sub_request = $batch_flag;
 			}
-			$this->leave_visitor_request( $visitor );
+			if ( $user_switched ) {
+				wp_set_current_user( $previous_user );
+			}
 		}
 
 		if ( isset( $auth_error ) && is_wp_error( $auth_error ) ) {
@@ -717,29 +735,30 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	 * REST authentication filters and the dispatch run.
 	 *
 	 * Sets REQUEST_URI (path and query of the target URL), REQUEST_METHOD
-	 * (GET) and the global WP query var rest_route, and detaches core's two
-	 * credential checks: rest_cookie_check_errors re-verifies the OUTER
-	 * request's nonce against user 0 and always fails a browser session, and
-	 * rest_application_password_check_errors answers true for an outer
-	 * request that used an application password, which would end the filter
-	 * chain before a site's own lock runs. Neither credential belongs to the
-	 * visitor. leave_visitor_request() restores all of it.
+	 * (GET), $_GET and $_REQUEST (the target URL's query: a visitor's GET
+	 * carries no body) and the global WP query var rest_route, and detaches
+	 * core's two credential checks: rest_cookie_check_errors re-verifies the
+	 * OUTER request's nonce against user 0 and always fails a browser
+	 * session, and rest_application_password_check_errors answers true for an
+	 * outer request that used an application password, which would end the
+	 * filter chain before a site's own lock runs. Neither credential belongs
+	 * to the visitor.
+	 *
+	 * Each change is recorded in $state BEFORE it is made, so
+	 * leave_visitor_request() restores exactly what changed, even if this
+	 * stops part-way.
 	 *
 	 * @param string $url   Target URL.
 	 * @param string $route Target REST route.
-	 * @return array Saved state.
+	 * @param array  $state Saved state, filled in by reference.
 	 */
-	private function enter_visitor_request( $url, $route ) {
-		$state = array(
-			'server'   => array(),
-			'wp'       => null,
-			'detached' => array(),
-		);
-
+	private function enter_visitor_request( $url, $route, array &$state ) {
 		$parts = wp_parse_url( (string) $url );
 		$uri   = ( is_array( $parts ) && isset( $parts['path'] ) ) ? (string) $parts['path'] : '/';
+		$query = array();
 		if ( is_array( $parts ) && isset( $parts['query'] ) && '' !== $parts['query'] ) {
 			$uri .= '?' . $parts['query'];
+			parse_str( (string) $parts['query'], $query );
 		}
 
 		foreach ( array( 'REQUEST_URI' => $uri, 'REQUEST_METHOD' => 'GET' ) as $key => $value ) {
@@ -747,6 +766,13 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			$state['server'][ $key ] = array_key_exists( $key, $_SERVER ) ? array( $_SERVER[ $key ] ) : null;
 			$_SERVER[ $key ]         = $value;
 		}
+
+		// phpcs:disable WordPress.Security.NonceVerification -- saved and restored verbatim, never read here.
+		$state['globals']['get']     = array( $_GET );
+		$_GET                        = is_array( $query ) ? $query : array();
+		$state['globals']['request'] = array( $_REQUEST );
+		$_REQUEST                    = $_GET;
+		// phpcs:enable
 
 		if ( isset( $GLOBALS['wp'] ) && is_object( $GLOBALS['wp'] ) ) {
 			$had_vars    = isset( $GLOBALS['wp']->query_vars ) && is_array( $GLOBALS['wp']->query_vars );
@@ -760,19 +786,23 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			$GLOBALS['wp']->query_vars = $vars;
 		}
 
+		// Detaching and re-adding a callback moves it to the END of its
+		// priority slot: after leave_visitor_request(), another callback at
+		// priority 90 or 100 that used to run after core's check now runs
+		// before it. Both core checks pass an earlier error through
+		// unchanged, so only a same-priority callback that depends on running
+		// after them can see a difference.
 		foreach ( array( 'rest_cookie_check_errors', 'rest_application_password_check_errors' ) as $callback ) {
 			$priority = has_filter( 'rest_authentication_errors', $callback );
 			if ( false !== $priority ) {
-				remove_filter( 'rest_authentication_errors', $callback, (int) $priority );
 				$state['detached'][ $callback ] = (int) $priority;
+				remove_filter( 'rest_authentication_errors', $callback, (int) $priority );
 			}
 		}
-
-		return $state;
 	}
 
 	/**
-	 * Undo enter_visitor_request().
+	 * Undo enter_visitor_request(), for whatever part of it ran.
 	 *
 	 * @param array $state Saved state.
 	 */
@@ -785,6 +815,13 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			}
 		}
 
+		if ( isset( $state['globals']['get'] ) ) {
+			$_GET = $state['globals']['get'][0];
+		}
+		if ( isset( $state['globals']['request'] ) ) {
+			$_REQUEST = $state['globals']['request'][0];
+		}
+
 		if ( is_array( $state['wp'] ) && isset( $GLOBALS['wp'] ) && is_object( $GLOBALS['wp'] ) ) {
 			if ( $state['wp']['had_vars'] ) {
 				$GLOBALS['wp']->query_vars = $state['wp']['vars'];
@@ -794,7 +831,9 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		}
 
 		foreach ( $state['detached'] as $callback => $priority ) {
-			add_filter( 'rest_authentication_errors', $callback, $priority );
+			if ( false === has_filter( 'rest_authentication_errors', $callback ) ) {
+				add_filter( 'rest_authentication_errors', $callback, $priority );
+			}
 		}
 	}
 
@@ -840,7 +879,8 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	 *   `comments?post=` by that post's type; `users` is `admin`, the same
 	 *   category MCPWP's own /users needs; `types`, `taxonomies` and
 	 *   `statuses` are `content`; any other `wp/v2` route is `admin`.
-	 * - `oembed/1.0/embed?url=`: by the type of the post it embeds.
+	 * - `oembed/1.0/embed?url=`: by the type of the post it embeds; `admin`
+	 *   when the URL does not resolve to a post on this site.
 	 * - `wc/*`, `wc-*`: WooCommerce. `elementor*`: Elementor templates.
 	 * - A post type or taxonomy under its own rest_namespace: its post type.
 	 * - Any other namespace: `admin`.
@@ -894,7 +934,10 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				? get_post( absint( url_to_postid( $query['url'] ) ) )
 				: null;
 
-			return $target instanceof WP_Post ? $for_types( array( $target->post_type ) ) : array( 'content' );
+			// An embed URL that does not resolve to a post here may still be
+			// answered (an oembed_request_post_id filter, another site of a
+			// network), so what it returns is unknown: admin.
+			return $target instanceof WP_Post ? $for_types( array( $target->post_type ) ) : array( 'admin' );
 		}
 
 		if ( 'wp/v2' === $namespace ) {
