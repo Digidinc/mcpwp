@@ -320,6 +320,27 @@ class Mcpwp_Rate_Limiter {
 	}
 
 	/**
+	 * Run a callback and leave no reporting state behind (#1175).
+	 *
+	 * The callback may meter a bucket (it is charged as usual), but what the
+	 * limiter reports afterwards (get_headers() / get_budget()) is restored to
+	 * what it was before, so the caller's response carries nothing from it.
+	 *
+	 * @param callable $callback Callback.
+	 * @return mixed Whatever the callback returns.
+	 */
+	public function without_reporting( $callback ) {
+		$current  = $this->current_data;
+		$reported = $this->reported_data;
+		try {
+			return call_user_func( $callback );
+		} finally {
+			$this->current_data  = $current;
+			$this->reported_data = $reported;
+		}
+	}
+
+	/**
 	 * Get rate limit headers.
 	 *
 	 * @return array Headers array.
