@@ -25,6 +25,15 @@ DISTIGNORE="$PLUGIN_DIR/.distignore"
 
 [[ -f "$DISTIGNORE" ]] || { echo "No .distignore at $DISTIGNORE" >&2; exit 1; }
 
+# Class names below are read with grep -P (\K). BSD/macOS grep has no -P, and
+# with that grep's errors swallowed every pruned file would yield zero classes,
+# so the check would pass without checking anything. Refuse up front instead.
+PROBE="$(printf 'final class Mcpwp_Probe {\n' | grep -oP '^\s*(?:final\s+|abstract\s+)?class\s+\K\w+' 2>/dev/null || true)"
+if [[ "$PROBE" != "Mcpwp_Probe" ]]; then
+	echo "FAIL: this grep does not support -P (PCRE); run $(basename "$0") with GNU grep" >&2
+	exit 1
+fi
+
 # A path is pruned if .distignore names it outright or names a directory above
 # it. Without the directory case, everything under /tests reads as shipped code.
 is_pruned() {
@@ -73,7 +82,7 @@ while IFS= read -r entry; do
 				FAILED=1
 			fi
 		done < <(grep -rlE "(${class}::|new +${class}\b)" "$PLUGIN_DIR" --include='*.php' 2>/dev/null || true)
-	done < <(grep -oP '^\s*(?:final\s+|abstract\s+)?class\s+\K\w+' "$pruned_file" 2>/dev/null || true)
+	done < <(grep -oP '^\s*(?:final\s+|abstract\s+)?class\s+\K\w+' "$pruned_file" || true)
 done < "$DISTIGNORE"
 
 if [[ "$FAILED" -eq 1 ]]; then

@@ -5,6 +5,8 @@ on:
     paths:
       - "mcpwp/**"
       - "scripts/verify_plugin_assets.sh"
+      - "scripts/verify_distignore_refs.sh"
+      - "scripts/tests/verify_plugin_assets_test.sh"
       - ".github/workflows/mcpwp-ci.yml"
   push:
     branches:
@@ -12,6 +14,8 @@ on:
     paths:
       - "mcpwp/**"
       - "scripts/verify_plugin_assets.sh"
+      - "scripts/verify_distignore_refs.sh"
+      - "scripts/tests/verify_plugin_assets_test.sh"
       - ".github/workflows/mcpwp-ci.yml"
 
 jobs:
@@ -90,6 +94,7 @@ jobs:
       # ships references only files it contains. Nothing is uploaded.
       - name: Distribution Asset Check
         run: |
+          bash scripts/tests/verify_plugin_assets_test.sh
           bash mcpwp/scripts/build-all.sh
           bash mcpwp/scripts/build-selfhosted.sh
           bash scripts/verify_plugin_assets.sh mcpwp/scripts/mcpwp-*.zip

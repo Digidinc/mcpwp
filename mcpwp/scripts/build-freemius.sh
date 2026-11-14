@@ -53,14 +53,11 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 echo "    Copying plugin files..."
 cp -a "$PLUGIN_DIR" "$DEST"
 
-# Remove WP.org directory assets (uploaded separately to SVN assets/), except
-# the plugin icon: includes/freemius-init.php hands the Freemius SDK
-# assets/icon-128x128.png for its opt-in, connect and pricing screens, and this
-# is the only build that ships that bootstrap. Stripping it shipped a broken
-# image on every premium install. scripts/verify_plugin_assets.sh enforces it.
+# Remove WP.org directory assets (uploaded separately to SVN assets/). The
+# plugin icon is copied back after .distignore runs, below.
 FREEMIUS_ICON="assets/icon-128x128.png"
 rm -f "$DEST"/assets/banner-*.png
-find "$DEST/assets" -maxdepth 1 -name 'icon-*.png' ! -name "$(basename "$FREEMIUS_ICON")" -delete
+rm -f "$DEST"/assets/icon-*.png
 rm -f "$DEST"/assets/screenshot-*.png
 rm -f "$DEST"/assets/icon.svg
 
@@ -84,13 +81,19 @@ if [[ -f "$DEST/.distignore" ]]; then
 		[[ -z "$pattern" || "$pattern" == \#* ]] && continue
 		[[ "$pattern" == "/freemius" ]] && continue
 		[[ "$pattern" == "/includes/freemius-init.php" ]] && continue
-		# Only the Freemius icon is left under assets/*.png by now (see above).
-		[[ "$pattern" == "/assets/*.png" ]] && continue
 		pattern="${pattern#/}"
 		find "$DEST" -path "$DEST/$pattern" -exec rm -rf {} + 2>/dev/null || true
 	done < "$DEST/.distignore"
 	rm -f "$DEST/.distignore"
 fi
+
+# Put back exactly one asset: the plugin icon. includes/freemius-init.php hands
+# the Freemius SDK assets/icon-128x128.png for its opt-in, connect and pricing
+# screens, and this is the only build that ships that bootstrap. Stripping it
+# shipped a broken image on every premium install. Copying it back after the
+# /assets/*.png rule (rather than exempting the rule) keeps any other PNG added
+# to assets/ out of this zip. scripts/verify_plugin_assets.sh enforces it.
+cp "$PLUGIN_DIR/$FREEMIUS_ICON" "$DEST/$FREEMIUS_ICON"
 
 # Freemius handles Pro updates; do not ship the legacy self-hosted updater.
 rm -f "$DEST/includes/class-mcpwp-updater.php"
@@ -143,11 +146,15 @@ else
 	exit 1
 fi
 
-if [[ "$(find "$DEST/assets" -maxdepth 1 \( -name 'banner*' -o -name 'screenshot-*' -o -name '*.svg' \) | wc -l)" -ne 0 ]]; then
-	echo "    [FAIL] WP.org banner/screenshot/svg assets leaked into the Freemius build"
-	exit 1
+# The only image under assets/ must be the icon: anything else is a WP.org
+# directory asset (or a new file) that .distignore meant to keep out.
+ASSET_IMAGES="$(grep -iE "^mcpwp/assets/[^/]+\.(png|svg|jpe?g|gif|webp)$" "$ZIP_MANIFEST" || true)"
+if [[ "$ASSET_IMAGES" == "mcpwp/$FREEMIUS_ICON" ]]; then
+	echo "    [OK] assets/ ships only the plugin icon"
 else
-	echo "    [OK] WP.org banner/screenshot assets excluded"
+	echo "    [FAIL] assets/ images in the Freemius zip must be exactly $FREEMIUS_ICON, got:"
+	printf '%s\n' "$ASSET_IMAGES" | sed 's/^/           /'
+	exit 1
 fi
 
 ASSET_CHECK="$PLUGIN_DIR/../scripts/verify_plugin_assets.sh"
