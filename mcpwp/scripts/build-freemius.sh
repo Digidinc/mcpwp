@@ -53,7 +53,9 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 echo "    Copying plugin files..."
 cp -a "$PLUGIN_DIR" "$DEST"
 
-# Remove WP.org directory assets (uploaded separately to SVN assets/).
+# Remove WP.org directory assets (uploaded separately to SVN assets/). The
+# plugin icon is copied back after .distignore runs, below.
+FREEMIUS_ICON="assets/icon-128x128.png"
 rm -f "$DEST"/assets/banner-*.png
 rm -f "$DEST"/assets/icon-*.png
 rm -f "$DEST"/assets/screenshot-*.png
@@ -84,6 +86,14 @@ if [[ -f "$DEST/.distignore" ]]; then
 	done < "$DEST/.distignore"
 	rm -f "$DEST/.distignore"
 fi
+
+# Put back exactly one asset: the plugin icon. includes/freemius-init.php hands
+# the Freemius SDK assets/icon-128x128.png for its opt-in, connect and pricing
+# screens, and this is the only build that ships that bootstrap. Stripping it
+# shipped a broken image on every premium install. Copying it back after the
+# /assets/*.png rule (rather than exempting the rule) keeps any other PNG added
+# to assets/ out of this zip. scripts/verify_plugin_assets.sh enforces it.
+cp "$PLUGIN_DIR/$FREEMIUS_ICON" "$DEST/$FREEMIUS_ICON"
 
 # Freemius handles Pro updates; do not ship the legacy self-hosted updater.
 rm -f "$DEST/includes/class-mcpwp-updater.php"
@@ -128,6 +138,31 @@ else
 	echo "    [FAIL] Freemius bootstrap missing"
 	exit 1
 fi
+
+if grep -qx "mcpwp/$FREEMIUS_ICON" "$ZIP_MANIFEST"; then
+	echo "    [OK] Freemius plugin icon included ($FREEMIUS_ICON)"
+else
+	echo "    [FAIL] Freemius plugin icon missing ($FREEMIUS_ICON) — opt-in screens would show a broken image"
+	exit 1
+fi
+
+# The only image under assets/ must be the icon: anything else is a WP.org
+# directory asset (or a new file) that .distignore meant to keep out.
+ASSET_IMAGES="$(grep -iE "^mcpwp/assets/[^/]+\.(png|svg|jpe?g|gif|webp)$" "$ZIP_MANIFEST" || true)"
+if [[ "$ASSET_IMAGES" == "mcpwp/$FREEMIUS_ICON" ]]; then
+	echo "    [OK] assets/ ships only the plugin icon"
+else
+	echo "    [FAIL] assets/ images in the Freemius zip must be exactly $FREEMIUS_ICON, got:"
+	printf '%s\n' "$ASSET_IMAGES" | sed 's/^/           /'
+	exit 1
+fi
+
+ASSET_CHECK="$PLUGIN_DIR/../scripts/verify_plugin_assets.sh"
+if [[ ! -f "$ASSET_CHECK" ]]; then
+	echo "    [FAIL] $ASSET_CHECK not found; cannot verify shipped asset references"
+	exit 1
+fi
+bash "$ASSET_CHECK" "$OUTPUT_ZIP" 2>&1 | sed 's/^/    /'
 
 if grep -q "includes/class-mcpwp-updater.php" "$ZIP_MANIFEST"; then
 	echo "    [FAIL] Legacy updater should not be in Freemius build"

@@ -4,12 +4,18 @@ on:
   pull_request:
     paths:
       - "mcpwp/**"
+      - "scripts/verify_plugin_assets.sh"
+      - "scripts/verify_distignore_refs.sh"
+      - "scripts/tests/verify_plugin_assets_test.sh"
       - ".github/workflows/mcpwp-ci.yml"
   push:
     branches:
       - main
     paths:
       - "mcpwp/**"
+      - "scripts/verify_plugin_assets.sh"
+      - "scripts/verify_distignore_refs.sh"
+      - "scripts/tests/verify_plugin_assets_test.sh"
       - ".github/workflows/mcpwp-ci.yml"
 
 jobs:
@@ -79,3 +85,17 @@ jobs:
       # e.g. the WebMCP registration script (#981).
       - name: JS Unit Tests
         run: node --test mcpwp/tests/js/*.test.js
+
+      # Lint and unit tests read the tree; a distribution build is the tree
+      # minus whatever its script and .distignore strip. Every build stripped
+      # assets/icon-*.png while the Freemius build shipped freemius-init.php
+      # pointing the SDK at assets/icon-128x128.png, so every premium opt-in
+      # screen showed a broken image. Build each zip and check that what it
+      # ships references only files it contains. Nothing is uploaded.
+      - name: Distribution Asset Check
+        run: |
+          bash scripts/tests/verify_plugin_assets_test.sh
+          bash mcpwp/scripts/build-all.sh
+          bash mcpwp/scripts/build-selfhosted.sh
+          bash scripts/verify_plugin_assets.sh mcpwp/scripts/mcpwp-*.zip
+          rm -f mcpwp/scripts/mcpwp-*.zip

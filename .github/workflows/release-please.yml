@@ -52,6 +52,11 @@ jobs:
           ref: main
       - name: Build all distribution zips
         run: bash mcpwp/scripts/build-all.sh
+      # Every asset shipped PHP points at (the Freemius plugin icon) must be in
+      # the zip that ships it. build-all.sh checks each zip too; this is the
+      # explicit gate before anything is attached.
+      - name: Verify shipped asset references
+        run: bash scripts/verify_plugin_assets.sh mcpwp/scripts/mcpwp-*.zip
       - name: Attach zips to the release
         run: |
           # Only the Free and Freemius ZIPs. Never the agency build: it has every
