@@ -54,7 +54,15 @@ final class OAuthReconnectMessageTest extends TestCase {
 		return $auth->issue_oauth_access_token( array( 'read' ), 3600, array( 'client_id' => 'test_client' ) )['access_token'];
 	}
 
+	/** Each request starts with a fresh limiter object, as in production; the counts live in transients. */
+	private function new_request_limiter(): void {
+		$instance = ( new ReflectionClass( Mcpwp_Rate_Limiter::class ) )->getProperty( 'instance' );
+		$instance->setAccessible( true );
+		$instance->setValue( null, null );
+	}
+
 	private function verify( string $token ) {
+		$this->new_request_limiter();
 		$request = new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'Authorization' => 'Bearer ' . $token ) );
 		return ( new Mcpwp_Api_Auth_Test_Harness() )->verify_api_key( $request );
 	}
@@ -63,6 +71,8 @@ final class OAuthReconnectMessageTest extends TestCase {
 	private function wire( $error ): array {
 		$this->assertInstanceOf( WP_Error::class, $error );
 		Mcpwp_OAuth_Well_Known::init();
+		// The real loader filter, so the response carries the limiter headers a client sees (#1175).
+		add_filter( 'rest_post_dispatch', array( ( new ReflectionClass( Mcpwp_Loader::class ) )->newInstanceWithoutConstructor(), 'add_mcpwp_rate_limit_headers' ), 10, 3 );
 		$server   = new WP_REST_Server();
 		$request  = new WP_REST_Request( 'GET', '/mcpwp/v1/site-info' );
 		$response = $server->error_to_response( $error );
@@ -362,6 +372,49 @@ final class OAuthReconnectMessageTest extends TestCase {
 		$request = fn() => new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'Authorization' => 'Bearer mcpwp_at_' . bin2hex( random_bytes( 24 ) ) ) );
 		$this->assertTrue( $harness->verify_api_key( $request() )->get_error_code() === 'invalid_token' );
 		$this->assertSame( 1, $harness->logged, 'Under the limit a failure is logged.' );
+		for ( $i = 0; $i < 40; $i++ ) {
+			$harness->verify_api_key( $request() );
+		}
+		$after_exhaustion = $harness->logged;
+		for ( $i = 0; $i < 10; $i++ ) {
+			$harness->verify_api_key( $request() );
+		}
+		$this->assertSame( $after_exhaustion, $harness->logged, 'Over the limit nothing is written to the log.' );
+		$this->assertLessThan( 20, $after_exhaustion );
+	}
+
+	public function test_the_dead_token_401_carries_the_same_headers_under_and_over_budget(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.50';
+		$auth = new Mcpwp_Api_Auth_Test_Harness();
+		$auth->create_scoped_api_key( 'live', array( 'read' ), 'admin' );
+		$dead = fn() => $this->wire( $this->verify( 'mcpwp_at_' . bin2hex( random_bytes( 24 ) ) ) );
+
+		$under = $dead();
+		$this->reset_limiter();
+		$this->assertNotNull( $this->first_429( fn() => $this->verify( 'mcpwp_' . bin2hex( random_bytes( 24 ) ) ) ), 'budget exhausted' );
+		$over = $dead();
+
+		$this->assertArrayNotHasKey( 'Retry-After', $over['headers'] );
+		$this->assertSame( $under['headers'], $over['headers'], 'the limiter state must not leak into the dead-token answer' );
+		$this->assertSame( $under, $over );
+	}
+
+	public function test_over_the_limit_the_failure_log_is_not_written_for_an_epoch_covered_token(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.31';
+		$harness = new class() extends Mcpwp_Api_Auth_Test_Harness {
+			public $logged = 0;
+			protected function log_auth_failure( $request ) {
+				++$this->logged;
+			}
+		};
+		Mcpwp_OAuth_Revocation::revoke_site();
+		$request = function () {
+			$t = 'mcpwp_at_' . bin2hex( random_bytes( 24 ) );
+			$this->row( $t );
+			return new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'Authorization' => 'Bearer ' . $t ) );
+		};
+		$this->assertSame( 'invalid_token', $harness->verify_api_key( $request() )->get_error_code() );
+		$this->assertSame( 1, $harness->logged, 'Under the limit an epoch-covered failure is logged.' );
 		for ( $i = 0; $i < 40; $i++ ) {
 			$harness->verify_api_key( $request() );
 		}
