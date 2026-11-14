@@ -267,6 +267,9 @@ class Mcpwp_OAuth_Well_Known {
 	 * is not served where that AS's tokens would be refused (plain HTTP). On
 	 * a broker-only site (local OAuth off) it names mumcp.com, whose bearer
 	 * tokens this rule does not cover, so it is served on any transport.
+	 * Accepted: a site with BOTH the broker and local OAuth on loses its
+	 * discovery over plain HTTP (the document names the local AS); its broker
+	 * bearers keep working, and the fix is the same as for local OAuth.
 	 *
 	 * @return bool
 	 */

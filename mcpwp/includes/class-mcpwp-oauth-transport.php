@@ -149,31 +149,49 @@ class Mcpwp_OAuth_Transport {
 	}
 
 	/**
-	 * Whether a refused request carried the marks of a TLS-terminating proxy
-	 * that does not tell WordPress (Cloudflare "Flexible", nginx, Traefik,
-	 * Caddy, Coolify): the site's address is https AND the request carries a
-	 * header such proxies add. The site address alone is not enough: anyone
-	 * can send a plain-HTTP request to an https site.
+	 * Whether a refused request looks like a TLS-terminating proxy that does
+	 * not tell WordPress (Cloudflare "Flexible", nginx, Traefik, Caddy,
+	 * Coolify): the site's address is https AND a proxy header on the
+	 * request says the client's leg was HTTPS. Neither alone is enough: anyone
+	 * can send a plain-HTTP request to an https site, and a proxy header that
+	 * says http (or only names a client IP) means the client itself used an
+	 * http:// URL.
 	 *
-	 * @param string $home_url       The `home` option.
-	 * @param bool   $proxy_headers  Whether proxy headers were present.
+	 * These headers are not trusted here: they choose the wording and the
+	 * Site Health severity only, never whether a request is secure.
+	 *
+	 * @param string $home_url      The `home` option.
+	 * @param bool   $claims_https  proxy_header_claims_https().
 	 * @return bool
 	 */
-	public static function proxy_suspected( $home_url, $proxy_headers ) {
-		return $proxy_headers && self::home_is_https( $home_url );
+	public static function proxy_suspected( $home_url, $claims_https ) {
+		return $claims_https && self::home_is_https( $home_url );
 	}
 
 	/**
-	 * Whether this request carries a header a reverse proxy adds. A hint
-	 * for the wording only; it never decides whether a request is secure.
+	 * Whether a proxy header on a request claims the client connected over
+	 * HTTPS: an `https` hop in X-Forwarded-Proto, a CF-Visitor scheme of
+	 * "https", or a `proto=https` in Forwarded (RFC 7239). Pure.
 	 *
+	 * @param string $forwarded_proto X-Forwarded-Proto, or ''.
+	 * @param string $cf_visitor      CF-Visitor, or ''.
+	 * @param string $forwarded       Forwarded, or ''.
 	 * @return bool
 	 */
-	public static function proxy_headers_present() {
-		foreach ( array( 'HTTP_X_FORWARDED_PROTO', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED_HOST', 'HTTP_FORWARDED', 'HTTP_X_REAL_IP', 'HTTP_CF_CONNECTING_IP', 'HTTP_CF_VISITOR' ) as $key ) {
-			if ( ! empty( $_SERVER[ $key ] ) ) {
+	public static function proxy_header_claims_https( $forwarded_proto, $cf_visitor, $forwarded ) {
+		foreach ( explode( ',', (string) $forwarded_proto ) as $hop ) {
+			if ( 'https' === strtolower( trim( $hop ) ) ) {
 				return true;
 			}
+		}
+		if ( '' !== (string) $cf_visitor ) {
+			$visitor = json_decode( (string) $cf_visitor, true );
+			if ( is_array( $visitor ) && isset( $visitor['scheme'] ) && 'https' === strtolower( (string) $visitor['scheme'] ) ) {
+				return true;
+			}
+		}
+		if ( '' !== (string) $forwarded && preg_match( '/(?:^|[;,\s])proto\s*=\s*"?https"?(?:$|[;,\s])/i', (string) $forwarded ) ) {
+			return true;
 		}
 		return false;
 	}
@@ -184,7 +202,14 @@ class Mcpwp_OAuth_Transport {
 	 * @return bool
 	 */
 	public static function request_proxy_suspected() {
-		return self::proxy_suspected( self::home(), self::proxy_headers_present() );
+		// phpcs:disable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- only compared against fixed strings.
+		$claims = self::proxy_header_claims_https(
+			isset( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) ? (string) wp_unslash( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) : '',
+			isset( $_SERVER['HTTP_CF_VISITOR'] ) ? (string) wp_unslash( $_SERVER['HTTP_CF_VISITOR'] ) : '',
+			isset( $_SERVER['HTTP_FORWARDED'] ) ? (string) wp_unslash( $_SERVER['HTTP_FORWARDED'] ) : ''
+		);
+		// phpcs:enable WordPress.Security.ValidatedSanitizedInput.InputNotSanitized
+		return self::proxy_suspected( self::home(), $claims );
 	}
 
 	// ── this request ─────────────────────────────────────────────────────
@@ -265,7 +290,7 @@ class Mcpwp_OAuth_Transport {
 		if ( $proxy ) {
 			return __( 'OAuth access tokens are accepted only over HTTPS. This site\'s address is https, but the request reached WordPress through a proxy over plain HTTP: the proxy terminates TLS without telling WordPress.', 'mcpwp' );
 		}
-		return __( 'OAuth access tokens are accepted only over HTTPS. This request arrived over plain HTTP and was refused.', 'mcpwp' );
+		return __( 'OAuth access tokens are accepted only over HTTPS. This request arrived over plain HTTP and was refused: the app is probably using an http:// URL.', 'mcpwp' );
 	}
 
 	/**
@@ -280,7 +305,7 @@ class Mcpwp_OAuth_Transport {
 		if ( $proxy ) {
 			return 'Use the site\'s https:// MCP URL. If the app already does, site owner: configure the proxy or host so WordPress is told the request was HTTPS ($_SERVER[\'HTTPS\'] = \'on\'). Only if the server can be reached solely through that proxy, wp-config.php may set it from the proxy\'s header: if ( isset( $_SERVER[\'HTTP_X_FORWARDED_PROTO\'] ) && \'https\' === $_SERVER[\'HTTP_X_FORWARDED_PROTO\'] ) { $_SERVER[\'HTTPS\'] = \'on\'; } If the server is also reachable directly, do not: anyone could then send that header and fake HTTPS. MCPWP_TRUST_PROXY_HEADERS has the same requirement and also makes MCPWP trust client-IP headers (X-Forwarded-For, CF-Connecting-IP) for rate limits and logs. ' . $revoked;
 		}
-		return 'Use the site\'s https:// MCP URL. Site owner: serve the site over HTTPS; behind a TLS-terminating proxy, configure the proxy or host so WordPress is told the request was HTTPS ($_SERVER[\'HTTPS\'] = \'on\'). ' . $revoked;
+		return 'The app used an http:// URL: use the site\'s https:// MCP URL instead. Site owner: serve the site over HTTPS; behind a TLS-terminating proxy, configure the proxy or host so WordPress is told the request was HTTPS ($_SERVER[\'HTTPS\'] = \'on\'). ' . $revoked;
 	}
 
 	/**
@@ -387,6 +412,12 @@ class Mcpwp_OAuth_Transport {
 	 * address is https, or a recorded refusal of a real token carried proxy
 	 * headers. 'recommended' when a real token was refused otherwise; else
 	 * 'good'. Nothing an anonymous caller can send reaches 'critical'.
+	 *
+	 * Accepted: a user holding a real token of their own can, by sending it
+	 * over plain HTTP with a forged proxy header, raise the status to
+	 * critical once. It costs them that token (revoked on arrival), the
+	 * record says nothing more than "a token was refused", and the wording
+	 * it selects only ever recommends fixes that are safe on their own.
 	 *
 	 * @return array{status:string,proxy:bool,record:array|false}
 	 */

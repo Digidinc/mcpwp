@@ -6169,10 +6169,11 @@ trait Mcpwp_Api_Auth {
 	 * On refusal the presented token is revoked with its refresh family (it
 	 * travelled unencrypted); only when that actually killed a live token is
 	 * the refusal recorded for Site Health, so an anonymous request with a
-	 * made-up token cannot raise the alarm. The lookup is bounded by a
+	 * made-up token cannot raise the alarm. Refusals are charged to a
 	 * dedicated per-address bucket, 'insecure:<ip>', separate from the
 	 * 'invalid:<ip>' bucket wrong credentials share; over that budget the
-	 * lookup is skipped. None of this changes the answer: one fixed 403 for
+	 * token is still looked up and revoked, but the refusal is not recorded.
+	 * None of this changes the answer: one fixed 403 for
 	 * every token, live, dead or never issued, with no rate-limit headers.
 	 * The time taken can differ by one indexed lookup (and a write for a live
 	 * token); the token is already exposed by then, so that is not treated
@@ -6190,7 +6191,13 @@ trait Mcpwp_Api_Auth {
 		if ( ! Mcpwp_OAuth_Transport::is_refused() ) {
 			return null;
 		}
-		if ( ! $this->insecure_transport_over_budget( $request, $metered ) && Mcpwp_OAuth_Transport::revoke_presented_token( $token ) ) {
+		// The lookup and revocation always run (one indexed read; a token that
+		// crossed the network in cleartext must die whatever the budget).
+		// Over the 'insecure:<ip>' budget only the Site Health record is
+		// skipped, so a flood cannot keep rewriting it.
+		$over    = $this->insecure_transport_over_budget( $request, $metered );
+		$revoked = Mcpwp_OAuth_Transport::revoke_presented_token( $token );
+		if ( $revoked && ! $over ) {
 			Mcpwp_OAuth_Transport::record_refusal();
 		}
 		return Mcpwp_OAuth_Transport::refusal_error();

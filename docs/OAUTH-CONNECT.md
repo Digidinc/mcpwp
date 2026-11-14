@@ -36,8 +36,8 @@ OAuth access tokens are accepted **only over HTTPS**. API keys are not affected.
   with its refresh token**, because it travelled unencrypted. Connect the app again once the site is
   fixed.
 - **Rate limits:** these refusals are counted in their own per-address bucket, never in the one wrong
-  credentials share. Over that bucket's limit the token is not even looked up, but the answer stays
-  the same 403 with no rate-limit headers. The response time can differ by one database lookup
+  credentials share. Over that bucket's limit the token is still looked up and revoked, but the
+  refusal is not recorded for Site Health. The answer stays the same 403 with no rate-limit headers. The response time can differ by one database lookup
   between a live and an unknown token. By then the token has already crossed the network in
   cleartext, so this is not treated as a secret worth hiding.
 - **The consent screen** (`/mcpwp-oauth/authorize`) answers a plain 403 page over plain HTTP. This
@@ -46,6 +46,9 @@ OAuth access tokens are accepted **only over HTTPS**. API keys are not affected.
   - On a site that uses only the mumcp.com broker (local OAuth off), the protected-resource document
     names mumcp.com. That document and its challenge are still served, since broker tokens are not
     covered by this rule.
+  - A site with both the broker and local OAuth on loses discovery over plain HTTP, because the
+    document names the local server. Its broker tokens keep working. This is accepted; the fix is
+    the same HTTPS fix.
 - **"HTTPS"** means WordPress's own `is_ssl()` says so: `$_SERVER['HTTPS']` is `on` or `1`, or, when
   it is not set at all, the server port is 443. That port fallback is core's own rule, so a server
   answering plain HTTP on port 443 would pass. A second route exists only when
@@ -59,9 +62,17 @@ claude.ai and ChatGPT usually do not show the reason, so MCPWP reports it in Sit
 notice on the MCPWP screens:
 
 - **Critical** when your own admin page arrives over plain HTTP although the site address is https,
-  or when a real token was refused and the request carried proxy headers.
-- **Recommended** when a real token was refused otherwise.
+  or when a real token was refused and a proxy header on that request said the client used HTTPS
+  (`X-Forwarded-Proto` with an `https` hop, `CF-Visitor` scheme `https`, or `Forwarded` with
+  `proto=https`).
+- **Recommended** when a real token was refused otherwise. For example, a proxy header says `http`,
+  or only a client-IP header (`X-Forwarded-For`, `CF-Connecting-IP`) is present. That means the app
+  itself used an `http://` URL, and the message says so.
 - Requests with made-up tokens, the consent screen and the discovery documents never raise it.
+- These headers choose only the wording and the severity. They never decide whether a request
+  counts as HTTPS.
+- A user can raise the status once with a real token of their own and a forged header. That token
+  is revoked on arrival, and the recommended fixes are safe on their own. This is accepted.
 
 The fix is to configure the proxy or host so WordPress is told the request was HTTPS
 (`$_SERVER['HTTPS'] = 'on'`). Many hosts have a setting for this. If the server can be reached
@@ -85,7 +96,9 @@ it only when the proxy overwrites those headers.
 **Behaviour change:** every reader of `MCPWP_TRUST_PROXY_HEADERS` now honours it only when it is
 exactly `true`. That covers client IPs, the OAuth issuer origin and this HTTPS rule. Earlier releases
 accepted any truthy value, such as `1`, `'yes'`, or even the string `'false'`. Define it as `true` if
-you relied on that.
+you relied on that. Any other value (`1`, `'yes'`, `'true'`, `0`) is reported in Site Health and in
+a notice on the MCPWP screens: "MCPWP_TRUST_PROXY_HEADERS is not honoured; define it as true."
+`true` and `false` are never reported.
 
 **Local development** is exempt in three cases:
 

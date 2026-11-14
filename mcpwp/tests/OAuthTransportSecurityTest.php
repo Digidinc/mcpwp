@@ -311,21 +311,21 @@ final class OAuthTransportSecurityTest extends TestCase {
 		$this->assertSame( array(), $auth->limited );
 	}
 
-	public function test_over_the_insecure_budget_the_lookup_is_skipped_and_the_answer_is_the_same(): void {
+	public function test_over_the_insecure_budget_the_token_still_dies_but_nothing_is_recorded(): void {
 		$token = $this->live_token();
 		$this->over_http();
 		$under = $this->shape( $this->verify( 'mcpwp_at_' . str_repeat( 'm', 40 ) ) );
 
 		$auth                = new Mcpwp_OAuth_Transport_Test_Auth();
 		$auth->insecure_over = true;
-		$before              = $this->store_snapshot();
 		$over                = $auth->verify_api_key( $this->bearer( $token ) );
 		$this->assertSame( $under, $this->shape( $over ), 'Identical answer over budget.' );
-		$this->assertSame( $before, $this->store_snapshot(), 'Over budget: no lookup, no revocation, no record.' );
-		$this->assertFalse( Mcpwp_OAuth_Transport::get_record() );
+		$this->assertFalse( Mcpwp_OAuth_Transport::get_record(), 'Over budget: no Site Health record.' );
 
 		$this->over_https();
-		$this->assertTrue( $this->verify( $token ), 'The skipped token was not revoked.' );
+		$after = $this->verify( $token );
+		$this->assertInstanceOf( WP_Error::class, $after, 'Over budget the token is still looked up and revoked.' );
+		$this->assertSame( 'invalid_token', $after->get_error_code() );
 	}
 
 	public function test_the_403_reaches_the_client_without_a_reconnect_challenge(): void {
@@ -374,7 +374,7 @@ final class OAuthTransportSecurityTest extends TestCase {
 
 	public function test_an_https_site_reached_through_a_proxy_over_http_gets_the_proxy_text(): void {
 		$this->over_http();
-		$_SERVER['HTTP_X_FORWARDED_FOR'] = '198.51.100.4';
+		$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
 		$error = $this->verify( 'mcpwp_at_' . str_repeat( 'h', 40 ) );
 		$this->assertStringContainsString( 'proxy', $error->get_error_message() );
 		$hint = $error->get_error_data()['hint'];
@@ -389,6 +389,48 @@ final class OAuthTransportSecurityTest extends TestCase {
 		$this->assertLessThan( $trust, $snippet, 'The wp-config snippet comes first.' );
 		$this->assertStringContainsString( 'client-IP headers', $hint, 'The trust constant\'s side effect is stated.' );
 		$this->assertStringContainsString( 'revoked', $hint );
+	}
+
+	/** @return array<string, array{0: array<string, string>, 1: bool}> */
+	public static function proxy_header_cases(): array {
+		return array(
+			'XFP https'              => array( array( 'HTTP_X_FORWARDED_PROTO' => 'https' ), true ),
+			'XFP with an https hop'  => array( array( 'HTTP_X_FORWARDED_PROTO' => 'https, http' ), true ),
+			'XFP http'               => array( array( 'HTTP_X_FORWARDED_PROTO' => 'http' ), false ),
+			'CF-Visitor https'       => array( array( 'HTTP_CF_VISITOR' => '{"scheme":"https"}' ), true ),
+			'CF-Visitor http'        => array( array( 'HTTP_CF_VISITOR' => '{"scheme":"http"}' ), false ),
+			'CF-Visitor junk'        => array( array( 'HTTP_CF_VISITOR' => 'https' ), false ),
+			'Forwarded proto=https'  => array( array( 'HTTP_FORWARDED' => 'for=192.0.2.60;proto=https;by=203.0.113.43' ), true ),
+			'Forwarded proto=http'   => array( array( 'HTTP_FORWARDED' => 'for=192.0.2.60;proto=http' ), false ),
+			'Forwarded quoted https' => array( array( 'HTTP_FORWARDED' => 'proto="https"' ), true ),
+			'Forwarded not proto'    => array( array( 'HTTP_FORWARDED' => 'for=https' ), false ),
+			'XFF only'               => array( array( 'HTTP_X_FORWARDED_FOR' => '198.51.100.4' ), false ),
+			'CF-Connecting-IP only'  => array( array( 'HTTP_CF_CONNECTING_IP' => '198.51.100.4' ), false ),
+			'no headers'             => array( array(), false ),
+		);
+	}
+
+	/**
+	 * @dataProvider proxy_header_cases
+	 */
+	public function test_only_a_header_claiming_https_picks_the_proxy_wording_and_severity( array $headers, bool $proxy ): void {
+		$token = $this->live_token();
+		$this->over_http();
+		foreach ( $headers as $key => $value ) {
+			$_SERVER[ $key ] = $value;
+		}
+		$error = $this->verify( $token );
+		$this->assert_https_required( $error );
+		$this->assertSame( Mcpwp_OAuth_Transport::message( $proxy ), $error->get_error_message() );
+		$this->assertSame( Mcpwp_OAuth_Transport::hint( $proxy ), $error->get_error_data()['hint'] );
+		if ( ! $proxy ) {
+			$this->assertStringContainsString( 'http:// URL', $error->get_error_message() );
+		}
+		foreach ( array_keys( $headers ) as $key ) {
+			unset( $_SERVER[ $key ] );
+		}
+		$this->over_https();
+		$this->assertSame( $proxy ? 'critical' : 'recommended', Mcpwp_OAuth_Transport::run_site_status_test()['status'] );
 	}
 
 	public function test_an_https_site_without_proxy_headers_gets_the_plain_text(): void {
@@ -645,7 +687,7 @@ final class OAuthTransportSecurityTest extends TestCase {
 		$this->assertSame( 'good', Mcpwp_OAuth_Transport::get_status()['status'] );
 		$token = $this->live_token();
 		$this->over_http();
-		$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'http';
+		$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
 
 		// Made-up tokens, the consent screen and discovery write nothing.
 		$this->verify( 'mcpwp_at_' . str_repeat( 'o', 40 ) );
@@ -708,13 +750,23 @@ final class OAuthTransportSecurityTest extends TestCase {
 		$this->over_https();
 		$this->assertSame( 'recommended', Mcpwp_OAuth_Transport::run_site_status_test()['status'] );
 
-		// A real token refused through a proxy: critical.
+		// Only a client IP from the proxy: still the client's http:// URL.
 		delete_transient( Mcpwp_OAuth_Transport::REFUSALS_TRANSIENT );
 		$token = $this->live_token();
 		$this->over_http();
 		$_SERVER['HTTP_CF_CONNECTING_IP'] = '198.51.100.7';
 		$this->verify( $token );
 		unset( $_SERVER['HTTP_CF_CONNECTING_IP'] );
+		$this->over_https();
+		$this->assertSame( 'recommended', Mcpwp_OAuth_Transport::run_site_status_test()['status'] );
+
+		// A real token refused through a proxy that says the client used https: critical.
+		delete_transient( Mcpwp_OAuth_Transport::REFUSALS_TRANSIENT );
+		$token = $this->live_token();
+		$this->over_http();
+		$_SERVER['HTTP_CF_VISITOR'] = '{"scheme":"https"}';
+		$this->verify( $token );
+		unset( $_SERVER['HTTP_CF_VISITOR'] );
 		$this->over_https();
 		$this->assertSame( 'critical', Mcpwp_OAuth_Transport::run_site_status_test()['status'] );
 
@@ -748,7 +800,7 @@ final class OAuthTransportSecurityTest extends TestCase {
 
 		$token = $this->live_token();
 		$this->over_http();
-		$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'http';
+		$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'https';
 		$this->verify( $token );
 		$this->over_https();
 		unset( $_SERVER['HTTP_X_FORWARDED_PROTO'] );
@@ -762,5 +814,67 @@ final class OAuthTransportSecurityTest extends TestCase {
 		ob_start();
 		Mcpwp_OAuth_Transport::render_notice();
 		$this->assertSame( '', ob_get_clean() );
+	}
+
+	// ── the trust constant, misconfigured ────────────────────────────────
+
+	public function test_an_undefined_trust_constant_is_not_reported(): void {
+		if ( defined( 'MCPWP_TRUST_PROXY_HEADERS' ) ) {
+			$this->markTestSkipped( 'MCPWP_TRUST_PROXY_HEADERS is defined in this process.' );
+		}
+		$this->assertFalse( Mcpwp_Proxy_Trust::misconfigured() );
+		$this->assertSame( 'good', Mcpwp_Proxy_Trust::run_site_status_test()['status'] );
+		$tests = Mcpwp_Proxy_Trust::register_site_status_test( array( 'direct' => array() ) );
+		$this->assertArrayHasKey( 'mcpwp_proxy_trust_constant', $tests['direct'] );
+	}
+
+	/** @return array<string, array{0: mixed, 1: bool}> */
+	public static function trust_constant_values(): array {
+		return array(
+			'true'           => array( true, false ),
+			'false'          => array( false, false ),
+			'1'              => array( 1, true ),
+			'"yes"'          => array( 'yes', true ),
+			'"false" string' => array( 'false', true ),
+			'"true" string'  => array( 'true', true ),
+			'0'              => array( 0, true ),
+		);
+	}
+
+	/**
+	 * @dataProvider trust_constant_values
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 *
+	 * @param mixed $value      The defined value.
+	 * @param bool  $misconfig Whether it should be reported.
+	 */
+	public function test_a_trust_constant_that_is_not_exactly_true_or_false_is_reported( $value, bool $misconfig ): void {
+		define( 'MCPWP_TRUST_PROXY_HEADERS', $value );
+		$this->assertSame( true === $value, Mcpwp_Proxy_Trust::headers_trusted() );
+		$this->assertSame( $misconfig, Mcpwp_Proxy_Trust::misconfigured() );
+		$result = Mcpwp_Proxy_Trust::run_site_status_test();
+		$this->assertSame( $misconfig ? 'recommended' : 'good', $result['status'] );
+		if ( $misconfig ) {
+			$this->assertStringContainsString( 'not honoured', $result['label'] );
+			$this->assertStringContainsString( 'define it as true', $result['description'] );
+		}
+
+		require_once __DIR__ . '/fixtures/get-current-screen.php';
+		$GLOBALS['mcpwp_test_screen_id']    = 'toplevel_page_mcpwp';
+		$GLOBALS['mcpwp_test_current_user'] = 1;
+		$GLOBALS['mcpwp_test_user_caps']    = array( 1 => array( 'manage_options' => true ) );
+		ob_start();
+		Mcpwp_Proxy_Trust::render_notice();
+		$html = ob_get_clean();
+		if ( $misconfig ) {
+			$this->assertStringContainsString( 'is not honoured', $html );
+		} else {
+			$this->assertSame( '', $html );
+		}
+		$GLOBALS['mcpwp_test_screen_id'] = 'dashboard';
+		ob_start();
+		Mcpwp_Proxy_Trust::render_notice();
+		$this->assertSame( '', ob_get_clean(), 'Only on the MCPWP screens and Plugins.' );
 	}
 }
