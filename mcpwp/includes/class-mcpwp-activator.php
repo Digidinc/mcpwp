@@ -1301,14 +1301,17 @@ class Mcpwp_Activator {
 		$now       = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
 
 		// Hashed once, outside the mutator: a salted hash differs on every call.
-		$single_is_hash = '' !== $single && Mcpwp_Key_State::is_password_hash_shaped( $single );
+		// A stored verifier (password hash or MD5-era hash) is carried VERBATIM:
+		// hashing it would make the stored string itself the key.
+		$single_is_hash = '' !== $single && Mcpwp_Key_State::is_stored_verifier( $single );
 		$single_hash    = '' === $single ? '' : ( $single_is_hash ? $single : wp_hash_password( $single ) );
 
-		$legacy       = (string) get_option( 'mcpwp_api_key', '' );
-		$legacy_hash  = '' === $legacy ? '' : ( self::looks_like_password_hash( $legacy ) ? $legacy : wp_hash_password( $legacy ) );
+		$legacy          = (string) get_option( 'mcpwp_api_key', '' );
+		$legacy_verifier = '' !== $legacy && Mcpwp_Key_State::is_stored_verifier( $legacy );
+		$legacy_hash     = '' === $legacy ? '' : ( $legacy_verifier ? $legacy : wp_hash_password( $legacy ) );
 		// A plaintext legacy key gets a fresh salted hash that no stored hash
 		// equals, so it is also compared by verification.
-		$legacy_plain = ( '' !== $legacy && ! self::looks_like_password_hash( $legacy ) ) ? $legacy : '';
+		$legacy_plain = ( '' !== $legacy && ! $legacy_verifier ) ? $legacy : '';
 
 		return static function ( array $keys ) use ( $spai_keys, $single, $single_is_hash, $single_hash, $legacy_hash, $legacy_plain, $now, $revoke ) {
 			$present = array();
@@ -1381,10 +1384,10 @@ class Mcpwp_Activator {
 					}
 					$hash = isset( $key['hash'] ) ? (string) $key['hash'] : '';
 					$id   = isset( $key['id'] ) ? sanitize_key( (string) $key['id'] ) : '';
-					// Not a real hash, or no id: the bridge refuses it (no plaintext
+					// Not a verifier, or no id: the bridge refuses it (no plaintext
 					// match for a store record, no principal without an id), so it
 					// is already dead and is not adopted.
-					if ( '' === $hash || '' === $id || isset( $present[ $hash ] ) || ! Mcpwp_Key_State::is_password_hash_shaped( $hash ) ) {
+					if ( '' === $hash || '' === $id || isset( $present[ $hash ] ) || ! Mcpwp_Key_State::is_stored_verifier( $hash ) ) {
 						continue;
 					}
 					if ( $legacy_in_play && $is_legacy( $hash ) ) {
@@ -2478,7 +2481,9 @@ class Mcpwp_Activator {
 			return;
 		}
 
-		$legacy_hash = self::looks_like_password_hash( $legacy_key ) ? (string) $legacy_key : wp_hash_password( (string) $legacy_key );
+		// A stored verifier (password hash or MD5-era hash) is kept verbatim:
+		// hashing it would make the stored string itself the key.
+		$legacy_hash = Mcpwp_Key_State::is_stored_verifier( (string) $legacy_key ) ? (string) $legacy_key : wp_hash_password( (string) $legacy_key );
 
 		$key_id = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : uniqid( 'mcpwp_', true );
 		$record = array(

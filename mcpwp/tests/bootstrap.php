@@ -1697,6 +1697,11 @@ function wp_hash_password($password)
 function wp_check_password($password, $hash)
 {
     $hash = (string) $hash;
+    if (0 === strpos($hash, '$wp')) {
+        // WordPress 6.8+ shape, verified exactly as core does.
+        $password_to_verify = base64_encode(hash_hmac('sha384', (string) $password, 'wp-sha384', true));
+        return password_verify($password_to_verify, substr($hash, 3));
+    }
     if (0 === strpos($hash, '$2') || 0 === strpos($hash, '$argon')) {
         return password_verify((string) $password, $hash);
     }
