@@ -445,7 +445,7 @@ All endpoints require `X-API-Key` header. Namespace: `mcpwp/v1`.
 | `/settings` | GET/PUT | Plugin settings |
 | `/options` | GET | WordPress reading options |
 | `/plugins` | GET | Active plugins + capabilities |
-| `/fetch` | GET | Fetch arbitrary external URL |
+| `/fetch` | GET | Fetch a post by id/URL, or one of this site's archive or `/wp-json/` URLs (#989) |
 | `/rate-limit` | GET | Rate limit status |
 | `/rate-limit/reset` | POST | Reset rate limit |
 | `/analytics` | GET | Usage analytics |
@@ -819,6 +819,29 @@ container → container(s) → widget(s)  # Flexbox layout (check elementor_layo
   }
 }
 ```
+
+### Render verification (#989)
+
+`meta_verified` still means only that `_elementor_data` was stored. `render_verified` now also
+checks the rendered DOM: once the save pipeline is clean, the writer renders the page body in-process
+(`Frontend::get_builder_content()`, the page as the current post) and `Mcpwp_Render_Inspector`
+compares the HTML with the stored tree. It fails, with the reason in `render_errors`, when a saved
+element id has no `data-id` in the HTML, Elementor's default text or `placeholder.png` is showing
+(unless the saved data asked for that text), an unrendered `[et_pb_` / `[elementor-template]`
+shortcode is visible, or a heading title / button label is not in that element's text. Buttons
+linking to `#` are warnings only. The report is `dom_check` (`status` passed/failed/skipped); it is
+skipped, with a `reason`, for password-protected posts, Theme Builder documents, a failed pipeline,
+or when the `mcpwp_verify_rendered_dom` filter returns false.
+
+`wp_get_rendered_html` returns `effective_template`: `assigned` (page template, and the Theme Builder
+templates Elementor Pro's conditions pick for the post) and `rendered` (from the fetched document:
+body-class page template, every `data-elementor-type` document and its location, theme header/footer
+markup outside Elementor), plus `warnings` where they disagree. `Mcpwp_Effective_Template`.
+
+`wp_fetch` also takes this site's archive URLs (category, tag, taxonomy, author, date, post type
+archive, search, blog index; returns `resource: archive` and one page of published posts) and REST
+URLs (`/wp-json/...`, `?rest_route=`; dispatched internally as a logged-out visitor, outside the
+MCP sub-request flag; `mcpwp/*` refused). `Mcpwp_Site_Url_Resolver`.
 
 ## Version Bumping
 
