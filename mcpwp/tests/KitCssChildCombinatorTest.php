@@ -51,6 +51,20 @@ final class KitCssChildCombinatorTest extends TestCase {
 	}
 
 	/**
+	 * The controller as an admin-scoped key's request sees it: raw Kit CSS is
+	 * a privilege (#829), and these tests are about the bytes an authorised
+	 * caller gets back, not about who may write them.
+	 */
+	private function admin_controller(): Mcpwp_REST_Elementor {
+		$controller = new Mcpwp_REST_Elementor();
+		$property   = new ReflectionProperty( $controller, 'current_api_key_record' );
+		$property->setAccessible( true );
+		$property->setValue( $controller, array( 'id' => 'k', 'scopes' => array( 'read', 'write', 'admin' ) ) );
+
+		return $controller;
+	}
+
+	/**
 	 * Install the Elementor kit doubles and a $wpdb that reflects the meta store.
 	 *
 	 * @param bool $host_escapes Whether the simulated host HTML-escapes meta writes.
@@ -90,7 +104,7 @@ final class KitCssChildCombinatorTest extends TestCase {
 	}
 
 	private function upsert( string $name, string $css ) {
-		$controller = new Mcpwp_REST_Elementor();
+		$controller = $this->admin_controller();
 
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/kit-css/blocks' );
 		$request->set_param( 'name', $name );
@@ -100,7 +114,7 @@ final class KitCssChildCombinatorTest extends TestCase {
 	}
 
 	private function read_block( string $name ) {
-		$controller = new Mcpwp_REST_Elementor();
+		$controller = $this->admin_controller();
 
 		$request = new WP_REST_Request( 'GET', '/mcpwp/v1/elementor/kit-css/blocks/' . $name );
 		$request->set_param( 'name', $name );
@@ -113,7 +127,7 @@ final class KitCssChildCombinatorTest extends TestCase {
 	}
 
 	private function list_blocks() {
-		$controller = new Mcpwp_REST_Elementor();
+		$controller = $this->admin_controller();
 
 		$request = new WP_REST_Request( 'GET', '/mcpwp/v1/elementor/kit-css/blocks' );
 

@@ -193,6 +193,20 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 	}
 
 	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_silently_failed_meta_write_never_publishes_a_template(): void {
+		$this->install_elementor( false );
+		$GLOBALS['mcpwp_test_meta_write_fails'] = array( '_elementor_data' );
+
+		$result = ( new Mcpwp_Theme_Builder() )->create_theme_template( $this->create_args() );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertEmpty( $GLOBALS['_mcpwp_test_posts'], 'A template with no persisted tree must not remain published or draft.' );
+	}
+
+	/**
 	 * The happy path: a save that succeeds ends published, carrying the
 	 * submitted data — and publish happens even though the (unrelated,
 	 * deliberately invalid) location assignment failed, matching the

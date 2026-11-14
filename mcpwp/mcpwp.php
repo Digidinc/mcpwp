@@ -302,6 +302,11 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-template-refs.php';
 	// The one reader of a stored `_elementor_data` tree, whatever its form (#845).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-stored-tree.php';
+	// The one chokepoint every _elementor_data / _elementor_page_settings write
+	// passes through: Elementor's REST sanitizer no longer re-sanitizes what the
+	// caller did not change (#829). Booted here, before rest_api_init.
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-meta-write.php';
+	Mcpwp_Elementor_Meta_Write::boot();
 	// Shared suspend/restore for Elementor's content-sanitizer (#828 part 2 /
 	// #759 residual gap) — loaded before anything that calls it, trait or not.
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-sanitizer-guard.php';

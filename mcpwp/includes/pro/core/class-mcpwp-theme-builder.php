@@ -1266,7 +1266,13 @@ class Mcpwp_Theme_Builder {
 					if ( $document && method_exists( $document, 'save' ) ) {
 						$suspended_sanitizer = Mcpwp_Elementor_Sanitizer_Guard::suspend();
 						try {
-							$save_result = $document->save( array( 'elements' => $elements ) );
+							// Elementor's own write of _elementor_data is an MCPWP write (#829).
+							$save_result = Mcpwp_Elementor_Meta_Write::as_writer(
+								(int) $template_id,
+								static function () use ( $document, $elements ) {
+									return $document->save( array( 'elements' => $elements ) );
+								}
+							);
 						} finally {
 							Mcpwp_Elementor_Sanitizer_Guard::restore( $suspended_sanitizer );
 						}
@@ -1294,7 +1300,15 @@ class Mcpwp_Theme_Builder {
 
 				// Always overwrite raw meta — Document::save() may silently fail or
 				// write to revision cache instead of post meta (#198).
-				update_post_meta( $template_id, '_elementor_data', wp_slash( $json ) );
+				$approved_json = Mcpwp_Elementor_Meta_Write::apply_policy( $template_id, '_elementor_data', $json );
+				$written = Mcpwp_Elementor_Meta_Write::update( $template_id, '_elementor_data', $json );
+				if ( is_wp_error( $written ) ) {
+					throw new RuntimeException( 'elementor_data_refused: ' . $written->get_error_message() );
+				}
+				wp_cache_delete( $template_id, 'post_meta' );
+				if ( $approved_json !== get_post_meta( $template_id, '_elementor_data', true ) ) {
+					throw new RuntimeException( 'elementor_data_not_persisted: Elementor data did not match the approved write.' );
+				}
 
 				// Clear post_content so Elementor owns the rendering.
 				$content_cleared = wp_update_post(

@@ -840,7 +840,7 @@ class Mcpwp_Elementor_Pro {
 
 		$post_data = array(
 			'post_title'  => $title,
-			'post_status' => 'publish',
+			'post_status' => 'draft',
 			'post_type'   => 'elementor_library',
 		);
 
@@ -858,6 +858,7 @@ class Mcpwp_Elementor_Pro {
 		if ( ! empty( $data['elementor_data'] ) ) {
 			$save_result = $this->save_elementor_data( $template_id, $data['elementor_data'] );
 			if ( is_wp_error( $save_result ) ) {
+				wp_delete_post( $template_id, true );
 				return $save_result;
 			}
 		}
@@ -866,9 +867,18 @@ class Mcpwp_Elementor_Pro {
 		// this a "full-page" template carried the layout and lost the frame:
 		// canvas choice, hide-title, body background, page CSS (#638).
 		$settings_report = $this->store_template_page_settings( $template_id, $data );
+		if ( is_array( $settings_report ) && ! $settings_report['written'] ) {
+			wp_delete_post( $template_id, true );
+			return new WP_Error( 'elementor_settings_write_refused', __( 'The template page settings were not stored.', 'mcpwp' ), array( 'status' => 409 ) );
+		}
 
 		$this->save_part_metadata( $template_id, $data );
 		$this->save_archetype_metadata( $template_id, $data );
+		$published = wp_update_post( array( 'ID' => $template_id, 'post_status' => 'publish' ), true );
+		if ( is_wp_error( $published ) || ! $published ) {
+			wp_delete_post( $template_id, true );
+			return is_wp_error( $published ) ? $published : new WP_Error( 'elementor_template_publish_failed', __( 'The completed template could not be published.', 'mcpwp' ), array( 'status' => 500 ) );
+		}
 
 		$created = $this->get_template( $template_id );
 
@@ -1009,6 +1019,9 @@ class Mcpwp_Elementor_Pro {
 		}
 
 		$settings_report = $this->store_template_page_settings( $template_id, $data );
+		if ( is_array( $settings_report ) && ! $settings_report['written'] ) {
+			return new WP_Error( 'elementor_settings_write_refused', __( 'The template data was updated, but the requested page settings were not stored.', 'mcpwp' ), array( 'status' => 500, 'partial_write' => true ) );
+		}
 
 		$this->save_part_metadata( $template_id, $data );
 		$this->save_archetype_metadata( $template_id, $data );
@@ -1411,7 +1424,19 @@ class Mcpwp_Elementor_Pro {
 		// Mcpwp_Content_Guardrails::on_insert_post_data() (#957), which has
 		// no post ID to look postmeta up by otherwise. See that method's
 		// docblock.
+		$meta = get_post_meta( $source_id );
+		$has_elementor_data = array_key_exists( '_elementor_data', $meta );
 		$elementor_data = get_post_meta( $source_id, '_elementor_data', true );
+
+		// Data the chokepoint would refuse to store (not a tree, a non-finite
+		// number: #829 review rounds 3-4) is refused before the copy exists,
+		// not silently left out of it.
+		if ( $has_elementor_data ) {
+			$clone_refusal = Mcpwp_Elementor_Meta_Write::tree_refusal( $elementor_data );
+			if ( null !== $clone_refusal ) {
+				return $clone_refusal;
+			}
+		}
 
 		// #1032: a clone copies _elementor_data verbatim, bypassing
 		// save_elementor_data()/validate_and_fix_elements() entirely — so a
@@ -1445,39 +1470,74 @@ class Mcpwp_Elementor_Pro {
 			'post_title'   => $title,
 			'post_content' => $source->post_content,
 			'post_excerpt' => $source->post_excerpt,
-			'post_status'  => $status,
+			'post_status'  => 'draft',
 			'post_type'    => $source->post_type,
 			'post_author'  => get_current_user_id(),
 		);
-		if ( ! empty( $elementor_data ) ) {
-			$new_post['meta_input'] = array( '_elementor_data' => $elementor_data );
+		if ( $has_elementor_data ) {
+			// Slashed, as update_post_meta() (which meta_input calls) expects:
+			// unslashed, every `\"` in the JSON lost its backslash and the
+			// clone's data could not be decoded (#829).
+			$new_post['meta_input'] = array( '_elementor_data' => wp_slash( $elementor_data ) );
 		}
 
 		if ( ! empty( $args['parent'] ) ) {
 			$new_post['post_parent'] = absint( $args['parent'] );
 		}
 
-		$new_id = wp_insert_post( $new_post );
+		// MCPWP writes the copy's Elementor meta (#829): a copy made by a
+		// principal without unfiltered_html is a sanitized copy, whatever the
+		// post type — nothing is "known" on a post that did not exist.
+		$new_id = Mcpwp_Elementor_Meta_Write::as_writer(
+			0,
+			static function () use ( $new_post ) {
+				return wp_insert_post( $new_post );
+			}
+		);
 
 		if ( is_wp_error( $new_id ) ) {
 			return $new_id;
 		}
 
-		// Copy every OTHER post meta — _elementor_data was already written
-		// above, atomically with the insert.
-		$meta = get_post_meta( $source_id );
-		foreach ( $meta as $key => $values ) {
-			if ( '_elementor_data' === $key ) {
-				continue;
-			}
-			foreach ( $values as $value ) {
-				add_post_meta( $new_id, $key, maybe_unserialize( $value ) );
+		if ( $has_elementor_data ) {
+			$expected = Mcpwp_Elementor_Meta_Write::apply_policy( 0, '_elementor_data', $elementor_data );
+			wp_cache_delete( $new_id, 'post_meta' );
+			$stored = get_post_meta( $new_id, '_elementor_data', true );
+			if ( $expected !== $stored ) {
+				wp_delete_post( $new_id, true );
+				return new WP_Error( 'elementor_meta_write_refused', __( 'The clone\'s Elementor data was not stored as approved.', 'mcpwp' ), array( 'status' => 409 ) );
 			}
 		}
 
-		// The guardrails filter above may have downgraded post_status —
-		// read back what actually landed, not what was requested.
-		$status = get_post_status( $new_id );
+		// Copy source metadata, excluding Elementor's derived render caches.
+		// They were built from the source's raw data; the clone's data has
+		// passed through the acting principal's content policy and may differ.
+		Mcpwp_Elementor_Meta_Write::as_writer(
+			(int) $new_id,
+			static function () use ( $meta, $new_id ) {
+				foreach ( $meta as $key => $values ) {
+					if ( in_array( $key, array( '_elementor_data', '_elementor_element_cache', '_elementor_css' ), true ) ) {
+						continue;
+					}
+					foreach ( $values as $value ) {
+						// Slashed: add_post_meta() unslashes, which stripped every
+						// backslash from the copy (#829 review round 2).
+						add_post_meta( $new_id, $key, wp_slash( maybe_unserialize( $value ) ) );
+					}
+				}
+			}
+		);
+
+		if ( array_key_exists( '_elementor_page_settings', $meta ) ) {
+			$source_settings = get_post_meta( $source_id, '_elementor_page_settings', true );
+			$expected_settings = Mcpwp_Elementor_Meta_Write::apply_policy( 0, '_elementor_page_settings', $source_settings );
+			wp_cache_delete( $new_id, 'post_meta' );
+			$stored_settings = get_post_meta( $new_id, '_elementor_page_settings', true );
+			if ( ! Mcpwp_Elementor_Meta_Write::deep_equal( $expected_settings, $stored_settings ) ) {
+				wp_delete_post( $new_id, true );
+				return new WP_Error( 'elementor_settings_write_refused', __( 'The clone\'s Elementor page settings were not stored as approved.', 'mcpwp' ), array( 'status' => 409 ) );
+			}
+		}
 
 		// Copy taxonomies.
 		$taxonomies = get_object_taxonomies( $source->post_type );
@@ -1487,6 +1547,14 @@ class Mcpwp_Elementor_Pro {
 				wp_set_object_terms( $new_id, $terms, $taxonomy );
 			}
 		}
+		if ( 'draft' !== $status ) {
+			$published = wp_update_post( array( 'ID' => $new_id, 'post_status' => $status ), true );
+			if ( is_wp_error( $published ) || ! $published ) {
+				wp_delete_post( $new_id, true );
+				return is_wp_error( $published ) ? $published : new WP_Error( 'elementor_clone_publish_failed', __( 'The completed clone could not be published.', 'mcpwp' ), array( 'status' => 500 ) );
+			}
+		}
+		$status = get_post_status( $new_id );
 
 		// Get the cloned page with Elementor data.
 		$result = array(
@@ -1552,15 +1620,22 @@ class Mcpwp_Elementor_Pro {
 		// Create the page.
 		$page_data = array(
 			'post_title'  => $title,
-			'post_status' => $status,
+			'post_status' => 'draft',
 			'post_type'   => 'page',
 			'post_author' => get_current_user_id(),
 		);
 		if ( null !== $landing_elementor_data ) {
-			$page_data['meta_input'] = array( '_elementor_data' => $landing_elementor_data );
+			// Slashed, as update_post_meta() (which meta_input calls) expects (#829).
+			$page_data['meta_input'] = array( '_elementor_data' => wp_slash( $landing_elementor_data ) );
 		}
 
-		$page_id = wp_insert_post( $page_data );
+		// meta_input is an MCPWP write of _elementor_data (#829).
+		$page_id = Mcpwp_Elementor_Meta_Write::as_writer(
+			0,
+			static function () use ( $page_data ) {
+				return wp_insert_post( $page_data );
+			}
+		);
 
 		if ( is_wp_error( $page_id ) ) {
 			return $page_id;
@@ -1573,6 +1648,7 @@ class Mcpwp_Elementor_Pro {
 		if ( null !== $landing_elementor_data ) {
 			$save_result = $this->save_elementor_data( $page_id, $landing_elementor_data );
 			if ( is_wp_error( $save_result ) ) {
+				wp_delete_post( $page_id, true );
 				return $save_result;
 			}
 		}
@@ -1589,6 +1665,13 @@ class Mcpwp_Elementor_Pro {
 			if ( is_wp_error( $template_result ) ) {
 				wp_delete_post( $page_id, true );
 				return $template_result;
+			}
+		}
+		if ( 'draft' !== $status ) {
+			$published = wp_update_post( array( 'ID' => $page_id, 'post_status' => $status ), true );
+			if ( is_wp_error( $published ) || ! $published ) {
+				wp_delete_post( $page_id, true );
+				return is_wp_error( $published ) ? $published : new WP_Error( 'elementor_landing_publish_failed', __( 'The completed landing page could not be published.', 'mcpwp' ), array( 'status' => 500 ) );
 			}
 		}
 
@@ -1746,6 +1829,9 @@ class Mcpwp_Elementor_Pro {
 			Mcpwp_Elementor_Page_Settings::read( $template_id ),
 			$page_settings_mode
 		);
+		if ( array_key_exists( 'written', $settings_report ) && ! $settings_report['written'] ) {
+			return new WP_Error( 'elementor_settings_write_refused', __( 'The template layout was applied, but the requested page settings were not stored.', 'mcpwp' ), array( 'status' => 500, 'partial_write' => true ) );
+		}
 
 		if ( is_array( $save_result ) ) {
 			$save_result['page_settings'] = $settings_report;
@@ -1854,7 +1940,7 @@ class Mcpwp_Elementor_Pro {
 		// Create the template post.
 		$template_id = wp_insert_post( array(
 			'post_title'  => sanitize_text_field( $title ),
-			'post_status' => 'publish',
+			'post_status' => 'draft',
 			'post_type'   => 'elementor_library',
 		) );
 
@@ -1872,13 +1958,19 @@ class Mcpwp_Elementor_Pro {
 
 		// Save the element data (wrapped in array).
 		$template_data = array( $found );
-		$save_result = $this->save_elementor_data( $template_id, $template_data );
+		$save_result   = $this->save_elementor_data( $template_id, $template_data );
 		if ( is_wp_error( $save_result ) ) {
+			wp_delete_post( $template_id, true );
 			return $save_result;
 		}
 
 		// Set taxonomy term for Elementor library type.
 		wp_set_object_terms( $template_id, $template_type, 'elementor_library_type' );
+		$published = wp_update_post( array( 'ID' => $template_id, 'post_status' => 'publish' ), true );
+		if ( is_wp_error( $published ) || ! $published ) {
+			wp_delete_post( $template_id, true );
+			return is_wp_error( $published ) ? $published : new WP_Error( 'elementor_template_publish_failed', __( 'The saved section could not be published.', 'mcpwp' ), array( 'status' => 500 ) );
+		}
 
 		return array(
 			'template_id'   => $template_id,

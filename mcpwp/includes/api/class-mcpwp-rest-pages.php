@@ -475,6 +475,13 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 			return Mcpwp_Elementor_Stored_Tree::refusal( $source_tree, "The source page's Elementor data" );
 		}
 
+		// Data the chokepoint would refuse (a non-finite number, #829 review
+		// round 4) is refused here, before a page is created without it.
+		$clone_refusal = Mcpwp_Elementor_Meta_Write::tree_refusal( get_post_meta( $page_id, '_elementor_data', true ) );
+		if ( null !== $clone_refusal ) {
+			return $this->error_response_from_wp_error( $clone_refusal );
+		}
+
 		// #1032 (adversarial review round 1, NIT): a clone copies
 		// _elementor_data and post_content byte for byte, bypassing every
 		// write-time template-reference check — refused before wp_insert_post()
@@ -497,7 +504,7 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 				'post_type'    => 'page',
 				'post_title'   => sanitize_text_field( $title ),
 				'post_content' => $page->post_content,
-				'post_status'  => sanitize_key( $status ),
+				'post_status'  => 'draft',
 				'post_parent'  => $page->post_parent,
 				'menu_order'   => $page->menu_order,
 			),
@@ -528,12 +535,26 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 				$elementor_data = Mcpwp_Elementor_Element_Keys::normalize_json( $elementor_data );
 			}
 
-			update_post_meta( $new_page_id, '_elementor_data', wp_slash( $elementor_data ) );
+			// An MCPWP write of the copy (#829): a principal without
+			// unfiltered_html gets a sanitized copy, whatever the post type.
+			$written = Mcpwp_Elementor_Meta_Write::update( $new_page_id, '_elementor_data', $elementor_data );
+			if ( is_wp_error( $written ) ) {
+				wp_delete_post( $new_page_id, true );
+				return $this->error_response_from_wp_error( $written );
+			}
 			update_post_meta( $new_page_id, '_elementor_edit_mode', 'builder' );
 
 			$template_type = get_post_meta( $page_id, '_elementor_template_type', true );
 			if ( $template_type ) {
 				update_post_meta( $new_page_id, '_elementor_template_type', $template_type );
+			}
+		}
+		if ( array_key_exists( '_elementor_page_settings', get_post_meta( $page_id ) ) ) {
+			$settings = get_post_meta( $page_id, '_elementor_page_settings', true );
+			$written_settings = Mcpwp_Elementor_Meta_Write::update( $new_page_id, '_elementor_page_settings', $settings );
+			if ( is_wp_error( $written_settings ) ) {
+				wp_delete_post( $new_page_id, true );
+				return $this->error_response_from_wp_error( $written_settings );
 			}
 		}
 
@@ -542,10 +563,18 @@ class Mcpwp_REST_Pages extends Mcpwp_REST_API {
 		if ( $thumbnail_id ) {
 			set_post_thumbnail( $new_page_id, $thumbnail_id );
 		}
+		if ( 'draft' !== $status ) {
+			$published = wp_update_post( array( 'ID' => $new_page_id, 'post_status' => sanitize_key( $status ) ), true );
+			if ( is_wp_error( $published ) || ! $published ) {
+				wp_delete_post( $new_page_id, true );
+				return is_wp_error( $published ) ? $this->error_response_from_wp_error( $published ) : $this->error_response( 'clone_publish_failed', __( 'The completed clone could not be published.', 'mcpwp' ), 500 );
+			}
+		}
 
 		$result = $this->pages->get_page( $new_page_id );
 
 		if ( is_wp_error( $result ) ) {
+			wp_delete_post( $new_page_id, true );
 			return $result;
 		}
 

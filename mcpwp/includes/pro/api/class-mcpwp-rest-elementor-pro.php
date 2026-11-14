@@ -765,6 +765,40 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * strip_wrapper_html_tags() over every string of a value (a string, or an
+	 * array such as `_elementor_page_settings`), keeping its shape.
+	 *
+	 * @param mixed $value Value.
+	 * @return array{value:mixed,changed:bool}
+	 */
+	private function strip_wrapper_html_tags_deep( $value ) {
+		if ( is_string( $value ) ) {
+			if ( '' === $value || ! $this->contains_wrapper_html_tags( $value ) ) {
+				return array( 'value' => $value, 'changed' => false );
+			}
+			$stripped = $this->strip_wrapper_html_tags( $value );
+
+			return array(
+				'value'   => empty( $stripped['changed'] ) ? $value : $stripped['content'],
+				'changed' => ! empty( $stripped['changed'] ),
+			);
+		}
+
+		if ( ! is_array( $value ) ) {
+			return array( 'value' => $value, 'changed' => false );
+		}
+
+		$changed = false;
+		foreach ( $value as $k => $v ) {
+			$r           = $this->strip_wrapper_html_tags_deep( $v );
+			$value[ $k ] = $r['value'];
+			$changed     = $changed || $r['changed'];
+		}
+
+		return array( 'value' => $value, 'changed' => $changed );
+	}
+
+	/**
 	 * Sanitize a Custom Code snippet by stripping invalid wrapper tags.
 	 *
 	 * Scans all string post meta values and removes <html>/<head>/<body> tags.
@@ -787,6 +821,23 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		foreach ( $meta as $key => $values ) {
 			if ( ! is_array( $values ) ) {
+				continue;
+			}
+
+			// An Elementor key is read as its real (unserialized) value and
+			// written back through the one chokepoint (#829): get_post_meta( $id )
+			// returns `_elementor_page_settings` as a serialized string, which
+			// would be stripped as text and stored back serialized twice.
+			if ( in_array( $key, Mcpwp_Elementor_Meta_Write::KEYS, true ) ) {
+				$current = get_post_meta( $id, $key, true );
+				$fixed   = $this->strip_wrapper_html_tags_deep( $current );
+				if ( $fixed['changed'] ) {
+					$written = Mcpwp_Elementor_Meta_Write::update( $id, $key, $fixed['value'] );
+					if ( ! is_wp_error( $written ) ) {
+						$changed++;
+						$matches[] = $key;
+					}
+				}
 				continue;
 			}
 
@@ -1476,6 +1527,12 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 */
 	public static function grant_custom_code_unfiltered_html_cap( $allcaps, $caps = array(), $args = array(), $user = null ) {
 		if ( self::$custom_code_unfiltered_depth < 1 || ! is_array( $allcaps ) ) {
+			return $allcaps;
+		}
+
+		// While an Elementor meta write is vouching/suspending grants, this one
+		// stays out too, like the writer-trait grants (#829).
+		if ( class_exists( 'Mcpwp_Elementor_Meta_Write', false ) && Mcpwp_Elementor_Meta_Write::grants_suspended() ) {
 			return $allcaps;
 		}
 
@@ -2916,7 +2973,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		// custom_css renders sitewide, so writing it requires admin scope (the
 		// route itself stays write-scope for the design-token surface). OAuth
-		// callers carry a null key record → treated as non-admin (fails closed).
+		// callers carry a key record with the admin scope stripped → non-admin
+		// (fails closed); the user's own unfiltered_html never counts.
 		$record   = $this->get_current_api_key_record();
 		$is_admin = is_array( $record ) && $this->key_has_scope( $record, 'admin' );
 
@@ -2962,6 +3020,17 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 			if ( 'custom_css' === $key ) {
 				$value = $this->sanitize_kit_custom_css( (string) $value, $warnings );
+				// Stored as sent (#829), so nothing that can end the <style>
+				// element it is printed in. sanitize_kit_custom_css() is
+				// iterated to a fixed point, and this check stays as defence in
+				// depth (also covers `</ style`, `<\/style`, NUL, lookalikes).
+				if ( Mcpwp_Elementor_Meta_Write::css_breaks_out( $value ) ) {
+					return $this->error_response(
+						'kit_css_style_breakout',
+						__( 'Kit CSS must not contain "</style" (in any letter case or spacing): the stylesheet is printed inside a <style> element, and that text would end it and let what follows run as HTML. Nothing was saved.', 'mcpwp' ),
+						400
+					);
+				}
 			} elseif ( 'string' === $expected ) {
 				$value = sanitize_text_field( $value );
 			}
@@ -2994,7 +3063,13 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			$warnings[] = __( 'custom_css was not applied: writing kit CSS requires an admin-scoped API key. Other settings were saved.', 'mcpwp' );
 		}
 
-		update_post_meta( $kit_id, '_elementor_page_settings', $updated );
+		// custom_css (admin-scoped, cleaned by sanitize_kit_custom_css()) is
+		// stored as that cleaning left it, not HTML-escaped; every other string
+		// follows the caller's policy (#829).
+		$written = Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $updated, array( 'raw_paths' => array( 'custom_css' ) ) );
+		if ( is_wp_error( $written ) ) {
+			return $this->error_response_from_wp_error( $written );
+		}
 
 		// Clear Elementor caches
 		if ( method_exists( \Elementor\Plugin::$instance->files_manager, 'clear_cache' ) ) {
@@ -3074,9 +3149,22 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	private function sanitize_kit_custom_css( $css, &$warnings ) {
 		$css = (string) $css;
 
-		// Remove HTML tag sequences (style/script-context breakouts).
-		$css = preg_replace( '#</?[a-z][^>]*>#i', '', $css );
-		$css = str_ireplace( array( '</style', '<style', '<script', '</script' ), '', (string) $css );
+		// Remove HTML tag sequences (style/script-context breakouts). Each pass
+		// can splice the text around a removed piece into a new tag
+		// (`<<b>/s<<a>/styletyle>` -> `</style>`), so repeat to a fixed point.
+		// A bounded loop that still has not settled is emptied rather than kept.
+		for ( $pass = 0; ; $pass++ ) {
+			$prev = $css;
+			$css  = preg_replace( '#</?[a-z][^>]*>#i', '', $css );
+			$css  = str_ireplace( array( '</style', '<style', '<script', '</script' ), '', (string) $css );
+			if ( $css === $prev ) {
+				break;
+			}
+			if ( $pass >= 50 ) {
+				$css = '';
+				break;
+			}
+		}
 
 		// Neutralize dangerous CSS directives (case-insensitive).
 		$patterns = array(

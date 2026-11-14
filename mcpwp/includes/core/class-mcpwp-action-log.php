@@ -129,6 +129,13 @@ class Mcpwp_Action_Log {
 		$before_cap  = self::cap_snapshot( self::snapshot( $resource ) );
 		$log_id      = self::generate_id();
 
+		// Record what the tool's write actually replaces, so complete() can
+		// tell whether this snapshot is still "the state the write replaced"
+		// (#829 review round 3).
+		if ( 'elementor' === $resource['type'] && ! empty( $resource['id'] ) && class_exists( 'Mcpwp_Elementor_Meta_Write' ) ) {
+			Mcpwp_Elementor_Meta_Write::forget_replaced( (int) $resource['id'] );
+		}
+
 		self::$pending[ $log_id ] = array(
 			'resource'            => $resource,
 			'resource_post_type'  => $resource_post_type,
@@ -163,6 +170,7 @@ class Mcpwp_Action_Log {
 		$arguments = $pending['arguments'];
 
 		$after_cap          = $success ? self::cap_snapshot( self::snapshot( $resource ) ) : array( 'value' => null, 'skipped' => false );
+		$pending['before_snap'] = self::mark_raced_snapshot( $resource, $pending['before_snap'] );
 		$snapshot_skipped   = ( $pending['before_snap_skipped'] || $after_cap['skipped'] ) ? 'too_large' : '';
 		$rollback_supported = $success && self::is_rollback_supported( $tool_name, $resource );
 
@@ -282,7 +290,7 @@ class Mcpwp_Action_Log {
 			}
 		}
 
-		$result = self::apply_snapshot( $entry['resource_type'], $snap );
+		$result = self::apply_snapshot( $entry['resource_type'], $snap, self::snapshot_is_trusted( $entry, $snap ) );
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
@@ -838,6 +846,9 @@ class Mcpwp_Action_Log {
 			array(
 				'post_id'        => $post_id,
 				'elementor_data' => get_post_meta( $post_id, '_elementor_data', true ),
+				// Which write of the post this snapshot describes: what a later
+				// rollback's trust is bound to (snapshot_is_trusted()).
+				'write_token'    => class_exists( 'Mcpwp_Elementor_Meta_Write' ) ? Mcpwp_Elementor_Meta_Write::write_token( $post_id ) : '',
 			)
 		);
 	}
@@ -869,7 +880,7 @@ class Mcpwp_Action_Log {
 		);
 	}
 
-	private static function apply_snapshot( $resource_type, $snap ) {
+	private static function apply_snapshot( $resource_type, $snap, $trusted = false ) {
 		// #1031 round 2: a snapshot withheld for size (cap_snapshot(), any
 		// resource type) OR — pre-existing — a credential-shaped option
 		// value (snapshot_option()) both carry a `withheld` key instead of
@@ -935,7 +946,23 @@ class Mcpwp_Action_Log {
 				// Slashed: update_post_meta() unslashes what it stores, and
 				// Elementor JSON escapes every quote inside a setting. Restored
 				// unslashed, the page could not be decoded (#845).
-				update_post_meta( (int) $snap['post_id'], '_elementor_data', wp_slash( $snap_data ) );
+				//
+				// The snapshot is what this same post held before the write
+				// being rolled back, taken server-side by MCPWP. Its elements
+				// are trusted as stored content only when nothing has changed
+				// the post since that write ($trusted, see rollback()): an
+				// admin who removed a script afterwards must not see a key's
+				// rollback put it back. Otherwise the restore is sanitized
+				// like any content the caller introduces (#829).
+				$written = Mcpwp_Elementor_Meta_Write::update(
+					(int) $snap['post_id'],
+					'_elementor_data',
+					$snap_data,
+					$trusted ? array( 'snapshot' => $snap_data ) : array()
+				);
+				if ( is_wp_error( $written ) ) {
+					return $written;
+				}
 				delete_post_meta( (int) $snap['post_id'], '_elementor_css' );
 				return true;
 
@@ -962,6 +989,92 @@ class Mcpwp_Action_Log {
 			default:
 				return new WP_Error( 'unsupported_type', __( 'Rollback not supported for this resource type.', 'mcpwp' ), array( 'status' => 400 ) );
 		}
+	}
+
+	/**
+	 * Whether a rollback's before-snapshot may be trusted as stored content
+	 * (#829 review round 2): only an Elementor snapshot of the same post, and
+	 * only while nothing has written that post since the logged write (its
+	 * after_snap's write token is still the post's) and it still holds exactly
+	 * what that write left. Once anything else has written the post — an admin
+	 * removing a script, or a later write reproducing the same bytes — the
+	 * snapshot is just old content, and restoring it goes through the
+	 * sanitizer like anything a caller sends.
+	 *
+	 * @param array $entry Log entry.
+	 * @param array $snap  Decoded before_snap.
+	 * @return bool
+	 */
+	private static function snapshot_is_trusted( array $entry, array $snap ) {
+		if ( 'elementor' !== ( $entry['resource_type'] ?? '' ) || empty( $snap['post_id'] ) || empty( $entry['after_snap'] ) ) {
+			return false;
+		}
+
+		// Something else wrote the post between begin() and the tool's write:
+		// the snapshot is not what the write replaced (see mark_raced_snapshot()).
+		if ( ! empty( $snap['raced'] ) ) {
+			return false;
+		}
+
+		$after = json_decode( (string) $entry['after_snap'], true );
+		if ( ! is_array( $after ) || ! array_key_exists( 'elementor_data', $after ) || isset( $after['withheld'] ) ) {
+			return false;
+		}
+
+		if ( (int) ( $after['post_id'] ?? 0 ) !== (int) $snap['post_id'] ) {
+			return false;
+		}
+
+		// Trust is a fact about WRITES, not bytes (#829 review round 5): the
+		// post must not have been written at all since the logged write. A
+		// later write that happens to reproduce the same bytes (an admin
+		// rebuilt the page without a script, a key then wrote the logged
+		// result again) is still a later write. An entry with no recorded
+		// token (logged before tokens existed) is never trusted.
+		$recorded = (string) ( $after['write_token'] ?? '' );
+		if ( '' === $recorded || ! class_exists( 'Mcpwp_Elementor_Meta_Write' ) ) {
+			return false;
+		}
+		if ( ! hash_equals( $recorded, Mcpwp_Elementor_Meta_Write::write_token( (int) $snap['post_id'] ) ) ) {
+			return false;
+		}
+
+		// And the bytes still match, as a second, independent check.
+		return get_post_meta( (int) $snap['post_id'], '_elementor_data', true ) === $after['elementor_data'];
+	}
+
+	/**
+	 * Flag a before-snapshot that is not what the logged write replaced.
+	 *
+	 * begin() snapshots the post before the tool runs; an admin's edit landing
+	 * between that and the tool's own write would otherwise be reverted by a
+	 * trusted rollback of the older snapshot (#829 review round 3). The
+	 * chokepoint records the value the write actually replaced; when it
+	 * differs, the snapshot is marked `raced` and never trusted.
+	 *
+	 * @param array       $resource    Detected resource.
+	 * @param string|null $before_snap Snapshot JSON from begin().
+	 * @return string|null
+	 */
+	private static function mark_raced_snapshot( array $resource, $before_snap ) {
+		if ( 'elementor' !== ( $resource['type'] ?? '' ) || empty( $resource['id'] ) || ! is_string( $before_snap ) || ! class_exists( 'Mcpwp_Elementor_Meta_Write' ) ) {
+			return $before_snap;
+		}
+
+		$replaced = Mcpwp_Elementor_Meta_Write::replaced( (int) $resource['id'] );
+		$snap     = json_decode( $before_snap, true );
+		if ( ! $replaced['written'] || ! is_array( $snap ) || isset( $snap['withheld'] ) || ! array_key_exists( 'elementor_data', $snap ) ) {
+			return $before_snap;
+		}
+
+		if ( $snap['elementor_data'] === $replaced['value'] ) {
+			return $before_snap;
+		}
+
+		$snap['raced'] = true;
+		$encoded       = wp_json_encode( $snap );
+
+		return false === $encoded ? $before_snap : $encoded;
 	}
 
 	private static function insert(

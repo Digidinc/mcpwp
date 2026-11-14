@@ -153,6 +153,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * @param callable $call   The Elementor call to attempt.
 	 * @param array    $debug  Debug bag, written by reference on failure.
 	 * @param string   $label  Key prefix for the debug entry.
+	 * @param int      $post_id The post the call writes, for Mcpwp_Elementor_Meta_Write (#829).
 	 * @return array{ok:bool,value:mixed} ok=false when the call threw, returned
 	 *         WP_Error, or returned the literal bool `false`.
 	 *
@@ -177,7 +178,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 * pressure. This is a known gap, not an overlooked one; the next change
 	 * that touches this method should close it the same way.
 	 */
-	private function attempt_elementor_call( callable $call, array &$debug, $label ) {
+	private function attempt_elementor_call( callable $call, array &$debug, $label, $post_id = 0 ) {
 		// Depth-counted so a nested call cannot tear the filter out from under
 		// the call that installed it. Nothing nests today; a future edit that
 		// starts to would otherwise silently reopen #765 with no failing test.
@@ -222,7 +223,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		try {
-			$value = $call();
+			// Whatever Elementor writes to this post's _elementor_data /
+			// _elementor_page_settings inside the call is an MCPWP write, and
+			// goes through the same policy as MCPWP's own (#829).
+			$value = ( (int) $post_id > 0 && class_exists( 'Mcpwp_Elementor_Meta_Write', false ) )
+				? Mcpwp_Elementor_Meta_Write::as_writer( (int) $post_id, $call )
+				: $call();
 
 			if ( is_wp_error( $value ) ) {
 				$debug[ $label . '_error' ] = $value->get_error_message();
@@ -291,7 +297,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 *
 	 * Elementor's Document::save() runs the whole payload through
 	 * Utils::kses_post_deep() whenever the current user lacks `unfiltered_html`
-	 * (core/base/document.php). Every MCPWP write is such a request — the API
+	 * (core/base/document.php). Every API-key write is such a request — the API
 	 * key maps onto the mcpwp_api_agent role, which has no such capability —
 	 * so Elementor rewrote the caller's settings on the way in: `style=` and
 	 * `<script>` stripped out of widget settings, among others. Reproduced on
@@ -315,9 +321,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 *   fallback. The unfiltered content already rendered.
 	 *
 	 * So the pass was not a safety control here — it was the sole cause of a
-	 * disagreement between what we store and what Elementor renders. What
-	 * governs whether a caller may write raw HTML at all remains the API key,
-	 * its role scope and the plugin's own validation, exactly as before.
+	 * disagreement between what we store and what Elementor renders. What is
+	 * stored is decided by Mcpwp_Elementor_Meta_Write (#829): unedited elements
+	 * keep their bytes, everything a caller introduces is sanitized, and the
+	 * acting user's own `unfiltered_html` never exempts an AI-driven write
+	 * (API key, OAuth app or chat bridge alike). This grant only lets
+	 * Elementor's render-cache rebuild agree with what was stored.
 	 *
 	 * Deliberately narrow: one capability, one user, one call, removed in a
 	 * `finally` so a Throwable cannot leave it installed.
@@ -330,6 +339,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 */
 	public static function grant_unfiltered_html_cap( $allcaps, $caps = array(), $args = array(), $user = null ) {
 		if ( self::$unfiltered_html_depth < 1 || ! is_array( $allcaps ) ) {
+			return $allcaps;
+		}
+
+		// Not while a meta sanitizer decides what this write may store (#829):
+		// Document::save() writes _elementor_data inside this grant, and that
+		// write must be judged on the caller's own capability, or the raw bytes
+		// it stored would read as "already on the post" to the write after it.
+		if ( class_exists( 'Mcpwp_Elementor_Meta_Write', false ) && Mcpwp_Elementor_Meta_Write::grants_suspended() ) {
 			return $allcaps;
 		}
 
@@ -457,6 +474,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 */
 	public static function map_unfiltered_html_cap( $caps, $cap = '', $user_id = 0 ) {
 		if ( self::$unfiltered_html_depth < 1 || 'unfiltered_html' !== $cap ) {
+			return $caps;
+		}
+
+		// See grant_unfiltered_html_cap() (#829).
+		if ( class_exists( 'Mcpwp_Elementor_Meta_Write', false ) && Mcpwp_Elementor_Meta_Write::grants_suspended() ) {
 			return $caps;
 		}
 
@@ -1100,7 +1122,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 					return true;
 				},
 				$debug,
-				'builder_flag'
+				'builder_flag',
+				$page_id
 			);
 
 			// Fall through to the raw write rather than returning, when the
@@ -1353,6 +1376,27 @@ trait Mcpwp_Elementor_Writer_Trait {
 			);
 		}
 
+		// #829 review round 3: only a list of elements — as Elementor decodes
+		// it — is written or policed. A JSON object here used to reach the
+		// validator and fatal (TypeError, HTTP 500) on 3.14.10.
+		if ( class_exists( 'Mcpwp_Elementor_Meta_Write' ) ) {
+			$tree_refusal = Mcpwp_Elementor_Meta_Write::tree_refusal( $elementor_json );
+			if ( null !== $tree_refusal ) {
+				return $tree_refusal;
+			}
+			if ( ! empty( $data['page_settings'] ) && is_array( $data['page_settings'] ) ) {
+				$stored_settings  = get_post_meta( $page_id, '_elementor_page_settings', true );
+				$merged_settings  = array_merge(
+					is_array( $stored_settings ) ? $stored_settings : array(),
+					array_intersect_key( $data['page_settings'], array_flip( array( 'custom_css', 'background_background', 'background_color', 'padding', 'hide_title' ) ) )
+				);
+				$settings_refusal = Mcpwp_Elementor_Meta_Write::settings_refusal( $merged_settings );
+				if ( null !== $settings_refusal ) {
+					return $settings_refusal;
+				}
+			}
+		}
+
 		// --- Layout-mode mismatch guard (#612) ---
 		// 'container' elements only render/persist correctly when the site's
 		// Elementor Container experiment is active. On a site still in classic
@@ -1590,6 +1634,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				array( 'status' => 500, 'sections_submitted' => $input_count, 'sections_after_validation' => $post_validation_count )
 			);
 		}
+		$approved_json = Mcpwp_Elementor_Meta_Write::apply_policy( $page_id, '_elementor_data', $elementor_json );
 
 		// --- 3. Save via Elementor Document API (preferred) or meta fallback ---
 
@@ -1612,7 +1657,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 							return $document->save( array( 'elements' => $post_validation_decoded ) );
 						},
 						$save_debug,
-						'document_save'
+						'document_save',
+						$page_id
 					);
 
 					$save_result = $attempt['value'];
@@ -1628,7 +1674,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 					if ( $attempt['ok'] && ! is_wp_error( $save_result ) ) {
 						// (#198) Always overwrite raw meta after Document::save() to
 						// prevent revision/cache divergence on subsequent reads.
-						update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+						$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+						if ( is_wp_error( $meta_write ) ) {
+							return $meta_write;
+						}
 
 						wp_cache_delete( $page_id, 'post_meta' );
 						clean_post_cache( $page_id );
@@ -1671,7 +1720,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// Fallback: direct meta write if Document::save() is unavailable or failed.
 		if ( ! $document_saved ) {
 			global $wpdb;
-			update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+			$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+			if ( is_wp_error( $meta_write ) ) {
+				return $meta_write;
+			}
 			$save_debug['meta_written'] = true;
 			if ( $wpdb->last_error ) {
 				// (#612) update_post_meta() swallows $wpdb errors — a query that fails
@@ -1719,7 +1771,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		$stored_decoded = $stored ? json_decode( $stored, true ) : null;
 		$stored_count   = is_array( $stored_decoded ) ? count( $stored_decoded ) : 0;
-		$save_debug['meta_verified']    = ( $stored_count === $input_count );
+		$save_debug['meta_verified']    = ( $stored === $approved_json );
 		$save_debug['sections_saved']   = $stored_count;
 		if ( $db_error_on_verify ) {
 			$save_debug['db_error_on_verify'] = $db_error_on_verify;
@@ -1743,6 +1795,9 @@ trait Mcpwp_Elementor_Writer_Trait {
 				)
 			);
 		}
+		if ( ! $save_debug['meta_verified'] ) {
+			return new WP_Error( 'meta_write_mismatch', __( 'The stored Elementor data does not match the approved write.', 'mcpwp' ), array( 'status' => 500, 'db_error' => $db_error_on_verify ) );
+		}
 
 		// --- 4. Rebuild CSS + HTML rendering cache ---
 		// Always regenerate — meta overwrite may leave post_content (HTML cache) stale.
@@ -1764,7 +1819,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 						return true;
 					},
 					$save_debug,
-					'cache_clear'
+					'cache_clear',
+					$page_id
 				);
 				$save_debug['cache_cleared'] = $cleared['ok'];
 			}
@@ -1790,13 +1846,17 @@ trait Mcpwp_Elementor_Writer_Trait {
 								return $fresh_doc->save( array( 'elements' => $fresh_elements ) );
 							},
 							$save_debug,
-							'html_cache_rebuild'
+							'html_cache_rebuild',
+							$page_id
 						);
 						$save_debug['html_cache_rebuilt'] = $rebuild['ok'];
 						if ( ! $rebuild['ok'] ) {
 							// Elementor may have partially written before throwing. Restore
 							// our known-good bytes, exactly as the corruption guard below does.
-							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+							$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							if ( is_wp_error( $meta_write ) ) {
+								return $meta_write;
+							}
 							wp_cache_delete( $page_id, 'post_meta' );
 						}
 
@@ -1816,7 +1876,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 						$post_rebuild_decoded = $post_rebuild ? json_decode( $post_rebuild, true ) : null;
 						$post_rebuild_total    = is_array( $post_rebuild_decoded ) ? $this->count_elements_recursive( $post_rebuild_decoded ) : 0;
 						if ( ! $this->elementor_values_match( $fresh_elements, $post_rebuild_decoded ) ) {
-							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+							$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							if ( is_wp_error( $meta_write ) ) {
+								return $meta_write;
+							}
 							wp_cache_delete( $page_id, 'post_meta' );
 							$save_debug['html_rebuild_corrupted_data'] = true;
 							$save_debug['html_rebuild_elements_before'] = $pre_rebuild_total;
@@ -1858,7 +1921,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 						return true;
 					},
 					$save_debug,
-					'css_regeneration'
+					'css_regeneration',
+					$page_id
 				);
 				$save_debug['css_regenerated'] = $css_regen['ok'];
 
@@ -1945,7 +2009,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 					$page_settings[ $key ] = $value;
 				}
 			}
-			update_post_meta( $page_id, '_elementor_page_settings', $page_settings );
+			$settings_written = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_page_settings', $page_settings );
+			if ( is_wp_error( $settings_written ) ) {
+				return $settings_written;
+			}
 			$save_debug['page_settings_updated'] = array_keys( $data['page_settings'] );
 		}
 
@@ -2067,7 +2134,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		} else {
 			// Set empty Elementor data
-			update_post_meta( $page_id, '_elementor_data', '[]' );
+			$empty_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', '[]' );
+			if ( is_wp_error( $empty_write ) ) {
+				wp_delete_post( $page_id, true );
+				return $empty_write;
+			}
 		}
 
 		$response = array(
@@ -2479,6 +2550,16 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $ref_check;
 		}
 
+		// Only a list of elements with finite numbers is written (#829 review
+		// rounds 3-4): INF made wp_json_encode() below fail and the edit end
+		// in a 500. A clear 400 instead, nothing written.
+		if ( class_exists( 'Mcpwp_Elementor_Meta_Write' ) ) {
+			$tree_refusal = Mcpwp_Elementor_Meta_Write::tree_refusal( $elements );
+			if ( null !== $tree_refusal ) {
+				return $tree_refusal;
+			}
+		}
+
 		// Refuse to silently convert a page that already has non-Elementor
 		// content (#788).
 		$conversion = $this->guard_content_conversion( $page_id, $elements, $options );
@@ -2512,6 +2593,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return new WP_Error( 'validation_corrupted', 'Data corrupted during validation.', array( 'status' => 500 ) );
 		}
 		$this->last_saved_elements = $post_val;
+		$approved_json = Mcpwp_Elementor_Meta_Write::apply_policy( $page_id, '_elementor_data', $elementor_json );
 
 		// Save via Elementor Document API (preferred) or meta fallback.
 		$document_saved = false;
@@ -2533,7 +2615,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 							return $document->save( array( 'elements' => $post_val ) );
 						},
 						$debug,
-						'document_save'
+						'document_save',
+						$page_id
 					);
 					$save_result = $attempt['value'];
 
@@ -2549,7 +2632,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 						// to guarantee the raw _elementor_data meta matches what we sent.
 						// Document::save() may create revisions or write to internal caches
 						// that diverge from the post meta on subsequent reads.
-						update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+						$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+						if ( is_wp_error( $meta_write ) ) {
+							return $meta_write;
+						}
 
 						wp_cache_delete( $page_id, 'post_meta' );
 						clean_post_cache( $page_id );
@@ -2590,7 +2676,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		// Fallback: direct meta write.
 		if ( ! $document_saved ) {
-			update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+			$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+			if ( is_wp_error( $meta_write ) ) {
+				return $meta_write;
+			}
 			$debug['save_method'] = 'meta_direct';
 
 			// (#187) Update post_content so front-end renderer doesn't short-circuit.
@@ -2611,16 +2700,22 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		$debug['meta_written'] = true;
 
-		// Verify.
+		// Verify against the database, not an optimistic object cache.
+		global $wpdb;
+		$stored = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_elementor_data' ORDER BY meta_id DESC LIMIT 1",
+				$page_id
+			)
+		);
 		wp_cache_delete( $page_id, 'post_meta' );
-		// Read back in whatever form is stored (#845): a vetoed write leaves
-		// the array that was already there, and json_decode() on it was a
-		// TypeError.
-		$stored         = get_post_meta( $page_id, '_elementor_data', true );
 		$stored_decoded = Mcpwp_Elementor_Stored_Tree::read( $stored )['elements'];
 		$stored_count   = is_array( $stored_decoded ) ? count( $stored_decoded ) : 0;
 		$debug['sections_saved'] = $stored_count;
-		$debug['meta_verified']  = ( $stored_count === $input_count );
+		$debug['meta_verified']  = ( $stored === $approved_json );
+		if ( ! $debug['meta_verified'] ) {
+			return new WP_Error( 'meta_write_mismatch', __( 'The stored Elementor data does not match the approved write.', 'mcpwp' ), array( 'status' => 500, 'sections_submitted' => $input_count, 'sections_saved' => $stored_count, 'db_error' => $wpdb->last_error ?: null ) );
+		}
 
 		// Rebuild Elementor's CSS + HTML rendering cache.
 		// Always regenerate — Document::save() may have used stale data before
@@ -2640,7 +2735,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 						return true;
 					},
 					$debug,
-					'cache_clear'
+					'cache_clear',
+					$page_id
 				);
 			}
 			delete_post_meta( $page_id, '_elementor_css' );
@@ -2657,11 +2753,15 @@ trait Mcpwp_Elementor_Writer_Trait {
 								return $fresh_doc->save( array( 'elements' => $fresh_elements ) );
 							},
 							$debug,
-							'html_cache_rebuild'
+							'html_cache_rebuild',
+							$page_id
 						);
 						$debug['html_cache_rebuilt'] = $rebuild['ok'];
 						if ( ! $rebuild['ok'] ) {
-							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+							$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							if ( is_wp_error( $meta_write ) ) {
+								return $meta_write;
+							}
 							wp_cache_delete( $page_id, 'post_meta' );
 						}
 
@@ -2678,7 +2778,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 						$post_rebuild_decoded = $post_rebuild ? json_decode( $post_rebuild, true ) : null;
 						$post_rebuild_total    = is_array( $post_rebuild_decoded ) ? $this->count_elements_recursive( $post_rebuild_decoded ) : 0;
 						if ( ! $this->elementor_values_match( $fresh_elements, $post_rebuild_decoded ) ) {
-							update_post_meta( $page_id, '_elementor_data', wp_slash( $elementor_json ) );
+							$meta_write = Mcpwp_Elementor_Meta_Write::update( $page_id, '_elementor_data', $elementor_json );
+							if ( is_wp_error( $meta_write ) ) {
+								return $meta_write;
+							}
 							wp_cache_delete( $page_id, 'post_meta' );
 							$debug['html_rebuild_corrupted_data'] = true;
 							$debug['html_rebuild_elements_before'] = $pre_rebuild_total;
@@ -2708,7 +2811,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 						return true;
 					},
 					$debug,
-					'css_regeneration'
+					'css_regeneration',
+					$page_id
 				);
 				$debug['css_regenerated'] = $css_regen['ok'];
 

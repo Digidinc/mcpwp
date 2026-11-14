@@ -130,12 +130,20 @@ class Mcpwp_Page_Builder {
 		// downgrades — see resolve_comparable_texts()'s docblock) but a
 		// false "word_count: 0" reported back for a page with real,
 		// multi-section visible text (#998).
-		$page_id = wp_insert_post( array(
+		// meta_input is an MCPWP write of _elementor_data (#829).
+		$page_postarr = array(
 			'post_title'  => sanitize_text_field( $title ),
-			'post_status' => $effective_status,
+			'post_status' => 'draft',
 			'post_type'   => 'page',
-			'meta_input'  => array( '_elementor_data' => $elements ),
-		) );
+			// Slashed, as update_post_meta() (which meta_input calls) expects (#829).
+			'meta_input'  => array( '_elementor_data' => wp_slash( $elements ) ),
+		);
+		$page_id      = Mcpwp_Elementor_Meta_Write::as_writer(
+			0,
+			static function () use ( $page_postarr ) {
+				return wp_insert_post( $page_postarr );
+			}
+		);
 
 		if ( is_wp_error( $page_id ) ) {
 			return $page_id;
@@ -160,16 +168,34 @@ class Mcpwp_Page_Builder {
 			)
 		);
 		if ( is_wp_error( $save_result ) ) {
+			wp_delete_post( $page_id, true );
 			return $save_result;
+		}
+		global $wpdb;
+		$meta_query = $wpdb->prepare(
+			"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_elementor_data' ORDER BY meta_id DESC LIMIT 1",
+			$page_id
+		);
+		$approved_stored = $wpdb->get_var( $meta_query );
+		if ( 'draft' !== $effective_status ) {
+			$published = wp_update_post( array( 'ID' => $page_id, 'post_status' => $effective_status ), true );
+			if ( is_wp_error( $published ) || ! $published ) {
+				wp_delete_post( $page_id, true );
+				return is_wp_error( $published ) ? $published : new WP_Error( 'elementor_page_publish_failed', __( 'The completed page could not be published.', 'mcpwp' ), array( 'status' => 500 ) );
+			}
 		}
 
 		// Final verification: confirm data is in the database.
 		wp_cache_delete( $page_id, 'post_meta' );
-		$final_stored  = get_post_meta( $page_id, '_elementor_data', true );
+		$final_stored  = $wpdb->get_var( $meta_query );
 		// In whatever form is stored (#845): a stale cache can still hold an array.
 		$final_decoded = Mcpwp_Elementor_Stored_Tree::read( $final_stored )['elements'];
 		$final_count   = is_array( $final_decoded ) ? count( $final_decoded ) : 0;
-		$meta_verified = ( $final_count === count( $elements ) );
+		$meta_verified = ( null !== $approved_stored && $final_stored === $approved_stored );
+		if ( ! $meta_verified ) {
+			wp_delete_post( $page_id, true );
+			return new WP_Error( 'elementor_meta_write_mismatch', __( 'The built page no longer matches its verified Elementor data.', 'mcpwp' ), array( 'status' => 500 ) );
+		}
 
 		$page = get_post( $page_id );
 
