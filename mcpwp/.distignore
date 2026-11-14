@@ -21,6 +21,9 @@
 CLAUDE_DESKTOP_SETUP.md
 MCP_IMPLEMENTATION.md
 CHANGELOG.md
+# WP.org directory assets. build-freemius.sh exempts /assets/*.png because it
+# keeps assets/icon-128x128.png, the Freemius plugin icon freemius-init.php
+# references (scripts/verify_plugin_assets.sh checks every built zip).
 /assets/*.png
 /assets/*.svg
 /includes/class-mcpwp-updater.php

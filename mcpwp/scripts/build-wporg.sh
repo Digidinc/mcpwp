@@ -48,6 +48,9 @@ cp -a "$PLUGIN_DIR" "$DEST"
 
 # ── Strip WP.org directory assets (uploaded separately to SVN assets/) ──
 rm -f "$DEST"/assets/banner-*.png
+# Icons included: this build also drops includes/freemius-init.php (the only
+# shipped code that names assets/icon-128x128.png). Only build-freemius.sh
+# keeps it. scripts/verify_plugin_assets.sh fails the build if that changes.
 rm -f "$DEST"/assets/icon-*.png
 rm -f "$DEST"/assets/screenshot-*.png
 rm -f "$DEST"/assets/icon.svg
@@ -144,6 +147,13 @@ if grep -Eq "defined\(\s*'MCPWP_PRO'\s*\)" "$DEST/includes/class-mcpwp-license.p
 else
     echo "    [OK] No wp-config.php MCPWP_PRO override in license class"
 fi
+
+ASSET_CHECK="$PLUGIN_DIR/../scripts/verify_plugin_assets.sh"
+if [[ ! -f "$ASSET_CHECK" ]]; then
+    echo "    [FAIL] $ASSET_CHECK not found; cannot verify shipped asset references"
+    exit 1
+fi
+bash "$ASSET_CHECK" "$OUTPUT_ZIP" 2>&1 | sed 's/^/    /'
 
 FILE_COUNT=$(unzip -l "$OUTPUT_ZIP" | tail -1 | awk '{print $2}')
 echo "    [INFO] $FILE_COUNT files in zip"
