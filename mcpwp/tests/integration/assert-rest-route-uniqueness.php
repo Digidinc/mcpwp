@@ -14,7 +14,8 @@ if ( $duplicates ) {
 }
 // #1104: core matches in registration order, so a route an earlier pattern
 // already matches is unreachable. Checked on the real table, in the real
-// loader order, which the unit harness only approximates.
+// loader order, which the unit harness only approximates. The sweep is a
+// sampling heuristic, not exhaustive — see mcpwp_test_shadowed_rest_routes().
 $shadowed = array();
 foreach ( mcpwp_test_shadowed_rest_routes( $routes ) as $key => $winner ) {
 	$shadowed[] = "$key -> $winner";

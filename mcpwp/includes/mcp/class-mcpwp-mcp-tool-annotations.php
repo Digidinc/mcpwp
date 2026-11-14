@@ -119,11 +119,6 @@ class Mcpwp_MCP_Tool_Annotations {
 			'destructiveHint' => false,
 			'reason'          => 'GET, but store=true persists the run to Mcpwp_SEO_Audit_Store (Mcpwp_REST_SEO_Audit::audit_seo_site()) — not a pure read on every call. Not destructive: the stored audit is a disposable, re-runnable snapshot, not user content.',
 		),
-		'wp_extract_site_blueprint' => array(
-			'readOnlyHint'    => false,
-			'destructiveHint' => false,
-			'reason'          => 'GET, but save=true persists the extracted result via Mcpwp_Site_Blueprints::save() (Mcpwp_REST_Site_Blueprints::extract_blueprint()) — not a pure read. Not destructive: extract() never sets an `id`, so save() always mints a brand-new blueprint id — this call path can only create, never overwrite an existing stored blueprint.',
-		),
 		'wp_get_signals'            => array(
 			'readOnlyHint'    => false,
 			'destructiveHint' => false,

@@ -327,7 +327,10 @@ class Mcpwp_Site_Blueprints {
 		}
 
 		return array(
-			'id'           => 'extracted-' . gmdate( 'Ymd' ),
+			// Unique per extraction, so storing two extractions made on the same
+			// day (POST /site-blueprints upserts by id) never overwrites one
+			// with the other.
+			'id'           => 'extracted-' . gmdate( 'Ymd' ) . '-' . substr( md5( uniqid( '', true ) ), 0, 8 ),
 			'name'         => get_bloginfo( 'name' ) . ' — Extracted Blueprint',
 			'description'  => 'Auto-extracted from ' . home_url() . ' on ' . gmdate( 'Y-m-d' ),
 			'category'     => 'custom',

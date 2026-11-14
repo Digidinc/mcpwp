@@ -67,6 +67,112 @@ final class SiteBlueprintsExtractRoute1104Test extends TestCase {
 		$this->assertStringStartsWith( 'extracted-', $data['blueprint']['id'] );
 	}
 
+	// ── Extracting is read-only (saving stays on the admin POST) ─────────
+
+	public static function truthy_save_values(): array {
+		return array(
+			'bool true' => array( true ),
+			'"true"'    => array( 'true' ),
+			'"1"'       => array( '1' ),
+			'int 1'     => array( 1 ),
+			'"yes"'     => array( 'yes' ),
+			'"on"'      => array( 'on' ),
+			'"TRUE"'    => array( 'TRUE' ),
+		);
+	}
+
+	/**
+	 * @dataProvider truthy_save_values
+	 */
+	public function test_a_truthy_save_on_extract_is_refused_and_stores_nothing( $save ): void {
+		list( $match ) = $this->dispatch( 'GET', '/mcpwp/v1/site-blueprints/extract' );
+		$request       = new WP_REST_Request( 'GET', '/mcpwp/v1/site-blueprints/extract', array( 'save' => $save ) );
+		$response      = call_user_func( $match['handler']['callback'], $request );
+
+		$this->assertSame( 400, $response->get_status() );
+		$this->assertSame( 'save_not_supported', $response->get_data()['code'] );
+		$this->assertSame( array(), Mcpwp_Site_Blueprints::list_all( false ), 'Nothing may be stored by a GET.' );
+		$this->assertFalse( get_option( Mcpwp_Site_Blueprints::OPTION_KEY, false ) );
+	}
+
+	public static function falsy_save_values(): array {
+		return array(
+			'bool false' => array( false ),
+			'"false"'    => array( 'false' ),
+			'"0"'        => array( '0' ),
+			'empty'      => array( '' ),
+		);
+	}
+
+	/**
+	 * @dataProvider falsy_save_values
+	 */
+	public function test_a_falsy_save_on_extract_still_extracts( $save ): void {
+		$request  = new WP_REST_Request( 'GET', '/mcpwp/v1/site-blueprints/extract', array( 'save' => $save ) );
+		$response = $this->controller->extract_blueprint( $request );
+
+		$this->assertSame( 200, $response->get_status() );
+		$this->assertFalse( $response->get_data()['saved'] );
+		$this->assertSame( array(), Mcpwp_Site_Blueprints::list_all( false ) );
+	}
+
+	public function test_extract_route_declares_no_save_arg(): void {
+		$match = mcpwp_test_match_rest_route( rest_get_server()->get_routes(), 'GET', '/mcpwp/v1/site-blueprints/extract' );
+		$this->assertArrayNotHasKey( 'save', $match['handler']['args'] ?? array() );
+	}
+
+	public function test_two_extractions_get_distinct_ids(): void {
+		$a = Mcpwp_Site_Blueprints::extract();
+		$b = Mcpwp_Site_Blueprints::extract();
+		$this->assertNotSame( $a['id'], $b['id'], 'Storing two same-day extractions must not overwrite one with the other.' );
+		$this->assertMatchesRegularExpression( '/^extracted-\d{8}-[a-f0-9]{8}$/', $a['id'] );
+		// Still routable by the by-id pattern.
+		$this->assertMatchesRegularExpression( '@^[a-z0-9_-]+$@', $a['id'] );
+	}
+
+	public function test_mcp_extract_tool_is_read_only_and_cannot_store(): void {
+		$free = new Mcpwp_MCP_Free_Tools();
+		$this->assertTrue( $free->get_tool_annotations( 'wp_extract_site_blueprint' )['readOnlyHint'] );
+		foreach ( $free->get_tools() as $tool ) {
+			if ( 'wp_extract_site_blueprint' === $tool['name'] ) {
+				$this->assertArrayNotHasKey( 'save', (array) ( $tool['inputSchema']['properties'] ?? array() ) );
+			}
+		}
+
+		// tools/call still forwards a stray `save` to the route (the tool
+		// declares no params, so there is no schema to refuse it against);
+		// the handler is what refuses it, for every caller.
+		$GLOBALS['mcpwp_test_current_user']        = 2;
+		$GLOBALS['mcpwp_test_filters']             = array();
+		$GLOBALS['mcpwp_test_dispatched_requests'] = array();
+		foreach ( array( true, 'yes', '1' ) as $save ) {
+			$GLOBALS['mcpwp_test_dispatched_requests'] = array();
+			( new Mcpwp_REST_MCP() )->handle_mcp(
+				new WP_REST_Request(
+					'POST',
+					'/mcpwp/v1/mcp',
+					array(),
+					array(),
+					array(
+						'jsonrpc' => '2.0',
+						'id'      => 1,
+						'method'  => 'tools/call',
+						'params'  => array(
+							'name'      => 'wp_extract_site_blueprint',
+							'arguments' => array( 'save' => $save ),
+						),
+					)
+				)
+			);
+			$this->assertNotEmpty( $GLOBALS['mcpwp_test_dispatched_requests'], 'Premise: the call reaches the route.' );
+			$sub = end( $GLOBALS['mcpwp_test_dispatched_requests'] );
+			$this->assertSame( '/mcpwp/v1/site-blueprints/extract', $sub->get_route() );
+			$match = mcpwp_test_match_rest_route( rest_get_server()->get_routes(), $sub->get_method(), $sub->get_route() );
+			$this->assertSame( 400, call_user_func( $match['handler']['callback'], $sub )->get_status(), var_export( $save, true ) );
+		}
+		$this->assertFalse( get_option( Mcpwp_Site_Blueprints::OPTION_KEY, false ) );
+	}
+
 	public function test_get_by_id_still_reaches_the_by_id_handler(): void {
 		list( $match, $response ) = $this->dispatch( 'GET', '/mcpwp/v1/site-blueprints/law-firm' );
 

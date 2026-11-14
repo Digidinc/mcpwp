@@ -575,13 +575,8 @@ trait Mcpwp_Free_Tools_Site_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_extract_site_blueprint',
-			'Analyze the current site and generate a blueprint definition from it. Extracts page structure, Elementor section types, navigation menus, and site context. Use save=true to store the result as a reusable custom blueprint.',
-			array(
-				'save' => array(
-					'type'        => 'boolean',
-					'description' => 'Save the extracted blueprint as a custom blueprint (default false).',
-				),
-			)
+			'Analyze the current site and generate a blueprint definition from it. Extracts page structure, Elementor section types, navigation menus, and site context. Read-only: to store the result as a reusable custom blueprint, pass it to wp_create_site_blueprint.',
+			array()
 		);
 
 		$tools[] = $this->define_tool(

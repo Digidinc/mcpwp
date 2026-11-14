@@ -401,6 +401,7 @@ final class RouteCapabilityMapTest extends TestCase {
 	 * GET /site-blueprints/extract used to answer "Blueprint 'extract' not
 	 * found." from the by-id handler. Sweep every registered route/method the
 	 * way core dispatches it and require each to reach its own handler.
+	 * A sampling heuristic, not a proof — see mcpwp_test_shadowed_rest_routes().
 	 */
 	public function test_no_registered_route_is_shadowed_by_an_earlier_registration(): void {
 		$GLOBALS['mcpwp_test_is_multisite'] = true;
@@ -425,11 +426,20 @@ final class RouteCapabilityMapTest extends TestCase {
 		register_rest_route( 'mcpwp/v1', '/things/extract', array( 'methods' => 'GET', 'callback' => $cb, 'permission_callback' => $cb ) );
 		register_rest_route( 'mcpwp/v1', '/things/purge', array( 'methods' => 'POST', 'callback' => $cb, 'permission_callback' => $cb ) );
 
+		// Overlap is not shadowing: /items/(?P<slug>[a-z]+) catches "abc"
+		// from the later id route, but the numeric samples still reach it.
+		register_rest_route( 'mcpwp/v1', '/items/(?P<slug>[a-z0-9]+)', array( 'methods' => 'GET', 'callback' => $cb, 'permission_callback' => $cb ) );
+		register_rest_route( 'mcpwp/v1', '/items/(?P<id>[a-z0-9_-]+)', array( 'methods' => 'GET', 'callback' => $cb, 'permission_callback' => $cb ) );
+		// Another namespace never wins an mcpwp/v1 request (core narrows by namespace).
+		register_rest_route( 'other/v1', '/(?P<any>.+)', array( 'methods' => 'GET', 'callback' => $cb, 'permission_callback' => $cb ) );
+
 		// POST /things/purge falls through: the id route has no POST handler.
 		$this->assertSame(
 			array( 'GET /mcpwp/v1/things/extract' => '/mcpwp/v1/things/(?P<id>[a-z0-9_-]+)' ),
 			mcpwp_test_shadowed_rest_routes( rest_get_server()->get_routes() )
 		);
+		$this->assertSame( '/mcpwp/v1/things/(?P<id>[a-z0-9_-]+)', mcpwp_test_match_rest_route( rest_get_server()->get_routes(), 'GET', '/mcpwp/v1/things/extract' )['route'] );
+		$this->assertSame( '/other/v1/(?P<any>.+)', mcpwp_test_match_rest_route( rest_get_server()->get_routes(), 'GET', '/other/v1/things/extract', array( 'mcpwp/v1', 'other/v1' ) )['route'] );
 	}
 
 	public function test_patch_and_head_resolve_through_put_and_get(): void {

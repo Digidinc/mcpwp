@@ -228,8 +228,6 @@ final class McpToolAnnotationsTest extends TestCase {
 
 	public function get_only_tool_with_a_write_side_effect_provider(): array {
 		return array(
-			// Mcpwp_Site_Blueprints::save() via save=true.
-			array( 'wp_extract_site_blueprint', 'free' ),
 			// Mcpwp_Signals::compute() -> update_option(), on first call or refresh=true.
 			array( 'wp_get_signals', 'free' ),
 			// keyword_research(): enrich=true consumes the lookup budget.
