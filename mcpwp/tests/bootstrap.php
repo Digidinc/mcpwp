@@ -1694,13 +1694,103 @@ function wp_hash_password($password)
     return password_hash((string) $password, PASSWORD_BCRYPT);
 }
 
+/**
+ * Mirrors core's wp_check_password() (WordPress 6.8+), branch for branch:
+ * <= 32 chars is MD5, `$wp` is the 6.8 sha384+bcrypt form, `$P$` is phpass,
+ * anything else goes to password_verify(). There is NO plaintext fallback —
+ * core has none, and the stub must verify exactly as core does.
+ */
 function wp_check_password($password, $hash)
 {
-    $hash = (string) $hash;
-    if (0 === strpos($hash, '$2') || 0 === strpos($hash, '$argon')) {
-        return password_verify((string) $password, $hash);
+    $password = (string) $password;
+    $hash     = (string) $hash;
+    if (strlen($hash) <= 32) {
+        return hash_equals($hash, md5($password));
     }
-    return hash_equals($hash, (string) $password);
+    if (strlen($password) > 4096) {
+        return false;
+    }
+    if (0 === strpos($hash, '$wp')) {
+        $password_to_verify = base64_encode(hash_hmac('sha384', $password, 'wp-sha384', true));
+        return password_verify($password_to_verify, substr($hash, 3));
+    }
+    if (0 === strpos($hash, '$P$')) {
+        return hash_equals($hash, mcpwp_test_phpass_crypt($password, $hash));
+    }
+    return password_verify($password, $hash);
+}
+
+/**
+ * Portable phpass (PasswordHash::crypt_private), as WordPress used before 6.8.
+ *
+ * @param string $password Password.
+ * @param string $setting  Stored hash (or setting) to take the salt and cost from.
+ * @return string Hash, or '*0' / '*1' on a malformed setting.
+ */
+function mcpwp_test_phpass_crypt($password, $setting)
+{
+    $itoa64 = './0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+    $output = '*0';
+    if (substr($setting, 0, 2) === $output) {
+        $output = '*1';
+    }
+    $id = substr($setting, 0, 3);
+    if ('$P$' !== $id && '$H$' !== $id) {
+        return $output;
+    }
+    $count_log2 = strpos($itoa64, isset($setting[3]) ? $setting[3] : '!');
+    if (false === $count_log2 || $count_log2 < 7 || $count_log2 > 30) {
+        return $output;
+    }
+    $count = 1 << $count_log2;
+    $salt  = substr($setting, 4, 8);
+    if (8 !== strlen($salt)) {
+        return $output;
+    }
+    $hash = md5($salt . $password, true);
+    do {
+        $hash = md5($hash . $password, true);
+    } while (--$count);
+
+    $encoded = '';
+    $i       = 0;
+    do {
+        $value    = ord($hash[$i++]);
+        $encoded .= $itoa64[$value & 0x3f];
+        if ($i < 16) {
+            $value |= ord($hash[$i]) << 8;
+        }
+        $encoded .= $itoa64[($value >> 6) & 0x3f];
+        if ($i++ >= 16) {
+            break;
+        }
+        if ($i < 16) {
+            $value |= ord($hash[$i]) << 16;
+        }
+        $encoded .= $itoa64[($value >> 12) & 0x3f];
+        if ($i++ >= 16) {
+            break;
+        }
+        $encoded .= $itoa64[($value >> 18) & 0x3f];
+    } while ($i < 16);
+
+    return substr($setting, 0, 12) . $encoded;
+}
+
+/**
+ * A fresh portable phpass hash ($P$B..., WordPress's 2^13 iterations).
+ *
+ * @param string $password Password.
+ * @return string
+ */
+function mcpwp_test_phpass_hash($password)
+{
+    $itoa64 = './0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+    $salt   = '';
+    for ($i = 0; $i < 8; $i++) {
+        $salt .= $itoa64[random_int(0, 63)];
+    }
+    return mcpwp_test_phpass_crypt((string) $password, '$P$B' . $salt);
 }
 
 function wp_check_invalid_utf8($text, $strip = false)

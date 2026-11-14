@@ -1356,9 +1356,10 @@ trait Mcpwp_Api_Auth {
 		$legacy_key  = get_option( 'mcpwp_api_key' );
 
 		if ( ! $matched_key && ! empty( $legacy_key ) && $this->legacy_api_key_option_is_honoured() && $this->is_api_key_match( $api_key, $legacy_key ) ) {
-			// Auto-migrate legacy plain text keys to hashed storage.
-			if ( hash_equals( $legacy_key, $api_key ) ) {
-				$legacy_key = wp_hash_password( $api_key );
+			// Auto-migrate a plaintext or MD5-era value to a hash of the key just verified.
+			$verified_hash = $this->verified_legacy_key_hash( $legacy_key, $api_key );
+			if ( $verified_hash !== $legacy_key ) {
+				$legacy_key = $verified_hash;
 				update_option( 'mcpwp_api_key', $legacy_key );
 			}
 
@@ -4247,6 +4248,13 @@ trait Mcpwp_Api_Auth {
 		$legacy_key  = get_option( 'mcpwp_api_key' );
 
 		if ( ! $matched_key && ! empty( $legacy_key ) && $this->legacy_api_key_option_is_honoured() && $this->is_api_key_match( $api_key, $legacy_key ) ) {
+			// Same migration as compute_api_key_verdict(): a plaintext or
+			// MD5-era value is rehashed from the key just verified.
+			$verified_hash = $this->verified_legacy_key_hash( $legacy_key, $api_key );
+			if ( $verified_hash !== $legacy_key ) {
+				$legacy_key = $verified_hash;
+				update_option( 'mcpwp_api_key', $legacy_key );
+			}
 			$matched_key = $this->migrate_legacy_key_to_scoped_store( $legacy_key );
 		}
 
@@ -5064,31 +5072,76 @@ trait Mcpwp_Api_Auth {
 		if ( empty( $api_key ) || ! is_string( $hash ) || '' === $hash ) {
 			return false;
 		}
+		// The stored value itself is never the key, whatever a verifier (or a
+		// `check_password` filter) would say about it.
+		if ( hash_equals( $hash, (string) $api_key ) ) {
+			return false;
+		}
 		if ( $this->looks_like_password_hash( $hash ) ) {
 			return (bool) wp_check_password( $api_key, $hash ); // Any algorithm WordPress hashed it with.
 		}
-		// Not a hash: only core's own legacy MD5 branch (<= 32 chars) may match,
-		// never the plaintext string itself.
-		return strlen( $hash ) <= 32 && hash_equals( $hash, md5( (string) $api_key ) );
+		// Not a password hash: only an MD5-era verifier may match, by hashing the
+		// presented key — never the plaintext string itself. Hex case is not
+		// significant (an upper-case MD5 must still verify, and must still not
+		// match itself).
+		if ( ! Mcpwp_Key_State::is_md5_shaped( $hash ) ) {
+			return false;
+		}
+		$md5 = strtolower( $hash );
+		if ( hash_equals( $md5, strtolower( (string) $api_key ) ) ) {
+			return false;
+		}
+		return hash_equals( $md5, md5( (string) $api_key ) );
 	}
 
 	/**
-	 * Check whether incoming key matches stored key (hash or legacy plain text).
+	 * Check whether incoming key matches a legacy single-key option value
+	 * (`mcpwp_api_key`, `spai_api_key`): a hash, or on a pre-1.0.14 install the
+	 * key in plaintext.
+	 *
+	 * A stored VERIFIER (password hash of any algorithm, or MD5) is checked
+	 * solely by hashing/verifying the presented key; it is never string-compared
+	 * with the presented key. Only a value that is not a verifier is a
+	 * plaintext key, compared in constant time — and callers replace it with
+	 * a hash on first use.
 	 *
 	 * @param string $api_key    Incoming API key.
 	 * @param string $stored_key Stored API key value.
 	 * @return bool True if key is valid.
 	 */
 	protected function is_api_key_match( $api_key, $stored_key ) {
-		if ( empty( $api_key ) || empty( $stored_key ) ) {
+		if ( empty( $api_key ) || empty( $stored_key ) || ! is_string( $stored_key ) ) {
 			return false;
 		}
+		$api_key = (string) $api_key;
 
-		if ( wp_check_password( $api_key, $stored_key ) ) {
-			return true;
+		if ( ! class_exists( 'Mcpwp_Key_State' ) ) {
+			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
+		}
+		if ( Mcpwp_Key_State::is_stored_verifier( $stored_key ) ) {
+			return $this->is_api_key_hash_match( $api_key, $stored_key );
 		}
 
 		return hash_equals( $stored_key, $api_key );
+	}
+
+	/**
+	 * The hash to keep for a legacy single key that was just verified.
+	 *
+	 * A password hash is kept as it is. A plaintext or MD5-era value is
+	 * replaced with a fresh hash OF THE PRESENTED KEY, which this request has
+	 * just proven — never a hash of the stored string, which for an MD5 value
+	 * would turn the MD5 string itself into the key.
+	 *
+	 * @param string $stored_key Stored option value.
+	 * @param string $api_key    Presented key, already verified against it.
+	 * @return string Password hash.
+	 */
+	protected function verified_legacy_key_hash( $stored_key, $api_key ) {
+		if ( $this->looks_like_password_hash( $stored_key ) ) {
+			return (string) $stored_key;
+		}
+		return wp_hash_password( (string) $api_key );
 	}
 
 	/**
@@ -5173,10 +5226,13 @@ trait Mcpwp_Api_Auth {
 			}
 		}
 		foreach ( $revoked as $hash ) {
-			if ( hash_equals( $hash, $single ) ) {
+			if ( hash_equals( Mcpwp_Key_State::canonical_verifier( $hash ), Mcpwp_Key_State::canonical_verifier( $single ) ) ) {
 				return true;
 			}
 		}
+		// Not a password hash (plaintext, or an MD5 no string compare can tie
+		// to a revoked salted copy): verify the presented key against every
+		// revoked hash.
 		if ( ! $this->looks_like_password_hash( $single ) ) {
 			foreach ( $revoked as $hash ) {
 				if ( $this->is_api_key_hash_match( $api_key, $hash ) ) {
@@ -5200,8 +5256,11 @@ trait Mcpwp_Api_Auth {
 		if ( '' === $hash ) {
 			return false;
 		}
+		if ( ! class_exists( 'Mcpwp_Key_State' ) ) {
+			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-state.php';
+		}
 		foreach ( $this->get_scoped_api_keys_raw() as $record ) {
-			if ( is_array( $record ) && ! empty( $record['revoked_at'] ) && isset( $record['hash'] ) && hash_equals( (string) $record['hash'], $hash ) ) {
+			if ( is_array( $record ) && ! empty( $record['revoked_at'] ) && isset( $record['hash'] ) && hash_equals( Mcpwp_Key_State::canonical_verifier( $record['hash'] ), Mcpwp_Key_State::canonical_verifier( $hash ) ) ) {
 				return true;
 			}
 		}
@@ -7172,6 +7231,12 @@ trait Mcpwp_Api_Auth {
 		$legacy_key      = (string) $legacy_key;
 		$legacy_is_hashed = $this->looks_like_password_hash( $legacy_key );
 		$legacy_hash      = $legacy_key;
+
+		// An MD5-era value cannot be rehashed from itself: hashing the MD5 string
+		// would make that string the key. Callers pass verified_legacy_key_hash().
+		if ( ! $legacy_is_hashed && Mcpwp_Key_State::is_md5_shaped( $legacy_key ) ) {
+			return null;
+		}
 
 		if ( ! $legacy_is_hashed ) {
 			$legacy_hash = wp_hash_password( $legacy_key );
