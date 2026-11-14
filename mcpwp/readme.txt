@@ -157,6 +157,9 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.15 =
+* fix: **freemius:** ship the plugin icon the freemius bootstrap points at ([#1188](https://github.com/Digidinc/mcpwp/issues/1188))
+
 = 3.14.14 =
 * feat: **verification:** assert the rendered dom, fetch site archives and rest urls, report effective templates ([#1184](https://github.com/Digidinc/mcpwp/issues/1184))
 * fix: **auth:** verify legacy credentials against their hash ([#1187](https://github.com/Digidinc/mcpwp/issues/1187))
