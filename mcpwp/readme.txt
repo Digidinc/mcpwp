@@ -157,6 +157,12 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.14 =
+* feat: **verification:** assert the rendered dom, fetch site archives and rest urls, report effective templates ([#1184](https://github.com/Digidinc/mcpwp/issues/1184))
+* fix: **auth:** verify legacy credentials against their hash ([#1187](https://github.com/Digidinc/mcpwp/issues/1187))
+* fix: **oauth:** refuse oauth bearer access tokens over plain http ([#1183](https://github.com/Digidinc/mcpwp/issues/1183))
+* fix: **routing:** register /site-blueprints/extract before the by-id route ([#1182](https://github.com/Digidinc/mcpwp/issues/1182))
+
 = 3.14.13 =
 * feat: **admin:** add a connect-an-AI-app card on Setup and a plainer OAuth consent screen ([#1173](https://github.com/Digidinc/mcpwp/issues/1173))
 * fix: **auth:** a dead OAuth token's 401 carries the same rate-limit headers under or over budget ([#1177](https://github.com/Digidinc/mcpwp/issues/1177))
