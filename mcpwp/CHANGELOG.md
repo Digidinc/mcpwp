@@ -5,6 +5,20 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.14](https://github.com/Digidinc/mcpwp/compare/v3.14.13...v3.14.14) (2026-11-14)
+
+
+### Features
+
+* **verification:** assert the rendered dom, fetch site archives and rest urls, report effective templates ([#1184](https://github.com/Digidinc/mcpwp/issues/1184)) ([b3f268b](https://github.com/Digidinc/mcpwp/commit/b3f268bbf81ce1fc6bdac1b85c1410300e71bd9f))
+
+
+### Bug Fixes
+
+* **auth:** verify legacy credentials against their hash ([#1187](https://github.com/Digidinc/mcpwp/issues/1187)) ([6a846e5](https://github.com/Digidinc/mcpwp/commit/6a846e51f8a3bf8477fc5a1258ddaa11bbc2ddc2))
+* **oauth:** refuse oauth bearer access tokens over plain http ([#1183](https://github.com/Digidinc/mcpwp/issues/1183)) ([3cbe5a7](https://github.com/Digidinc/mcpwp/commit/3cbe5a717394dd01db9a311c2647a6dfa924e268))
+* **routing:** register /site-blueprints/extract before the by-id route ([#1182](https://github.com/Digidinc/mcpwp/issues/1182)) ([d6e59b0](https://github.com/Digidinc/mcpwp/commit/d6e59b033ba2212d4d2246572e0975f323847b43))
+
 ## [3.14.13](https://github.com/Digidinc/mcpwp/compare/v3.14.12...v3.14.13) (2026-11-14)
 
 
