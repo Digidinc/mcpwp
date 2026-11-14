@@ -14,7 +14,7 @@
   "scripts": {
     "build": "bun build src/index.ts --target=node --outfile=dist/index.js --format=esm",
     "build:tsc": "tsc",
-    "test": "node --test test/stdio-large-message.test.mjs",
+    "test": "node --test test/*.test.mjs",
     "start": "node dist/index.js",
     "dev": "bun run src/index.ts"
   },

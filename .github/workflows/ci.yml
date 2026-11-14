@@ -73,5 +73,5 @@ jobs:
         run: cd mcp-server && bun install --frozen-lockfile
       - name: Build bundle
         run: cd mcp-server && bun run build
-      - name: Stdio large-message smoke test
+      - name: Stdio smoke tests (large message, initialize instructions)
         run: cd mcp-server && npm test

@@ -146,11 +146,18 @@ test("a line over the 16 MiB cap is logged to stderr, not dropped silently", asy
   try {
     await handshake(p);
     p.send(toolsCallOfSize(2, 17 * MIB));
-    const deadline = Date.now() + 10_000;
+    // The overflow takes ~3s on a quiet box (the SDK concatenates per chunk,
+    // which is quadratic) and far longer under load, so wait generously.
+    const OVERFLOW_LOG_TIMEOUT_MS = 30_000;
+    const deadline = Date.now() + OVERFLOW_LOG_TIMEOUT_MS;
     while (!/maximum size of 16777216 bytes/.test(p.stderr()) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 100));
     }
-    assert.match(p.stderr(), /\[error\] stdio transport error.*maximum size of 16777216 bytes/s);
+    assert.match(
+      p.stderr(),
+      /\[error\] stdio transport error.*maximum size of 16777216 bytes/s,
+      `no overflow log on stderr within ${OVERFLOW_LOG_TIMEOUT_MS}ms; stderr tail: ${p.stderr().slice(-400)}`
+    );
   } finally {
     p.stop();
     wp.server.close();
