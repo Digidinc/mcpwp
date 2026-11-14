@@ -20,6 +20,21 @@ use PHPUnit\Framework\TestCase;
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-content.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
 
+// Core's two credential checks on rest_authentication_errors, as they behave
+// for the request wp_fetch runs inside: the cookie check fails a browser
+// session's nonce once the user is 0, and the application-password check
+// answers true for an outer request that authenticated with one.
+if ( ! function_exists( 'rest_cookie_check_errors' ) ) {
+	function rest_cookie_check_errors( $result ) {
+		return new WP_Error( 'rest_cookie_invalid_nonce', 'Cookie check failed', array( 'status' => 403 ) );
+	}
+}
+if ( ! function_exists( 'rest_application_password_check_errors' ) ) {
+	function rest_application_password_check_errors( $result ) {
+		return true;
+	}
+}
+
 final class WpFetchSiteUrlsTest extends TestCase {
 
 	protected function setUp(): void {
@@ -367,7 +382,7 @@ final class WpFetchSiteUrlsTest extends TestCase {
 			}
 		);
 
-		$response = $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/users' ) );
+		$response = $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/users' ), array( 'content', 'admin' ) );
 
 		$this->assertInstanceOf( WP_Error::class, $response );
 		$this->assertSame( 'rest_visitor_refused', $response->get_error_code() );
@@ -472,5 +487,153 @@ final class WpFetchSiteUrlsTest extends TestCase {
 
 		$data = $this->data( $this->fetch( array( 'url' => 'https://example.com/site2/wp-json/wp/v2/posts' ) ) );
 		$this->assertSame( '/wp/v2/posts', $data['route'] );
+	}
+
+	// ── Delta review (#989) ─────────────────────────────────────────────
+
+	/**
+	 * A lock that decides by URL must see the TARGET route, not the outer
+	 * /mcp request: allowing /wp-json/mcpwp/ must not let /wp/v2/users out.
+	 */
+	public function test_url_based_lock_judges_the_target_route_not_the_outer_request(): void {
+		$this->capture_dispatch();
+		$_SERVER['REQUEST_URI']    = '/wp-json/mcpwp/v1/mcp';
+		$_SERVER['REQUEST_METHOD'] = 'POST';
+		$GLOBALS['wp']             = (object) array( 'query_vars' => array( 'rest_route' => '/mcpwp/v1/mcp' ) );
+		$seen                      = array();
+		add_filter(
+			'rest_authentication_errors',
+			static function ( $result ) use ( &$seen ) {
+				$seen = array(
+					'uri'        => $_SERVER['REQUEST_URI'],
+					'method'     => $_SERVER['REQUEST_METHOD'],
+					'rest_route' => $GLOBALS['wp']->query_vars['rest_route'],
+				);
+				if ( false !== strpos( (string) $_SERVER['REQUEST_URI'], '/mcpwp/' ) ) {
+					return $result;
+				}
+				return new WP_Error( 'rest_disabled', 'REST is off for visitors.', array( 'status' => 401 ) );
+			}
+		);
+
+		$response = $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/users?per_page=5' ), array( 'content', 'admin' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'rest_visitor_refused', $response->get_error_code() );
+		$this->assertSame(
+			array(
+				'uri'        => '/wp-json/wp/v2/users?per_page=5',
+				'method'     => 'GET',
+				'rest_route' => '/wp/v2/users',
+			),
+			$seen
+		);
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatch_seen'] );
+
+		// Restored afterwards.
+		$this->assertSame( '/wp-json/mcpwp/v1/mcp', $_SERVER['REQUEST_URI'] );
+		$this->assertSame( 'POST', $_SERVER['REQUEST_METHOD'] );
+		$this->assertSame( '/mcpwp/v1/mcp', $GLOBALS['wp']->query_vars['rest_route'] );
+
+		unset( $GLOBALS['wp'], $_SERVER['REQUEST_URI'], $_SERVER['REQUEST_METHOD'] );
+	}
+
+	/**
+	 * Core's cookie and application-password checks judge the OUTER
+	 * request's credentials. Neither is the visitor's: they are detached
+	 * for the visitor check and put back afterwards.
+	 */
+	public function test_core_credential_checks_are_detached_for_the_visitor_and_restored(): void {
+		$this->capture_dispatch();
+		add_filter( 'rest_authentication_errors', 'rest_application_password_check_errors', 90 );
+		add_filter( 'rest_authentication_errors', 'rest_cookie_check_errors', 100 );
+		$site_lock_ran = false;
+		add_filter(
+			'rest_authentication_errors',
+			static function ( $result ) use ( &$site_lock_ran ) {
+				$site_lock_ran = true;
+				return $result;
+			},
+			200
+		);
+
+		$data = $this->data( $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/posts' ) ) );
+
+		$this->assertSame( 'rest', $data['resource'], 'A browser session is not refused by its own nonce check.' );
+		$this->assertTrue( $site_lock_ran, 'The site\'s own lock still runs.' );
+		$this->assertSame( 90, has_filter( 'rest_authentication_errors', 'rest_application_password_check_errors' ) );
+		$this->assertSame( 100, has_filter( 'rest_authentication_errors', 'rest_cookie_check_errors' ) );
+	}
+
+	public function test_users_route_needs_the_admin_category(): void {
+		$this->capture_dispatch();
+
+		$denied = $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/users' ) );
+		$this->assertInstanceOf( WP_Error::class, $denied );
+		$this->assertSame( 'forbidden_category', $denied->get_error_code() );
+		$this->assertSame( 'admin', $denied->get_error_data()['category'] );
+
+		$data = $this->data( $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/users' ), array( 'content', 'admin' ) ) );
+		$this->assertSame( 'rest', $data['resource'] );
+	}
+
+	public function test_comments_route_is_judged_by_the_post_it_belongs_to(): void {
+		$this->capture_dispatch();
+		$this->seed_post( 70, 'Widget', 'publish', array( 'post_type' => 'product' ) );
+		$GLOBALS['mcpwp_test_public_post_types'] = array( 'product' );
+
+		$on_post = $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/comments?post=11' ) );
+		$this->assertSame( 'rest', $this->data( $on_post )['resource'] );
+
+		$on_product = $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/comments?post=70' ) );
+		$this->assertInstanceOf( WP_Error::class, $on_product );
+		$this->assertSame( 'woocommerce', $on_product->get_error_data()['category'] );
+
+		$all = $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/comments' ) );
+		$this->assertInstanceOf( WP_Error::class, $all, 'Comments across every type need every type\'s category.' );
+	}
+
+	public function test_oembed_is_judged_by_the_post_it_embeds(): void {
+		$this->capture_dispatch();
+		$this->seed_post( 70, 'Widget', 'publish', array( 'post_type' => 'product' ) );
+		$GLOBALS['mcpwp_test_url_to_postid']['https://example.com/product/widget/'] = 70;
+
+		$product = $this->fetch( array( 'url' => 'https://example.com/wp-json/oembed/1.0/embed?url=' . rawurlencode( 'https://example.com/product/widget/' ) ) );
+		$this->assertInstanceOf( WP_Error::class, $product );
+		$this->assertSame( 'woocommerce', $product->get_error_data()['category'] );
+
+		$post = $this->fetch( array( 'url' => 'https://example.com/wp-json/oembed/1.0/embed?url=' . rawurlencode( 'https://example.com/?p=11' ) ) );
+		$this->assertSame( 'rest', $this->data( $post )['resource'] );
+
+		$proxy = $this->fetch( array( 'url' => 'https://example.com/wp-json/oembed/1.0/proxy?url=x' ) );
+		$this->assertInstanceOf( WP_Error::class, $proxy );
+	}
+
+	/**
+	 * Fail closed: a namespace or wp/v2 route the map does not know needs
+	 * the admin category.
+	 */
+	public function test_unknown_routes_need_the_admin_category(): void {
+		$this->capture_dispatch();
+
+		foreach ( array( '/wp-json/acme-forms/v1/entries', '/wp-json/wp/v2/settings', '/wp-json/wp/v2/plugins', '/wp-json/wp-site-health/v1/tests/background-updates' ) as $path ) {
+			$response = $this->fetch( array( 'url' => 'https://example.com' . $path ) );
+
+			$this->assertInstanceOf( WP_Error::class, $response, $path );
+			$this->assertSame( 'admin', $response->get_error_data()['category'], $path );
+		}
+
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatch_seen'] );
+
+		$data = $this->data( $this->fetch( array( 'url' => 'https://example.com/wp-json/acme-forms/v1/entries' ), array( 'content', 'admin' ) ) );
+		$this->assertSame( 'rest', $data['resource'] );
+	}
+
+	public function test_route_index_and_type_listings_are_content(): void {
+		$this->capture_dispatch();
+
+		foreach ( array( '/wp-json/', '/wp-json/wp/v2', '/wp-json/wp/v2/types', '/wp-json/wp/v2/categories' ) as $path ) {
+			$this->assertSame( 'rest', $this->data( $this->fetch( array( 'url' => 'https://example.com' . $path ) ) )['resource'], $path );
+		}
 	}
 }

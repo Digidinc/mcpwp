@@ -837,7 +837,9 @@ password-protected posts, Theme Builder documents, a failed pipeline, `/batch` o
 (`Mcpwp_REST_Batch::$batch_operation_depth`, not the `/mcp` sub-request flag), Element Caching
 placeholders, HTML over `mcpwp_dom_check_max_bytes` (2 MB), trees over `mcpwp_dom_check_max_elements`
 (3000), a spent per-request `mcpwp_dom_check_time_budget` (5 s), or when the
-`mcpwp_verify_rendered_dom` filter returns false.
+`mcpwp_verify_rendered_dom` filter returns false. All three limit filters read 0 as "no limit"; the
+off switch is `mcpwp_verify_rendered_dom`. The time budget is checked before a render and charged
+after it (it caps how many checks start); the element limit is the guard that runs before a render.
 
 `wp_get_rendered_html` returns `effective_template`: `assigned` (page template, and the Theme Builder
 templates Elementor Pro's conditions pick for the post) and `rendered` (from the fetched document:
@@ -848,9 +850,11 @@ markup outside Elementor), plus `warnings` where they disagree. `Mcpwp_Effective
 archive, search, blog index; returns `resource: archive` and one page of published posts) and REST
 URLs (`/wp-json/...`, `?rest_route=`; dispatched internally as a logged-out visitor, outside the
 MCP sub-request flag, after `rest_authentication_errors` is applied as that visitor, because
-`rest_do_request()` skips it; `mcpwp/*` refused; a route exposing a post type the key's categories
-do not cover — `wc/*`, `elementor/*`, `/wp/v2/search`, any `rest_base` — is a 403
-`forbidden_category`). A subdirectory site only owns URLs under its home path
+`rest_do_request()` skips it — with `REQUEST_URI`/`REQUEST_METHOD`/`$wp->query_vars['rest_route']` set
+to the target route and core's cookie and application-password checks detached, all restored after;
+`mcpwp/*` refused; route categories fail closed — post type/taxonomy routes, `wc/*`, `elementor/*`,
+`/wp/v2/search`, `/wp/v2/comments?post=` and `oembed/1.0/embed?url=` by the post type they return,
+`/wp/v2/users` and every unknown route or namespace `admin`; denied is a 403 `forbidden_category`). A subdirectory site only owns URLs under its home path
 (`is_same_site_origin()`). `Mcpwp_Site_Url_Resolver`.
 
 ## Version Bumping

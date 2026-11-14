@@ -1326,6 +1326,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $skip( 'batch_operation', 'This write ran inside a /batch request, where the rendered page is not checked. Check it with wp_get_rendered_html, or write it on its own.' );
 		}
 
+		// Checked before the render, charged after it (see
+		// Mcpwp_Render_Inspector::time_budget_left()): this caps how many
+		// checks START in one request. The element limit below is the guard
+		// that bounds a single render before it runs.
 		if ( ! Mcpwp_Render_Inspector::time_budget_left() ) {
 			return $skip( 'time_budget_exhausted', 'Earlier DOM checks in this request used up its time budget, so the rendered page was not checked.' );
 		}
@@ -1337,6 +1341,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		/**
 		 * Filters the largest saved tree, in elements, the DOM check renders.
+		 * 0 or less means no limit, like the byte and time limits.
 		 *
 		 * @param int $max Default Mcpwp_Render_Inspector::DEFAULT_MAX_ELEMENTS.
 		 */

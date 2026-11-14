@@ -40,19 +40,26 @@ final class Mcpwp_Render_Inspector {
 	/**
 	 * Largest rendered HTML parsed by default, in bytes. Filterable with
 	 * `mcpwp_dom_check_max_bytes`. Over it, the check is skipped, not run on a
-	 * partial document.
+	 * partial document. Applied after the render, before parsing.
+	 *
+	 * The three limit filters (bytes, elements, time) all read a value of 0
+	 * or less as "no limit". To turn the check off, use the
+	 * `mcpwp_verify_rendered_dom` filter.
 	 */
 	const DEFAULT_MAX_BYTES = 2097152;
 
 	/**
 	 * Default seconds of DOM checking one PHP request may spend in total.
-	 * Filterable with `mcpwp_dom_check_time_budget`.
+	 * Filterable with `mcpwp_dom_check_time_budget`. Checked before each
+	 * render and charged after it, so it caps how many checks start in one
+	 * request; see time_budget_left().
 	 */
 	const DEFAULT_TIME_BUDGET = 5.0;
 
 	/**
 	 * Default largest saved tree checked, in elements. Filterable with
-	 * `mcpwp_dom_check_max_elements`.
+	 * `mcpwp_dom_check_max_elements`. The one limit applied before rendering,
+	 * so it is what bounds the cost of a single check.
 	 */
 	const DEFAULT_MAX_ELEMENTS = 3000;
 
@@ -75,15 +82,30 @@ final class Mcpwp_Render_Inspector {
 	/**
 	 * Whether this request still has time for another DOM check.
 	 *
+	 * The budget is checked BEFORE a render and charged AFTER it, so it
+	 * bounds how many checks start, not how long one takes: the check that
+	 * crosses the budget still finishes. The guard that runs before any
+	 * render, and so bounds a single one, is the element limit
+	 * (`mcpwp_dom_check_max_elements`); the byte limit
+	 * (`mcpwp_dom_check_max_bytes`) bounds parsing after it.
+	 *
+	 * All three limits read 0 (or less) the same way: no limit. To turn the
+	 * check off, use `mcpwp_verify_rendered_dom`.
+	 *
 	 * @return bool
 	 */
 	public static function time_budget_left() {
 		/**
 		 * Filters the seconds of DOM checking one request may spend.
+		 * 0 or less means no limit.
 		 *
 		 * @param float $seconds Default Mcpwp_Render_Inspector::DEFAULT_TIME_BUDGET.
 		 */
 		$budget = (float) apply_filters( 'mcpwp_dom_check_time_budget', self::DEFAULT_TIME_BUDGET );
+
+		if ( $budget <= 0 ) {
+			return true;
+		}
 
 		return self::$seconds_spent < $budget;
 	}
@@ -270,6 +292,7 @@ final class Mcpwp_Render_Inspector {
 
 		/**
 		 * Filters the largest rendered HTML the DOM check parses, in bytes.
+		 * 0 or less means no limit, like the element and time limits.
 		 *
 		 * @param int $max_bytes Default Mcpwp_Render_Inspector::DEFAULT_MAX_BYTES.
 		 */

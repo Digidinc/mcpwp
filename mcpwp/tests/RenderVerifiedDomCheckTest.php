@@ -293,15 +293,69 @@ final class RenderVerifiedDomCheckTest extends TestCase {
 		add_filter(
 			'mcpwp_dom_check_time_budget',
 			static function () {
-				return 0.0;
+				return 1.0;
 			}
 		);
+		// Earlier checks in this request spent the budget.
+		Mcpwp_Render_Inspector::add_time_spent( 1.5 );
 
 		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
 
 		$this->assertTrue( $result['render_verified'] );
 		$this->assertSame( 'time_budget_exhausted', $result['dom_check']['reason'] );
 		$this->assertSame( array(), $GLOBALS['mcpwp_test_dom_seen'] );
+	}
+
+	/**
+	 * The budget is checked before a render and charged after: the check
+	 * that crosses it still runs, and the next one is skipped.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_time_budget_is_checked_before_and_charged_after(): void {
+		$basic                          = $this->install();
+		$GLOBALS['mcpwp_test_dom_html'] = $this->rendered( 'Welcome' );
+		add_filter(
+			'mcpwp_dom_check_time_budget',
+			static function () {
+				return 1.0;
+			}
+		);
+		Mcpwp_Render_Inspector::add_time_spent( 0.999999 );
+
+		$first = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+		$this->assertSame( 'passed', $first['dom_check']['status'], 'Budget left when the check starts: it runs.' );
+
+		Mcpwp_Render_Inspector::add_time_spent( 0.01 );
+		$second = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+		$this->assertSame( 'time_budget_exhausted', $second['dom_check']['reason'] );
+		$this->assertCount( 1, $GLOBALS['mcpwp_test_dom_seen'] );
+	}
+
+	/**
+	 * Every limit reads 0 as "no limit"; mcpwp_verify_rendered_dom is the
+	 * off switch.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_zero_means_no_limit_for_every_limit_filter(): void {
+		$basic                          = $this->install();
+		$GLOBALS['mcpwp_test_dom_html'] = $this->rendered( 'Welcome' );
+		foreach ( array( 'mcpwp_dom_check_time_budget', 'mcpwp_dom_check_max_elements', 'mcpwp_dom_check_max_bytes' ) as $filter ) {
+			add_filter(
+				$filter,
+				static function () {
+					return 0;
+				}
+			);
+		}
+		Mcpwp_Render_Inspector::add_time_spent( 100.0 );
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertSame( 'passed', $result['dom_check']['status'], wp_json_encode( $result['dom_check'] ) );
 	}
 
 	/**

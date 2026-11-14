@@ -605,7 +605,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			);
 		}
 
-		$category_denied = $this->rest_route_category_denial( (string) $route );
+		$category_denied = $this->rest_route_category_denial( (string) $route, $query );
 		if ( $category_denied ) {
 			return $category_denied;
 		}
@@ -619,6 +619,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 
 		$previous_user = get_current_user_id();
 		$batch_flag    = class_exists( 'Mcpwp_REST_Batch' ) ? Mcpwp_REST_Batch::$is_batch_sub_request : null;
+		$visitor       = $this->enter_visitor_request( $url, (string) $route );
 
 		wp_set_current_user( 0 );
 		if ( null !== $batch_flag ) {
@@ -629,7 +630,10 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			// rest_do_request() skips WP_REST_Server::serve_request(), which is
 			// where core applies rest_authentication_errors. A site that locks
 			// anonymous REST access (or one route of it) does so there, so it
-			// is applied here, as the visitor this request stands in for.
+			// is applied here, as the visitor this request stands in for: no
+			// user, and the request URI, method and rest_route of the TARGET
+			// route (enter_visitor_request()), so a lock that decides by URL
+			// judges this route, not the outer /mcp request.
 			$auth_error = apply_filters( 'rest_authentication_errors', null );
 
 			$response = is_wp_error( $auth_error ) ? $auth_error : rest_do_request( $request );
@@ -638,6 +642,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			if ( null !== $batch_flag ) {
 				Mcpwp_REST_Batch::$is_batch_sub_request = $batch_flag;
 			}
+			$this->leave_visitor_request( $visitor );
 		}
 
 		if ( isset( $auth_error ) && is_wp_error( $auth_error ) ) {
@@ -708,30 +713,228 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Refuse a REST route that exposes a post type this key's categories do
+	 * Make the request look like the visitor's request for $url while the
+	 * REST authentication filters and the dispatch run.
+	 *
+	 * Sets REQUEST_URI (path and query of the target URL), REQUEST_METHOD
+	 * (GET) and the global WP query var rest_route, and detaches core's two
+	 * credential checks: rest_cookie_check_errors re-verifies the OUTER
+	 * request's nonce against user 0 and always fails a browser session, and
+	 * rest_application_password_check_errors answers true for an outer
+	 * request that used an application password, which would end the filter
+	 * chain before a site's own lock runs. Neither credential belongs to the
+	 * visitor. leave_visitor_request() restores all of it.
+	 *
+	 * @param string $url   Target URL.
+	 * @param string $route Target REST route.
+	 * @return array Saved state.
+	 */
+	private function enter_visitor_request( $url, $route ) {
+		$state = array(
+			'server'   => array(),
+			'wp'       => null,
+			'detached' => array(),
+		);
+
+		$parts = wp_parse_url( (string) $url );
+		$uri   = ( is_array( $parts ) && isset( $parts['path'] ) ) ? (string) $parts['path'] : '/';
+		if ( is_array( $parts ) && isset( $parts['query'] ) && '' !== $parts['query'] ) {
+			$uri .= '?' . $parts['query'];
+		}
+
+		foreach ( array( 'REQUEST_URI' => $uri, 'REQUEST_METHOD' => 'GET' ) as $key => $value ) {
+			// phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- saved verbatim, restored verbatim.
+			$state['server'][ $key ] = array_key_exists( $key, $_SERVER ) ? array( $_SERVER[ $key ] ) : null;
+			$_SERVER[ $key ]         = $value;
+		}
+
+		if ( isset( $GLOBALS['wp'] ) && is_object( $GLOBALS['wp'] ) ) {
+			$had_vars    = isset( $GLOBALS['wp']->query_vars ) && is_array( $GLOBALS['wp']->query_vars );
+			$vars        = $had_vars ? $GLOBALS['wp']->query_vars : array();
+			$state['wp'] = array(
+				'had_vars' => $had_vars,
+				'vars'     => $vars,
+			);
+
+			$vars['rest_route']        = (string) $route;
+			$GLOBALS['wp']->query_vars = $vars;
+		}
+
+		foreach ( array( 'rest_cookie_check_errors', 'rest_application_password_check_errors' ) as $callback ) {
+			$priority = has_filter( 'rest_authentication_errors', $callback );
+			if ( false !== $priority ) {
+				remove_filter( 'rest_authentication_errors', $callback, (int) $priority );
+				$state['detached'][ $callback ] = (int) $priority;
+			}
+		}
+
+		return $state;
+	}
+
+	/**
+	 * Undo enter_visitor_request().
+	 *
+	 * @param array $state Saved state.
+	 */
+	private function leave_visitor_request( array $state ) {
+		foreach ( $state['server'] as $key => $value ) {
+			if ( null === $value ) {
+				unset( $_SERVER[ $key ] );
+			} else {
+				$_SERVER[ $key ] = $value[0];
+			}
+		}
+
+		if ( is_array( $state['wp'] ) && isset( $GLOBALS['wp'] ) && is_object( $GLOBALS['wp'] ) ) {
+			if ( $state['wp']['had_vars'] ) {
+				$GLOBALS['wp']->query_vars = $state['wp']['vars'];
+			} else {
+				unset( $GLOBALS['wp']->query_vars );
+			}
+		}
+
+		foreach ( $state['detached'] as $callback => $priority ) {
+			add_filter( 'rest_authentication_errors', $callback, $priority );
+		}
+	}
+
+	/**
+	 * Refuse a REST route that returns something this key's categories do
 	 * not cover (#1020 rule, applied to the REST door of wp_fetch).
 	 *
 	 * @param string $route REST route.
+	 * @param array  $query Query args of the request.
 	 * @return WP_Error|null
 	 */
-	private function rest_route_category_denial( $route ) {
-		foreach ( $this->post_types_for_rest_route( $route ) as $post_type ) {
-			$denied = $this->guard_post_type_category_for_type( $post_type );
-			if ( $denied ) {
-				return $denied;
+	private function rest_route_category_denial( $route, array $query = array() ) {
+		foreach ( $this->categories_for_rest_route( $route, $query ) as $category ) {
+			if ( $this->caller_may_read_category( $category ) ) {
+				continue;
 			}
+
+			return new WP_Error(
+				'forbidden_category',
+				sprintf(
+					/* translators: 1: REST route, 2: tool category */
+					__( 'The REST route %1$s returns data in the "%2$s" tool category, which this API key does not have access to, or which has been disabled by the site administrator.', 'mcpwp' ),
+					(string) $route,
+					$category
+				),
+				array(
+					'status'   => 403,
+					'category' => $category,
+				)
+			);
 		}
 
 		return null;
 	}
 
 	/**
-	 * Post types whose posts a REST route can return.
+	 * Tool categories a REST route's response belongs to. Fails closed: a
+	 * route this map does not know needs the `admin` category.
 	 *
-	 * Covers every post type and taxonomy route registered under its own
-	 * rest_namespace/rest_base, core's search route (which spans every viewable
-	 * type), and the WooCommerce and Elementor namespaces, which expose
-	 * products and templates under routes of their own.
+	 * - `/` and the `wp/v2` index list routes only: `content`.
+	 * - `wp/v2`: a post type or taxonomy route by its post type; `search`,
+	 *   and `comments` without `post=`, span every public type;
+	 *   `comments?post=` by that post's type; `users` is `admin`, the same
+	 *   category MCPWP's own /users needs; `types`, `taxonomies` and
+	 *   `statuses` are `content`; any other `wp/v2` route is `admin`.
+	 * - `oembed/1.0/embed?url=`: by the type of the post it embeds.
+	 * - `wc/*`, `wc-*`: WooCommerce. `elementor*`: Elementor templates.
+	 * - A post type or taxonomy under its own rest_namespace: its post type.
+	 * - Any other namespace: `admin`.
+	 *
+	 * @param string $route REST route.
+	 * @param array  $query Query args of the request.
+	 * @return string[]
+	 */
+	private function categories_for_rest_route( $route, array $query = array() ) {
+		$route    = strtolower( '/' . trim( (string) $route, '/' ) );
+		$segments = array_values( array_filter( explode( '/', trim( $route, '/' ) ), 'strlen' ) );
+
+		$for_types = static function ( array $types ) {
+			$categories = array();
+			foreach ( $types as $type ) {
+				$categories[] = self::category_for_post_type( (string) $type );
+			}
+
+			return array_values( array_unique( $categories ) );
+		};
+
+		$public_types = static function () {
+			$types = array();
+			foreach ( (array) get_post_types( array( 'public' => true ) ) as $type ) {
+				$types[] = is_object( $type ) ? (string) $type->name : (string) $type;
+			}
+
+			return $types;
+		};
+
+		if ( empty( $segments ) ) {
+			return array( 'content' );
+		}
+
+		if ( preg_match( '#^/wc(?:/|-|$)#', $route ) ) {
+			return $for_types( array( 'product' ) );
+		}
+
+		if ( preg_match( '#^/elementor(?:-pro)?(?:/|$)#', $route ) ) {
+			return $for_types( array( 'elementor_library' ) );
+		}
+
+		$namespace = isset( $segments[1] ) ? $segments[0] . '/' . $segments[1] : $segments[0];
+		$base      = isset( $segments[2] ) ? $segments[2] : '';
+
+		if ( 'oembed/1.0' === $namespace ) {
+			if ( 'embed' !== $base ) {
+				return array( 'admin' );
+			}
+			$target = ( isset( $query['url'] ) && is_string( $query['url'] ) && function_exists( 'url_to_postid' ) )
+				? get_post( absint( url_to_postid( $query['url'] ) ) )
+				: null;
+
+			return $target instanceof WP_Post ? $for_types( array( $target->post_type ) ) : array( 'content' );
+		}
+
+		if ( 'wp/v2' === $namespace ) {
+			switch ( $base ) {
+				case '':
+				case 'types':
+				case 'taxonomies':
+				case 'statuses':
+					return array( 'content' );
+				case 'users':
+					return array( 'admin' );
+				case 'search':
+					return $for_types( $public_types() );
+				case 'comments':
+					$raw      = isset( $query['post'] ) ? $query['post'] : array();
+					$post_ids = array_filter( array_map( 'absint', is_array( $raw ) ? $raw : preg_split( '/[,\s]+/', (string) $raw ) ) );
+					if ( empty( $post_ids ) ) {
+						return $for_types( $public_types() );
+					}
+					$types = array();
+					foreach ( $post_ids as $post_id ) {
+						$post    = get_post( $post_id );
+						$types[] = $post instanceof WP_Post ? $post->post_type : 'post';
+					}
+
+					return $for_types( $types );
+			}
+		}
+
+		$types = $this->post_types_for_rest_route( $route );
+		if ( ! empty( $types ) ) {
+			return $for_types( $types );
+		}
+
+		return array( 'admin' );
+	}
+
+	/**
+	 * Post types whose posts a REST route returns, matched by each post
+	 * type's and taxonomy's own rest_namespace/rest_base.
 	 *
 	 * @param string $route REST route.
 	 * @return string[]
@@ -739,20 +942,6 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	private function post_types_for_rest_route( $route ) {
 		$route = strtolower( '/' . trim( (string) $route, '/' ) );
 		$types = array();
-
-		if ( preg_match( '#^/wc(?:/|-|$)#', $route ) || preg_match( '#^/wc-[a-z0-9-]+(?:/|$)#', $route ) ) {
-			$types[] = 'product';
-		}
-
-		if ( preg_match( '#^/elementor(?:-pro)?(?:/|$)#', $route ) ) {
-			$types[] = 'elementor_library';
-		}
-
-		if ( preg_match( '#^/wp/v2/search(?:/|$)#', $route ) ) {
-			foreach ( (array) get_post_types( array( 'public' => true ) ) as $type ) {
-				$types[] = is_object( $type ) ? (string) $type->name : (string) $type;
-			}
-		}
 
 		$core_bases = array(
 			'post'       => 'posts',
