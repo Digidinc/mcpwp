@@ -232,6 +232,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-state.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-store.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-key-store-health.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-oauth-transport.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-api-auth.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-sanitization.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-logging.php';
@@ -891,6 +892,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 
 	// An unreadable API key store refuses every key; say so to an admin (#1096).
 	Mcpwp_Key_Store_Health::init();
+
+	// OAuth refused over plain HTTP: say so to an admin, since MCP clients
+	// rarely show the error text.
+	Mcpwp_OAuth_Transport::init();
 
 	}
 }

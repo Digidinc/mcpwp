@@ -235,21 +235,43 @@ do_consent() { # jar client_id scope state tick
 }
 qparam() { python3 -I -c 'import sys,urllib.parse as u; q=u.parse_qs(u.urlparse(sys.argv[1]).query); print(q.get(sys.argv[2],[""])[0])' "$1" "$2"; }
 
-# The documented MCPWP_ALLOW_INSECURE_OAUTH escape hatch, as a throwaway mu-plugin.
-INSECURE_MU=/var/www/html/wp-content/mu-plugins/e2e-allow-insecure-oauth.php
+# Throwaway mu-plugins for the transport checks (this stack only).
+MU_DIR=/var/www/html/wp-content/mu-plugins
+mu_put() { # name php-body-line...
+	local name=$1; shift
+	docker exec "$WP" mkdir -p "$MU_DIR"
+	printf '%s\n' '<?php' "$@" | docker exec -i "$WP" sh -c "cat >$MU_DIR/$name.php"
+	docker exec "$WP" chown -R www-data:www-data "$MU_DIR"
+}
+mu_rm() { docker exec "$WP" rm -f "$MU_DIR/$1.php"; }
+# The documented MCPWP_ALLOW_INSECURE_OAUTH escape hatch.
 allow_insecure() { # on|off
+	if [[ $1 == on ]]; then mu_put e2e-allow-insecure-oauth "define( 'MCPWP_ALLOW_INSECURE_OAUTH', true );"; else mu_rm e2e-allow-insecure-oauth; fi
+}
+# The documented wp-config fix for a TLS-terminating proxy, as a mu-plugin.
+proxy_https() { # on|off
 	if [[ $1 == on ]]; then
-		docker exec "$WP" mkdir -p /var/www/html/wp-content/mu-plugins
-		printf '%s\n' '<?php' "define( 'MCPWP_ALLOW_INSECURE_OAUTH', true );" | docker exec -i "$WP" sh -c "cat >$INSECURE_MU"
-		docker exec "$WP" chown -R www-data:www-data /var/www/html/wp-content/mu-plugins
+		mu_put e2e-proxy-https "if ( isset( \$_SERVER['HTTP_X_FORWARDED_PROTO'] ) && 'https' === \$_SERVER['HTTP_X_FORWARDED_PROTO'] ) { \$_SERVER['HTTPS'] = 'on'; }"
 	else
-		docker exec "$WP" rm -f "$INSECURE_MU"
+		mu_rm e2e-proxy-https
 	fi
 }
 # tools/list over http with a non-loopback Host; prints the status, body in $SCRATCH/f2.body.
-lan_call() { # token
-	curl -s -D "$HDR" -o "$SCRATCH/f2.body" -w '%{http_code}' -X POST "$MCP" -H 'Host: e2e-oauth.example' \
-		-H "Authorization: Bearer $1" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+lan_call() { # token [extra curl args...]
+	local tok=$1; shift
+	curl -s -D "$HDR" -o "$SCRATCH/f2.body" -w '%{http_code}' -X POST "$MCP" -H 'Host: e2e-oauth.example' "$@" \
+		-H "Authorization: Bearer $tok" -H 'Content-Type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+}
+local_call() { # token -> status of tools/list over the normal localhost address
+	curl -s -o /dev/null -w '%{http_code}' -X POST "$MCP" -H "Authorization: Bearer $1" -H 'Content-Type: application/json' \
+		-d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+}
+# A fresh administrator grant; sets G_ACCESS and G_REFRESH.
+fresh_grant() { # state
+	new_pkce; local v=$VERIFIER
+	do_consent "$JAR_ADMIN" "$CLIENT_ID" "read write" "$1" write || { bad "fresh grant $1" "http=$CONSENT_CODE"; return 1; }
+	split_resp "$(token_post -d grant_type=authorization_code -d "code=$(qparam "$LOCATION" code)" -d "redirect_uri=$REDIRECT" -d "client_id=$CLIENT_ID" -d "code_verifier=$v")"
+	G_ACCESS=$(jq -r .access_token <<<"$RESP_BODY"); G_REFRESH=$(jq -r .refresh_token <<<"$RESP_BODY")
 }
 
 token_post() { curl -s -w '\n%{http_code}' -X POST "$TOKEN_EP" "$@"; }
@@ -367,18 +389,42 @@ check "(f) a garbage bearer is 401" "$R" 401
 echo "== (f2) transport: a bearer over plain HTTP"
 # This whole run is plain http://localhost, which the plugin allows for local
 # development (site address and Host both loopback). Name the site by anything
-# else and the same token is refused before it is looked up.
-check "(f2) non-loopback Host over http -> 403" "$(lan_call "$ACCESS")" 403
+# else and a token is refused, and revoked with its refresh family. Each check
+# uses its own grant so the tokens of the later sections stay live.
+fresh_grant st-f2a; T1=$G_ACCESS; R1=$G_REFRESH
+check "(f2) non-loopback Host over http -> 403" "$(lan_call "$T1")" 403
 check "(f2) ... code https_required" "$(jq -r .code "$SCRATCH/f2.body")" https_required
-if grep -qF "$ACCESS" "$SCRATCH/f2.body" "$HDR"; then bad "(f2) the refusal echoes the token"; else ok "(f2) the refusal does not echo the token"; fi
+if grep -qF "$T1" "$SCRATCH/f2.body" "$HDR"; then bad "(f2) the refusal echoes the token"; else ok "(f2) the refusal does not echo the token"; fi
 if grep -qi '^www-authenticate:' "$HDR"; then bad "(f2) the refusal carries a reconnect challenge"; else ok "(f2) the refusal carries no reconnect challenge"; fi
-lan_call "$ACCESS" >/dev/null; LIVE_BODY=$(jq -c . "$SCRATCH/f2.body")
+LIVE_BODY=$(jq -c . "$SCRATCH/f2.body")
 lan_call "mcpwp_at_$(rand 20)" >/dev/null; FAKE_BODY=$(jq -c . "$SCRATCH/f2.body")
 check "(f2) a never-issued token gets the identical answer" "$FAKE_BODY" "$LIVE_BODY"
+check "(f2) the refused token is dead afterwards, even on the allowed address (401)" "$(local_call "$T1")" 401
+split_resp "$(token_post -d grant_type=refresh_token -d "refresh_token=$R1" -d "client_id=$CLIENT_ID")"
+check "(f2) ... and so is its refresh token" "$RESP_CODE" 400
+check "(f2) the grant from (e) is untouched" "$(local_call "$ACCESS")" 200
+
+# Consent and discovery are refused on the same transport.
+OUT=$(curl -s -b "$JAR_ADMIN" -o "$SCRATCH/f2.html" -w '%{http_code}' -H 'Host: e2e-oauth.example' "$(new_pkce; authorize_url "$CLIENT_ID" "read" st-f2c)")
+check "(f2) consent screen over http with a non-loopback Host -> 403" "$OUT" 403
+[[ $(<"$SCRATCH/f2.html") == *"needs HTTPS"* && $(<"$SCRATCH/f2.html") != *'name="action"'* ]] && ok "(f2) ... a plain page, no consent form" || bad "(f2) consent page"
+# Not served: WordPress takes the request instead (a 404, or its canonical redirect).
+OUT=$(curl -s -o "$SCRATCH/f2.meta" -w '%{http_code}' -H 'Host: e2e-oauth.example' "$SITE/.well-known/oauth-authorization-server")
+if [[ $OUT != 200 && $(<"$SCRATCH/f2.meta") != *authorization_endpoint* ]]; then ok "(f2) AS metadata is not served over http with a non-loopback Host (http $OUT)"; else bad "(f2) AS metadata served over http" "http $OUT"; fi
+
+# The documented escape hatch.
+fresh_grant st-f2b; T2=$G_ACCESS
 allow_insecure on
-check "(f2) MCPWP_ALLOW_INSECURE_OAUTH lets the same call through (200)" "$(lan_call "$ACCESS")" 200
+check "(f2) MCPWP_ALLOW_INSECURE_OAUTH lets the call through (200)" "$(lan_call "$T2")" 200
 allow_insecure off
-check "(f2) removing the constant refuses it again" "$(lan_call "$ACCESS")" 403
+check "(f2) removing the constant refuses it again" "$(lan_call "$T2")" 403
+
+# The documented proxy fix: WordPress told the request was HTTPS.
+fresh_grant st-f2d; T3=$G_ACCESS
+proxy_https on
+check "(f2) behind the proxy fix, X-Forwarded-Proto: https is accepted (200)" "$(lan_call "$T3" -H 'X-Forwarded-Proto: https')" 200
+check "(f2) ... and without the header it is still refused" "$(lan_call "$T3")" 403
+proxy_https off
 
 # ================================================================ (g)
 echo "== (g) scope limits"
@@ -490,9 +536,10 @@ echo "== $pass passed, $fail failed"
 if [[ $KEEP -eq 1 ]]; then
 	if [[ -n $SITE_URL_OVERRIDE ]]; then
 		wpcli option update home "$SITE_URL_OVERRIDE" >/dev/null && wpcli option update siteurl "$SITE_URL_OVERRIDE" >/dev/null
-		# The tunnel terminates TLS and reaches this container over plain HTTP, which the
-		# plugin refuses for OAuth bearers; this throwaway stack takes the documented escape hatch.
-		allow_insecure on
+		# The tunnel terminates TLS and reaches this container over plain HTTP. Tell
+		# WordPress so, the way the docs tell a proxied site to (the tunnel sets
+		# X-Forwarded-Proto: https). Throwaway stack only.
+		proxy_https on
 		SHOWN=$SITE_URL_OVERRIDE
 	else
 		SHOWN=$SITE

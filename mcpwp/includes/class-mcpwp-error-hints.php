@@ -141,7 +141,7 @@ class Mcpwp_Error_Hints {
 				'guide' => '',
 			),
 			'https_required'      => array(
-				'hint'  => 'Use the site\'s https:// MCP URL. The token travelled unencrypted, so reconnect over https to replace it. Site owner: serve the site over HTTPS; behind a TLS-terminating proxy, make WordPress see HTTPS (is_ssl()) or define MCPWP_TRUST_PROXY_HEADERS. For local development only, define MCPWP_ALLOW_INSECURE_OAUTH as true. API keys are not affected.',
+				'hint'  => class_exists( 'Mcpwp_OAuth_Transport' ) ? Mcpwp_OAuth_Transport::hint( false ) : 'Use the site\'s https:// MCP URL.',
 				'guide' => '',
 			),
 			'api_not_configured'  => array(

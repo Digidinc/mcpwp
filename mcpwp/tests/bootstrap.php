@@ -5642,6 +5642,7 @@ require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-signals.php';
 // OAuth 2.1 server (#531).
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-clients.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-revocation.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-oauth-transport.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-token-store.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-route-capability-map.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-oauth.php';

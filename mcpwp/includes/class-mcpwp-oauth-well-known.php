@@ -131,7 +131,9 @@ class Mcpwp_OAuth_Well_Known {
 		$data          = method_exists( $response, 'get_data' ) ? $response->get_data() : null;
 		$invalid_token = is_array( $data ) && isset( $data['code'] ) && 'invalid_token' === $data['code'];
 
-		$discoverable = self::is_legacy_oauth_enabled() || self::is_broker_enrolled();
+		// The local AS is only advertised where its tokens would be accepted
+		// (see maybe_serve_well_known()); the broker path is unaffected.
+		$discoverable = ( self::is_legacy_oauth_enabled() && ! self::local_oauth_transport_refused( false ) ) || self::is_broker_enrolled();
 		if ( ! $discoverable && ! $invalid_token ) {
 			return $response;
 		}
@@ -205,6 +207,11 @@ class Mcpwp_OAuth_Well_Known {
 				if ( ! self::should_serve_protected_resource_metadata() ) {
 					return $do_parse;
 				}
+				// While it names this site's own AS, the document is not
+				// served where that AS's tokens would be refused (plain HTTP).
+				if ( self::is_legacy_oauth_enabled() && self::local_oauth_transport_refused( true ) ) {
+					return $do_parse;
+				}
 				self::serve_protected_resource_metadata();
 				exit;
 			}
@@ -216,7 +223,7 @@ class Mcpwp_OAuth_Well_Known {
 			if ( in_array( $path_only, $authorization_server_paths, true ) ) {
 				// This document only ever describes this site's own AS, so it
 				// stays gated on the local OAuth setting alone.
-				if ( ! self::is_legacy_oauth_enabled() ) {
+				if ( ! self::is_legacy_oauth_enabled() || self::local_oauth_transport_refused( true ) ) {
 					return $do_parse;
 				}
 				self::serve_authorization_server_metadata();
@@ -238,6 +245,26 @@ class Mcpwp_OAuth_Well_Known {
 		}
 
 		return $do_parse;
+	}
+
+	/**
+	 * Whether this request's transport would get a local OAuth access token
+	 * refused (Mcpwp_OAuth_Transport::is_refused()).
+	 *
+	 * @param bool $record Whether to note the refusal for Site Health.
+	 * @return bool
+	 */
+	public static function local_oauth_transport_refused( $record ) {
+		if ( ! class_exists( 'Mcpwp_OAuth_Transport' ) ) {
+			require_once __DIR__ . '/class-mcpwp-oauth-transport.php';
+		}
+		if ( ! Mcpwp_OAuth_Transport::is_refused() ) {
+			return false;
+		}
+		if ( $record ) {
+			Mcpwp_OAuth_Transport::record_refusal( 'metadata' );
+		}
+		return true;
 	}
 
 	/**
