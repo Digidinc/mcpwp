@@ -293,40 +293,136 @@ final class OAuthReconnectMessageTest extends TestCase {
 		Mcpwp_Rate_Limiter::get_instance()->update_settings( array( 'enabled' => true, 'requests_per_minute' => 60, 'requests_per_hour' => 1000, 'burst_limit' => 5, 'whitelist' => array() ) );
 	}
 
-	public function test_a_loop_of_random_oauth_tokens_is_throttled_like_a_loop_of_garbage_api_keys(): void {
+	private function first_429( callable $attempt, int $max = 40 ): ?int {
+		return $this->first_throttled( $attempt, $max );
+	}
+
+	public function test_garbage_keys_and_random_tokens_share_one_budget_and_tokens_never_get_429(): void {
 		$_SERVER['REMOTE_ADDR'] = '203.0.113.7';
 		$auth = new Mcpwp_Api_Auth_Test_Harness();
 		$auth->create_scoped_api_key( 'live', array( 'read' ), 'admin' );
+		$garbage = fn() => $this->verify( 'mcpwp_' . bin2hex( random_bytes( 24 ) ) );
+		$random  = fn() => $this->verify( 'mcpwp_at_' . bin2hex( random_bytes( 24 ) ) );
 
-		$keys = $this->first_throttled( fn() => $this->verify( 'mcpwp_' . bin2hex( random_bytes( 24 ) ) ) );
-		$this->assertNotNull( $keys, 'sanity: garbage API keys hit the limiter' );
+		$alone = $this->first_429( $garbage );
+		$this->assertNotNull( $alone, 'sanity: garbage API keys alone hit the limiter' );
 
+		// No reset between: tokens and keys, alternating, from ONE address.
 		$this->reset_limiter();
-		$tokens = $this->first_throttled( fn() => $this->verify( 'mcpwp_at_' . bin2hex( random_bytes( 24 ) ) ) );
-		$this->assertSame( $keys, $tokens, 'Random OAuth tokens must be counted exactly like garbage keys.' );
+		$n = 0;
+		$hit = null;
+		while ( $n < 40 && null === $hit ) {
+			++$n;
+			$result = ( 0 === $n % 2 ) ? $garbage() : $random();
+			if ( 0 === $n % 2 ) {
+				$this->assertContains( $result->get_error_code(), array( 'invalid_api_key', 'rate_limit_exceeded' ) );
+				if ( 'rate_limit_exceeded' === $result->get_error_code() ) {
+					$hit = $n;
+				}
+			} else {
+				$this->assertSame( 'invalid_token', $result->get_error_code(), 'An OAuth token is never answered 429.' );
+			}
+		}
+		$this->assertNotNull( $hit );
+		$this->assertLessThanOrEqual( $alone + 1, $hit, 'Tokens must spend the same budget as garbage keys.' );
+		$this->assertGreaterThan( (int) ceil( $alone / 2 ), $hit, 'Sanity: and not more than the keys alone would.' );
+	}
+
+	public function test_from_an_exhausted_address_dead_tokens_still_answer_the_identical_401(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.20';
+		$auth = new Mcpwp_Api_Auth_Test_Harness();
+		$auth->create_scoped_api_key( 'live', array( 'read' ), 'admin' );
+
+		$fresh_unknown = $this->wire( $this->verify( 'mcpwp_at_' . bin2hex( random_bytes( 24 ) ) ) );
+		$this->reset_limiter();
+		$this->assertNotNull( $this->first_429( fn() => $this->verify( 'mcpwp_' . bin2hex( random_bytes( 24 ) ) ) ), 'budget exhausted' );
+		$this->assertSame( 'rate_limit_exceeded', $this->verify( 'mcpwp_' . bin2hex( random_bytes( 24 ) ) )->get_error_code(), 'API-key path still 429s' );
+
+		$expired = 'mcpwp_at_' . bin2hex( random_bytes( 24 ) );
+		$this->row( $expired, array( 'expires_at' => time() - 5 ) );
+		$unknown = 'mcpwp_at_' . bin2hex( random_bytes( 24 ) );
+		Mcpwp_OAuth_Revocation::revoke_site();
+		$epoch = 'mcpwp_at_' . bin2hex( random_bytes( 24 ) );
+		$this->row( $epoch );
+		foreach ( array( 'expired' => $expired, 'unknown' => $unknown, 'epoch' => $epoch ) as $label => $token ) {
+			$this->assertSame( $fresh_unknown, $this->wire( $this->verify( $token ) ), $label . ' from an exhausted address' );
+		}
+		update_option( 'mcpwp_settings', array( 'oauth_enabled' => false ) );
+		$this->assertSame( 'invalid_token', $this->verify( 'mcpwp_at_' . bin2hex( random_bytes( 24 ) ) )->get_error_code(), 'OAuth off, exhausted' );
+	}
+
+	public function test_over_the_limit_the_failure_log_is_not_written(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.30';
+		$harness = new class() extends Mcpwp_Api_Auth_Test_Harness {
+			public $logged = 0;
+			protected function log_auth_failure( $request ) {
+				++$this->logged;
+			}
+		};
+		$request = fn() => new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'Authorization' => 'Bearer mcpwp_at_' . bin2hex( random_bytes( 24 ) ) ) );
+		$this->assertTrue( $harness->verify_api_key( $request() )->get_error_code() === 'invalid_token' );
+		$this->assertSame( 1, $harness->logged, 'Under the limit a failure is logged.' );
+		for ( $i = 0; $i < 40; $i++ ) {
+			$harness->verify_api_key( $request() );
+		}
+		$after_exhaustion = $harness->logged;
+		for ( $i = 0; $i < 10; $i++ ) {
+			$harness->verify_api_key( $request() );
+		}
+		$this->assertSame( $after_exhaustion, $harness->logged, 'Over the limit nothing is written to the log.' );
+		$this->assertLessThan( 20, $after_exhaustion );
+	}
+
+	public function test_an_unmetered_sub_request_failure_is_not_counted(): void {
+		$_SERVER['REMOTE_ADDR'] = '203.0.113.40';
+		$auth = new Mcpwp_Api_Auth_Test_Harness();
+		$auth->create_scoped_api_key( 'live', array( 'read' ), 'admin' );
+		$harness = new class() extends Mcpwp_Api_Auth_Test_Harness {
+			public function sub( $request ) {
+				return $this->verify_api_key_auth_only( $request );
+			}
+		};
+		for ( $i = 0; $i < 40; $i++ ) {
+			$error = $harness->sub( new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'Authorization' => 'Bearer mcpwp_at_' . bin2hex( random_bytes( 24 ) ) ) ) );
+			$this->assertSame( 'invalid_token', $error->get_error_code() );
+		}
+		$this->assertSame( 'invalid_api_key', $this->verify( 'mcpwp_' . bin2hex( random_bytes( 24 ) ) )->get_error_code(), 'The outer request owns the count; sub-requests spent none of this address\'s budget.' );
 	}
 
 	public function test_each_dead_token_reason_counts_against_the_limiter(): void {
 		$_SERVER['REMOTE_ADDR'] = '203.0.113.9';
-		Mcpwp_OAuth_Revocation::revoke_site();
-		$n = $this->first_throttled(
-			function () {
-				$t = 'mcpwp_at_' . bin2hex( random_bytes( 24 ) );
-				$this->row( $t ); // issued before the site epoch: epoch branch
-				return $this->verify( $t );
-			}
-		);
-		$this->assertNotNull( $n, 'epoch-covered tokens are counted' );
+		$auth = new Mcpwp_Api_Auth_Test_Harness();
+		$auth->create_scoped_api_key( 'live', array( 'read' ), 'admin' );
+		$garbage = fn() => $this->verify( 'mcpwp_' . bin2hex( random_bytes( 24 ) ) );
+		$alone   = $this->first_429( $garbage );
+		$this->assertNotNull( $alone );
 
+		// Epoch-covered tokens spend the shared budget.
+		$this->reset_limiter();
+		Mcpwp_OAuth_Revocation::revoke_site();
+		for ( $i = 0; $i < $alone - 1; $i++ ) {
+			$t = 'mcpwp_at_' . bin2hex( random_bytes( 24 ) );
+			$this->row( $t );
+			$this->assertSame( 'invalid_token', $this->verify( $t )->get_error_code() );
+		}
+		$this->assertSame( 'rate_limit_exceeded', $garbage()->get_error_code(), 'epoch-covered failures were counted' );
+
+		// OAuth-off tokens too.
 		$this->reset_limiter();
 		update_option( 'mcpwp_settings', array( 'oauth_enabled' => false ) );
-		$this->assertNotNull( $this->first_throttled( fn() => $this->verify( 'mcpwp_at_' . bin2hex( random_bytes( 24 ) ) ) ), 'OAuth-off tokens are counted' );
+		for ( $i = 0; $i < $alone - 1; $i++ ) {
+			$this->verify( 'mcpwp_at_' . bin2hex( random_bytes( 24 ) ) );
+		}
+		$this->assertSame( 'rate_limit_exceeded', $garbage()->get_error_code(), 'OAuth-off failures were counted' );
 	}
 
 	public function test_a_valid_token_is_never_throttled_by_another_addresses_failures(): void {
 		$token = $this->issue();
 		$_SERVER['REMOTE_ADDR'] = '198.51.100.1';
-		$this->assertNotNull( $this->first_throttled( fn() => $this->verify( 'mcpwp_at_' . bin2hex( random_bytes( 24 ) ) ) ) );
+		$auth = new Mcpwp_Api_Auth_Test_Harness();
+		$auth->create_scoped_api_key( 'live', array( 'read' ), 'admin' );
+		$this->assertNotNull( $this->first_throttled( fn() => $this->verify( 'mcpwp_' . bin2hex( random_bytes( 24 ) ) ) ) );
+		$this->assertTrue( $this->verify( $token ), 'a valid token is not refused even from the exhausted address' );
 
 		$_SERVER['REMOTE_ADDR'] = '198.51.100.2';
 		for ( $i = 0; $i < 3; $i++ ) {

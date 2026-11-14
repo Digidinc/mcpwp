@@ -4547,8 +4547,8 @@ trait Mcpwp_Api_Auth {
 	protected function authenticate_oauth_access_token( $token, $request, $metered = true ) {
 		$oauth_settings = $this->get_oauth_settings();
 		if ( empty( $oauth_settings['oauth_enabled'] ) ) {
-			$throttled = $this->throttle_oauth_failure( $request, $metered );
-			return is_wp_error( $throttled ) ? $throttled : self::oauth_disabled_error();
+			$this->count_oauth_failure( $request, $metered );
+			return self::oauth_disabled_error();
 		}
 
 		// #1101 PR-3b: access tokens live in the hashed token table.  A
@@ -4578,9 +4578,10 @@ trait Mcpwp_Api_Auth {
 		}
 
 		if ( ! is_array( $record ) || empty( $record['scopes'] ) ) {
-			$this->log_auth_failure( $request );
-			$throttled = $this->throttle_oauth_failure( $request, $metered );
-			return is_wp_error( $throttled ) ? $throttled : self::oauth_reconnect_error();
+			if ( ! $this->count_oauth_failure( $request, $metered ) ) {
+				$this->log_auth_failure( $request );
+			}
+			return self::oauth_reconnect_error();
 		}
 
 		// #1101: revoked by epoch (its client was revoked or deleted, its user
@@ -4589,9 +4590,10 @@ trait Mcpwp_Api_Auth {
 		// the audience so a revoked token answers like every other dead one,
 		// whatever else is wrong with it.
 		if ( Mcpwp_OAuth_Revocation::is_revoked( $record ) ) {
-			$this->log_auth_failure( $request );
-			$throttled = $this->throttle_oauth_failure( $request, $metered );
-			return is_wp_error( $throttled ) ? $throttled : self::oauth_reconnect_error();
+			if ( ! $this->count_oauth_failure( $request, $metered ) ) {
+				$this->log_auth_failure( $request );
+			}
+			return self::oauth_reconnect_error();
 		}
 
 		// RFC 8707 audience binding (PR-2 D2).  Every token issued since PR-2
@@ -6072,22 +6074,26 @@ trait Mcpwp_Api_Auth {
 
 	/**
 	 * Count a failed OAuth token against the same per-address limiter a wrong
-	 * API key uses ('invalid:<ip>'), so a loop of random tokens is throttled
-	 * the way a loop of garbage keys is. Valid tokens never reach this, and
-	 * the bucket is per address, so one address's failures never throttle
-	 * another's valid token. Unmetered sub-requests were already charged by
-	 * their outer request.
+	 * API key uses ('invalid:<ip>'), so the two share ONE budget and the
+	 * failure load is bounded. Unlike the API-key path, going over the limit
+	 * never changes the answer: a dead token still gets the identical 401
+	 * invalid_token (a client refreshes on 401, never on 429, so a shared
+	 * address's exhausted budget must not stall every client's hourly expiry).
+	 * The caller skips only the side effects (the activity-log INSERT) when
+	 * this returns true. Valid tokens never reach this; unmetered
+	 * sub-requests were already charged by their outer request.
 	 *
 	 * @param WP_REST_Request $request Request.
 	 * @param bool            $metered Whether this call is the outer request.
-	 * @return true|WP_Error True, or the 429.
+	 * @return bool True when the address is over its failure budget.
 	 */
-	protected function throttle_oauth_failure( $request, $metered ) {
+	protected function count_oauth_failure( $request, $metered ) {
 		if ( ! $metered ) {
-			return true;
+			return false;
 		}
 		$method = method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST';
-		return $this->check_rate_limit( 'invalid:' . $this->get_client_ip(), $method );
+		$over   = $this->check_rate_limit( 'invalid:' . $this->get_client_ip(), $method );
+		return is_wp_error( $over );
 	}
 
 	/**
