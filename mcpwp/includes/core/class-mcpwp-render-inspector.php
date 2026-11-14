@@ -38,6 +38,121 @@ final class Mcpwp_Render_Inspector {
 	const MAX_REPORTED_IDS = 20;
 
 	/**
+	 * Largest rendered HTML parsed by default, in bytes. Filterable with
+	 * `mcpwp_dom_check_max_bytes`. Over it, the check is skipped, not run on a
+	 * partial document.
+	 */
+	const DEFAULT_MAX_BYTES = 2097152;
+
+	/**
+	 * Default seconds of DOM checking one PHP request may spend in total.
+	 * Filterable with `mcpwp_dom_check_time_budget`.
+	 */
+	const DEFAULT_TIME_BUDGET = 5.0;
+
+	/**
+	 * Default largest saved tree checked, in elements. Filterable with
+	 * `mcpwp_dom_check_max_elements`.
+	 */
+	const DEFAULT_MAX_ELEMENTS = 3000;
+
+	/**
+	 * Seconds spent on DOM checks in this request.
+	 *
+	 * @var float
+	 */
+	private static $seconds_spent = 0.0;
+
+	/**
+	 * Record time spent on a DOM check.
+	 *
+	 * @param float $seconds Seconds.
+	 */
+	public static function add_time_spent( $seconds ) {
+		self::$seconds_spent += max( 0.0, (float) $seconds );
+	}
+
+	/**
+	 * Whether this request still has time for another DOM check.
+	 *
+	 * @return bool
+	 */
+	public static function time_budget_left() {
+		/**
+		 * Filters the seconds of DOM checking one request may spend.
+		 *
+		 * @param float $seconds Default Mcpwp_Render_Inspector::DEFAULT_TIME_BUDGET.
+		 */
+		$budget = (float) apply_filters( 'mcpwp_dom_check_time_budget', self::DEFAULT_TIME_BUDGET );
+
+		return self::$seconds_spent < $budget;
+	}
+
+	/**
+	 * Forget time spent (tests, long-running workers between requests).
+	 */
+	public static function reset_time_spent() {
+		self::$seconds_spent = 0.0;
+	}
+
+	/**
+	 * Count every element in a tree.
+	 *
+	 * @param array $elements Element list.
+	 * @return int
+	 */
+	public static function count_elements( array $elements ) {
+		return self::count_all( $elements );
+	}
+
+	/**
+	 * XPath predicate selecting nodes that belong to the page's own markup:
+	 * not inside a nested Elementor document (a Template, Global or Loop item
+	 * rendered into the page has its own data-elementor-type wrapper), and not
+	 * inside code, preformatted text, scripts, styles or form fields, where a
+	 * placeholder or a shortcode is content, not a defect.
+	 */
+	const OWN_SCOPE = 'count(ancestor-or-self::*[@data-elementor-type]) <= 1 and not(ancestor-or-self::code or ancestor-or-self::pre or ancestor-or-self::script or ancestor-or-self::style or ancestor-or-self::textarea or ancestor-or-self::noscript or ancestor-or-self::template)';
+
+	/**
+	 * Widgets that render no output when they have nothing to show, which is
+	 * a valid state: an empty Shortcode or HTML widget, a Loop Grid with no
+	 * posts, a Nav Menu with no menu, an embedded template. A missing data-id
+	 * for these is not a failure.
+	 *
+	 * @var string[]
+	 */
+	private static $may_render_empty = array(
+		'shortcode',
+		'html',
+		'template',
+		'global',
+		'loop-grid',
+		'loop-carousel',
+		'nav-menu',
+		'mega-menu',
+		'sidebar',
+		'posts',
+		'archive-posts',
+		'portfolio',
+		'image-gallery',
+		'gallery',
+		'media-carousel',
+		'table-of-contents',
+		'login',
+		'search-form',
+		'sitemap',
+	);
+
+	/**
+	 * Widget type prefixes that may render nothing: WordPress widgets, theme
+	 * and WooCommerce widgets that depend on the query they render in.
+	 *
+	 * @var string[]
+	 */
+	private static $may_render_empty_prefixes = array( 'wp-widget-', 'theme-', 'woocommerce-', 'wc-', 'post-', 'archive-' );
+
+	/**
 	 * Widget settings whose text must appear inside the widget's rendered
 	 * element. Kept to plain-text settings, where a normalised substring test
 	 * cannot be thrown off by markup the widget adds around the value.
@@ -54,8 +169,10 @@ final class Mcpwp_Render_Inspector {
 	 * widget's setting was never saved, most often because the data used a
 	 * wrong control key (`text` instead of `title` on a heading).
 	 *
-	 * `match` is the literal to look for, `in` is where (visible `text` or raw
-	 * `html`), and `regex` marks a pattern instead of a literal. `exempt_if_saved`
+	 * `match` is the literal to look for in the page's own visible text
+	 * (`in` = `text`), or an XPath expression (`in` = `xpath`); both are scoped
+	 * to the page's own markup, see own_scope(). `regex` marks a pattern
+	 * instead of a literal. `exempt_if_saved`
 	 * is the literal that, when present in the saved tree, means the caller
 	 * asked for it, so it is not reported.
 	 *
@@ -93,16 +210,16 @@ final class Mcpwp_Render_Inspector {
 			),
 			'elementor_placeholder_image' => array(
 				'label'           => 'Elementor placeholder image (assets/images/placeholder.png)',
-				'match'           => 'assets/images/placeholder.png',
-				'in'              => 'html',
+				'match'           => '//img[contains(@src, "assets/images/placeholder.png") or contains(@srcset, "assets/images/placeholder.png")]',
+				'in'              => 'xpath',
 				'regex'           => false,
 				'exempt_if_saved' => 'placeholder.png',
 			),
 			'elementor_default_button_text' => array(
 				'label'           => 'Elementor default button label "Click here"',
-				'match'           => '#<span[^>]*class="[^"]*\belementor-button-text\b[^"]*"[^>]*>\s*Click here\s*</span>#i',
-				'in'              => 'html',
-				'regex'           => true,
+				'match'           => '//span[contains(concat(" ", normalize-space(@class), " "), " elementor-button-text ") and normalize-space(.) = "Click here"]',
+				'in'              => 'xpath',
+				'regex'           => false,
 				'exempt_if_saved' => 'Click here',
 			),
 		);
@@ -139,6 +256,7 @@ final class Mcpwp_Render_Inspector {
 			'elements_expected'     => count( $expected ),
 			'elements_rendered'     => 0,
 			'elements_not_checked'  => $not_checked,
+			'elements_empty_allowed' => 0,
 			'missing_element_count' => 0,
 			'missing_element_ids'   => array(),
 			'placeholders'          => array(),
@@ -149,6 +267,29 @@ final class Mcpwp_Render_Inspector {
 		);
 
 		$html = (string) $html;
+
+		/**
+		 * Filters the largest rendered HTML the DOM check parses, in bytes.
+		 *
+		 * @param int $max_bytes Default Mcpwp_Render_Inspector::DEFAULT_MAX_BYTES.
+		 */
+		$max_bytes = (int) apply_filters( 'mcpwp_dom_check_max_bytes', self::DEFAULT_MAX_BYTES );
+		if ( $max_bytes > 0 && strlen( $html ) > $max_bytes ) {
+			return self::skipped(
+				'html_too_large',
+				sprintf( 'The rendered HTML is %1$d bytes, over the %2$d byte limit for this check, so it was not parsed.', strlen( $html ), $max_bytes )
+			);
+		}
+
+		// Elementor's Element Caching stores widget output behind an
+		// [elementor-element] shortcode. Output that still carries one is not
+		// the final markup, so ids and text cannot be compared with it.
+		if ( false !== stripos( $html, '[elementor-element ' ) || false !== stripos( $html, '[elementor-element]' ) ) {
+			return self::skipped(
+				'element_cache_placeholder',
+				'The render returned Elementor Element Caching placeholders instead of final markup, so the rendered page was not checked.'
+			);
+		}
 
 		if ( '' === trim( $html ) ) {
 			if ( ! empty( $expected ) ) {
@@ -189,6 +330,8 @@ final class Mcpwp_Render_Inspector {
 			if ( isset( $nodes[ $id ] ) ) {
 				++$report['elements_rendered'];
 				self::check_text( $element, $nodes[ $id ], $report );
+			} elseif ( self::may_render_empty( $element ) ) {
+				++$report['elements_empty_allowed'];
 			} else {
 				$missing[] = (string) $id;
 			}
@@ -206,8 +349,7 @@ final class Mcpwp_Render_Inspector {
 			);
 		}
 
-		$body_nodes   = $xpath->query( '//body' );
-		$visible_text = self::normalise_space( $body_nodes->length > 0 ? $body_nodes->item( 0 )->textContent : $doc->textContent );
+		$visible_text = self::own_visible_text( $xpath );
 		$saved_blob   = self::saved_blob( $elements );
 
 		foreach ( self::placeholder_patterns() as $key => $pattern ) {
@@ -215,10 +357,14 @@ final class Mcpwp_Render_Inspector {
 				continue;
 			}
 
-			$haystack = 'text' === $pattern['in'] ? $visible_text : $html;
-			$count    = $pattern['regex']
-				? (int) preg_match_all( $pattern['match'], $haystack )
-				: substr_count( $haystack, $pattern['match'] );
+			if ( 'xpath' === $pattern['in'] ) {
+				$found = $xpath->query( $pattern['match'] . '[' . self::OWN_SCOPE . ']' );
+				$count = $found ? (int) $found->length : 0;
+			} else {
+				$count = $pattern['regex']
+					? (int) preg_match_all( $pattern['match'], $visible_text )
+					: substr_count( $visible_text, $pattern['match'] );
+			}
 
 			if ( $count > 0 ) {
 				$report['placeholders'][] = array(
@@ -254,7 +400,7 @@ final class Mcpwp_Render_Inspector {
 			);
 		}
 
-		$hash_buttons = $xpath->query( '//a[contains(concat(" ", normalize-space(@class), " "), " elementor-button ") and normalize-space(@href) = "#"]' );
+		$hash_buttons = $xpath->query( '//a[contains(concat(" ", normalize-space(@class), " "), " elementor-button ") and normalize-space(@href) = "#" and ' . self::OWN_SCOPE . ']' );
 		if ( $hash_buttons->length > 0 ) {
 			$owners = array();
 			foreach ( $hash_buttons as $button ) {
@@ -275,6 +421,64 @@ final class Mcpwp_Render_Inspector {
 		}
 
 		return $report;
+	}
+
+	/**
+	 * A skipped report.
+	 *
+	 * @param string $reason Reason code.
+	 * @param string $note   Plain-language explanation.
+	 * @return array{status:string,reason:string,note:string}
+	 */
+	public static function skipped( $reason, $note ) {
+		return array(
+			'status' => 'skipped',
+			'reason' => (string) $reason,
+			'note'   => (string) $note,
+		);
+	}
+
+	/**
+	 * Whether an element may legitimately render nothing.
+	 *
+	 * @param array $element Saved element.
+	 * @return bool
+	 */
+	private static function may_render_empty( array $element ) {
+		$type = isset( $element['widgetType'] ) ? strtolower( (string) $element['widgetType'] ) : '';
+		if ( '' === $type ) {
+			return false;
+		}
+
+		if ( in_array( $type, self::$may_render_empty, true ) ) {
+			return true;
+		}
+
+		foreach ( self::$may_render_empty_prefixes as $prefix ) {
+			if ( 0 === strpos( $type, $prefix ) ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * The page's own visible text, without nested documents, code or scripts.
+	 *
+	 * @param DOMXPath $xpath Parsed document.
+	 * @return string
+	 */
+	private static function own_visible_text( $xpath ) {
+		$parts = array();
+		$nodes = $xpath->query( '//text()[' . self::OWN_SCOPE . ']' );
+		if ( $nodes ) {
+			foreach ( $nodes as $node ) {
+				$parts[] = $node->nodeValue;
+			}
+		}
+
+		return self::normalise_space( implode( ' ', $parts ) );
 	}
 
 	/**

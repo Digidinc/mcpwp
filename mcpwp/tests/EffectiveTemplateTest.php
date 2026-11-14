@@ -86,6 +86,28 @@ final class EffectiveTemplateTest extends TestCase {
 		$this->assertNull( $rendered['page_template'], 'No template class, no guess.' );
 	}
 
+	public function test_document_over_the_byte_limit_is_not_parsed(): void {
+		add_filter(
+			'mcpwp_dom_check_max_bytes',
+			static function () {
+				return 100;
+			}
+		);
+
+		$rendered = Mcpwp_Effective_Template::rendered_from_html( $this->document( '', str_repeat( 'x', 200 ) ) );
+
+		$this->assertSame( 'skipped', $rendered['status'] );
+		$this->assertSame( 'html_too_large', $rendered['reason'] );
+		$this->assertSame(
+			array(),
+			Mcpwp_Effective_Template::compare(
+				array( 'page_template' => 'elementor_canvas', 'theme_builder' => array( 'evaluated' => true, 'locations' => array( 'header' => array( 1 ) ) ) ),
+				$rendered
+			),
+			'An unread document is not evidence that anything failed to render.'
+		);
+	}
+
 	public function test_a_fragment_is_not_read_as_a_document(): void {
 		$this->assertNull( Mcpwp_Effective_Template::rendered_from_html( '<div class="elementor">x</div>' ) );
 	}

@@ -172,10 +172,11 @@ final class Mcpwp_Effective_Template {
 				}
 			}
 		} catch ( \Throwable $e ) {
+			// A reason code only: an exception message from a third-party
+			// plugin can carry paths or data this caller should not see.
 			$result = array(
 				'evaluated' => false,
 				'reason'    => 'evaluation_failed',
-				'error'     => get_class( $e ) . ': ' . $e->getMessage(),
 			);
 		} finally {
 			foreach ( $saved as $global => $value ) {
@@ -201,6 +202,9 @@ final class Mcpwp_Effective_Template {
 	/**
 	 * What a full rendered document shows about its templates.
 	 *
+	 * Over the DOM check's byte limit (`mcpwp_dom_check_max_bytes`) the
+	 * document is not parsed, and the result says so with status "skipped".
+	 *
 	 * @param string $html Full HTML document.
 	 * @return array|null Null when $html is not a full document (no <body>).
 	 */
@@ -208,6 +212,17 @@ final class Mcpwp_Effective_Template {
 		$html = (string) $html;
 		if ( '' === $html || false === stripos( $html, '<body' ) || ! class_exists( 'Mcpwp_Render_Inspector' ) ) {
 			return null;
+		}
+
+		$max_bytes = (int) apply_filters( 'mcpwp_dom_check_max_bytes', Mcpwp_Render_Inspector::DEFAULT_MAX_BYTES );
+		if ( $max_bytes > 0 && strlen( $html ) > $max_bytes ) {
+			return array(
+				'source'   => 'rendered_html',
+				'status'   => 'skipped',
+				'reason'   => 'html_too_large',
+				'note'     => sprintf( 'The document is %1$d bytes, over the %2$d byte limit, so its templates were not read.', strlen( $html ), $max_bytes ),
+				'warnings' => array(),
+			);
 		}
 
 		$doc = Mcpwp_Render_Inspector::load_dom( $html );
@@ -258,6 +273,7 @@ final class Mcpwp_Effective_Template {
 
 		$rendered = array(
 			'source'              => 'rendered_html',
+			'status'              => 'read',
 			'page_template'       => self::page_template_from_body_classes( $body_classes ),
 			'elementor_documents' => array_slice( $documents, 0, 50 ),
 			'locations'           => $locations,
@@ -331,7 +347,7 @@ final class Mcpwp_Effective_Template {
 	 * @return string[]
 	 */
 	public static function compare( $assigned, $rendered ) {
-		if ( ! is_array( $assigned ) || ! is_array( $rendered ) ) {
+		if ( ! is_array( $assigned ) || ! is_array( $rendered ) || 'skipped' === ( $rendered['status'] ?? '' ) ) {
 			return array();
 		}
 

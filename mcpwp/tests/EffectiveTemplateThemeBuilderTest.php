@@ -80,7 +80,8 @@ final class EffectiveTemplateThemeBuilderTest extends TestCase {
 
 		$this->assertFalse( $assigned['theme_builder']['evaluated'] );
 		$this->assertSame( 'evaluation_failed', $assigned['theme_builder']['reason'] );
-		$this->assertStringContainsString( 'conditions exploded', $assigned['theme_builder']['error'] );
+		$this->assertArrayNotHasKey( 'error', $assigned['theme_builder'], 'Only a reason code: no exception class or message reaches the caller.' );
+		$this->assertStringNotContainsString( 'conditions exploded', wp_json_encode( $assigned ) );
 		$this->assertArrayNotHasKey( 'post', $GLOBALS );
 		$this->assertSame( 2, $GLOBALS['mcpwp_test_tb_clears'] );
 	}

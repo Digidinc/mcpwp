@@ -381,7 +381,11 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			if ( 'any' === $type && class_exists( 'Mcpwp_Site_Url_Resolver' ) && self::is_same_site_origin( $url ) ) {
 				$posts_page = 'page' === get_option( 'show_on_front' ) ? (int) get_option( 'page_for_posts' ) : 0;
 
-				if ( $post instanceof WP_Post && $posts_page > 0 && (int) $post->ID === $posts_page ) {
+				// Answered as the blog index only when the caller may read the
+				// posts page itself; otherwise the guards below answer it, the
+				// same way as any other page.
+				if ( $post instanceof WP_Post && $posts_page > 0 && (int) $post->ID === $posts_page
+					&& $this->requester_can_read_post( $post ) && null === $this->guard_post_type_category( $post, '' ) ) {
 					$request_path = Mcpwp_Site_Url_Resolver::request_path( $url );
 					$paged        = 1;
 					if ( null !== $request_path && preg_match( '#/page/([0-9]+)$#', '/' . $request_path['path'], $m ) ) {
@@ -553,11 +557,16 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				break;
 
 			default:
-				$posts_page = 'page' === get_option( 'show_on_front' ) ? (int) get_option( 'page_for_posts' ) : 0;
-				if ( $posts_page > 0 ) {
-					$response['posts_page_id'] = $posts_page;
+				$response['title'] = __( 'Latest posts', 'mcpwp' );
+
+				// The posts page is named only to a caller who may read it.
+				$posts_page_id = 'page' === get_option( 'show_on_front' ) ? (int) get_option( 'page_for_posts' ) : 0;
+				$posts_page    = $posts_page_id > 0 ? get_post( $posts_page_id ) : null;
+				if ( $posts_page instanceof WP_Post && $this->requester_can_read_post( $posts_page ) && null === $this->guard_post_type_category( $posts_page, '' ) ) {
+					$response['posts_page_id'] = (int) $posts_page->ID;
+					$response['title']         = get_the_title( $posts_page );
+					$response['edit_url']      = admin_url( 'post.php?post=' . (int) $posts_page->ID . '&action=edit' );
 				}
-				$response['title'] = $posts_page > 0 ? get_the_title( $posts_page ) : __( 'Latest posts', 'mcpwp' );
 		}
 
 		$response['items']      = $items;
@@ -596,6 +605,11 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			);
 		}
 
+		$category_denied = $this->rest_route_category_denial( (string) $route );
+		if ( $category_denied ) {
+			return $category_denied;
+		}
+
 		foreach ( array( '_method', '_envelope', '_jsonp', 'rest_route' ) as $reserved ) {
 			unset( $query[ $reserved ] );
 		}
@@ -612,12 +626,33 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		}
 
 		try {
-			$response = rest_do_request( $request );
+			// rest_do_request() skips WP_REST_Server::serve_request(), which is
+			// where core applies rest_authentication_errors. A site that locks
+			// anonymous REST access (or one route of it) does so there, so it
+			// is applied here, as the visitor this request stands in for.
+			$auth_error = apply_filters( 'rest_authentication_errors', null );
+
+			$response = is_wp_error( $auth_error ) ? $auth_error : rest_do_request( $request );
 		} finally {
 			wp_set_current_user( $previous_user );
 			if ( null !== $batch_flag ) {
 				Mcpwp_REST_Batch::$is_batch_sub_request = $batch_flag;
 			}
+		}
+
+		if ( isset( $auth_error ) && is_wp_error( $auth_error ) ) {
+			$error_data = $auth_error->get_error_data();
+			$status     = is_array( $error_data ) && isset( $error_data['status'] ) ? (int) $error_data['status'] : 401;
+
+			return $this->error_response(
+				'rest_visitor_refused',
+				sprintf(
+					/* translators: %s: the site's own refusal message */
+					__( 'This site refuses this REST request from a logged-out visitor: %s', 'mcpwp' ),
+					$auth_error->get_error_message()
+				),
+				$status >= 400 ? $status : 401
+			);
 		}
 
 		$status = 200;
@@ -670,6 +705,101 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		}
 
 		return $this->success_response( $result );
+	}
+
+	/**
+	 * Refuse a REST route that exposes a post type this key's categories do
+	 * not cover (#1020 rule, applied to the REST door of wp_fetch).
+	 *
+	 * @param string $route REST route.
+	 * @return WP_Error|null
+	 */
+	private function rest_route_category_denial( $route ) {
+		foreach ( $this->post_types_for_rest_route( $route ) as $post_type ) {
+			$denied = $this->guard_post_type_category_for_type( $post_type );
+			if ( $denied ) {
+				return $denied;
+			}
+		}
+
+		return null;
+	}
+
+	/**
+	 * Post types whose posts a REST route can return.
+	 *
+	 * Covers every post type and taxonomy route registered under its own
+	 * rest_namespace/rest_base, core's search route (which spans every viewable
+	 * type), and the WooCommerce and Elementor namespaces, which expose
+	 * products and templates under routes of their own.
+	 *
+	 * @param string $route REST route.
+	 * @return string[]
+	 */
+	private function post_types_for_rest_route( $route ) {
+		$route = strtolower( '/' . trim( (string) $route, '/' ) );
+		$types = array();
+
+		if ( preg_match( '#^/wc(?:/|-|$)#', $route ) || preg_match( '#^/wc-[a-z0-9-]+(?:/|$)#', $route ) ) {
+			$types[] = 'product';
+		}
+
+		if ( preg_match( '#^/elementor(?:-pro)?(?:/|$)#', $route ) ) {
+			$types[] = 'elementor_library';
+		}
+
+		if ( preg_match( '#^/wp/v2/search(?:/|$)#', $route ) ) {
+			foreach ( (array) get_post_types( array( 'public' => true ) ) as $type ) {
+				$types[] = is_object( $type ) ? (string) $type->name : (string) $type;
+			}
+		}
+
+		$core_bases = array(
+			'post'       => 'posts',
+			'page'       => 'pages',
+			'attachment' => 'media',
+		);
+
+		$matches = static function ( $namespace, $base ) use ( $route ) {
+			$prefix = strtolower( '/' . trim( (string) $namespace, '/' ) . '/' . trim( (string) $base, '/' ) );
+
+			return $route === $prefix || 0 === strpos( $route, $prefix . '/' );
+		};
+
+		foreach ( (array) get_post_types( array(), 'objects' ) as $type ) {
+			$object = is_object( $type ) ? $type : get_post_type_object( (string) $type );
+			if ( ! is_object( $object ) || empty( $object->name ) ) {
+				continue;
+			}
+			$name      = (string) $object->name;
+			$namespace = ! empty( $object->rest_namespace ) ? $object->rest_namespace : 'wp/v2';
+			$base      = ! empty( $object->rest_base ) ? $object->rest_base : ( $core_bases[ $name ] ?? $name );
+			if ( $matches( $namespace, $base ) ) {
+				$types[] = $name;
+			}
+		}
+
+		if ( function_exists( 'get_taxonomies' ) ) {
+			foreach ( (array) get_taxonomies( array(), 'objects' ) as $taxonomy ) {
+				if ( ! is_object( $taxonomy ) || empty( $taxonomy->name ) ) {
+					continue;
+				}
+				$namespace = ! empty( $taxonomy->rest_namespace ) ? $taxonomy->rest_namespace : 'wp/v2';
+				$base      = ! empty( $taxonomy->rest_base ) ? $taxonomy->rest_base : (string) $taxonomy->name;
+				if ( 'category' === $taxonomy->name && empty( $taxonomy->rest_base ) ) {
+					$base = 'categories';
+				} elseif ( 'post_tag' === $taxonomy->name && empty( $taxonomy->rest_base ) ) {
+					$base = 'tags';
+				}
+				if ( $matches( $namespace, $base ) ) {
+					foreach ( (array) ( $taxonomy->object_type ?? array() ) as $object_type ) {
+						$types[] = (string) $object_type;
+					}
+				}
+			}
+		}
+
+		return array_values( array_unique( array_filter( $types ) ) );
 	}
 
 	private function format_content_item( $post, $include_content ) {
@@ -1042,7 +1172,8 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Whether a URL is on this site's own origin (home_url() or site_url()).
+	 * Whether a URL is on this site's own origin (home_url() or site_url()),
+	 * and, for a site installed in a subdirectory, under that directory.
 	 *
 	 * @param string $url URL.
 	 * @return bool
@@ -1052,8 +1183,27 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		if ( '' === $origin ) {
 			return false;
 		}
+		$path = (string) wp_parse_url( trim( (string) $url ), PHP_URL_PATH );
+		$path = trim( rawurldecode( $path ), '/' );
+
 		foreach ( array( home_url( '/' ), site_url( '/' ) ) as $own ) {
-			if ( $origin === self::origin_of_url( $own ) ) {
+			if ( $origin !== self::origin_of_url( $own ) ) {
+				continue;
+			}
+
+			// A site installed in a subdirectory (a subdirectory multisite
+			// subsite, or WordPress in /blog/) owns only the paths under
+			// that directory; the rest of the origin belongs to other sites.
+			$own_path = trim( (string) wp_parse_url( $own, PHP_URL_PATH ), '/' );
+			if ( '' === $own_path ) {
+				return true;
+			}
+
+			if ( in_array( '..', explode( '/', $path ), true ) ) {
+				continue;
+			}
+
+			if ( $path === $own_path || 0 === strpos( $path . '/', $own_path . '/' ) ) {
 				return true;
 			}
 		}

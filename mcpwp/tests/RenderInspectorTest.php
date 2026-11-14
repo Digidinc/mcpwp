@@ -11,6 +11,10 @@ use PHPUnit\Framework\TestCase;
 
 final class RenderInspectorTest extends TestCase {
 
+	protected function tearDown(): void {
+		$GLOBALS['mcpwp_test_filters'] = array();
+	}
+
 	private function heading( string $id, array $settings ): array {
 		return array(
 			'id'         => $id,
@@ -263,5 +267,99 @@ final class RenderInspectorTest extends TestCase {
 
 		$this->assertSame( 'passed', $report['status'] );
 		$this->assertSame( 3, $report['elements_expected'] );
+	}
+
+	// ── Adversarial review round 1 (#989) ───────────────────────────────
+
+	/**
+	 * A Template, Global or Loop item embedded in the page is another
+	 * document: its placeholders and shortcodes are not this page's defects.
+	 */
+	public function test_placeholders_and_shortcodes_inside_a_nested_document_do_not_fail_the_page(): void {
+		$tree   = $this->section(
+			array(
+				$this->heading( 'hed0001', array( 'title' => 'Hi' ) ),
+				array(
+					'id'         => 'tpl0001',
+					'elType'     => 'widget',
+					'widgetType' => 'template',
+					'settings'   => array( 'template_id' => 77 ),
+				),
+			)
+		);
+		$nested = '<div class="elementor-widget" data-id="tpl0001"><div data-elementor-type="section" data-elementor-id="77">'
+			. '<h2>Add Your Heading Text Here</h2><img src="/wp-content/plugins/elementor/assets/images/placeholder.png">'
+			. '<span class="elementor-button-text">Click here</span><p>[et_pb_text]</p></div></div>';
+
+		$report = Mcpwp_Render_Inspector::inspect_elementor_output( $this->render( $this->heading_html( 'hed0001', 'Hi' ) . $nested ), $tree );
+
+		$this->assertSame( 'passed', $report['status'], wp_json_encode( $report ) );
+	}
+
+	public function test_the_same_placeholders_on_the_page_itself_still_fail(): void {
+		$tree = $this->section( array( $this->heading( 'hed0001', array( 'title' => 'Hi' ) ) ) );
+		$own  = '<img src="/wp-content/plugins/elementor/assets/images/placeholder.png"><span class="elementor-button-text">Click here</span>';
+
+		$report = Mcpwp_Render_Inspector::inspect_elementor_output( $this->render( $this->heading_html( 'hed0001', 'Hi' ) . $own ), $tree );
+
+		$this->assertSame( array( 'elementor_placeholder_image', 'elementor_default_button_text' ), array_column( $report['placeholders'], 'type' ) );
+	}
+
+	public function test_shortcode_text_inside_code_is_content_not_a_leak(): void {
+		$tree = $this->section(
+			array(
+				array(
+					'id'         => 'txt0001',
+					'elType'     => 'widget',
+					'widgetType' => 'text-editor',
+					'settings'   => array( 'editor' => 'x' ),
+				),
+			)
+		);
+		$html = $this->render( '<div data-id="txt0001"><p>Use <code>[et_pb_section]</code> or:</p><pre>[elementor-template id="5"]</pre><script>var s="Add Your Heading Text Here";</script></div>' );
+
+		$report = Mcpwp_Render_Inspector::inspect_elementor_output( $html, $tree );
+
+		$this->assertSame( 'passed', $report['status'], wp_json_encode( $report ) );
+	}
+
+	public function test_widgets_that_may_render_nothing_are_not_missing(): void {
+		$widgets = array();
+		foreach ( array( 'shortcode', 'html', 'loop-grid', 'nav-menu', 'wp-widget-recent-posts', 'theme-post-title' ) as $i => $type ) {
+			$widgets[] = array(
+				'id'         => sprintf( 'emp%04d', $i ),
+				'elType'     => 'widget',
+				'widgetType' => $type,
+				'settings'   => array(),
+			);
+		}
+
+		$report = Mcpwp_Render_Inspector::inspect_elementor_output( $this->render( '' ), $this->section( $widgets ) );
+
+		$this->assertSame( 'passed', $report['status'], wp_json_encode( $report ) );
+		$this->assertSame( 6, $report['elements_empty_allowed'] );
+		$this->assertSame( 0, $report['missing_element_count'] );
+	}
+
+	public function test_element_cache_placeholders_skip_the_check(): void {
+		$html   = $this->render( '[elementor-element k="abc" data="eyJ9"]' );
+		$report = Mcpwp_Render_Inspector::inspect_elementor_output( $html, $this->section( array( $this->heading( 'hed0001', array( 'title' => 'x' ) ) ) ) );
+
+		$this->assertSame( 'skipped', $report['status'] );
+		$this->assertSame( 'element_cache_placeholder', $report['reason'] );
+	}
+
+	public function test_html_over_the_byte_limit_is_skipped_not_parsed(): void {
+		add_filter(
+			'mcpwp_dom_check_max_bytes',
+			static function () {
+				return 100;
+			}
+		);
+
+		$report = Mcpwp_Render_Inspector::inspect_elementor_output( $this->render( str_repeat( 'x', 200 ) ), array() );
+
+		$this->assertSame( 'skipped', $report['status'] );
+		$this->assertSame( 'html_too_large', $report['reason'] );
 	}
 }

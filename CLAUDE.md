@@ -829,9 +829,15 @@ compares the HTML with the stored tree. It fails, with the reason in `render_err
 element id has no `data-id` in the HTML, Elementor's default text or `placeholder.png` is showing
 (unless the saved data asked for that text), an unrendered `[et_pb_` / `[elementor-template]`
 shortcode is visible, or a heading title / button label is not in that element's text. Buttons
-linking to `#` are warnings only. The report is `dom_check` (`status` passed/failed/skipped); it is
-skipped, with a `reason`, for password-protected posts, Theme Builder documents, a failed pipeline,
-or when the `mcpwp_verify_rendered_dom` filter returns false.
+linking to `#` are warnings only. Placeholder and shortcode scans cover only the page's own markup
+(not nested Template/Global/Loop documents, not code/pre/script), and widgets that may render nothing
+(Shortcode, HTML, Loop Grid, Nav Menu, `wp-widget-*`, `theme-*`, ...) are not counted missing. The
+report is `dom_check` (`status` passed/failed/skipped); it is skipped, with a `reason`, for
+password-protected posts, Theme Builder documents, a failed pipeline, `/batch` operations
+(`Mcpwp_REST_Batch::$batch_operation_depth`, not the `/mcp` sub-request flag), Element Caching
+placeholders, HTML over `mcpwp_dom_check_max_bytes` (2 MB), trees over `mcpwp_dom_check_max_elements`
+(3000), a spent per-request `mcpwp_dom_check_time_budget` (5 s), or when the
+`mcpwp_verify_rendered_dom` filter returns false.
 
 `wp_get_rendered_html` returns `effective_template`: `assigned` (page template, and the Theme Builder
 templates Elementor Pro's conditions pick for the post) and `rendered` (from the fetched document:
@@ -841,7 +847,11 @@ markup outside Elementor), plus `warnings` where they disagree. `Mcpwp_Effective
 `wp_fetch` also takes this site's archive URLs (category, tag, taxonomy, author, date, post type
 archive, search, blog index; returns `resource: archive` and one page of published posts) and REST
 URLs (`/wp-json/...`, `?rest_route=`; dispatched internally as a logged-out visitor, outside the
-MCP sub-request flag; `mcpwp/*` refused). `Mcpwp_Site_Url_Resolver`.
+MCP sub-request flag, after `rest_authentication_errors` is applied as that visitor, because
+`rest_do_request()` skips it; `mcpwp/*` refused; a route exposing a post type the key's categories
+do not cover — `wc/*`, `elementor/*`, `/wp/v2/search`, any `rest_base` — is a 403
+`forbidden_category`). A subdirectory site only owns URLs under its home path
+(`is_same_site_origin()`). `Mcpwp_Site_Url_Resolver`.
 
 ## Version Bumping
 

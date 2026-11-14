@@ -1500,9 +1500,12 @@ if (! function_exists('wp_get_environment_type')) {
 }
 
 if (! function_exists('home_url')) {
+    // $GLOBALS['mcpwp_test_home_url'] models a site installed in a
+    // subdirectory, e.g. 'https://example.com/site2' (#989).
     function home_url($path = '', $scheme = null)
     {
-        return 'https://example.com' . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
+        $base = rtrim((string) ($GLOBALS['mcpwp_test_home_url'] ?? 'https://example.com'), '/');
+        return $base . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
     }
 }
 
@@ -5421,7 +5424,8 @@ if (! function_exists('wp_get_post_revisions')) {
 if (! function_exists('site_url')) {
     function site_url($path = '', $scheme = null)
     {
-        return 'https://example.com' . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
+        $base = rtrim((string) ($GLOBALS['mcpwp_test_home_url'] ?? 'https://example.com'), '/');
+        return $base . ('' !== (string) $path ? '/' . ltrim((string) $path, '/') : '');
     }
 }
 

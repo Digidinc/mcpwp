@@ -1320,10 +1320,33 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		}
 
+		// One render per operation of a /batch request multiplies the cost of
+		// the whole batch; check pages one tool call at a time instead.
+		if ( class_exists( 'Mcpwp_REST_Batch' ) && Mcpwp_REST_Batch::$batch_operation_depth > 0 ) {
+			return $skip( 'batch_operation', 'This write ran inside a /batch request, where the rendered page is not checked. Check it with wp_get_rendered_html, or write it on its own.' );
+		}
+
+		if ( ! Mcpwp_Render_Inspector::time_budget_left() ) {
+			return $skip( 'time_budget_exhausted', 'Earlier DOM checks in this request used up its time budget, so the rendered page was not checked.' );
+		}
+
 		$tree = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
 		if ( ! is_array( $tree['elements'] ) ) {
 			return $skip( 'unreadable_tree', 'The stored Elementor data could not be read back, so the rendered page was not checked.' );
 		}
+
+		/**
+		 * Filters the largest saved tree, in elements, the DOM check renders.
+		 *
+		 * @param int $max Default Mcpwp_Render_Inspector::DEFAULT_MAX_ELEMENTS.
+		 */
+		$max_elements = (int) apply_filters( 'mcpwp_dom_check_max_elements', Mcpwp_Render_Inspector::DEFAULT_MAX_ELEMENTS );
+		$element_count = Mcpwp_Render_Inspector::count_elements( $tree['elements'] );
+		if ( $max_elements > 0 && $element_count > $max_elements ) {
+			return $skip( 'tree_too_large', sprintf( 'The page has %1$d elements, over the %2$d element limit for this check, so the rendered page was not checked.', $element_count, $max_elements ) );
+		}
+
+		$started_at = microtime( true );
 
 		$frontend    = \Elementor\Plugin::$instance->frontend;
 		$render_bag  = array();
@@ -1353,6 +1376,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		if ( ! $attempt['ok'] ) {
+			Mcpwp_Render_Inspector::add_time_spent( microtime( true ) - $started_at );
+
 			$detail = '';
 			if ( isset( $render_bag['dom_render_exception']['class'], $render_bag['dom_render_exception']['message'] ) ) {
 				$detail = $render_bag['dom_render_exception']['class'] . ': ' . $render_bag['dom_render_exception']['message'];
@@ -1371,6 +1396,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		$html   = is_string( $attempt['value'] ) ? $attempt['value'] : '';
 		$report = Mcpwp_Render_Inspector::inspect_elementor_output( $html, $tree['elements'] );
+
+		Mcpwp_Render_Inspector::add_time_spent( microtime( true ) - $started_at );
 
 		$report['rendered_bytes'] = strlen( $html );
 

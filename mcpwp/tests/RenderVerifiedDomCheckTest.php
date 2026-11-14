@@ -24,6 +24,7 @@ final class RenderVerifiedDomCheckTest extends TestCase {
 		$GLOBALS['mcpwp_test_dom_seen']  = array();
 		$GLOBALS['mcpwp_test_dom_html']  = '';
 		$GLOBALS['mcpwp_test_dom_throw'] = false;
+		Mcpwp_Render_Inspector::reset_time_spent();
 	}
 
 	protected function tearDown(): void {
@@ -245,5 +246,80 @@ final class RenderVerifiedDomCheckTest extends TestCase {
 		$this->assertNotInstanceOf( WP_Error::class, $result );
 		$this->assertFalse( $result['render_verified'], 'The render still shows the old title.' );
 		$this->assertSame( 'hed0001', $result['dom_check']['text_mismatches'][0]['element_id'] );
+	}
+
+	/**
+	 * A /batch request does not render every page it writes.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_batch_operation_is_skipped(): void {
+		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
+		$basic                                    = $this->install();
+		$GLOBALS['mcpwp_test_dom_html']           = $this->rendered( 'Add Your Heading Text Here' );
+		Mcpwp_REST_Batch::$batch_operation_depth = 1;
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'text' => 'Welcome' ) ) ) ) );
+
+		$this->assertSame( 'batch_operation', $result['dom_check']['reason'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dom_seen'] );
+	}
+
+	/**
+	 * /mcp sets the sub-request flag around every tool call; that alone must
+	 * not skip the check, or no MCP write would ever be checked.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_single_mcp_tool_call_is_still_checked(): void {
+		require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-batch.php';
+		$basic                                  = $this->install();
+		$GLOBALS['mcpwp_test_dom_html']         = $this->rendered( 'Welcome' );
+		Mcpwp_REST_Batch::$is_batch_sub_request = true;
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertSame( 'passed', $result['dom_check']['status'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_exhausted_time_budget_skips_the_check(): void {
+		$basic = $this->install();
+		add_filter(
+			'mcpwp_dom_check_time_budget',
+			static function () {
+				return 0.0;
+			}
+		);
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertTrue( $result['render_verified'] );
+		$this->assertSame( 'time_budget_exhausted', $result['dom_check']['reason'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dom_seen'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_tree_over_the_element_limit_skips_the_check(): void {
+		$basic = $this->install();
+		add_filter(
+			'mcpwp_dom_check_max_elements',
+			static function () {
+				return 2;
+			}
+		);
+
+		$result = $basic->set_elementor_data( self::PAGE_ID, array( 'elementor_data' => wp_json_encode( $this->tree( array( 'title' => 'Welcome' ) ) ) ) );
+
+		$this->assertSame( 'tree_too_large', $result['dom_check']['reason'] );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dom_seen'] );
 	}
 }

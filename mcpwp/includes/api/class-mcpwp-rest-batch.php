@@ -91,6 +91,17 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 	public static $is_batch_sub_request = false;
 
 	/**
+	 * How many /batch operations are dispatching right now (#989).
+	 *
+	 * Unlike $is_batch_sub_request, which /mcp also sets around every tool
+	 * call, this counts only operations of a /batch request, so code can tell
+	 * "one of many batched writes" from "a single tool call".
+	 *
+	 * @var int
+	 */
+	public static $batch_operation_depth = 0;
+
+	/**
 	 * Register routes.
 	 */
 	public function register_routes() {
@@ -527,6 +538,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		}
 		$previous_sub_request       = self::$is_batch_sub_request;
 		self::$is_batch_sub_request = true;
+		++self::$batch_operation_depth;
 
 		try {
 			$this->forward_raw_parameter_bags( $request, $internal_request, $raw_bags );
@@ -535,6 +547,7 @@ class Mcpwp_REST_Batch extends Mcpwp_REST_API {
 		} finally {
 			$this->forget_raw_parameter_bags( $internal_request );
 			self::$is_batch_sub_request = $previous_sub_request;
+			--self::$batch_operation_depth;
 		}
 
 		// Extract response data

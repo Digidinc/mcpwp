@@ -81,6 +81,8 @@ final class WpFetchSiteUrlsTest extends TestCase {
 		unset( $GLOBALS['wp_rewrite'] );
 		$GLOBALS['_mcpwp_test_taxonomies'] = array();
 		Mcpwp_REST_Batch::$is_batch_sub_request = false;
+		unset( $GLOBALS['mcpwp_test_home_url'] );
+		$GLOBALS['mcpwp_test_public_post_types'] = array();
 	}
 
 	private function seed_post( int $id, string $title, string $status, array $extra = array() ): void {
@@ -98,9 +100,9 @@ final class WpFetchSiteUrlsTest extends TestCase {
 		);
 	}
 
-	private function fetch( array $params ) {
+	private function fetch( array $params, array $categories = array( 'content' ), array $scopes = array( 'read' ) ) {
 		$controller = new Mcpwp_REST_Site_Content();
-		$created    = $controller->create_scoped_api_key( 'test key', array( 'read' ), 'custom', array( 'content' ) );
+		$created    = $controller->create_scoped_api_key( 'test key', $scopes, 'custom', $categories );
 
 		$request = new WP_REST_Request( 'GET', '/mcpwp/v1/fetch', $params, array( 'X-API-Key' => $created['key'] ) );
 		$this->assertTrue( $controller->verify_api_key( $request ) );
@@ -214,6 +216,7 @@ final class WpFetchSiteUrlsTest extends TestCase {
 		$this->assertSame( 'archive', $data['resource'] );
 		$this->assertSame( 'home', $data['archive_type'] );
 		$this->assertSame( 40, $data['posts_page_id'] );
+		$this->assertStringContainsString( 'post=40', $data['edit_url'] );
 	}
 
 	public function test_url_query_vars_never_reach_the_listing_query(): void {
@@ -343,5 +346,131 @@ final class WpFetchSiteUrlsTest extends TestCase {
 
 		$this->assertSame( 11, $data['id'] );
 		$this->assertArrayNotHasKey( 'resource', $data );
+	}
+
+	// ── Adversarial review round 1 (#989) ───────────────────────────────
+
+	/**
+	 * rest_do_request() skips serve_request(), where core applies
+	 * rest_authentication_errors. A site that refuses anonymous REST there
+	 * must refuse wp_fetch too.
+	 */
+	public function test_site_refusing_anonymous_rest_refuses_the_fetch(): void {
+		$this->capture_dispatch( array( array( 'id' => 1, 'name' => 'admin' ) ) );
+		$GLOBALS['mcpwp_test_current_user'] = 1;
+		$seen_user                          = null;
+		add_filter(
+			'rest_authentication_errors',
+			static function ( $result ) use ( &$seen_user ) {
+				$seen_user = get_current_user_id();
+				return new WP_Error( 'rest_login_required', 'REST is for logged-in users only.', array( 'status' => 401 ) );
+			}
+		);
+
+		$response = $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/users' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'rest_visitor_refused', $response->get_error_code() );
+		$this->assertSame( 401, $response->get_error_data()['status'] );
+		$this->assertStringContainsString( 'logged-in users only', $response->get_error_message() );
+		$this->assertSame( 0, $seen_user, 'The filter is asked about the logged-out visitor, not this key.' );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatch_seen'], 'A refused request is never dispatched.' );
+		$this->assertNotSame( 0, get_current_user_id(), 'The request user is restored after the visitor check.' );
+	}
+
+	public function test_rest_authentication_filter_that_allows_lets_the_fetch_through(): void {
+		$this->capture_dispatch();
+		add_filter(
+			'rest_authentication_errors',
+			static function ( $result ) {
+				return $result;
+			}
+		);
+
+		$data = $this->data( $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/posts' ) ) );
+
+		$this->assertSame( 'rest', $data['resource'] );
+	}
+
+	/**
+	 * The #1020 per-post-type category rule holds on the REST door too.
+	 */
+	public function test_rest_route_for_a_gated_post_type_is_refused(): void {
+		$this->capture_dispatch();
+		$GLOBALS['mcpwp_test_public_post_types'] = array( 'product' );
+
+		foreach ( array( 'https://example.com/wp-json/wc/store/v1/products', 'https://example.com/wp-json/wp/v2/product/5', 'https://example.com/wp-json/wp/v2/search?search=x' ) as $url ) {
+			$response = $this->fetch( array( 'url' => $url ) );
+
+			$this->assertInstanceOf( WP_Error::class, $response, $url );
+			$this->assertSame( 'forbidden_category', $response->get_error_code(), $url );
+		}
+
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatch_seen'] );
+
+		$data = $this->data( $this->fetch( array( 'url' => 'https://example.com/wp-json/wc/store/v1/products' ), array( 'content', 'woocommerce' ) ) );
+		$this->assertSame( 'rest', $data['resource'], 'A key holding the category gets the route.' );
+	}
+
+	public function test_rest_route_for_elementor_templates_needs_their_category(): void {
+		$this->capture_dispatch();
+
+		$response = $this->fetch( array( 'url' => 'https://example.com/wp-json/elementor/v1/globals' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'forbidden_category', $response->get_error_code() );
+	}
+
+	/**
+	 * A posts page this key cannot read is not turned into the blog index,
+	 * and its id and title are never emitted.
+	 */
+	public function test_unreadable_posts_page_is_not_found_and_not_named(): void {
+		$this->seed_post( 41, 'Secret News', 'draft', array( 'post_type' => 'page' ) );
+		$GLOBALS['mcpwp_test_options']['show_on_front']  = 'page';
+		$GLOBALS['mcpwp_test_options']['page_for_posts'] = 41;
+		$GLOBALS['mcpwp_test_url_to_postid']['https://example.com/secret-news/'] = 41;
+
+		$response = $this->fetch( array( 'url' => 'https://example.com/secret-news/' ) );
+
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'not_found', $response->get_error_code() );
+	}
+
+	public function test_blog_index_does_not_name_an_unreadable_posts_page(): void {
+		$this->seed_post( 41, 'Secret News', 'draft', array( 'post_type' => 'page' ) );
+		$GLOBALS['mcpwp_test_options']['page_for_posts'] = 41;
+
+		$data = $this->data( $this->fetch( array( 'url' => 'https://example.com/' ) ) );
+
+		$this->assertSame( 'home', $data['archive_type'] );
+		$this->assertArrayNotHasKey( 'posts_page_id', $data );
+		$this->assertArrayNotHasKey( 'edit_url', $data );
+		$this->assertStringNotContainsString( 'Secret', wp_json_encode( $data ) );
+	}
+
+	/**
+	 * Subdirectory multisite: /site2/ owns only paths under /site2/.
+	 */
+	public function test_subdirectory_site_owns_only_its_own_paths(): void {
+		$GLOBALS['mcpwp_test_home_url'] = 'https://example.com/site2';
+
+		$this->assertTrue( Mcpwp_REST_Site_Content::is_same_site_origin( 'https://example.com/site2/' ) );
+		$this->assertTrue( Mcpwp_REST_Site_Content::is_same_site_origin( 'https://example.com/site2' ) );
+		$this->assertTrue( Mcpwp_REST_Site_Content::is_same_site_origin( 'https://example.com/site2/category/blog/' ) );
+		$this->assertFalse( Mcpwp_REST_Site_Content::is_same_site_origin( 'https://example.com/' ) );
+		$this->assertFalse( Mcpwp_REST_Site_Content::is_same_site_origin( 'https://example.com/wp-json/wp/v2/users' ) );
+		$this->assertFalse( Mcpwp_REST_Site_Content::is_same_site_origin( 'https://example.com/site3/' ) );
+		$this->assertFalse( Mcpwp_REST_Site_Content::is_same_site_origin( 'https://example.com/site22/' ) );
+		$this->assertFalse( Mcpwp_REST_Site_Content::is_same_site_origin( 'https://example.com/site2/../site3/' ) );
+		$this->assertFalse( Mcpwp_REST_Site_Content::is_same_site_origin( 'https://example.com/site2/%2e%2e/site3/' ) );
+
+		$this->capture_dispatch();
+		$response = $this->fetch( array( 'url' => 'https://example.com/wp-json/wp/v2/users' ) );
+		$this->assertInstanceOf( WP_Error::class, $response, 'The network root\'s REST API is another site.' );
+		$this->assertSame( array(), $GLOBALS['mcpwp_test_dispatch_seen'] );
+
+		$data = $this->data( $this->fetch( array( 'url' => 'https://example.com/site2/wp-json/wp/v2/posts' ) ) );
+		$this->assertSame( '/wp/v2/posts', $data['route'] );
 	}
 }
