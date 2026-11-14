@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once dirname( __DIR__ ) . '/class-mcpwp-proxy-trust.php';
+
 /**
  * Activity logging functionality.
  */
@@ -213,7 +215,7 @@ trait Mcpwp_Logging {
 	 * @return string IP address.
 	 */
 	protected function get_client_ip_for_logging() {
-		$trust_proxy = defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS;
+		$trust_proxy = Mcpwp_Proxy_Trust::headers_trusted();
 
 		return $this->resolve_logging_client_ip( $trust_proxy );
 	}

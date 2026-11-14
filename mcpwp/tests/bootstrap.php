@@ -1481,6 +1481,28 @@ function get_site_url()
         : 'https://example.com';
 }
 
+if (! function_exists('is_ssl')) {
+    // Mirrors core's is_ssl().
+    function is_ssl()
+    {
+        if (isset($_SERVER['HTTPS'])) {
+            if ('on' === strtolower((string) $_SERVER['HTTPS']) || '1' === (string) $_SERVER['HTTPS']) {
+                return true;
+            }
+        } elseif (isset($_SERVER['SERVER_PORT']) && '443' === (string) $_SERVER['SERVER_PORT']) {
+            return true;
+        }
+        return false;
+    }
+}
+
+// The test site is https://example.com (get_site_url(), home_url()), so a
+// simulated request arrives over TLS unless a test says otherwise. OAuth
+// bearer tokens are refused over plain HTTP (OAuthTransportSecurityTest).
+if (! isset($_SERVER['HTTPS'])) {
+    $_SERVER['HTTPS'] = 'on';
+}
+
 if (! function_exists('wp_get_environment_type')) {
     function wp_get_environment_type()
     {
@@ -5620,6 +5642,7 @@ require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-signals.php';
 // OAuth 2.1 server (#531).
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-clients.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-revocation.php';
+require_once dirname(__DIR__) . '/includes/class-mcpwp-oauth-transport.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-oauth-token-store.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-route-capability-map.php';
 require_once dirname(__DIR__) . '/includes/api/class-mcpwp-rest-oauth.php';

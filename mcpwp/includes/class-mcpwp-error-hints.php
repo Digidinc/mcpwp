@@ -140,6 +140,10 @@ class Mcpwp_Error_Hints {
 				'hint'  => 'The access token is expired, revoked, or not recognised. Try the refresh token, and if that is refused, reconnect: remove and re-add the connector, or sign in again.',
 				'guide' => '',
 			),
+			'https_required'      => array(
+				'hint'  => class_exists( 'Mcpwp_OAuth_Transport' ) ? Mcpwp_OAuth_Transport::hint( false ) : 'Use the site\'s https:// MCP URL.',
+				'guide' => '',
+			),
 			'api_not_configured'  => array(
 				'hint'  => 'No API keys have been configured yet. The site admin needs to visit WP Admin > MCPWP > Setup to generate an API key.',
 				'guide' => '',

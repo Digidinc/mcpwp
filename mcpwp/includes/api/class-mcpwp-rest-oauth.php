@@ -247,6 +247,11 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 			return $this->oauth_error_response( 'server_error', 'OAuth is not enabled on this site.', 501 );
 		}
 
+		$insecure = $this->insecure_transport_refusal_response();
+		if ( null !== $insecure ) {
+			return $insecure;
+		}
+
 		$params       = $this->extract_authorize_params( $request );
 		$validate_err = $this->validate_authorize_params( $params );
 		if ( is_wp_error( $validate_err ) ) {
@@ -308,6 +313,13 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	public function handle_authorize_post( $request ) {
 		if ( ! $this->is_oauth_enabled() ) {
 			return $this->oauth_error_response( 'server_error', 'OAuth is not enabled on this site.', 501 );
+		}
+
+		// Before the login check and the nonce: a consent submitted over
+		// plain HTTP mints nothing.
+		$insecure = $this->insecure_transport_refusal_response();
+		if ( null !== $insecure ) {
+			return $insecure;
 		}
 
 		if ( ! function_exists( 'is_user_logged_in' ) || ! is_user_logged_in() ) {
@@ -1865,6 +1877,39 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		$entry = new WP_REST_Request( 'POST', '/' . $this->namespace . '/oauth/' . str_replace( 'oauth_', '', $action ) );
 		$entry->set_body_params( $fields );
 		$this->log_activity( $action, $entry );
+	}
+
+	/**
+	 * The consent screen over a transport where an access token would be
+	 * refused (Mcpwp_OAuth_Transport): a plain 403 page instead, so a user
+	 * cannot finish a connection whose token would be refused, and revoked,
+	 * on its first use. Same local-development exceptions as the token check.
+	 *
+	 * @return WP_REST_Response|null Null when the transport is acceptable.
+	 */
+	private function insecure_transport_refusal_response() {
+		if ( ! class_exists( 'Mcpwp_OAuth_Transport' ) ) {
+			require_once dirname( __DIR__ ) . '/class-mcpwp-oauth-transport.php';
+		}
+		if ( ! Mcpwp_OAuth_Transport::is_refused() ) {
+			return null;
+		}
+		$error = Mcpwp_OAuth_Transport::refusal_error();
+		$data  = $error->get_error_data();
+
+		$html = '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+			. '<title>' . esc_html__( 'HTTPS required', 'mcpwp' ) . '</title>'
+			. '<style>body{font-family:system-ui,sans-serif;max-width:560px;margin:60px auto;padding:0 16px}</style></head><body>'
+			. '<h1>' . esc_html__( 'This connection needs HTTPS.', 'mcpwp' ) . '</h1>'
+			. '<p>' . esc_html( $error->get_error_message() ) . '</p>'
+			. '<p>' . esc_html( (string) $data['hint'] ) . '</p></body></html>';
+
+		$response = new WP_REST_Response( $html, 403 );
+		$response->header( 'Content-Type', 'text/html; charset=utf-8' );
+		$response->header( 'X-Frame-Options', 'DENY' );
+		$response->header( 'Content-Security-Policy', "frame-ancestors 'none'" );
+		$response->header( 'Cache-Control', 'no-store, private' );
+		return $response;
 	}
 
 	/**
