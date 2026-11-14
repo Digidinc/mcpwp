@@ -57,9 +57,9 @@ All paths below are under `/mcpwp/v1`. MCP tool names route into these REST hand
 4. Theme Builder could publish a template after a silent `_elementor_data` write failure. It now compares fresh stored data with the approved value before publishing and deletes the draft on mismatch.
 5. The full and surgical Elementor writers accepted a stale tree when its top-level section count matched. Both now compare the database value to the approved tree before rebuilding caches or returning success.
 6. The shared metadata writer now verifies persisted tree/settings values directly from postmeta. Kit CSS blocks retain a narrowly deferred repair path whose caller must verify the final CSS bytes.
-7. Pro template, landing-page, page-builder, saved-section, Pro clone, Free clone, and Custom Code creation now stage as draft until requested data is saved. Failed creates remove the incomplete post; Custom Code updates defer status changes until after metadata verification.
+7. Pro template, landing-page, page-builder, saved-section, Pro clone and Free clone creation now stage as draft until requested data is saved. Failed creates remove the incomplete post. (Custom Code staging and verification is main's #1131, not this change.) Content Guardrails gate a draft-to-publish update through the same `wp_insert_post_data` filter as a publishing insert, so the staged publish is still judged; `ElementorNoCollateralKsesTest::test_a_clone_created_as_draft_is_still_gated_when_it_is_published` pins it.
 8. Free page clones now carry page settings through the target policy and verify the target copy. Pro template apply/update refuse a failed requested settings write, reporting a partial tree write where applicable.
-9. Custom Code checks persisted code, location, priority, edit mode, and conditions. When Elementor Pro is loaded, an unavailable document or failed conditions cache update is a write error, and the cache entry is read from the options table before success.
+9. Custom Code is #1131's (receipts, conditions cache). This change only sends Elementor keys on a snippet's meta through the chokepoint in `sanitize_custom_code`.
 10. Named Kit CSS block writes now verify the whole `_elementor_page_settings` DB row after CSS repair. A host that changes an untouched sibling setting while preserving CSS bytes no longer receives a success response.
 
 ## Remaining proof
@@ -82,3 +82,14 @@ All paths below are under `/mcpwp/v1`. MCP tool names route into these REST hand
 - In a fresh throwaway WordPress site with Elementor 4.3.3 and Elementor Pro 4.1.1, Elementor Pro initially left `elementor_snippet` unregistered. Its installed module source permits Custom Code when a published legacy snippet exists; a local test fixture was seeded for that path. With MCPWP's CLI-only test entitlement, authenticated REST calls then created Custom Code (post 18) and a Theme Builder header (post 19). The database held the exact Custom Code script and header tree, the Elementor Pro conditions cache held both entries, and the HTTP frontend served the live script and header marker. Deleting posts 19, 18 and fixture 17 removed both markers from the frontend. No production site or license state was changed.
 - A fresh read-only reviewer found no remaining concrete Critical/Important issue after the four findings in the prior pass were repaired, then separately reviewed the final Kit CSS change with no such finding. All review passes were source-only; runtime claims come from the separate commands above.
 - A separate read-only reviewer inspected all 23 changed files at exact source commit `9ee3cf8ae5c139b7e1ad9743700dc781851bf149` and reported no concrete Critical/Important finding. The review did not run tests or contact a site; the command and runtime receipts above support those separate claims.
+
+## Round 5 (supersedes #1083)
+
+Re-done on current `main` after an independent adversarial review. Changes against the earlier head:
+
+- Kit settings (Pro): `sanitize_kit_custom_css()` strips tags until the output is stable (one pass could be spliced into `</style>` by the next), and the route's `css_breaks_out()` refusal stays as a second wall. Route-level tests send the splice payload and its case, NUL, spacing, backslash, full-width and entity variants.
+- Custom Code: main's #1131 behaviour is taken whole; only the `sanitize_custom_code` chokepoint routing is kept here. The scoped Custom Code `unfiltered_html` grant now stands aside while Elementor grants are suspended, like the writer-trait grants.
+- The acting user's `unfiltered_html` never grants raw storage for an Elementor write (OAuth runs as the real user). The "unedited elements are vouched and kept" rule is unchanged.
+- Rollback trust is bound to a per-post write token, not to byte equality with the logged after-snapshot.
+- Raw Kit CSS needs an admin-scoped key or `unfiltered_html`; named blocks are refused otherwise.
+- Pinned, not fixed: an unedited raw element moved to a different parent keeps its bytes.

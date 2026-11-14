@@ -846,6 +846,9 @@ class Mcpwp_Action_Log {
 			array(
 				'post_id'        => $post_id,
 				'elementor_data' => get_post_meta( $post_id, '_elementor_data', true ),
+				// Which write of the post this snapshot describes: what a later
+				// rollback's trust is bound to (snapshot_is_trusted()).
+				'write_token'    => class_exists( 'Mcpwp_Elementor_Meta_Write' ) ? Mcpwp_Elementor_Meta_Write::write_token( $post_id ) : '',
 			)
 		);
 	}
@@ -991,10 +994,12 @@ class Mcpwp_Action_Log {
 	/**
 	 * Whether a rollback's before-snapshot may be trusted as stored content
 	 * (#829 review round 2): only an Elementor snapshot of the same post, and
-	 * only while that post still holds exactly what the logged write left
-	 * (its after_snap). Once anything else has written the post — an admin
-	 * removing a script — the snapshot is just old content, and restoring it
-	 * goes through the capability sanitizer like anything a caller sends.
+	 * only while nothing has written that post since the logged write (its
+	 * after_snap's write token is still the post's) and it still holds exactly
+	 * what that write left. Once anything else has written the post — an admin
+	 * removing a script, or a later write reproducing the same bytes — the
+	 * snapshot is just old content, and restoring it goes through the
+	 * sanitizer like anything a caller sends.
 	 *
 	 * @param array $entry Log entry.
 	 * @param array $snap  Decoded before_snap.
@@ -1020,6 +1025,21 @@ class Mcpwp_Action_Log {
 			return false;
 		}
 
+		// Trust is a fact about WRITES, not bytes (#829 review round 5): the
+		// post must not have been written at all since the logged write. A
+		// later write that happens to reproduce the same bytes (an admin
+		// rebuilt the page without a script, a key then wrote the logged
+		// result again) is still a later write. An entry with no recorded
+		// token (logged before tokens existed) is never trusted.
+		$recorded = (string) ( $after['write_token'] ?? '' );
+		if ( '' === $recorded || ! class_exists( 'Mcpwp_Elementor_Meta_Write' ) ) {
+			return false;
+		}
+		if ( ! hash_equals( $recorded, Mcpwp_Elementor_Meta_Write::write_token( (int) $snap['post_id'] ) ) ) {
+			return false;
+		}
+
+		// And the bytes still match, as a second, independent check.
 		return get_post_meta( (int) $snap['post_id'], '_elementor_data', true ) === $after['elementor_data'];
 	}
 

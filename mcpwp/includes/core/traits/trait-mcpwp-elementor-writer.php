@@ -297,7 +297,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 *
 	 * Elementor's Document::save() runs the whole payload through
 	 * Utils::kses_post_deep() whenever the current user lacks `unfiltered_html`
-	 * (core/base/document.php). Every MCPWP write is such a request — the API
+	 * (core/base/document.php). Every API-key write is such a request — the API
 	 * key maps onto the mcpwp_api_agent role, which has no such capability —
 	 * so Elementor rewrote the caller's settings on the way in: `style=` and
 	 * `<script>` stripped out of widget settings, among others. Reproduced on
@@ -321,9 +321,12 @@ trait Mcpwp_Elementor_Writer_Trait {
 	 *   fallback. The unfiltered content already rendered.
 	 *
 	 * So the pass was not a safety control here — it was the sole cause of a
-	 * disagreement between what we store and what Elementor renders. What
-	 * governs whether a caller may write raw HTML at all remains the API key,
-	 * its role scope and the plugin's own validation, exactly as before.
+	 * disagreement between what we store and what Elementor renders. What is
+	 * stored is decided by Mcpwp_Elementor_Meta_Write (#829): unedited elements
+	 * keep their bytes, everything a caller introduces is sanitized, and the
+	 * acting user's own `unfiltered_html` never exempts an AI-driven write
+	 * (API key, OAuth app or chat bridge alike). This grant only lets
+	 * Elementor's render-cache rebuild agree with what was stored.
 	 *
 	 * Deliberately narrow: one capability, one user, one call, removed in a
 	 * `finally` so a Throwable cannot leave it installed.

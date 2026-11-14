@@ -460,11 +460,24 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		);
 		$entry = array(
 			'resource_type' => 'elementor',
-			'after_snap'    => wp_json_encode( array( 'post_id' => self::PAGE_ID, 'elementor_data' => wp_json_encode( $stripped ) ) ),
+			'after_snap'    => $this->logged_after_snap( self::PAGE_ID ),
 		);
 
 		$this->assertTrue( $this->rollback( $entry, $snap ) );
-		$this->assert_html_widgets_intact( self::PAGE_ID, 'a rollback of a post nothing has changed since' );
+		$this->assert_html_widgets_intact( self::PAGE_ID, 'a rollback of a post nothing has written since' );
+	}
+
+	/**
+	 * What the action log records once a logged write has finished: the real
+	 * snapshot of the post, with the write token of that write. The seeded
+	 * bytes stand in for the write itself (seed() writes no hook-firing meta).
+	 */
+	private function logged_after_snap( int $post_id ): string {
+		Mcpwp_Elementor_Meta_Write::on_data_meta_changed( 0, $post_id, '_elementor_data' );
+		$snapshot = new ReflectionMethod( Mcpwp_Action_Log::class, 'snapshot_elementor' );
+		$snapshot->setAccessible( true );
+
+		return (string) $snapshot->invoke( null, $post_id );
 	}
 
 	/**
@@ -492,14 +505,18 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$logged_after = self::tree();
 		$logged_after[0]['elements'][0]['elements'][0]['settings']['title'] = 'Key edit';
 
+		$this->seed( self::PAGE_ID, $logged_after );
+		$entry = array(
+			'resource_type' => 'elementor',
+			'after_snap'    => $this->logged_after_snap( self::PAGE_ID ),
+		);
+
+		// The admin's edit lands after the logged write: a write, with bytes
+		// that no longer equal the logged result.
 		$admin_removed = $logged_after;
 		$admin_removed[0]['elements'][0]['elements'][1]['settings']['html'] = '<p>removed by admin</p>';
 		$this->seed( self::PAGE_ID, $admin_removed );
-
-		$entry = array(
-			'resource_type' => 'elementor',
-			'after_snap'    => wp_json_encode( array( 'post_id' => self::PAGE_ID, 'elementor_data' => wp_json_encode( $logged_after ) ) ),
-		);
+		Mcpwp_Elementor_Meta_Write::on_data_meta_changed( 0, self::PAGE_ID, '_elementor_data' );
 		$snap  = array(
 			'post_id'        => self::PAGE_ID,
 			'elementor_data' => wp_json_encode( self::tree() ),
@@ -923,13 +940,15 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
-	public function test_an_admin_clone_keeps_the_script(): void {
+	public function test_a_clone_by_a_user_holding_unfiltered_html_is_still_sanitized(): void {
+		// #829 review round 5: an AI-driven write never gains raw storage from
+		// the acting user's own capability (an OAuth app runs as the real user).
 		$this->as_user( true );
 
 		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'b829 admin clone' ) );
 
 		$this->assert_ok( $result, 'clone_page' );
-		$this->assert_html_widgets_intact( (int) $result['id'], 'a clone by a user holding unfiltered_html' );
+		$this->assert_html_widgets_sanitized( (int) $result['id'], 'a clone by a user holding unfiltered_html' );
 	}
 
 	/**
@@ -1769,12 +1788,20 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
-	public function test_a_user_with_unfiltered_html_stores_introduced_content_raw(): void {
+	public function test_a_user_with_unfiltered_html_still_has_introduced_content_sanitized(): void {
+		// An OAuth/chat-bridge write runs as a real user who may hold the cap
+		// (#1099). The plugin's rule for post_content never exempts it for
+		// AI-driven writes; the Elementor chokepoint now agrees.
 		$this->as_user( true );
 
 		$this->edit_widget( self::PAGE_ID, 'sc82901', array( 'html' => '<script>window.__admin829=1;</script>' ) );
 
-		$this->assertSame( '<script>window.__admin829=1;</script>', self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'] );
+		$stored = $this->stored_tree( self::PAGE_ID );
+		$this->assertSame( wp_kses_post( '<script>window.__admin829=1;</script>' ), self::find( $stored, 'sc82901' )['settings']['html'] );
+		$this->assertStringNotContainsString( '<script', self::find( $stored, 'sc82901' )['settings']['html'] );
+		// ...while what the user did not edit survives, which is #829.
+		$this->assertSame( self::STYLE, self::find( $stored, 'st82901' )['settings']['html'] );
+		$this->assertSame( self::SVG, self::find( $stored, 'sv82901' )['settings']['html'] );
 	}
 
 	/**
@@ -1864,7 +1891,16 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 			}
 		};
 
-		return new Mcpwp_REST_Elementor();
+		return $this->with_scopes( new Mcpwp_REST_Elementor(), array( 'read', 'write', 'admin' ) );
+	}
+
+	/** Give a controller the key record an authenticated request would have. */
+	private function with_scopes( object $controller, array $scopes ): object {
+		$property = new ReflectionProperty( $controller, 'current_api_key_record' );
+		$property->setAccessible( true );
+		$property->setValue( $controller, array( 'id' => 'k829', 'scopes' => $scopes ) );
+
+		return $controller;
 	}
 
 	private function kit_css(): string {
@@ -2047,5 +2083,465 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 		$this->assertSame( 'kit_css_style_breakout', $result->get_error_code() );
 		$this->assertSame( 400, $result->get_error_data()['status'] );
 		$this->assertSame( '', $this->kit_css(), 'Nothing was saved.' );
+	}
+
+	// ---------------------------------------------------------------------
+	// Review round 5: Kit settings (Pro) route, the rollback trust, raw Kit
+	// CSS as a privilege, the AI-driven rule, and mutation gaps.
+	// ---------------------------------------------------------------------
+
+	/** The Pro Kit settings handler, with an admin-scoped key unless told otherwise. */
+	private function set_globals( array $params, array $scopes = array( 'read', 'write', 'admin' ) ) {
+		$this->install_kit();
+		$controller = $this->with_scopes( new Mcpwp_REST_Elementor_Pro( new stdClass() ), $scopes );
+
+		return $this->data( $controller->set_globals( new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/globals', $params ) ) );
+	}
+
+	/** What the handler left stored as custom_css, or null when a refusal stored nothing. */
+	private function stored_kit_custom_css(): ?string {
+		$settings = $GLOBALS['_mcpwp_test_meta'][ self::KIT_ID ]['_elementor_page_settings'] ?? null;
+
+		return is_array( $settings ) && isset( $settings['custom_css'] ) ? (string) $settings['custom_css'] : null;
+	}
+
+	/**
+	 * Nothing stored as Kit CSS may end its <style> element, however it is
+	 * spelled, and no tag may be left to reassemble.
+	 */
+	private function assert_kit_css_cannot_break_out( ?string $stored, string $label ): void {
+		if ( null === $stored ) {
+			$this->addToAssertionCount( 1 );
+			return;
+		}
+		$bare = str_replace( "\0", '', $stored );
+		$this->assertFalse( Mcpwp_Elementor_Meta_Write::css_breaks_out( $bare ), $label . ': no </style in any spelling: ' . $stored );
+		$this->assertSame( 0, preg_match( '#<\s*/?\s*[a-z!]#i', $bare ), $label . ': no tag left behind: ' . $stored );
+	}
+
+	public static function nested_breakouts(): array {
+		return array(
+			// Review round 5, P1-1: the regex pass and the str_ireplace pass
+			// reassemble this into `.a{}</style><img src=x onerror=alert(1)>`.
+			'nested tags'      => array( '.a{}<<b>/s<<a>/styletyle><<b>img src=x onerror=alert(1)>' ),
+			'nested, upper'    => array( '.a{}<<B>/S<<A>/STYLETYLE><<B>IMG src=x onerror=alert(1)>' ),
+			'nested, deeper'   => array( '.a{}<<b><<i>/s<<a>/styletyle>>tyle><<b>img src=x onerror=alert(1)>' ),
+			'nested script'    => array( '.a{}<<b>scr<<i>ipt>ipt>alert(1)<<b>/scr<<i>ipt>ipt>' ),
+			'nested style'     => array( '.a{}<<b>st<<i>yle>yle>*{x:y}' ),
+			'upper'            => array( '.a{}</STYLE><img src=x onerror=alert(1)>' ),
+			'spaced'           => array( '.a{}</ style><img src=x onerror=alert(1)>' ),
+			'spaced <'         => array( ".a{}< /\tStyle><img src=x onerror=alert(1)>" ),
+			'NUL in the tag'   => array( ".a{}</sty\0le><img src=x onerror=alert(1)>" ),
+			'NUL splits it'    => array( ".a{}<<b>/s\0<<a>/styletyle><<b>img src=x onerror=alert(1)>" ),
+			'backslash'        => array( '.a{}<\\/style><img src=x onerror=alert(1)>' ),
+			'double backslash' => array( '.a{}<\\\\/style><img src=x onerror=alert(1)>' ),
+			'fullwidth'        => array( '.a{}＜/style＞<img src=x onerror=alert(1)>' ),
+			'entity'           => array( '.a{}&lt;/style&gt;<img src=x onerror=alert(1)>' ),
+			'unterminated'     => array( '.a{}</style' ),
+		);
+	}
+
+	/**
+	 * @dataProvider nested_breakouts
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_kit_settings_route_never_stores_a_style_breakout( string $css ): void {
+		$response = $this->set_globals( array( 'custom_css' => $css ) );
+
+		$this->assert_kit_css_cannot_break_out( $this->stored_kit_custom_css(), 'set_globals' );
+		$this->assertNotSame( $css, $this->stored_kit_custom_css(), 'The payload is never stored as sent.' );
+		unset( $response );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_sanitize_kit_custom_css_reaches_a_fixed_point(): void {
+		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
+		$method     = new ReflectionMethod( Mcpwp_REST_Elementor_Pro::class, 'sanitize_kit_custom_css' );
+		$method->setAccessible( true );
+
+		foreach ( self::nested_breakouts() as $label => $case ) {
+			$warnings = array();
+			$once     = $method->invokeArgs( $controller, array( $case[0], &$warnings ) );
+			$warnings = array();
+			$twice    = $method->invokeArgs( $controller, array( $once, &$warnings ) );
+			$this->assertSame( $once, $twice, "{$label}: sanitizing its own output changes nothing" );
+			$this->assertStringNotContainsString( '</style', strtolower( str_replace( "\0", '', $once ) ), $label );
+			$this->assertStringNotContainsString( '<img', strtolower( $once ), $label );
+		}
+
+		// Ordinary CSS, child combinators included, is not touched.
+		$warnings = array();
+		$this->assertSame( '.a>.b{color:red}', $method->invokeArgs( $controller, array( '.a>.b{color:red}', &$warnings ) ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_kit_settings_route_check_is_a_second_wall_for_what_the_sanitizer_leaves(): void {
+		// M24. `</ style` survives sanitize_kit_custom_css() (it is no tag the
+		// regex or the str_ireplace list knows) and is stored as sent, so the
+		// route's own css_breaks_out() refusal is the only thing between it
+		// and the Kit.
+		$response = $this->set_globals( array( 'custom_css' => '.a{color:red}</ style>' ) );
+
+		$this->assertSame( 'kit_css_style_breakout', $response instanceof WP_Error ? $response->get_error_code() : ( $response['code'] ?? null ) );
+		$this->assertNull( $this->stored_kit_custom_css(), 'Nothing was saved.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_kit_settings_route_still_stores_ordinary_css_as_sent(): void {
+		$this->set_globals( array( 'custom_css' => '.a>.b{color:red}' ) );
+
+		$this->assertSame( '.a>.b{color:red}', $this->stored_kit_custom_css() );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_raw_path_safety_net_inside_the_policy_sanitizes_a_breakout(): void {
+		// M12. A declared raw path (the Kit's custom_css) is stored as sent
+		// only while it cannot end its <style>; a caller that skipped the
+		// route-level refusal still gets it sanitized, not stored.
+		$this->install_kit();
+		$css = '.a{}</style><script>window.__raw829=1</script>';
+
+		$written = Mcpwp_Elementor_Meta_Write::update( self::KIT_ID, '_elementor_page_settings', array( 'custom_css' => $css ), array( 'raw_paths' => array( 'custom_css' ) ) );
+
+		$this->assertNotInstanceOf( WP_Error::class, $written );
+		$stored = $this->stored_kit_custom_css();
+		$this->assertNotSame( $css, $stored );
+		$this->assertStringNotContainsString( '<script', (string) $stored );
+		$this->assertSame( wp_kses_post( $css ), $stored, 'It went through the policy sanitizer instead of being stored as sent.' );
+
+		// And an ordinary raw path is untouched.
+		Mcpwp_Elementor_Meta_Write::update( self::KIT_ID, '_elementor_page_settings', array( 'custom_css' => '.a>.b{}' ), array( 'raw_paths' => array( 'custom_css' ) ) );
+		$this->assertSame( '.a>.b{}', $this->stored_kit_custom_css() );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_value_that_is_not_a_tree_is_refused_by_the_metadata_filter(): void {
+		// M20. Not through update() (which refuses first): any other write
+		// inside MCPWP's writer context — meta_input, add_post_meta(),
+		// Elementor's own save — meets the filter's own refusal.
+		$before = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+
+		foreach ( array( '{"a":1}', '"text"', '5', '[1,2]' ) as $not_a_tree ) {
+			Mcpwp_Elementor_Meta_Write::as_writer(
+				self::PAGE_ID,
+				static function () use ( $not_a_tree ) {
+					update_post_meta( ElementorNoCollateralKsesTest::page_id(), '_elementor_data', wp_slash( $not_a_tree ) );
+				}
+			);
+			$this->assertSame( $before, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], "{$not_a_tree} is not stored" );
+		}
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_page_settings_that_arrive_as_a_string_are_sanitized_unless_unchanged(): void {
+		// M29. Settings are normally an array; a string reaches the filter
+		// through a plain write inside the writer context.
+		$script = '<script>window.__s829=1</script><p>x</p>';
+		$write  = static function ( string $value ) {
+			Mcpwp_Elementor_Meta_Write::as_writer(
+				self::PAGE_ID,
+				static function () use ( $value ) {
+					update_post_meta( ElementorNoCollateralKsesTest::page_id(), '_elementor_page_settings', wp_slash( $value ) );
+				}
+			);
+		};
+
+		$write( $script );
+		$this->assertSame( wp_kses_post( $script ), $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'], 'A new string is sanitized.' );
+		$this->assertStringNotContainsString( '<script', $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] );
+
+		// The same string, already stored raw by an admin, is unchanged.
+		$GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] = $script;
+		$write( $script );
+		$this->assertSame( $script, $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_page_settings'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_list_is_not_the_same_value_as_a_map_with_the_same_pairs(): void {
+		// M10. Repeater items are read in order: ["a","<script>"] stored raw
+		// does not vouch for {"1":"<script>","0":"a"}, whose keys are the same
+		// and whose order is not.
+		$tree = array( self::section( 'sec8292', 'col8292', array( self::widget( 'rp82901', 'html', array( 'items' => array( 'a', '<script>window.__list829=1</script>' ) ) ) ) ) );
+		$this->seed( self::PAGE_ID, $tree );
+
+		$json = wp_json_encode( $tree );
+		$map  = str_replace( '["a","<script>window.__list829=1<\/script>"]', '{"1":"<script>window.__list829=1<\/script>","0":"a"}', $json );
+		$this->assertNotSame( $json, $map, 'The fixture really became a map.' );
+
+		$this->assertTrue( Mcpwp_Elementor_Meta_Write::deep_equal( array( 'a', 'b' ), array( 'a', 'b' ) ) );
+		$this->assertFalse( Mcpwp_Elementor_Meta_Write::deep_equal( array( 'a', 'b' ), array( 1 => 'b', 0 => 'a' ) ) );
+
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', $map );
+
+		$this->assertStringNotContainsString( '<script', $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], 'The reordered map is a different element, so it is sanitized.' );
+	}
+
+	// -- Rollback trust is bound to writes, not bytes (P2-1) ----------------
+
+	private function is_trusted( array $entry, array $snap ): bool {
+		$trusted = new ReflectionMethod( Mcpwp_Action_Log::class, 'snapshot_is_trusted' );
+		$trusted->setAccessible( true );
+
+		return (bool) $trusted->invoke( null, $entry, $snap );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_later_write_that_reproduces_the_logged_bytes_does_not_restore_trust(): void {
+		// The repro. L1: a key wipes the page ([]); its before-snapshot holds
+		// the script. An admin then rebuilds the page without the script. The
+		// key writes [] again, so the page equals L1's after-snapshot byte for
+		// byte. Rolling L1 back must not bring the script back raw.
+		$snap  = array( 'post_id' => self::PAGE_ID, 'elementor_data' => wp_json_encode( self::tree() ) );
+		$begin = json_encode( $snap );
+
+		$this->assertNotInstanceOf( WP_Error::class, Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', '[]' ) );
+		$entry = array(
+			'resource_type' => 'elementor',
+			'before_snap'   => $begin,
+			'after_snap'    => $this->snapshot_now( self::PAGE_ID ),
+		);
+		$this->assertTrue( $this->is_trusted( $entry, $snap ), 'Straight after the logged write the snapshot is trusted.' );
+
+		// The admin rebuilds (outside MCPWP: a plain write, no writer context).
+		$rebuilt = self::tree();
+		$rebuilt[0]['elements'][0]['elements'][1]['settings']['html'] = '<p>rebuilt by admin</p>';
+		update_post_meta( self::PAGE_ID, '_elementor_data', wp_slash( wp_json_encode( $rebuilt ) ) );
+		$this->assertFalse( $this->is_trusted( $entry, $snap ), 'The admin\'s write ends trust.' );
+
+		// The key wipes it again: byte-identical to L1's after-snapshot.
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', '[]' );
+		$this->assertSame( '[]', $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'] );
+		$this->assertSame( '[]', json_decode( $entry['after_snap'], true )['elementor_data'], 'The bytes equal the logged after-snapshot.' );
+		$this->assertFalse( $this->is_trusted( $entry, $snap ), 'Equal bytes are not the same write: still not trusted.' );
+
+		$this->assertTrue( $this->rollback( $entry, $snap ) );
+		$stored = $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'];
+		$this->assertStringNotContainsString( '<script', $stored, 'The script is not restored raw.' );
+		$this->assertStringContainsString( 'Hello 829', $stored, 'The rest of the page is restored.' );
+	}
+
+	private function snapshot_now( int $post_id ): string {
+		$snapshot = new ReflectionMethod( Mcpwp_Action_Log::class, 'snapshot_elementor' );
+		$snapshot->setAccessible( true );
+
+		return (string) $snapshot->invoke( null, $post_id );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_an_entry_without_a_write_token_is_never_trusted(): void {
+		// A row logged before tokens existed, for a post nothing has written
+		// since either: no token on either side, bytes equal. Two empty
+		// tokens are not a match.
+		$this->seed( self::PAGE_ID, array() );
+		$this->assertSame( '', Mcpwp_Elementor_Meta_Write::write_token( self::PAGE_ID ) );
+		$after = json_decode( $this->snapshot_now( self::PAGE_ID ), true );
+		unset( $after['write_token'] );
+		$entry = array( 'resource_type' => 'elementor', 'after_snap' => wp_json_encode( $after ) );
+
+		$this->assertFalse( $this->is_trusted( $entry, array( 'post_id' => self::PAGE_ID ) ), 'A row logged before tokens existed is sanitized on rollback.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_snapshot_of_another_post_is_never_trusted(): void {
+		// M21. The after-snapshot, token and bytes are the page's own, but the
+		// entry's snapshot names a different post.
+		Mcpwp_Elementor_Meta_Write::update( self::PAGE_ID, '_elementor_data', '[]' );
+		$entry = array( 'resource_type' => 'elementor', 'after_snap' => $this->snapshot_now( self::PAGE_ID ) );
+
+		$this->assertTrue( $this->is_trusted( $entry, array( 'post_id' => self::PAGE_ID ) ) );
+		$this->seed( self::TARGET_ID, array() );
+		$GLOBALS['_mcpwp_test_meta'][ self::TARGET_ID ]['_elementor_data'] = '[]';
+		$GLOBALS['_mcpwp_test_meta'][ self::TARGET_ID ]['_mcpwp_elementor_write_token'] = Mcpwp_Elementor_Meta_Write::write_token( self::PAGE_ID );
+		$this->assertFalse( $this->is_trusted( $entry, array( 'post_id' => self::TARGET_ID ) ), 'Same token, same bytes, other post.' );
+	}
+
+	// -- Raw Kit CSS is a privilege (P2-2) ----------------------------------
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_write_scoped_key_gets_its_kit_css_sanitized_not_raw(): void {
+		$controller = $this->with_scopes( $this->install_kit(), array( 'read', 'write' ) );
+		$css        = '.a{color:red}<img src=x onerror=alert(1)>';
+
+		$controller->set_kit_css( $this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css', array( 'css' => $css, 'mode' => 'replace' ) ) );
+
+		$this->assertNotSame( '', $this->kit_css() );
+		$this->assertSame( wp_kses_post( $css ), $this->kit_css(), 'Through the same sanitizer as any other setting.' );
+		$this->assertStringNotContainsString( 'onerror', $this->kit_css() );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_named_kit_css_blocks_need_raw_storage_so_a_write_key_is_refused(): void {
+		$controller = $this->with_scopes( $this->install_kit(), array( 'read', 'write' ) );
+		$GLOBALS['_mcpwp_test_meta'][ self::KIT_ID ]['_elementor_page_settings'] = array( 'custom_css' => '.old{}' );
+
+		$data = $this->data( $controller->upsert_kit_css_block( $this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css/blocks', array( 'name' => 'b829w', 'css' => '.a>.b{color:red}' ) ) ) );
+
+		$code = $data instanceof WP_Error ? $data->get_error_code() : ( $data['code'] ?? '' );
+		$this->assertSame( 'kit_css_raw_not_permitted', $code );
+		$this->assertSame( '.old{}', $this->kit_css(), 'Nothing was saved.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_an_admin_scoped_key_or_a_user_with_unfiltered_html_stores_kit_css_raw(): void {
+		$css = '.a>.b{color:red}';
+
+		$admin = $this->with_scopes( $this->install_kit(), array( 'read', 'write', 'admin' ) );
+		$admin->set_kit_css( $this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css', array( 'css' => $css ) ) );
+		$this->assertSame( $css, $this->kit_css(), 'An admin-scoped key.' );
+
+		$GLOBALS['_mcpwp_test_meta'][ self::KIT_ID ]['_elementor_page_settings'] = array();
+		$this->as_user( true );
+		$user_run = $this->with_scopes( $this->install_kit(), array( 'read', 'write' ) );
+		$user_run->set_kit_css( $this->rest_request( 'POST', '/mcpwp/v1/elementor/kit-css', array( 'css' => $css ) ) );
+		$this->assertSame( $css, $this->kit_css(), 'A user who holds unfiltered_html (what WordPress requires for custom CSS).' );
+	}
+
+	// -- A moved raw element (P2-3): pinned, accepted, reported -------------
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_raw_element_moved_to_another_parent_keeps_its_bytes(): void {
+		// PINNED LIMITATION (#829 review round 5, P2-3). An element is judged
+		// on its own fields, not its place: an unedited raw element moved into
+		// another container is still "unchanged", so a raw html widget an
+		// admin placed inside a conditional container/popup is stored raw when
+		// an AI-driven write moves it out where every visitor sees it. Making
+		// a move strip the content is the #829 defect itself (a move is not an
+		// edit), and requiring the parent chain to match would turn every
+		// restructure of a page holding admin-authored raw markup into data
+		// loss, so this is accepted and reported rather than "fixed". The
+		// caller can already show what is rendered; it cannot write new raw.
+		$tree = array(
+			self::section( 'secA829', 'colA829', array( self::widget( 'sc82901', 'html', array( 'html' => self::SCRIPT ) ) ) ),
+			self::section( 'secB829', 'colB829', array() ),
+		);
+		$this->seed( self::PAGE_ID, $tree );
+
+		$moved                             = $tree;
+		$moved[1]['elements'][0]['elements'] = $moved[0]['elements'][0]['elements'];
+		$moved[0]['elements'][0]['elements'] = array();
+		$this->assert_ok( $this->set_elementor( self::PAGE_ID, $moved ), 'set_elementor' );
+
+		$this->assertSame( self::SCRIPT, self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'] );
+		$this->assertSame( 'colB829', $this->stored_tree( self::PAGE_ID )[1]['elements'][0]['id'] );
+	}
+
+	// -- The scoped Custom Code grant stands aside like the others (P2-4) ---
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_the_custom_code_grant_stands_aside_while_grants_are_suspended(): void {
+		$set = static function ( string $class, string $prop, $value ): void {
+			$property = new ReflectionProperty( $class, $prop );
+			$property->setAccessible( true );
+			$property->setValue( null, $value );
+		};
+		$set( Mcpwp_REST_Elementor_Pro::class, 'custom_code_unfiltered_depth', 1 );
+		$set( Mcpwp_REST_Elementor_Pro::class, 'custom_code_unfiltered_user', self::API_USER );
+		$user = new WP_User( self::API_USER );
+
+		$granted = Mcpwp_REST_Elementor_Pro::grant_custom_code_unfiltered_html_cap( array( 'edit_posts' => true ), array(), array(), $user );
+		$this->assertTrue( $granted['unfiltered_html'] ?? false, 'The grant applies on its own.' );
+
+		$set( Mcpwp_Elementor_Meta_Write::class, 'suspend_grants', 1 );
+		$this->assertTrue( Mcpwp_Elementor_Meta_Write::grants_suspended() );
+		$suspended = Mcpwp_REST_Elementor_Pro::grant_custom_code_unfiltered_html_cap( array( 'edit_posts' => true ), array(), array(), $user );
+		$this->assertArrayNotHasKey( 'unfiltered_html', $suspended, 'Suspended: no grant, like the writer-trait grants.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_an_oauth_user_with_unfiltered_html_gets_no_raw_storage_from_it(): void {
+		// #1099: an OAuth request runs as the real WP user, who may hold
+		// unfiltered_html. Introduced content is still sanitized for every
+		// write path that reaches the chokepoint, and what they did not touch
+		// survives (#829).
+		$this->as_user( true );
+		$tree = self::tree();
+		$tree[0]['elements'][0]['elements'][0]['settings']['title']  = 'Edited by OAuth user';
+		$tree[0]['elements'][0]['elements'][] = self::widget( 'nw82901', 'html', array( 'html' => '<script>window.__oauth829=1</script>' ) );
+
+		$this->assert_ok( $this->set_elementor( self::PAGE_ID, $tree ), 'set_elementor' );
+
+		$stored = $this->stored_tree( self::PAGE_ID );
+		$this->assertSame( 'Edited by OAuth user', self::find( $stored, 'hd82901' )['settings']['title'] );
+		$this->assertStringNotContainsString( '<script', self::find( $stored, 'nw82901' )['settings']['html'], 'The new raw script is sanitized.' );
+		$this->assertSame( self::SCRIPT, self::find( $stored, 'sc82901' )['settings']['html'], 'The unedited raw widget survives.' );
+		$this->assertSame( self::STYLE, self::find( $stored, 'st82901' )['settings']['html'] );
+		$this->assertSame( self::SVG, self::find( $stored, 'sv82901' )['settings']['html'] );
+	}
+
+	// -- Draft first, then publish: the guardrails still judge the publish --
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_clone_created_as_draft_is_still_gated_when_it_is_published(): void {
+		// The clone is inserted as a draft and published once its tree is
+		// verified. Content Guardrails gate a draft->publish UPDATE through
+		// the same wp_insert_post_data filter as a publishing insert, so the
+		// daily ramp cap still downgrades it.
+		require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-content-guardrails.php';
+		Mcpwp_Content_Guardrails::reset_context_for_tests();
+		Mcpwp_Content_Guardrails::register_hooks();
+		Mcpwp_Content_Guardrails::enter_context();
+		Mcpwp_Content_Guardrails::update_settings( array( 'daily_publish_cap' => 1, 'min_word_count' => 0 ) );
+		wp_insert_post( array( 'post_type' => 'page', 'post_title' => 'Uses the cap', 'post_status' => 'publish', 'post_content' => 'one two three four five six seven eight nine ten' ) );
+		$this->assertSame( 1, Mcpwp_Content_Guardrails::get_daily_count() );
+
+		$result = ( new Mcpwp_Elementor_Pro() )->clone_page( self::PAGE_ID, array( 'title' => 'b829 gated clone', 'status' => 'publish' ) );
+
+		$this->assert_ok( $result, 'clone_page' );
+		$this->assertSame( 'draft', $result['status'], 'The guardrails downgraded the publish.' );
+		$this->assertSame( 'draft', get_post_status( (int) $result['id'] ) );
+		$this->assertSame( 1, Mcpwp_Content_Guardrails::get_daily_count(), 'A refused publish does not count.' );
+		Mcpwp_Content_Guardrails::reset_context_for_tests();
 	}
 }

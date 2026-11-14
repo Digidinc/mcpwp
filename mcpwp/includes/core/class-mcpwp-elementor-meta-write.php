@@ -18,9 +18,10 @@ if ( ! defined( 'ABSPATH' ) ) {
  * elementor-post-meta.php, on rest_api_init) with a sanitize_callback that, for
  * a user without `unfiltered_html`, runs wp_kses_post() over EVERY string in
  * the value, and update_metadata()/add_metadata() run it on every write. The
- * mcpwp_api_agent role never has `unfiltered_html`, so each MCPWP write
- * re-sanitized the whole document: one wp_edit_widget on a heading removed the
- * `<style>`, `<script>` and `<svg>` of every html widget on the page. And the
+ * acting user (the shared mcpwp_api_agent for an API key, the real WP user for
+ * an OAuth connection or the chat bridge) may lack `unfiltered_html`, so each
+ * MCPWP write re-sanitized the whole document: one wp_edit_widget on a heading
+ * removed the `<style>`, `<script>` and `<svg>` of every html widget on the page. And the
  * other half: Elementor registers that callback only for post types in
  * get_post_types_by_support( 'elementor' ), and not at all below 4.2, so on
  * any other type an API key's raw `<script>` was stored as sent.
@@ -28,9 +29,13 @@ if ( ! defined( 'ABSPATH' ) ) {
  * The policy, applied by MCPWP itself on every write it makes, whatever the
  * post type, Elementor version, or whether Elementor registered anything:
  *
- * - The acting principal holds `unfiltered_html` (checked with MCPWP's own
- *   scoped grants suspended): the value is stored as sent.
- * - Otherwise, per element, all or nothing:
+ * - Who the acting user is never matters. Every write this class polices is
+ *   AI-driven (API key, OAuth app, chat bridge), and the plugin's own rule for
+ *   post_content never exempts `unfiltered_html` for those writes
+ *   (trait-mcpwp-sanitization.php, sanitize_content_body()): a user who connects an
+ *   AI app must not thereby let that app store raw `<script>`. The cap is not
+ *   consulted. What keeps #829 fixed is the rule below, not the cap.
+ * - Per element, all or nothing:
  *     - an element whose every field and setting (`__dynamic__`, `__globals__`,
  *       repeater items included) is identical to an element of the same id,
  *       elType and widgetType stored on this post keeps its raw strings. Each
@@ -126,6 +131,55 @@ final class Mcpwp_Elementor_Meta_Write {
 		add_filter( 'register_meta_args', array( __CLASS__, 'wrap_meta_args' ), PHP_INT_MAX, 4 );
 		add_filter( 'update_post_metadata', array( __CLASS__, 'on_update_post_metadata' ), PHP_INT_MAX, 5 );
 		add_filter( 'add_post_metadata', array( __CLASS__, 'on_add_post_metadata' ), PHP_INT_MAX, 5 );
+
+		// A write sequence token per post (see write_token()): every change to
+		// `_elementor_data`, by anyone, replaces it.
+		add_action( 'added_post_meta', array( __CLASS__, 'on_data_meta_changed' ), 10, 4 );
+		add_action( 'updated_post_meta', array( __CLASS__, 'on_data_meta_changed' ), 10, 4 );
+		add_action( 'deleted_post_meta', array( __CLASS__, 'on_data_meta_changed' ), 10, 4 );
+	}
+
+	/**
+	 * Post meta holding the token of the last write of a post's `_elementor_data`.
+	 */
+	const TOKEN_META = '_mcpwp_elementor_write_token';
+
+	/**
+	 * An opaque token naming the last write of this post's `_elementor_data`.
+	 *
+	 * Replaced (random, so concurrent writers cannot collide) by every add,
+	 * update or delete of the key, whoever makes it. The action log records it
+	 * with each Elementor snapshot and trusts a rollback snapshot only while it
+	 * is unchanged: "nothing has written this post since the logged write" is a
+	 * fact about writes, which content equality is not (a later write can
+	 * reproduce the same bytes). Empty when the post has never been written
+	 * since this was introduced; an entry without a token is never trusted.
+	 *
+	 * @param int $post_id Post ID.
+	 * @return string
+	 */
+	public static function write_token( $post_id ) {
+		$token = get_post_meta( (int) $post_id, self::TOKEN_META, true );
+
+		return is_string( $token ) ? $token : '';
+	}
+
+	/**
+	 * `added_post_meta` / `updated_post_meta` / `deleted_post_meta`: record that
+	 * `_elementor_data` was written.
+	 *
+	 * @param mixed  $meta_id    Meta ID(s) (unused).
+	 * @param int    $object_id  Post ID.
+	 * @param string $meta_key   Meta key.
+	 * @return void
+	 */
+	public static function on_data_meta_changed( $meta_id, $object_id = 0, $meta_key = '' ) {
+		if ( '_elementor_data' !== $meta_key || (int) $object_id < 1 ) {
+			return;
+		}
+
+		$token = function_exists( 'wp_generate_uuid4' ) ? wp_generate_uuid4() : bin2hex( random_bytes( 16 ) );
+		update_post_meta( (int) $object_id, self::TOKEN_META, $token );
 	}
 
 	/**
@@ -457,10 +511,8 @@ final class Mcpwp_Elementor_Meta_Write {
 				self::$replaced[ $object_id ] = get_post_meta( $object_id, '_elementor_data', true );
 			}
 
-			// Whoever writes, a value that is not a tree is not stored.
-			if ( null === self::as_tree( $meta_value ) ) {
-				return array( 'refused' => true );
-			}
+			// A value that is not a tree is refused by police_elementor_data()
+			// below: there is no exemption left for who is writing.
 		} elseif ( null !== self::settings_refusal( $meta_value ) ) {
 			return array( 'refused' => true );
 		}
@@ -499,10 +551,9 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @return mixed
 	 */
 	public static function apply_policy( $object_id, $meta_key, $incoming ) {
-		if ( self::principal_may_store_raw() ) {
-			return $incoming;
-		}
-
+		// No `unfiltered_html` exemption, by design (see the class docblock): an
+		// OAuth or chat-bridge write runs as a real user who may hold the cap,
+		// and an AI-written raw script must not become storable because of it.
 		$raw_paths = array();
 		$snapshots = array();
 		foreach ( self::$contexts as $context ) {
@@ -522,24 +573,6 @@ final class Mcpwp_Elementor_Meta_Write {
 		}
 
 		return self::police_settings( $incoming, $stored, $raw_paths );
-	}
-
-	/**
-	 * Whether the acting principal holds `unfiltered_html` in its own right.
-	 *
-	 * @return bool
-	 */
-	private static function principal_may_store_raw() {
-		if ( ! function_exists( 'current_user_can' ) ) {
-			return false;
-		}
-
-		++self::$suspend_grants;
-		try {
-			return (bool) current_user_can( 'unfiltered_html' );
-		} finally {
-			--self::$suspend_grants;
-		}
 	}
 
 	// ---------------------------------------------------------------------
