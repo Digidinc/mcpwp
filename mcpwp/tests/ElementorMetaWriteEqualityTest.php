@@ -50,6 +50,9 @@ final class ElementorMetaWriteEqualityTest extends TestCase {
 			'list swap'             => array( array( 1, 2 ), array( 2, 1 ), false ),
 			'delimiter forgery'     => array( array( 'a' => 's1:x;' ), array( 'a' => 'x', 's1:x' => '' ), false ),
 			'forged structure'      => array( array( 'a' => 'b;s1:c=s1:d' ), array( 'a' => 'b', 'c' => 'd' ), false ),
+			// Same key set and count; without a length on each string the two
+			// encode to the same byte stream.
+			'forged adjacent pair'  => array( array( 'a' => 'u;2:sb=sv', 'b' => 'w' ), array( 'a' => 'u', 'b' => 'v;2:sb=sw' ), false ),
 			'string with length'    => array( array( 'k' => "5:abc" ), array( 'k' => 'abc' ), false ),
 			'string vs int'         => array( array( 'k' => '1' ), array( 'k' => 1 ), false ),
 			'float vs int nested'   => array( array( 'k' => 1.0 ), array( 'k' => 1 ), false ),
