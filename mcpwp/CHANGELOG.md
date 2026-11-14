@@ -5,6 +5,22 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.13](https://github.com/Digidinc/mcpwp/compare/v3.14.12...v3.14.13) (2026-11-14)
+
+
+### Features
+
+* **admin:** add a connect-an-AI-app card on Setup and a plainer OAuth consent screen ([#1173](https://github.com/Digidinc/mcpwp/issues/1173)) ([6958585](https://github.com/Digidinc/mcpwp/commit/6958585586946f8231cde246a2f3b17800b05768))
+
+
+### Bug Fixes
+
+* **auth:** a dead OAuth token's 401 carries the same rate-limit headers under or over budget ([#1177](https://github.com/Digidinc/mcpwp/issues/1177)) ([605e120](https://github.com/Digidinc/mcpwp/commit/605e1203f5f4629d08dd47937fe00c9f3de089ee))
+* **auth:** adopt uncopied 2.8 spai credentials into the revocable key store ([#1098](https://github.com/Digidinc/mcpwp/issues/1098)) ([#1178](https://github.com/Digidinc/mcpwp/issues/1178)) ([cfd39e2](https://github.com/Digidinc/mcpwp/commit/cfd39e2a5520e7bfef59b6985563be79d9ca75b5))
+* **auth:** answer an invalid OAuth access token with one clear reconnect message ([#1174](https://github.com/Digidinc/mcpwp/issues/1174)) ([724d056](https://github.com/Digidinc/mcpwp/commit/724d056aae371670e809cd492a160316927b6efa))
+* **elementor:** never strip unedited widgets; store Elementor data and Kit CSS past REST kses ([#829](https://github.com/Digidinc/mcpwp/issues/829), supersedes [#1083](https://github.com/Digidinc/mcpwp/issues/1083)) ([#1179](https://github.com/Digidinc/mcpwp/issues/1179)) ([0db726a](https://github.com/Digidinc/mcpwp/commit/0db726a82ecf10c5a7e7232b47c693af6fb54846))
+* **mcp-server:** raise stdio cap to 16 MiB, log transport errors, realign bun.lock ([#1124](https://github.com/Digidinc/mcpwp/issues/1124)) ([b5650f5](https://github.com/Digidinc/mcpwp/commit/b5650f53966dcbf7c320aecca2bea6b8ce104533))
+
 ## [3.14.12](https://github.com/Digidinc/mcpwp/compare/v3.14.11...v3.14.12) (2026-11-13)
 
 
