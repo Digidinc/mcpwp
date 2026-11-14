@@ -23,6 +23,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/class-mcpwp-proxy-trust.php';
+
 class Mcpwp_OAuth_Transport {
 
 	/** Transient holding the refusal record. Never holds token data. */
@@ -137,16 +139,52 @@ class Mcpwp_OAuth_Transport {
 	}
 
 	/**
-	 * Whether a refused request most likely came through a TLS-terminating
-	 * proxy that does not tell WordPress: the site's own address is https,
-	 * yet the request reached PHP as plain HTTP. Cloudflare "Flexible",
-	 * nginx, Traefik, Caddy and Coolify set-ups look exactly like this.
+	 * Whether the site's configured address is https.
 	 *
 	 * @param string $home_url The `home` option.
 	 * @return bool
 	 */
-	public static function proxy_suspected( $home_url ) {
+	public static function home_is_https( $home_url ) {
 		return 'https' === strtolower( (string) wp_parse_url( (string) $home_url, PHP_URL_SCHEME ) );
+	}
+
+	/**
+	 * Whether a refused request carried the marks of a TLS-terminating proxy
+	 * that does not tell WordPress (Cloudflare "Flexible", nginx, Traefik,
+	 * Caddy, Coolify): the site's address is https AND the request carries a
+	 * header such proxies add. The site address alone is not enough: anyone
+	 * can send a plain-HTTP request to an https site.
+	 *
+	 * @param string $home_url       The `home` option.
+	 * @param bool   $proxy_headers  Whether proxy headers were present.
+	 * @return bool
+	 */
+	public static function proxy_suspected( $home_url, $proxy_headers ) {
+		return $proxy_headers && self::home_is_https( $home_url );
+	}
+
+	/**
+	 * Whether this request carries a header a reverse proxy adds. A hint
+	 * for the wording only; it never decides whether a request is secure.
+	 *
+	 * @return bool
+	 */
+	public static function proxy_headers_present() {
+		foreach ( array( 'HTTP_X_FORWARDED_PROTO', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED_HOST', 'HTTP_FORWARDED', 'HTTP_X_REAL_IP', 'HTTP_CF_CONNECTING_IP', 'HTTP_CF_VISITOR' ) as $key ) {
+			if ( ! empty( $_SERVER[ $key ] ) ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
+	 * proxy_suspected() for the current request.
+	 *
+	 * @return bool
+	 */
+	public static function request_proxy_suspected() {
+		return self::proxy_suspected( self::home(), self::proxy_headers_present() );
 	}
 
 	// ── this request ─────────────────────────────────────────────────────
@@ -158,7 +196,7 @@ class Mcpwp_OAuth_Transport {
 	 * @return bool
 	 */
 	public static function trust_proxy_headers() {
-		return defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && true === constant( 'MCPWP_TRUST_PROXY_HEADERS' );
+		return Mcpwp_Proxy_Trust::headers_trusted();
 	}
 
 	/**
@@ -201,13 +239,14 @@ class Mcpwp_OAuth_Transport {
 	 *
 	 * 403, not 401: a 401 carries the WWW-Authenticate challenge, and the
 	 * client would sign in again and send the fresh token the same way. The
-	 * text depends only on the site's configuration (proxy or not), never on
-	 * the token, so it is identical for every token and every entry path.
+	 * text depends only on the request's transport and the site's address
+	 * (proxy suspected or not), never on the token, so it is identical for
+	 * every token and every entry path.
 	 *
 	 * @return WP_Error
 	 */
 	public static function refusal_error() {
-		$proxy = self::proxy_suspected( self::home() );
+		$proxy = self::request_proxy_suspected();
 		return new WP_Error(
 			'https_required',
 			self::message( $proxy ),
@@ -224,7 +263,7 @@ class Mcpwp_OAuth_Transport {
 	 */
 	public static function message( $proxy ) {
 		if ( $proxy ) {
-			return __( 'OAuth access tokens are accepted only over HTTPS. This site\'s address is https, but the request reached WordPress over plain HTTP: either the app uses the http:// URL, or a proxy in front of the site terminates TLS without telling WordPress.', 'mcpwp' );
+			return __( 'OAuth access tokens are accepted only over HTTPS. This site\'s address is https, but the request reached WordPress through a proxy over plain HTTP: the proxy terminates TLS without telling WordPress.', 'mcpwp' );
 		}
 		return __( 'OAuth access tokens are accepted only over HTTPS. This request arrived over plain HTTP and was refused.', 'mcpwp' );
 	}
@@ -239,9 +278,9 @@ class Mcpwp_OAuth_Transport {
 	public static function hint( $proxy ) {
 		$revoked = 'Any OAuth token sent over plain HTTP is revoked on arrival, with its refresh token; reconnect once the site is fixed. API keys are not affected.';
 		if ( $proxy ) {
-			return 'Use the site\'s https:// MCP URL. If the app already does, the site owner\'s proxy terminates TLS without telling WordPress: add this to wp-config.php, above "That\'s all, stop editing!": if ( isset( $_SERVER[\'HTTP_X_FORWARDED_PROTO\'] ) && \'https\' === $_SERVER[\'HTTP_X_FORWARDED_PROTO\'] ) { $_SERVER[\'HTTPS\'] = \'on\'; } — only if every request reaches WordPress through that proxy. Defining MCPWP_TRUST_PROXY_HEADERS also works, but it makes MCPWP trust client-IP headers (X-Forwarded-For, CF-Connecting-IP) for rate limits and logs too. ' . $revoked;
+			return 'Use the site\'s https:// MCP URL. If the app already does, site owner: configure the proxy or host so WordPress is told the request was HTTPS ($_SERVER[\'HTTPS\'] = \'on\'). Only if the server can be reached solely through that proxy, wp-config.php may set it from the proxy\'s header: if ( isset( $_SERVER[\'HTTP_X_FORWARDED_PROTO\'] ) && \'https\' === $_SERVER[\'HTTP_X_FORWARDED_PROTO\'] ) { $_SERVER[\'HTTPS\'] = \'on\'; } If the server is also reachable directly, do not: anyone could then send that header and fake HTTPS. MCPWP_TRUST_PROXY_HEADERS has the same requirement and also makes MCPWP trust client-IP headers (X-Forwarded-For, CF-Connecting-IP) for rate limits and logs. ' . $revoked;
 		}
-		return 'Use the site\'s https:// MCP URL. Site owner: serve the site over HTTPS; behind a TLS-terminating proxy, set $_SERVER[\'HTTPS\'] = \'on\' in wp-config.php. ' . $revoked;
+		return 'Use the site\'s https:// MCP URL. Site owner: serve the site over HTTPS; behind a TLS-terminating proxy, configure the proxy or host so WordPress is told the request was HTTPS ($_SERVER[\'HTTPS\'] = \'on\'). ' . $revoked;
 	}
 
 	/**
@@ -252,31 +291,38 @@ class Mcpwp_OAuth_Transport {
 	 *
 	 * Writes only when there is something live to kill: a token that was
 	 * never issued, or whose row and family are already revoked, writes
-	 * nothing. Charges no rate-limit bucket. Returns nothing: the caller's
-	 * answer must not depend on what happened here.
+	 * nothing. Charges no rate-limit bucket. The caller's answer must not
+	 * depend on the result; it only decides whether the refusal is recorded
+	 * for an administrator (a real, live token was exposed).
 	 *
 	 * @param string $token The presented access token.
-	 * @return void
+	 * @return bool True when a live token or a live refresh family was revoked.
 	 */
 	public static function revoke_presented_token( $token ) {
 		$token = (string) $token;
 		if ( '' === $token || ! class_exists( 'Mcpwp_OAuth_Token_Store' ) ) {
-			return;
+			return false;
 		}
 
 		$row = Mcpwp_OAuth_Token_Store::find( $token );
 		if ( is_array( $row ) ) {
 			if ( Mcpwp_OAuth_Token_Store::TYPE_ACCESS !== $row['type'] ) {
-				return;
+				return false;
 			}
-			if ( null === $row['revoked_at'] || '' === $row['revoked_at'] ) {
+			$killed = false;
+			if ( Mcpwp_OAuth_Token_Store::is_active( $row, Mcpwp_OAuth_Token_Store::TYPE_ACCESS ) ) {
+				Mcpwp_OAuth_Token_Store::revoke( $token );
+				$killed = true;
+			} elseif ( null === $row['revoked_at'] || '' === $row['revoked_at'] ) {
+				// Expired but never marked: mark it, but it was not live.
 				Mcpwp_OAuth_Token_Store::revoke( $token );
 			}
 			$family = isset( $row['family_id'] ) ? (string) $row['family_id'] : '';
 			if ( '' !== $family && class_exists( 'Mcpwp_OAuth_Revocation' ) && ! Mcpwp_OAuth_Revocation::family_revoked( $family ) ) {
 				Mcpwp_OAuth_Revocation::revoke_family( $family );
+				$killed = true;
 			}
-			return;
+			return $killed;
 		}
 
 		// A token from before the token table, still in its old transient.
@@ -284,42 +330,41 @@ class Mcpwp_OAuth_Transport {
 		if ( 0 === strpos( $token, 'spai_at_' ) ) {
 			$legacy_keys[] = 'spai_oauth_token_' . md5( $token );
 		}
+		$killed = false;
 		foreach ( $legacy_keys as $key ) {
 			if ( false !== get_transient( $key ) ) {
 				delete_transient( $key );
+				$killed = true;
 			}
 		}
+		return $killed;
 	}
 
 	// ── what an administrator sees ───────────────────────────────────────
 
 	/**
-	 * Note a refusal for Site Health and the admin notice. No token data:
-	 * when, where (api / authorize / metadata) and whether a proxy is
-	 * suspected. Written at most once per RECORD_INTERVAL, so a flood of
-	 * plain-HTTP requests cannot turn into a flood of writes.
+	 * Note, for Site Health and the admin notice, that a real live token was
+	 * refused over plain HTTP. Called only after revoke_presented_token()
+	 * actually revoked something, so it takes a genuinely issued token to
+	 * write it: an anonymous request with a made-up token, the consent
+	 * screen or the discovery documents never do. No token data: when, and
+	 * whether proxy headers came with it. Written at most once per
+	 * RECORD_INTERVAL.
 	 *
-	 * @param string $surface 'api', 'authorize' or 'metadata'.
 	 * @return void
 	 */
-	public static function record_refusal( $surface ) {
+	public static function record_refusal() {
 		$now    = time();
 		$record = self::get_record();
 		if ( is_array( $record ) && isset( $record['last_at'] ) && ( $now - (int) $record['last_at'] ) < self::RECORD_INTERVAL ) {
 			return;
-		}
-		$surfaces = is_array( $record ) && isset( $record['surfaces'] ) && is_array( $record['surfaces'] ) ? $record['surfaces'] : array();
-		$surface  = sanitize_key( (string) $surface );
-		if ( '' !== $surface && ! in_array( $surface, $surfaces, true ) ) {
-			$surfaces[] = $surface;
 		}
 		set_transient(
 			self::REFUSALS_TRANSIENT,
 			array(
 				'first_at'        => is_array( $record ) && isset( $record['first_at'] ) ? (int) $record['first_at'] : $now,
 				'last_at'         => $now,
-				'proxy_suspected' => self::proxy_suspected( self::home() ),
-				'surfaces'        => $surfaces,
+				'proxy_suspected' => self::request_proxy_suspected(),
 			),
 			self::RECORD_TTL
 		);
@@ -337,16 +382,17 @@ class Mcpwp_OAuth_Transport {
 	 * Site Health / notice status.
 	 *
 	 * 'critical' when a TLS-terminating proxy is suspected (every OAuth
-	 * connection on the real https address is refused), either from a
-	 * recorded refusal or from the administrator's own request right now;
-	 * 'recommended' when plain-HTTP refusals were recorded otherwise; else
-	 * 'good'.
+	 * connection on the real https address is refused): the administrator's
+	 * own request right now arrives over plain HTTP although the site's
+	 * address is https, or a recorded refusal of a real token carried proxy
+	 * headers. 'recommended' when a real token was refused otherwise; else
+	 * 'good'. Nothing an anonymous caller can send reaches 'critical'.
 	 *
 	 * @return array{status:string,proxy:bool,record:array|false}
 	 */
 	public static function get_status() {
 		$record    = self::get_record();
-		$proxy_now = self::is_refused() && self::proxy_suspected( self::home() );
+		$proxy_now = self::is_refused() && self::home_is_https( self::home() );
 		$proxy     = $proxy_now || ( is_array( $record ) && ! empty( $record['proxy_suspected'] ) );
 		if ( $proxy ) {
 			$status = 'critical';

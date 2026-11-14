@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/class-mcpwp-proxy-trust.php';
+
 /**
  * Handles API rate limiting using transients.
  */
@@ -463,7 +465,7 @@ class Mcpwp_Rate_Limiter {
 		// anonymous caller rotate the value to evade the per-IP throttle or forge
 		// a whitelisted IP. Honour them only behind the explicit
 		// MCPWP_TRUST_PROXY_HEADERS opt-in; otherwise use REMOTE_ADDR.
-		$trust_proxy = defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS;
+		$trust_proxy = Mcpwp_Proxy_Trust::headers_trusted();
 
 		$ip_keys = $trust_proxy
 			? array(

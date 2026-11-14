@@ -1880,11 +1880,6 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * The plain refusal page for a user below the minimum role (P0b).
-	 *
-	 * @return WP_REST_Response
-	 */
-	/**
 	 * The consent screen over a transport where an access token would be
 	 * refused (Mcpwp_OAuth_Transport): a plain 403 page instead, so a user
 	 * cannot finish a connection whose token would be refused, and revoked,
@@ -1899,7 +1894,6 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		if ( ! Mcpwp_OAuth_Transport::is_refused() ) {
 			return null;
 		}
-		Mcpwp_OAuth_Transport::record_refusal( 'authorize' );
 		$error = Mcpwp_OAuth_Transport::refusal_error();
 		$data  = $error->get_error_data();
 
@@ -1918,6 +1912,11 @@ class Mcpwp_REST_OAuth extends Mcpwp_REST_API {
 		return $response;
 	}
 
+	/**
+	 * The plain refusal page for a user below the minimum role (P0b).
+	 *
+	 * @return WP_REST_Response
+	 */
 	private function min_role_refusal_response() {
 		$labels = array(
 			'editor'        => __( 'Editor', 'mcpwp' ),

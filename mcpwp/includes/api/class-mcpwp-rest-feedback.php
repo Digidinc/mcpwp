@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once dirname( __DIR__ ) . '/class-mcpwp-proxy-trust.php';
+
 /**
  * REST controller for AI feedback submission and listing.
  */
@@ -548,7 +550,7 @@ class Mcpwp_REST_Feedback extends Mcpwp_REST_API {
 	 * @return string
 	 */
 	private function get_relay_client_ip() {
-		$trust_proxy = defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS;
+		$trust_proxy = Mcpwp_Proxy_Trust::headers_trusted();
 
 		return $this->resolve_relay_client_ip( $trust_proxy );
 	}

@@ -9,6 +9,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once dirname( __DIR__ ) . '/class-mcpwp-proxy-trust.php';
+
 /**
  * API authentication functionality.
  */
@@ -4546,16 +4548,16 @@ trait Mcpwp_Api_Auth {
 	 */
 	protected function authenticate_oauth_access_token( $token, $request, $metered = true ) {
 		// A bearer token over plain HTTP (RFC 6750 §5.3, OAuth 2.1 §1.5) is
-		// refused FIRST: before the OAuth switch, before validation and before
-		// any rate-limit charge. So the answer is one fixed 403 whether the
-		// string is a live token, a dead one or was never issued (no oracle),
-		// and it never charges the 'invalid:<ip>' bucket that wrong API keys
-		// share — a client set up with an http:// URL cannot spend that budget
+		// refused FIRST: before the OAuth switch and before validation. So the
+		// answer is one fixed 403 whether the string is a live token, a dead
+		// one or was never issued (no oracle), and it never charges the
+		// 'invalid:<ip>' bucket that wrong API keys share (it has its own,
+		// 'insecure:<ip>') — a client set up with an http:// URL cannot spend that budget
 		// for everyone behind its address. A live token is revoked with its
 		// refresh family on the way (it travelled unencrypted). The
 		// sub-request path (verify_api_key_auth_only()) lands here too, so
 		// /mcp and /batch answer the same.
-		$transport_refusal = $this->oauth_transport_refusal( $token );
+		$transport_refusal = $this->oauth_transport_refusal( $token, $request, $metered );
 		if ( null !== $transport_refusal ) {
 			return $transport_refusal;
 		}
@@ -4960,7 +4962,7 @@ trait Mcpwp_Api_Auth {
 		// Exactly true (the documented value): a truthy string such as
 		// "false" must not switch trust on. Earlier releases let any truthy value
 		// count; define the constant as true if you relied on that.
-		return $this->resolve_client_ip( defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && true === constant( 'MCPWP_TRUST_PROXY_HEADERS' ) );
+		return $this->resolve_client_ip( Mcpwp_Proxy_Trust::headers_trusted() );
 	}
 
 	/**
@@ -6165,23 +6167,55 @@ trait Mcpwp_Api_Auth {
 	 * null when the transport is acceptable (Mcpwp_OAuth_Transport).
 	 *
 	 * On refusal the presented token is revoked with its refresh family (it
-	 * travelled unencrypted) and the refusal is noted for Site Health. Neither
-	 * side effect changes the answer: it is one fixed 403 for every token,
-	 * live, dead or never issued, and it charges no rate-limit bucket.
+	 * travelled unencrypted); only when that actually killed a live token is
+	 * the refusal recorded for Site Health, so an anonymous request with a
+	 * made-up token cannot raise the alarm. The lookup is bounded by a
+	 * dedicated per-address bucket, 'insecure:<ip>', separate from the
+	 * 'invalid:<ip>' bucket wrong credentials share; over that budget the
+	 * lookup is skipped. None of this changes the answer: one fixed 403 for
+	 * every token, live, dead or never issued, with no rate-limit headers.
+	 * The time taken can differ by one indexed lookup (and a write for a live
+	 * token); the token is already exposed by then, so that is not treated
+	 * as an oracle worth hiding.
 	 *
-	 * @param string $token The presented access token.
+	 * @param string          $token   The presented access token.
+	 * @param WP_REST_Request $request Request.
+	 * @param bool            $metered False for an internal sub-request.
 	 * @return WP_Error|null
 	 */
-	protected function oauth_transport_refusal( $token ) {
+	protected function oauth_transport_refusal( $token, $request, $metered ) {
 		if ( ! class_exists( 'Mcpwp_OAuth_Transport' ) ) {
 			require_once dirname( __DIR__ ) . '/class-mcpwp-oauth-transport.php';
 		}
 		if ( ! Mcpwp_OAuth_Transport::is_refused() ) {
 			return null;
 		}
-		Mcpwp_OAuth_Transport::revoke_presented_token( $token );
-		Mcpwp_OAuth_Transport::record_refusal( 'api' );
+		if ( ! $this->insecure_transport_over_budget( $request, $metered ) && Mcpwp_OAuth_Transport::revoke_presented_token( $token ) ) {
+			Mcpwp_OAuth_Transport::record_refusal();
+		}
 		return Mcpwp_OAuth_Transport::refusal_error();
+	}
+
+	/**
+	 * Charge a refused plain-HTTP bearer to 'insecure:<ip>' and say whether
+	 * the address is over that budget. Headers are suppressed, as in
+	 * count_oauth_failure(), so the 403 is identical under and over budget.
+	 * An unmetered sub-request was charged by its outer request.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @param bool            $metered Whether this call is the outer request.
+	 * @return bool
+	 */
+	protected function insecure_transport_over_budget( $request, $metered ) {
+		if ( ! $metered ) {
+			return false;
+		}
+		$method = method_exists( $request, 'get_method' ) ? $request->get_method() : 'POST';
+		$check  = function () use ( $method ) {
+			return $this->check_rate_limit( 'insecure:' . $this->get_client_ip(), $method );
+		};
+		$over = class_exists( 'Mcpwp_Rate_Limiter' ) ? Mcpwp_Rate_Limiter::get_instance()->without_reporting( $check ) : $check();
+		return is_wp_error( $over );
 	}
 
 	/**

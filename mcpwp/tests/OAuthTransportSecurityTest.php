@@ -27,9 +27,14 @@ class Mcpwp_OAuth_Transport_Test_Auth {
 
 	/** @var string[] */
 	public $limited = array();
+	/** @var bool Answer the 'insecure:' bucket as over budget. */
+	public $insecure_over = false;
 
 	protected function check_rate_limit( $identifier = null, $method = 'POST', $key_record = null, $weight = 1 ) {
 		$this->limited[] = (string) $identifier;
+		if ( $this->insecure_over && 0 === strpos( (string) $identifier, 'insecure:' ) ) {
+			return new WP_Error( 'rate_limit_exceeded', 'over', array( 'status' => 429 ) );
+		}
 		return true;
 	}
 
@@ -42,7 +47,7 @@ final class OAuthTransportSecurityTest extends TestCase {
 
 	const REDIRECT    = 'https://client.example.com/callback';
 	const VERIFIER    = 'dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk';
-	const SERVER_KEYS = array( 'HTTPS', 'SERVER_PORT', 'HTTP_HOST', 'HTTP_X_FORWARDED_PROTO', 'REMOTE_ADDR' );
+	const SERVER_KEYS = array( 'HTTPS', 'SERVER_PORT', 'HTTP_HOST', 'HTTP_X_FORWARDED_PROTO', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED_HOST', 'HTTP_FORWARDED', 'HTTP_X_REAL_IP', 'HTTP_CF_CONNECTING_IP', 'HTTP_CF_VISITOR', 'REMOTE_ADDR' );
 
 	/** @var array */
 	private $saved_server = array();
@@ -68,7 +73,7 @@ final class OAuthTransportSecurityTest extends TestCase {
 		$_SERVER['HTTPS']       = 'on';
 		$_SERVER['REMOTE_ADDR'] = '203.0.113.9';
 		$_SERVER['HTTP_HOST']   = 'example.com';
-		unset( $_SERVER['SERVER_PORT'], $_SERVER['HTTP_X_FORWARDED_PROTO'] );
+		unset( $_SERVER['SERVER_PORT'], $_SERVER['HTTP_X_FORWARDED_PROTO'], $_SERVER['HTTP_X_FORWARDED_FOR'], $_SERVER['HTTP_X_FORWARDED_HOST'], $_SERVER['HTTP_FORWARDED'], $_SERVER['HTTP_X_REAL_IP'], $_SERVER['HTTP_CF_CONNECTING_IP'], $_SERVER['HTTP_CF_VISITOR'] );
 		putenv( 'WP_ENVIRONMENT_TYPE' );
 		update_option( 'home', 'https://example.com' );
 		update_option(
@@ -284,18 +289,43 @@ final class OAuthTransportSecurityTest extends TestCase {
 		}
 	}
 
-	public function test_the_refusal_charges_no_rate_limit_bucket(): void {
+	public function test_the_refusal_charges_only_its_own_bucket(): void {
 		$this->over_http();
 		$auth = new Mcpwp_OAuth_Transport_Test_Auth();
 		for ( $i = 0; $i < 5; $i++ ) {
 			$this->assert_https_required( $auth->verify_api_key( $this->bearer( 'mcpwp_at_' . str_repeat( 'c', 40 ) ) ) );
 		}
-		$this->assertSame( array(), $auth->limited, 'An http:// client must not spend the shared invalid:<ip> budget.' );
+		$this->assertSame( array_fill( 0, 5, 'insecure:203.0.113.9' ), $auth->limited, 'Never the invalid:<ip> budget wrong credentials share.' );
 
 		// Contrast: the same dead token over HTTPS is counted as a failure.
 		$this->over_https();
+		$auth->limited = array();
 		$auth->verify_api_key( $this->bearer( 'mcpwp_at_' . str_repeat( 'c', 40 ) ) );
 		$this->assertSame( array( 'invalid:203.0.113.9' ), $auth->limited );
+	}
+
+	public function test_the_sub_request_path_charges_nothing(): void {
+		$this->over_http();
+		$auth = new Mcpwp_OAuth_Transport_Test_Auth();
+		$this->assert_https_required( $auth->auth_only( $this->bearer( 'mcpwp_at_' . str_repeat( 'c', 40 ) ) ) );
+		$this->assertSame( array(), $auth->limited );
+	}
+
+	public function test_over_the_insecure_budget_the_lookup_is_skipped_and_the_answer_is_the_same(): void {
+		$token = $this->live_token();
+		$this->over_http();
+		$under = $this->shape( $this->verify( 'mcpwp_at_' . str_repeat( 'm', 40 ) ) );
+
+		$auth                = new Mcpwp_OAuth_Transport_Test_Auth();
+		$auth->insecure_over = true;
+		$before              = $this->store_snapshot();
+		$over                = $auth->verify_api_key( $this->bearer( $token ) );
+		$this->assertSame( $under, $this->shape( $over ), 'Identical answer over budget.' );
+		$this->assertSame( $before, $this->store_snapshot(), 'Over budget: no lookup, no revocation, no record.' );
+		$this->assertFalse( Mcpwp_OAuth_Transport::get_record() );
+
+		$this->over_https();
+		$this->assertTrue( $this->verify( $token ), 'The skipped token was not revoked.' );
 	}
 
 	public function test_the_403_reaches_the_client_without_a_reconnect_challenge(): void {
@@ -342,13 +372,16 @@ final class OAuthTransportSecurityTest extends TestCase {
 
 	// ── the text ─────────────────────────────────────────────────────────
 
-	public function test_an_https_site_reached_over_http_gets_the_proxy_text(): void {
+	public function test_an_https_site_reached_through_a_proxy_over_http_gets_the_proxy_text(): void {
 		$this->over_http();
+		$_SERVER['HTTP_X_FORWARDED_FOR'] = '198.51.100.4';
 		$error = $this->verify( 'mcpwp_at_' . str_repeat( 'h', 40 ) );
 		$this->assertStringContainsString( 'proxy', $error->get_error_message() );
 		$hint = $error->get_error_data()['hint'];
 		$this->assertStringStartsWith( 'Use the site\'s https:// MCP URL.', $hint );
-		$this->assertStringContainsString( 'terminates TLS without telling WordPress', $hint );
+		$this->assertStringContainsString( 'configure the proxy or host', $hint );
+		$this->assertStringContainsString( 'reached solely through that proxy', $hint, 'The snippet is conditional.' );
+		$this->assertStringContainsString( 'fake HTTPS', $hint, 'The forgery risk is stated.' );
 		$snippet = strpos( $hint, '$_SERVER[\'HTTPS\'] = \'on\'' );
 		$trust   = strpos( $hint, 'MCPWP_TRUST_PROXY_HEADERS' );
 		$this->assertNotFalse( $snippet );
@@ -356,6 +389,13 @@ final class OAuthTransportSecurityTest extends TestCase {
 		$this->assertLessThan( $trust, $snippet, 'The wp-config snippet comes first.' );
 		$this->assertStringContainsString( 'client-IP headers', $hint, 'The trust constant\'s side effect is stated.' );
 		$this->assertStringContainsString( 'revoked', $hint );
+	}
+
+	public function test_an_https_site_without_proxy_headers_gets_the_plain_text(): void {
+		$this->over_http();
+		$error = $this->verify( 'mcpwp_at_' . str_repeat( 'n', 40 ) );
+		$this->assertStringNotContainsString( 'proxy', $error->get_error_message() );
+		$this->assertSame( Mcpwp_OAuth_Transport::hint( false ), $error->get_error_data()['hint'] );
 	}
 
 	public function test_an_http_site_gets_the_plain_text(): void {
@@ -519,6 +559,24 @@ final class OAuthTransportSecurityTest extends TestCase {
 		$ip = ( new ReflectionMethod( Mcpwp_OAuth_Transport_Test_Auth::class, 'get_client_ip' ) );
 		$ip->setAccessible( true );
 		$this->assertSame( '203.0.113.9', $ip->invoke( new Mcpwp_OAuth_Transport_Test_Auth() ) );
+		// ...and so do the rate limiter and the issuer origin.
+		$limiter = new ReflectionMethod( Mcpwp_Rate_Limiter::class, 'get_client_identifier' );
+		$limiter->setAccessible( true );
+		$this->assertSame( '203.0.113.9', $limiter->invoke( Mcpwp_Rate_Limiter::get_instance() ) );
+		$GLOBALS['mcpwp_test_site_url'] = 'http://example.com';
+		$this->assertStringStartsWith( 'http://', Mcpwp_OAuth_Well_Known::get_site_origin(), 'X-Forwarded-Proto: https is not believed.' );
+	}
+
+	public function test_every_reader_of_the_trust_constant_goes_through_the_one_helper(): void {
+		$root  = dirname( __DIR__ ) . '/includes';
+		$files = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $root, FilesystemIterator::SKIP_DOTS ) );
+		foreach ( $files as $file ) {
+			if ( 'php' !== $file->getExtension() || 'class-mcpwp-proxy-trust.php' === $file->getFilename() ) {
+				continue;
+			}
+			$code = (string) file_get_contents( $file->getPathname() );
+			$this->assertDoesNotMatchRegularExpression( "/defined\\(\\s*'MCPWP_TRUST_PROXY_HEADERS'/", $code, $file->getPathname() . ' must use Mcpwp_Proxy_Trust::headers_trusted()' );
+		}
 	}
 
 	// ── consent screen and discovery ─────────────────────────────────────
@@ -533,8 +591,7 @@ final class OAuthTransportSecurityTest extends TestCase {
 			$this->assertStringContainsString( 'needs HTTPS', (string) $response->get_data(), $method );
 			$this->assertArrayNotHasKey( 'Location', $response->get_headers(), $method . ': never a redirect carrying a code' );
 		}
-		$record = Mcpwp_OAuth_Transport::get_record();
-		$this->assertContains( 'authorize', $record['surfaces'] );
+		$this->assertFalse( Mcpwp_OAuth_Transport::get_record(), 'An anonymous consent request never reaches Site Health.' );
 
 		// Over https the transport rule does not answer.
 		$this->over_https();
@@ -543,10 +600,12 @@ final class OAuthTransportSecurityTest extends TestCase {
 	}
 
 	public function test_local_discovery_is_not_advertised_over_http(): void {
-		$this->assertFalse( Mcpwp_OAuth_Well_Known::local_oauth_transport_refused( false ) );
+		$this->assertFalse( Mcpwp_OAuth_Well_Known::local_oauth_transport_refused() );
+		$this->assertTrue( Mcpwp_OAuth_Well_Known::protected_resource_metadata_served_now() );
 		$this->over_http();
-		$this->assertTrue( Mcpwp_OAuth_Well_Known::local_oauth_transport_refused( false ) );
-		$this->assertFalse( Mcpwp_OAuth_Transport::get_record(), 'Not recorded unless asked.' );
+		$this->assertTrue( Mcpwp_OAuth_Well_Known::local_oauth_transport_refused() );
+		$this->assertFalse( Mcpwp_OAuth_Well_Known::protected_resource_metadata_served_now() );
+		$this->assertFalse( Mcpwp_OAuth_Transport::get_record(), 'Discovery never records.' );
 
 		// An unauthenticated 401 over http no longer points at metadata that is not served.
 		$wire = $this->wire( ( new Mcpwp_OAuth_Transport_Test_Auth() )->verify_api_key( new WP_REST_Request( 'POST', '/mcpwp/v1/mcp' ) ) );
@@ -558,51 +617,119 @@ final class OAuthTransportSecurityTest extends TestCase {
 		$this->assertStringContainsString( 'resource_metadata', $wire['headers']['WWW-Authenticate'] ?? '' );
 	}
 
+	private function enroll_broker(): void {
+		update_option( 'mcpwp_broker_enrollment', array( 'site_id' => 'abc', 'audience' => home_url(), 'site_credential' => 'x' ) );
+	}
+
+	public function test_broker_only_discovery_survives_plain_http_and_the_challenge_agrees(): void {
+		$this->enroll_broker();
+		update_option( 'mcpwp_settings', array( 'oauth_enabled' => false ) );
+		$this->over_http();
+		$this->assertTrue( Mcpwp_OAuth_Well_Known::protected_resource_metadata_served_now(), 'Names mumcp.com, whose bearers this rule does not cover.' );
+		$this->assertSame( array( 'https://mumcp.com' ), Mcpwp_OAuth_Well_Known::build_protected_resource_metadata()['authorization_servers'] );
+		$wire = $this->wire( ( new Mcpwp_OAuth_Transport_Test_Auth() )->verify_api_key( new WP_REST_Request( 'POST', '/mcpwp/v1/mcp' ) ) );
+		$this->assertStringContainsString( 'resource_metadata', $wire['headers']['WWW-Authenticate'] ?? '' );
+	}
+
+	public function test_broker_plus_local_over_http_suppresses_document_and_challenge_together(): void {
+		$this->enroll_broker();
+		$this->over_http();
+		$this->assertFalse( Mcpwp_OAuth_Well_Known::protected_resource_metadata_served_now() );
+		$wire = $this->wire( ( new Mcpwp_OAuth_Transport_Test_Auth() )->verify_api_key( new WP_REST_Request( 'POST', '/mcpwp/v1/mcp' ) ) );
+		$this->assertStringNotContainsString( 'resource_metadata', $wire['headers']['WWW-Authenticate'] ?? '', 'The challenge never points at a suppressed document.' );
+	}
+
 	// ── what an administrator sees ───────────────────────────────────────
 
-	public function test_refusals_are_recorded_without_token_data_and_throttled(): void {
+	public function test_only_a_real_live_token_is_recorded_without_token_data_and_throttled(): void {
 		$this->assertSame( 'good', Mcpwp_OAuth_Transport::get_status()['status'] );
 		$token = $this->live_token();
 		$this->over_http();
+		$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'http';
+
+		// Made-up tokens, the consent screen and discovery write nothing.
+		$this->verify( 'mcpwp_at_' . str_repeat( 'o', 40 ) );
+		( new Mcpwp_REST_OAuth() )->handle_authorize_get( new WP_REST_Request( 'GET', '/mcpwp/v1/oauth/authorize', array() ) );
+		Mcpwp_OAuth_Well_Known::protected_resource_metadata_served_now();
+		$this->assertFalse( Mcpwp_OAuth_Transport::get_record() );
+
 		$this->verify( $token );
 		$record = Mcpwp_OAuth_Transport::get_record();
 		$this->assertIsArray( $record );
-		$this->assertSame( array( 'first_at', 'last_at', 'proxy_suspected', 'surfaces' ), array_keys( $record ) );
-		$this->assertTrue( $record['proxy_suspected'] );
-		$this->assertSame( array( 'api' ), $record['surfaces'] );
+		$this->assertSame( array( 'first_at', 'last_at', 'proxy_suspected' ), array_keys( $record ) );
+		$this->assertTrue( $record['proxy_suspected'], 'https site + proxy header at the refusal.' );
 		$this->assertStringNotContainsString( substr( $token, 9, 12 ), wp_json_encode( $record ) );
 
-		// Within the interval a second refusal does not rewrite the record.
-		$record['last_at'] = time() - 10;
+		// The same, now dead, token does not record again.
+		set_transient( Mcpwp_OAuth_Transport::REFUSALS_TRANSIENT, array( 'first_at' => 1, 'last_at' => 1, 'proxy_suspected' => false ), 60 );
+		$this->verify( $token );
+		$this->assertSame( 1, Mcpwp_OAuth_Transport::get_record()['last_at'] );
+
+		// Within the interval a second live refusal does not rewrite the record.
+		$record = array( 'first_at' => time() - 20, 'last_at' => time() - 10, 'proxy_suspected' => false );
 		set_transient( Mcpwp_OAuth_Transport::REFUSALS_TRANSIENT, $record, 60 );
-		Mcpwp_OAuth_Transport::record_refusal( 'metadata' );
+		Mcpwp_OAuth_Transport::record_refusal();
 		$this->assertSame( $record, Mcpwp_OAuth_Transport::get_record() );
 		// After it, it does.
 		$record['last_at'] = time() - Mcpwp_OAuth_Transport::RECORD_INTERVAL - 1;
 		set_transient( Mcpwp_OAuth_Transport::REFUSALS_TRANSIENT, $record, 60 );
-		Mcpwp_OAuth_Transport::record_refusal( 'metadata' );
-		$this->assertSame( array( 'api', 'metadata' ), Mcpwp_OAuth_Transport::get_record()['surfaces'] );
+		Mcpwp_OAuth_Transport::record_refusal();
+		$this->assertGreaterThan( $record['last_at'], Mcpwp_OAuth_Transport::get_record()['last_at'] );
 	}
 
-	public function test_site_health_is_critical_for_a_suspected_proxy_and_recommended_otherwise(): void {
+	public function test_anonymous_requests_never_raise_a_critical_alarm(): void {
+		$this->over_http();
+		$_SERVER['HTTP_X_FORWARDED_FOR'] = '198.51.100.9';
+		for ( $i = 0; $i < 3; $i++ ) {
+			$this->verify( 'mcpwp_at_' . bin2hex( random_bytes( 20 ) ) );
+			( new Mcpwp_REST_OAuth() )->handle_authorize_get( new WP_REST_Request( 'GET', '/mcpwp/v1/oauth/authorize', array() ) );
+		}
+		// The administrator then looks over https: nothing to report.
+		$this->over_https();
+		unset( $_SERVER['HTTP_X_FORWARDED_FOR'] );
+		$this->assertSame( 'good', Mcpwp_OAuth_Transport::run_site_status_test()['status'] );
+	}
+
+	public function test_site_health_severity(): void {
 		$this->assertSame( 'good', Mcpwp_OAuth_Transport::run_site_status_test()['status'] );
 
-		// The administrator's own request shows the proxy, before any refusal.
+		// The administrator's own request shows the proxy: critical, before any refusal.
 		$this->over_http();
 		$result = Mcpwp_OAuth_Transport::run_site_status_test();
 		$this->assertSame( 'critical', $result['status'] );
 		$this->assertStringContainsString( 'proxy', $result['label'] );
-		$this->assertStringContainsString( 'HTTPS', $result['description'] );
-
-		// An http-only site whose app used http://: recommended, once recorded.
-		update_option( 'home', 'http://example.com' );
+		$this->over_https();
 		$this->assertSame( 'good', Mcpwp_OAuth_Transport::run_site_status_test()['status'] );
-		$this->verify( 'mcpwp_at_' . str_repeat( 'k', 40 ) );
+
+		// A real token refused with no proxy headers: recommended, never critical.
+		$token = $this->live_token();
+		$this->over_http();
+		$this->verify( $token );
 		$this->over_https();
 		$this->assertSame( 'recommended', Mcpwp_OAuth_Transport::run_site_status_test()['status'] );
 
+		// A real token refused through a proxy: critical.
+		delete_transient( Mcpwp_OAuth_Transport::REFUSALS_TRANSIENT );
+		$token = $this->live_token();
+		$this->over_http();
+		$_SERVER['HTTP_CF_CONNECTING_IP'] = '198.51.100.7';
+		$this->verify( $token );
+		unset( $_SERVER['HTTP_CF_CONNECTING_IP'] );
+		$this->over_https();
+		$this->assertSame( 'critical', Mcpwp_OAuth_Transport::run_site_status_test()['status'] );
+
 		$tests = Mcpwp_OAuth_Transport::register_site_status_test( array( 'direct' => array() ) );
 		$this->assertArrayHasKey( 'mcpwp_oauth_transport', $tests['direct'] );
+	}
+
+	public function test_the_refusal_page_docblocks_belong_to_their_methods(): void {
+		$min = ( new ReflectionMethod( Mcpwp_REST_OAuth::class, 'min_role_refusal_response' ) )->getDocComment();
+		$ins = ( new ReflectionMethod( Mcpwp_REST_OAuth::class, 'insecure_transport_refusal_response' ) )->getDocComment();
+		$this->assertStringContainsString( 'minimum role', (string) $min );
+		$this->assertStringNotContainsString( 'transport', (string) $min );
+		$this->assertStringContainsString( 'consent screen over a transport', (string) $ins );
+		$source = (string) file_get_contents( dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-oauth.php' );
+		$this->assertDoesNotMatchRegularExpression( '#\*/\s*/\*\*#', $source, 'No docblock directly followed by another docblock.' );
 	}
 
 	/**
@@ -613,14 +740,18 @@ final class OAuthTransportSecurityTest extends TestCase {
 		$GLOBALS['mcpwp_test_screen_id'] = 'toplevel_page_mcpwp';
 		require_once __DIR__ . '/fixtures/get-current-screen.php';
 		$GLOBALS['mcpwp_test_current_user'] = 1;
-		$GLOBALS['mcpwp_test_user_caps']    = array( 1 => array( 'manage_options' => true ) );
+		$GLOBALS['mcpwp_test_user_caps']    = array( 1 => array( 'read' => true, 'edit_posts' => true, 'edit_others_posts' => true, 'manage_options' => true ) );
 
 		ob_start();
 		Mcpwp_OAuth_Transport::render_notice();
 		$this->assertSame( '', ob_get_clean(), 'Nothing to report yet.' );
 
+		$token = $this->live_token();
 		$this->over_http();
-		$this->verify( 'mcpwp_at_' . str_repeat( 'l', 40 ) );
+		$_SERVER['HTTP_X_FORWARDED_PROTO'] = 'http';
+		$this->verify( $token );
+		$this->over_https();
+		unset( $_SERVER['HTTP_X_FORWARDED_PROTO'] );
 		ob_start();
 		Mcpwp_OAuth_Transport::render_notice();
 		$html = ob_get_clean();

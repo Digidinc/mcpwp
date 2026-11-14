@@ -50,6 +50,8 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+require_once __DIR__ . '/class-mcpwp-proxy-trust.php';
+
 /**
  * Handles /.well-known/oauth-* at the WordPress domain root.
  */
@@ -131,9 +133,10 @@ class Mcpwp_OAuth_Well_Known {
 		$data          = method_exists( $response, 'get_data' ) ? $response->get_data() : null;
 		$invalid_token = is_array( $data ) && isset( $data['code'] ) && 'invalid_token' === $data['code'];
 
-		// The local AS is only advertised where its tokens would be accepted
-		// (see maybe_serve_well_known()); the broker path is unaffected.
-		$discoverable = ( self::is_legacy_oauth_enabled() && ! self::local_oauth_transport_refused( false ) ) || self::is_broker_enrolled();
+		// Advertise the protected-resource document exactly when it is served
+		// on this request (see protected_resource_metadata_served_now()), so
+		// the challenge never points at a document that would not answer.
+		$discoverable = self::protected_resource_metadata_served_now();
 		if ( ! $discoverable && ! $invalid_token ) {
 			return $response;
 		}
@@ -204,12 +207,7 @@ class Mcpwp_OAuth_Well_Known {
 			if ( in_array( untrailingslashit( $path_only ), $protected_resource_paths, true ) ) {
 				// Broker enrollment independently enables this document, regardless
 				// of the `oauth_enabled` setting — see should_serve_protected_resource_metadata().
-				if ( ! self::should_serve_protected_resource_metadata() ) {
-					return $do_parse;
-				}
-				// While it names this site's own AS, the document is not
-				// served where that AS's tokens would be refused (plain HTTP).
-				if ( self::is_legacy_oauth_enabled() && self::local_oauth_transport_refused( true ) ) {
+				if ( ! self::protected_resource_metadata_served_now() ) {
 					return $do_parse;
 				}
 				self::serve_protected_resource_metadata();
@@ -223,7 +221,7 @@ class Mcpwp_OAuth_Well_Known {
 			if ( in_array( $path_only, $authorization_server_paths, true ) ) {
 				// This document only ever describes this site's own AS, so it
 				// stays gated on the local OAuth setting alone.
-				if ( ! self::is_legacy_oauth_enabled() || self::local_oauth_transport_refused( true ) ) {
+				if ( ! self::is_legacy_oauth_enabled() || self::local_oauth_transport_refused() ) {
 					return $do_parse;
 				}
 				self::serve_authorization_server_metadata();
@@ -249,22 +247,34 @@ class Mcpwp_OAuth_Well_Known {
 
 	/**
 	 * Whether this request's transport would get a local OAuth access token
-	 * refused (Mcpwp_OAuth_Transport::is_refused()).
+	 * refused (Mcpwp_OAuth_Transport::is_refused()). Records nothing: an
+	 * anonymous discovery request must not reach Site Health.
 	 *
-	 * @param bool $record Whether to note the refusal for Site Health.
 	 * @return bool
 	 */
-	public static function local_oauth_transport_refused( $record ) {
+	public static function local_oauth_transport_refused() {
 		if ( ! class_exists( 'Mcpwp_OAuth_Transport' ) ) {
 			require_once __DIR__ . '/class-mcpwp-oauth-transport.php';
 		}
-		if ( ! Mcpwp_OAuth_Transport::is_refused() ) {
+		return Mcpwp_OAuth_Transport::is_refused();
+	}
+
+	/**
+	 * Whether the RFC 9728 document is served on THIS request — the one
+	 * predicate both maybe_serve_well_known() and the 401 challenge use.
+	 *
+	 * While local OAuth is on, the document names this site's own AS, and it
+	 * is not served where that AS's tokens would be refused (plain HTTP). On
+	 * a broker-only site (local OAuth off) it names mumcp.com, whose bearer
+	 * tokens this rule does not cover, so it is served on any transport.
+	 *
+	 * @return bool
+	 */
+	public static function protected_resource_metadata_served_now() {
+		if ( ! self::should_serve_protected_resource_metadata() ) {
 			return false;
 		}
-		if ( $record ) {
-			Mcpwp_OAuth_Transport::record_refusal( 'metadata' );
-		}
-		return true;
+		return ! ( self::is_legacy_oauth_enabled() && self::local_oauth_transport_refused() );
 	}
 
 	/**
@@ -623,7 +633,7 @@ class Mcpwp_OAuth_Well_Known {
 
 		// Only honour X-Forwarded-Proto when an explicit trusted-proxy opt-in is set.
 		// This prevents a spoofed X-Forwarded-Proto: http from downgrading https origins.
-		$trust_proxy = defined( 'MCPWP_TRUST_PROXY_HEADERS' ) && MCPWP_TRUST_PROXY_HEADERS;
+		$trust_proxy = Mcpwp_Proxy_Trust::headers_trusted();
 
 		if ( $trust_proxy && ! empty( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) ) {
 			$forwarded = strtolower( sanitize_text_field( wp_unslash( $_SERVER['HTTP_X_FORWARDED_PROTO'] ) ) );
