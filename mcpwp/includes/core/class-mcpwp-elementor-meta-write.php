@@ -961,6 +961,15 @@ final class Mcpwp_Elementor_Meta_Write {
 				continue;
 			}
 
+			// An element whose `elements` is present but not a list can never
+			// vouch (the incoming side treats it as having bad children), and its
+			// whole subtree stays in its fields: hashing it and then recursing
+			// hashed every nested level again, quadratic in the depth. Neither
+			// hash nor recurse.
+			if ( isset( $element['elements'] ) && ! self::is_list_of_elements( $element['elements'] ) ) {
+				continue;
+			}
+
 			$id = self::element_id( $element );
 			if ( '' !== $id ) {
 				$hash = self::fields_hash( self::element_fields( $element ) );

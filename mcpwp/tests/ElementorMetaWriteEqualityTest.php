@@ -42,4 +42,67 @@ final class ElementorMetaWriteEqualityTest extends TestCase {
 		$this->assertSame( $equal, Mcpwp_Elementor_Meta_Write::deep_equal( $b, $a ), 'symmetric' );
 	}
 
+
+	public static function hash_cases(): array {
+		return self::equality_cases() + array(
+			'1 vs 1 (int)'          => array( 1, 1, true ),
+			'A vs a'                => array( 'A', 'a', false ),
+			'list swap'             => array( array( 1, 2 ), array( 2, 1 ), false ),
+			'delimiter forgery'     => array( array( 'a' => 's1:x;' ), array( 'a' => 'x', 's1:x' => '' ), false ),
+			'forged structure'      => array( array( 'a' => 'b;s1:c=s1:d' ), array( 'a' => 'b', 'c' => 'd' ), false ),
+			'string with length'    => array( array( 'k' => "5:abc" ), array( 'k' => 'abc' ), false ),
+			'string vs int'         => array( array( 'k' => '1' ), array( 'k' => 1 ), false ),
+			'float vs int nested'   => array( array( 'k' => 1.0 ), array( 'k' => 1 ), false ),
+			'bool vs int nested'    => array( array( 'k' => true ), array( 'k' => 1 ), false ),
+			'null vs "" nested'     => array( array( 'k' => null ), array( 'k' => '' ), false ),
+			'neg zero nested'       => array( array( 'k' => -0.0 ), array( 'k' => 0.0 ), false ),
+			'float precision'       => array( array( 'k' => 0.1 ), array( 'k' => 0.10000000000000002 ), false ),
+		);
+	}
+
+	/**
+	 * vouch() relies on fields_hash() alone: it must agree with deep_equal()
+	 * exactly, in both directions.
+	 *
+	 * @dataProvider hash_cases
+	 */
+	public function test_the_vouching_hash_agrees_with_deep_equal( $a, $b, bool $equal ): void {
+		require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-elementor-meta-write.php';
+		$hash = new ReflectionMethod( Mcpwp_Elementor_Meta_Write::class, 'fields_hash' );
+		$hash->setAccessible( true );
+		$wrap = static function ( $v ) {
+			return array( 'settings' => array( 'v' => $v ) );
+		};
+		$ha = $hash->invoke( null, $wrap( $a ) );
+		$hb = $hash->invoke( null, $wrap( $b ) );
+
+		$this->assertSame( $equal, Mcpwp_Elementor_Meta_Write::deep_equal( $a, $b ) );
+		$this->assertSame( $equal, null !== $ha && $ha === $hb, 'hash equality is deep_equal equality' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_deep_non_list_elements_chain_is_not_hashed_per_level(): void {
+		require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-elementor-meta-write.php';
+		$big   = str_repeat( 'x', 1000000 );
+		$chain = array( 'id' => 'bot8291', 'elType' => 'widget', 'settings' => array( 'html' => $big . '<script>1</script>' ) );
+		for ( $i = 0; $i < 200; $i++ ) {
+			$chain = array( 'id' => 'l' . $i . '8291', 'elType' => 'container', 'settings' => array(), 'elements' => array( 'k' => $chain ) );
+		}
+		$tree = array( $chain );
+		$GLOBALS['_mcpwp_test_posts'][99] = new WP_Post( array( 'ID' => 99, 'post_type' => 'page', 'post_status' => 'publish' ) );
+		$GLOBALS['_mcpwp_test_meta'][99]['_elementor_data'] = wp_json_encode( $tree );
+		if ( false === has_filter( 'update_post_metadata', array( 'Mcpwp_Elementor_Meta_Write', 'on_update_post_metadata' ) ) ) {
+			Mcpwp_Elementor_Meta_Write::boot();
+		}
+
+		$start  = microtime( true );
+		$policy = Mcpwp_Elementor_Meta_Write::apply_policy( 99, '_elementor_data', wp_json_encode( $tree ) );
+		$this->assertLessThan( 3, microtime( true ) - $start, 'Linear in the payload, not depth squared.' );
+
+		// Never vouched: the stored raw script is sanitised.
+		$this->assertStringNotContainsString( '<script', (string) $policy );
+	}
 }
