@@ -1852,22 +1852,29 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			return $this->error_response_from_wp_error( $breakout );
 		}
 
-		// Raw Kit CSS is a privilege (#829 review round 5): WordPress core
-		// requires `edit_css` (`unfiltered_html`) for custom CSS, so a bare
-		// write-scoped key does not get it. An admin-scoped key, or a user who
-		// holds `unfiltered_html`, stores the CSS as sent — in append mode the
-		// existing stylesheet rides in this same string, and sanitizing it
-		// would escape every `>` of CSS the caller never touched. Anyone else's
-		// CSS goes through the chokepoint's sanitizer like any other setting.
-		// Either way: no `</style` ever (the refusal above).
-		$raw     = $this->caller_may_store_raw_kit_css();
-		$written = Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings, $raw ? array( 'raw_paths' => array( 'custom_css' ) ) : array() );
+		// Raw Kit CSS is a privilege (#829): only an admin-scoped key stores it
+		// as sent (WordPress itself requires `edit_css` for custom CSS), and the
+		// user's own `unfiltered_html` never counts for an AI-driven write.
+		// Anyone else's NEW css goes through the sanitizer; the stylesheet
+		// already stored is kept exactly as it is (sanitizing the whole string
+		// in append mode turned every existing `>` into `&gt;`).
+		$raw      = $this->caller_may_store_raw_kit_css();
+		$warnings = array();
+		if ( ! $raw ) {
+			$clean = wp_kses_post( $new_css );
+			if ( $clean !== $new_css ) {
+				$warnings[] = __( 'The CSS was sanitized, which can change characters such as ">" (child combinators). Use an admin-scoped key to store Kit CSS exactly as sent.', 'mcpwp' );
+			}
+			$settings['custom_css'] = 'append' === $mode ? $existing_css . "\n\n" . $clean : $clean;
+			$breakout               = $this->kit_css_breakout_refusal( $settings['custom_css'] );
+			if ( null !== $breakout ) {
+				return $this->error_response_from_wp_error( $breakout );
+			}
+		}
+		// The text is final either way, so it is stored as sent from here.
+		$written = Mcpwp_Elementor_Meta_Write::update( $kit_id, '_elementor_page_settings', $settings, array( 'raw_paths' => array( 'custom_css' ) ) );
 		if ( is_wp_error( $written ) ) {
 			return $this->error_response_from_wp_error( $written );
-		}
-		if ( ! $raw ) {
-			$stored = get_post_meta( $kit_id, '_elementor_page_settings', true );
-			$settings['custom_css'] = is_array( $stored ) && isset( $stored['custom_css'] ) ? (string) $stored['custom_css'] : $settings['custom_css'];
 		}
 
 		// Clear Elementor CSS cache so the new kit CSS is regenerated.
@@ -1881,7 +1888,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 				'custom_css' => $settings['custom_css'],
 				'length'     => strlen( $settings['custom_css'] ),
 				'mode'       => $mode,
-			)
+			) + ( $warnings ? array( 'warnings' => $warnings ) : array() )
 		);
 	}
 
@@ -2000,7 +2007,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 		if ( ! $this->caller_may_store_raw_kit_css() ) {
 			return new WP_Error(
 				'kit_css_raw_not_permitted',
-				__( 'Named Kit CSS blocks are stored exactly as sent, which needs an admin-scoped API key or a user with the unfiltered_html capability (WordPress requires it for custom CSS). Use an admin-scoped key, or set the Kit CSS with wp_set_kit_css, which sanitizes it.', 'mcpwp' ),
+				__( 'Named Kit CSS blocks are stored exactly as sent, which needs an admin-scoped API key. Use an admin-scoped key, or set the Kit CSS with wp_set_kit_css, which sanitizes it.', 'mcpwp' ),
 				array( 'status' => 403 )
 			);
 		}
@@ -2083,18 +2090,22 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 	 * @return string[] Characters, e.g. [">"]; empty when the difference was not escaping.
 	 */
 	/**
-	 * Whether this caller may store Kit CSS exactly as sent: an admin-scoped
-	 * key, or a user who holds `unfiltered_html` in their own right.
+	 * Whether this caller may store Kit CSS exactly as sent: only an admin-scoped
+	 * key (or OAuth grant carrying admin scope). The user's own `unfiltered_html`
+	 * never counts: every write here is AI-driven, and an OAuth connection runs
+	 * as the real user, so honouring the capability would hand raw storage to
+	 * any admin's write-scoped app (#829; same rule as Elementor data and as
+	 * the Pro Kit settings route).
+	 *
+	 * Raw CSS is not a full sanitizer: escapes such as `@\69mport` are not
+	 * neutralised, only `</style` is refused. That is the admin-scope trust.
 	 *
 	 * @return bool
 	 */
 	private function caller_may_store_raw_kit_css() {
 		$record = $this->get_current_api_key_record();
-		if ( is_array( $record ) && $this->key_has_scope( $record, 'admin' ) ) {
-			return true;
-		}
 
-		return function_exists( 'current_user_can' ) && current_user_can( 'unfiltered_html' );
+		return is_array( $record ) && $this->key_has_scope( $record, 'admin' );
 	}
 
 	/**

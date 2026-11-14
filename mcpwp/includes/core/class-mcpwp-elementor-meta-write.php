@@ -941,10 +941,18 @@ final class Mcpwp_Elementor_Meta_Write {
 	}
 
 	/**
-	 * Index every stored element's fields by id; each entry may vouch once.
+	 * Index every stored element by id + a canonical hash of its fields; each
+	 * stored copy may vouch for one incoming element.
+	 *
+	 * Bucketed (id, hash) with a count, so vouching is O(1) per element: the
+	 * earlier per-id list compared each incoming element with every stored
+	 * element of the same id, which is quadratic in a document that repeats an
+	 * id (Theme Builder stores such a tree without the validator's id repair).
+	 * A duplicated id is not special: N stored identical copies vouch for N
+	 * incoming ones, and an extra copy is an unvouched, sanitized one.
 	 *
 	 * @param array $elements Elements (assoc).
-	 * @param array $known    id => list of array{fields:array,used:bool}, by reference.
+	 * @param array $known    "id|hash" => remaining vouches, by reference.
 	 * @return void
 	 */
 	private static function index_elements( array $elements, array &$known ) {
@@ -955,10 +963,11 @@ final class Mcpwp_Elementor_Meta_Write {
 
 			$id = self::element_id( $element );
 			if ( '' !== $id ) {
-				$known[ $id ][] = array(
-					'fields' => self::element_fields( $element ),
-					'used'   => false,
-				);
+				$hash = self::fields_hash( self::element_fields( $element ) );
+				if ( null !== $hash ) {
+					$key           = $id . '|' . $hash;
+					$known[ $key ] = ( $known[ $key ] ?? 0 ) + 1;
+				}
 			}
 
 			if ( isset( $element['elements'] ) && is_array( $element['elements'] ) ) {
@@ -968,7 +977,66 @@ final class Mcpwp_Elementor_Meta_Write {
 	}
 
 	/**
-	 * Consume the first unused stored element strictly equal to this one.
+	 * A canonical form of an element's fields such that two values equal under
+	 * deep_equal() hash alike and different ones do not: types tagged, map keys
+	 * sorted (order is not a difference), lists in order, floats by exact
+	 * representation. Null when the value can never vouch (a non-finite float or
+	 * a digits-only string past PHP_INT_MAX, which deep_equal() also refuses).
+	 *
+	 * @param array $fields Element fields.
+	 * @return string|null
+	 */
+	private static function fields_hash( array $fields ) {
+		$canonical = self::canonical( $fields );
+
+		return null === $canonical ? null : hash( 'sha256', $canonical );
+	}
+
+	/**
+	 * @param mixed $value Value.
+	 * @return string|null
+	 */
+	private static function canonical( $value ) {
+		if ( is_object( $value ) ) {
+			$inner = self::canonical( self::as_map( get_object_vars( $value ) ) );
+
+			return null === $inner ? null : 'o' . strlen( get_class( $value ) ) . ':' . get_class( $value ) . $inner;
+		}
+		if ( is_array( $value ) ) {
+			$is_list = self::is_list( $value );
+			if ( ! $is_list ) {
+				ksort( $value, SORT_STRING );
+			}
+			$out = ( $is_list ? 'l' : 'm' ) . count( $value ) . '{';
+			foreach ( $value as $k => $v ) {
+				$c = self::canonical( $v );
+				if ( null === $c ) {
+					return null;
+				}
+				$key  = ( is_int( $k ) ? 'i' : 's' ) . $k;
+				$out .= strlen( $key ) . ':' . $key . '=' . $c . ';';
+			}
+
+			return $out . '}';
+		}
+		if ( is_float( $value ) ) {
+			return is_finite( $value ) ? 'f' . var_export( $value, true ) : null;
+		}
+		if ( is_string( $value ) ) {
+			return self::is_big_integer_string( $value ) ? null : 's' . strlen( $value ) . ':' . $value;
+		}
+		if ( is_int( $value ) ) {
+			return 'i' . $value;
+		}
+		if ( is_bool( $value ) ) {
+			return $value ? 'T' : 'F';
+		}
+
+		return null === $value ? 'N' : null;
+	}
+
+	/**
+	 * Consume one stored copy strictly equal to this element, if any is left.
 	 *
 	 * @param array  $known  Index, by reference.
 	 * @param string $id     Element id.
@@ -976,19 +1044,22 @@ final class Mcpwp_Elementor_Meta_Write {
 	 * @return bool Whether one vouched for it.
 	 */
 	private static function vouch( array &$known, $id, array $fields ) {
-		if ( '' === $id || empty( $known[ $id ] ) ) {
+		if ( '' === $id || empty( $known ) ) {
 			return false;
 		}
 
-		foreach ( $known[ $id ] as $i => $candidate ) {
-			if ( ! $candidate['used'] && self::deep_equal( $fields, $candidate['fields'] ) ) {
-				$known[ $id ][ $i ]['used'] = true;
-
-				return true;
-			}
+		$hash = self::fields_hash( $fields );
+		if ( null === $hash ) {
+			return false;
 		}
 
-		return false;
+		$key = $id . '|' . $hash;
+		if ( empty( $known[ $key ] ) ) {
+			return false;
+		}
+		--$known[ $key ];
+
+		return true;
 	}
 
 	/**

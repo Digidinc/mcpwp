@@ -2973,7 +2973,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		// custom_css renders sitewide, so writing it requires admin scope (the
 		// route itself stays write-scope for the design-token surface). OAuth
-		// callers carry a null key record → treated as non-admin (fails closed).
+		// callers carry a key record with the admin scope stripped → non-admin
+		// (fails closed); the user's own unfiltered_html never counts.
 		$record   = $this->get_current_api_key_record();
 		$is_admin = is_array( $record ) && $this->key_has_scope( $record, 'admin' );
 
