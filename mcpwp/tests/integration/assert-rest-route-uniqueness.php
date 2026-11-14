@@ -12,4 +12,14 @@ $duplicates = mcpwp_test_duplicate_rest_handlers( $routes );
 if ( $duplicates ) {
 	throw new RuntimeException( "Duplicate REST handlers:\n" . implode( "\n", $duplicates ) );
 }
-WP_CLI::success( 'No duplicate MCPWP REST route/method handlers.' );
+// #1104: core matches in registration order, so a route an earlier pattern
+// already matches is unreachable. Checked on the real table, in the real
+// loader order, which the unit harness only approximates.
+$shadowed = array();
+foreach ( mcpwp_test_shadowed_rest_routes( $routes ) as $key => $winner ) {
+	$shadowed[] = "$key -> $winner";
+}
+if ( $shadowed ) {
+	throw new RuntimeException( "Unreachable REST routes (shadowed by an earlier registration):\n" . implode( "\n", $shadowed ) );
+}
+WP_CLI::success( 'No duplicate or shadowed MCPWP REST route/method handlers.' );

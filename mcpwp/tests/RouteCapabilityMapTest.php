@@ -338,9 +338,6 @@ final class RouteCapabilityMapTest extends TestCase {
 		'PUT /menus/(?P<menu_id>[\d]+)/items/(?P<item_id>[\d]+)',
 		'DELETE /menus/(?P<menu_id>[\d]+)/items/(?P<item_id>[\d]+)',
 		'POST /pages/(?P<id>[\d]+)/template',
-		// GET /site-blueprints/(?P<id>[a-z0-9_-]+) is registered first and
-		// also matches "extract" — reported as a routing bug, not fixed here.
-		'GET /site-blueprints/extract',
 	);
 
 	// ── Both directions ────────────────────────────────────────────────────
@@ -396,6 +393,43 @@ final class RouteCapabilityMapTest extends TestCase {
 		sort( $expected );
 		sort( $shadowed );
 		$this->assertSame( $expected, $shadowed );
+	}
+
+	/**
+	 * #1104: WordPress matches routes in registration order, so a literal
+	 * route registered after a pattern that also matches it is dead code —
+	 * GET /site-blueprints/extract used to answer "Blueprint 'extract' not
+	 * found." from the by-id handler. Sweep every registered route/method the
+	 * way core dispatches it and require each to reach its own handler.
+	 */
+	public function test_no_registered_route_is_shadowed_by_an_earlier_registration(): void {
+		$GLOBALS['mcpwp_test_is_multisite'] = true;
+		$this->register_every_known_route();
+		$GLOBALS['mcpwp_test_is_multisite'] = false;
+		$routes = rest_get_server()->get_routes();
+
+		$this->assertGreaterThan( 250, count( $routes ), 'Premise: the whole plugin is registered.' );
+		$this->assertSame( array(), mcpwp_test_unsampled_rest_routes( $routes ), 'Routes the shadow sweep cannot build a request path for.' );
+
+		$shadowed = array();
+		foreach ( mcpwp_test_shadowed_rest_routes( $routes ) as $key => $winner ) {
+			$shadowed[] = "$key -> $winner";
+		}
+		$this->assertSame( array(), $shadowed, "Routes WordPress can never reach (register the literal before the pattern):\n" . implode( "\n", $shadowed ) );
+	}
+
+	/** The sweep itself catches the #1104 shape, so a clean result above means something. */
+	public function test_shadow_sweep_detects_a_literal_registered_after_a_matching_pattern(): void {
+		$cb = '__return_true';
+		register_rest_route( 'mcpwp/v1', '/things/(?P<id>[a-z0-9_-]+)', array( 'methods' => 'GET', 'callback' => $cb, 'permission_callback' => $cb ) );
+		register_rest_route( 'mcpwp/v1', '/things/extract', array( 'methods' => 'GET', 'callback' => $cb, 'permission_callback' => $cb ) );
+		register_rest_route( 'mcpwp/v1', '/things/purge', array( 'methods' => 'POST', 'callback' => $cb, 'permission_callback' => $cb ) );
+
+		// POST /things/purge falls through: the id route has no POST handler.
+		$this->assertSame(
+			array( 'GET /mcpwp/v1/things/extract' => '/mcpwp/v1/things/(?P<id>[a-z0-9_-]+)' ),
+			mcpwp_test_shadowed_rest_routes( rest_get_server()->get_routes() )
+		);
 	}
 
 	public function test_patch_and_head_resolve_through_put_and_get(): void {
