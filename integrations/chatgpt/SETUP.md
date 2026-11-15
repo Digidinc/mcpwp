@@ -33,7 +33,7 @@ Copy the key — it starts with `mcpwp_`. Store it somewhere safe; it's shown on
 1. Scroll to **Actions** → click **Create new action**
 2. Select **Import from URL** → paste:
    ```
-   https://raw.githubusercontent.com/Mumega-com/mcpwp/main/docs/openapi-chatgpt.yaml
+   https://raw.githubusercontent.com/Digidinc/mcpwp/main/docs/openapi-chatgpt.yaml
    ```
    Or upload `docs/openapi-chatgpt.yaml` directly.
 

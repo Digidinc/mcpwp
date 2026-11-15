@@ -38,10 +38,10 @@ There is already a **live** entry in the registry:
 ```
 
 This is under the **personal** GitHub namespace `io.github.mumega848`, not the org
-`io.github.mumega-com` that `docs/launch/registry-server.json` targets. It points at the npm
-package `@mcpwp.net/mcpwp` — the stdio proxy, confirmed live on npm at v3.0.1 (published
-2026-05-30) — **not** the plugin's own remote HTTP endpoint. Two things make this entry worth
-fixing rather than leaving alone:
+`io.github.digidinc` that `docs/launch/registry-server.json` targets. It points at the npm
+package `@mcpwp.net/mcpwp` — the stdio proxy (source in `mcp-server/`, `mcp-server/server.json`
+updated to `3.0.3` and `https://github.com/Digidinc/mcpwp`). Two things make this entry worth
+updating rather than leaving stale on `3.0.1`:
 
 1. **It's stale.** 3.0.1 predates the tool-annotation work (#934), the write/admin scope split
    (3.13), and everything else since. Anyone who finds MCPWP through this listing gets an old
@@ -64,14 +64,11 @@ intervention. That means the decision below is close to irreversible in practice
 
 **Check first: does Hadi still control the GitHub login `mumega848`?**
 
-- **If yes** → `mcp-publisher login github` as `mumega848` and republish an updated
-  `io.github.mumega848/mcpwp` (bump to 3.14.0, swap the npm `packages` entry for the `remotes`
-  entry in `registry-server.json`, keep the existing name). **This is the recommended path** —
+- **If yes** → first publish `@mcpwp.net/mcpwp` from `mcp-server/` with `npm publish --provenance --access public`, then `mcp-publisher login github` as `mumega848` and run `mcp-publisher publish` inside `mcp-server/` (using `mcp-server/server.json`, which targets `https://github.com/Digidinc/mcpwp` and schema `2025-12-11`). **This is the recommended path** —
   it updates the one listing in place, at the same name, with zero duplicate risk.
-- **If no** (lost access, or it was a placeholder/contractor account) → publish
-  `io.github.mumega-com/mcpwp` as prepared, under the org. This is a **new, second name** in the
-  registry. The old `io.github.mumega848/mcpwp` entry stays live, stale, and pointing at a
-  vulnerable npm package indefinitely — aggregators that auto-ingest by name (PulseMCP, Glama)
+- **If no** (lost access, or moving to the org namespace) → publish
+  `io.github.digidinc/mcpwp` using `docs/launch/registry-server.json`, authenticated under the `Digidinc` org. This is a **new, second name** in the
+  registry. The old `io.github.mumega848/mcpwp` entry stays live and stale indefinitely — aggregators that auto-ingest by name (PulseMCP, Glama)
   will show **two MCPWP listings** with different data, and nothing in the current registry
   tooling can merge or remove the old one. Flag this explicitly to anyone doing the north-star
   measurement (`docs/growth/NORTH-STAR.md`) so a stale duplicate doesn't get mis-scored as a
@@ -82,26 +79,30 @@ Either way, do not publish under the org name *in addition to* keeping the perso
 
 ## What's already prepared
 
-`docs/launch/registry-server.json`, updated in this PR:
-- `version`: `3.0.1` → `3.14.0` (matches `mcpwp/VERSION` and `readme.txt`)
-- `$schema`: unchanged — `2025-07-09` is still the schema the live registry serves as of this
-  check, so no migration needed
-- `name`, `description`, `repository`, `remotes` (the `YOUR-WORDPRESS-SITE.com` per-site
-  placeholder with the documented `X-API-Key` header): unchanged, still accurate to the
-  per-install architecture
+- `mcp-server/server.json` (in-place update for `io.github.mumega848/mcpwp`):
+  - `$schema`: `2025-12-11`
+  - `version` + `packages[0].version`: `3.0.3` (matches `mcp-server/package.json`)
+  - `repository`: `https://github.com/Digidinc/mcpwp` (`subfolder: "mcp-server"`)
+  - `websiteUrl`: `https://mcpwp.net`
+- `docs/launch/registry-server.json` (org-namespace remote alternative `io.github.digidinc/mcpwp`):
+  - `$schema`: `2025-12-11`, description ≤100 chars per schema constraint
+  - `repository`: `https://github.com/Digidinc/mcpwp`
+  - `remotes`: `streamable-http` `YOUR-WORDPRESS-SITE.com` placeholder with `X-API-Key` header
 
-## Prereqs (per the existing MCP-REGISTRY-SUBMISSION.md, still true)
+## Prereqs (per the existing MCP-REGISTRY-SUBMISSION.md)
 - [ ] Duplicate-listing decision above, resolved
-- [ ] Repo visibility: **currently private** (confirmed 2026-09-26). The registry's
-  `source: "github"` validation authenticates ownership via OAuth, which can succeed against a
-  private repo — but a `repository.url` link that visitors can't open is a dead end for anyone
-  who clicks through from PulseMCP/Glama. Treat "repo public" as a soft prereq for this listing
-  to be *useful*, even if not a hard technical one.
+- [x] Repo visibility: `https://github.com/Digidinc/mcpwp` is public under GPL-2.0.
 - [ ] `mcp-publisher` CLI installed, GitHub OAuth run by whichever account is chosen above
 
-## Publish steps (unchanged from MCP-REGISTRY-SUBMISSION.md)
+## Publish steps
 ```bash
-mcp-publisher login github     # as mumega848 (update in place) or as the Mumega-com org owner (new name)
+# Option A (recommended — update existing io.github.mumega848/mcpwp in place):
+cd mcp-server && npm publish --provenance --access public
+mcp-publisher login github     # as mumega848
+mcp-publisher publish
+
+# Option B (new org-owned remote entry io.github.digidinc/mcpwp):
+mcp-publisher login github     # as Digidinc org owner
 cp docs/launch/registry-server.json ./server.json
 mcp-publisher publish
 ```

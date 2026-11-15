@@ -127,14 +127,14 @@ Thanks to the following contributors for this release:
 
 ### Links
 
-- [Documentation](https://github.com/Mumega-com/mcp-for-wp/wiki)
-- [API Reference](https://github.com/Mumega-com/mcp-for-wp/wiki/API-Reference)
-- [Changelog](https://github.com/Mumega-com/mcp-for-wp/blob/main/CHANGELOG.md)
-- [Support](https://github.com/Mumega-com/mcp-for-wp/issues)
+- [Documentation](https://github.com/Digidinc/mcpwp/wiki)
+- [API Reference](https://github.com/Digidinc/mcpwp/wiki/API-Reference)
+- [Changelog](https://github.com/Digidinc/mcpwp/blob/main/CHANGELOG.md)
+- [Support](https://github.com/Digidinc/mcpwp/issues)
 
 ---
 
-Built with [Mumega MCP](https://github.com/Mumega-com/mcp-for-wp) - Control WordPress with AI via MCP
+Built with [Mumega MCP](https://github.com/Digidinc/mcpwp) - Control WordPress with AI via MCP
 
 ---
 
@@ -194,4 +194,4 @@ Tested with WordPress 6.4.x, PHP 7.4-8.2, Elementor 3.x.
 
 ---
 
-Built with [Mumega MCP](https://github.com/Mumega-com/mcp-for-wp)
+Built with [Mumega MCP](https://github.com/Digidinc/mcpwp)

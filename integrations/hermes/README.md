@@ -170,5 +170,5 @@ A pre-built skill for the Hermes Skills Hub is available at [`SKILL.md`](SKILL.m
 Install via URL:
 
 ```bash
-hermes skills install https://raw.githubusercontent.com/Mumega-com/mcpwp/main/integrations/hermes/SKILL.md
+hermes skills install https://raw.githubusercontent.com/Digidinc/mcpwp/main/integrations/hermes/SKILL.md
 ```

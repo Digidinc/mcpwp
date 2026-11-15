@@ -83,4 +83,4 @@ Issues in WordPress, Elementor, and hosting environments that MCPWP works around
 
 ## Contributing
 
-Found a platform bug we should work around? [File an issue](https://github.com/Mumega-com/mcp-for-wp/issues/new?template=bug_report.md) with the label `platform-bug`.
+Found a platform bug we should work around? [File an issue](https://github.com/Digidinc/mcpwp/issues/new?template=bug_report.md) with the label `platform-bug`.

@@ -20,9 +20,13 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Mumega-com/mcp-for-wp.git"
+    "url": "git+https://github.com/Digidinc/mcpwp.git",
+    "directory": "mcp-server"
   },
   "homepage": "https://mcpwp.net",
+  "bugs": {
+    "url": "https://github.com/Digidinc/mcpwp/issues"
+  },
   "engines": {
     "node": ">=18"
   },

@@ -365,7 +365,7 @@ class Mcpwp_Settings {
 			'mcpwp_general_section',
 			array(
 				'id'          => 'github_repo',
-				'description' => __( 'Repository in owner/repo format (e.g., Mumega-com/mcp-for-wp). Leave empty to disable GitHub integration.', 'mcpwp' ),
+				'description' => __( 'Repository in owner/repo format (e.g., Digidinc/mcpwp). Leave empty to disable GitHub integration.', 'mcpwp' ),
 				'placeholder' => 'owner/repo',
 			)
 		);
