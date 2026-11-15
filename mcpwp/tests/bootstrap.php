@@ -5148,6 +5148,21 @@ if (!function_exists('update_meta_cache')) {
     }
 }
 
+if (! function_exists('get_metadata_raw')) {
+    function get_metadata_raw($meta_type, $object_id, $meta_key, $single = false)
+    {
+        if ('post' !== $meta_type) {
+            return $single ? '' : array();
+        }
+        $object_id = (int) $object_id;
+        if (! isset($GLOBALS['_mcpwp_test_meta'][ $object_id ][ $meta_key ])) {
+            return $single ? '' : array();
+        }
+        $value = $GLOBALS['_mcpwp_test_meta'][ $object_id ][ $meta_key ];
+        return $single ? $value : array($value);
+    }
+}
+
 function get_post_meta($post_id, $key = '', $single = false)
 {
     $post_id = (int) $post_id;
@@ -5164,6 +5179,13 @@ function get_post_meta($post_id, $key = '', $single = false)
     }
     if ( '_thumbnail_id' === $key && ! empty( $GLOBALS['mcpwp_test_thumbnail_readback_armed'][ $post_id ] ) && isset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ $post_id ] ) ) {
         return $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ $post_id ];
+    }
+    $filtered = apply_filters('get_post_metadata', null, $post_id, $key, $single, 'post');
+    if (null !== $filtered) {
+        if ($single) {
+            return is_array($filtered) ? ($filtered[0] ?? '') : $filtered;
+        }
+        return is_array($filtered) ? $filtered : array($filtered);
     }
     if (isset($GLOBALS['_mcpwp_test_meta'][ $post_id ][ $key ])) {
         return $GLOBALS['_mcpwp_test_meta'][ $post_id ][ $key ];
@@ -5270,6 +5292,17 @@ function mcpwp_test_write_post_meta($post_id, $key, $value, $mode)
 
     $GLOBALS['_mcpwp_test_meta'][ $post_id_int ][ $key ] = $value;
 
+    if ('_thumbnail_id' === $key) {
+        if ('' === $value || '0' === (string) $value) {
+            unset($GLOBALS['_mcpwp_test_thumbnail_ids'][ $post_id_int ]);
+        } else {
+            if (! isset($GLOBALS['_mcpwp_test_thumbnail_ids'])) {
+                $GLOBALS['_mcpwp_test_thumbnail_ids'] = array();
+            }
+            $GLOBALS['_mcpwp_test_thumbnail_ids'][ $post_id_int ] = (int) $value;
+        }
+    }
+
     do_action($existed ? 'updated_post_meta' : 'added_post_meta', $meta_id, $post_id_int, $key, $value);
 
     return 'add' === $mode ? $meta_id : true;
@@ -5342,6 +5375,9 @@ function delete_post_meta($post_id, $key, $value = '')
         return false;
     }
     unset($GLOBALS['_mcpwp_test_meta'][ (int) $post_id ][ $key ]);
+    if ('_thumbnail_id' === $key && isset($GLOBALS['_mcpwp_test_thumbnail_ids'][ (int) $post_id ])) {
+        unset($GLOBALS['_mcpwp_test_thumbnail_ids'][ (int) $post_id ]);
+    }
     do_action('deleted_post_meta', array(0), (int) $post_id, $key, $value);
     return true;
 }

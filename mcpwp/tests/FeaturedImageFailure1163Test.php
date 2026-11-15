@@ -113,7 +113,31 @@ final class FeaturedImageFailure1163Test extends TestCase {
 	private const PDF_PREVIEW   = 11635;
 	private const MISSING_ID    = 116399;
 
+	/** @var mixed */
+	private $saved_mcpwp_test_fs;
+
+	/** @var array */
+	private $saved_test_taxonomies;
+
+	/** @var array */
+	private $saved_test_term_meta;
+
+	/** @var mixed */
+	private $saved_integration_manager;
+
+	/** @var mixed */
+	private $saved_license_instance;
+
 	protected function setUp(): void {
+		$this->saved_mcpwp_test_fs            = $GLOBALS['mcpwp_test_fs'] ?? null;
+		$this->saved_test_taxonomies          = $GLOBALS['_mcpwp_test_taxonomies'] ?? array();
+		$this->saved_test_term_meta           = $GLOBALS['_mcpwp_test_term_meta'] ?? array();
+		$manager_ref                          = new ReflectionProperty( Mcpwp_Integration_Manager::class, 'instance' );
+		$manager_ref->setAccessible( true );
+		$this->saved_integration_manager      = $manager_ref->getValue();
+		$license_ref                          = new ReflectionProperty( Mcpwp_License::class, 'instance' );
+		$license_ref->setAccessible( true );
+		$this->saved_license_instance         = $license_ref->getValue();
 		$GLOBALS['mcpwp_test_options']           = array();
 		$GLOBALS['_mcpwp_test_posts']            = array();
 		$GLOBALS['_mcpwp_test_meta']             = array();
@@ -139,20 +163,21 @@ final class FeaturedImageFailure1163Test extends TestCase {
 	}
 
 	protected function tearDown(): void {
-		$GLOBALS['_mcpwp_test_posts']           = array();
-		$GLOBALS['_mcpwp_test_meta']            = array();
-		$GLOBALS['_mcpwp_test_thumbnail_ids']   = array();
-		$GLOBALS['mcpwp_test_image_downsize']   = array();
-		$GLOBALS['_mcpwp_test_taxonomies']      = array();
+		$GLOBALS['_mcpwp_test_posts']             = array();
+		$GLOBALS['_mcpwp_test_meta']              = array();
+		$GLOBALS['_mcpwp_test_thumbnail_ids']     = array();
+		$GLOBALS['mcpwp_test_image_downsize']     = array();
 		$GLOBALS['_mcpwp_test_term_insert_count'] = 0;
-		$GLOBALS['_mcpwp_test_term_meta']       = array();
-		unset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'], $GLOBALS['mcpwp_test_thumbnail_readback_armed'], $GLOBALS['mcpwp_test_public_post_types'], $GLOBALS['mcpwp_test_fs'] );
-		$manager_ref = new ReflectionProperty( Mcpwp_Integration_Manager::class, 'instance' );
+		unset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'], $GLOBALS['mcpwp_test_thumbnail_readback_armed'], $GLOBALS['mcpwp_test_public_post_types'] );
+		$GLOBALS['mcpwp_test_fs']                 = $this->saved_mcpwp_test_fs;
+		$GLOBALS['_mcpwp_test_taxonomies']        = $this->saved_test_taxonomies;
+		$GLOBALS['_mcpwp_test_term_meta']         = $this->saved_test_term_meta;
+		$manager_ref                              = new ReflectionProperty( Mcpwp_Integration_Manager::class, 'instance' );
 		$manager_ref->setAccessible( true );
-		$manager_ref->setValue( null, null );
-		$license_ref = new ReflectionProperty( Mcpwp_License::class, 'instance' );
+		$manager_ref->setValue( null, $this->saved_integration_manager );
+		$license_ref                              = new ReflectionProperty( Mcpwp_License::class, 'instance' );
 		$license_ref->setAccessible( true );
-		$license_ref->setValue( null, null );
+		$license_ref->setValue( null, $this->saved_license_instance );
 	}
 
 	private function seed_content( int $id, string $type, string $title ): void {
@@ -370,6 +395,72 @@ final class FeaturedImageFailure1163Test extends TestCase {
 		$this->assertSame( self::IMAGE_ID, (int) ( $GLOBALS['_mcpwp_test_meta'][ self::POST_ID ]['_thumbnail_id'] ?? 0 ) );
 		$this->assertSame( 'invalid_media', $error->get_error_code() );
 		$this->assert_thumbnail_unchanged( self::POST_ID, self::IMAGE_ID );
+	}
+
+	public function test_apply_featured_image_restore_uses_raw_meta_not_filtered_default(): void {
+		$default_thumb = self::IMAGE_ID + 88;
+		$this->seed_attachment( $default_thumb, 'image/jpeg' );
+		delete_post_thumbnail( self::POST_ID );
+		$this->assertSame( 0, (int) get_post_thumbnail_id( self::POST_ID ) );
+
+		$filter = static function ( $value, $object_id, $meta_key ) use ( $default_thumb ) {
+			if ( '_thumbnail_id' === $meta_key && self::POST_ID === (int) $object_id && null === $value ) {
+				return $default_thumb;
+			}
+			return $value;
+		};
+		add_filter( 'get_post_metadata', $filter, 10, 3 );
+
+		$new_image = self::IMAGE_ID + 99;
+		$this->seed_attachment( $new_image, 'image/jpeg' );
+		$GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ self::POST_ID ] = self::MISSING_ID;
+		$error = Mcpwp_Posts::apply_featured_image( self::POST_ID, $new_image );
+		remove_filter( 'get_post_metadata', $filter, 10 );
+
+		$this->assertInstanceOf( WP_Error::class, $error );
+		unset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ self::POST_ID ] );
+		$this->assertArrayNotHasKey( '_thumbnail_id', $GLOBALS['_mcpwp_test_meta'][ self::POST_ID ] ?? array() );
+		$this->assertSame( 0, (int) get_post_thumbnail_id( self::POST_ID ) );
+	}
+
+	public function test_wc_product_image_id_null_is_refused(): void {
+		$wc      = new Mcpwp_WooCommerce();
+		$method  = new ReflectionMethod( Mcpwp_WooCommerce::class, 'set_product_data' );
+		$method->setAccessible( true );
+		$product = new class() {
+			public function set_image_id( $id ) {} // phpcs:ignore
+			public function set_gallery_image_ids( $ids ) {} // phpcs:ignore
+		};
+		$error = $method->invoke( $wc, $product, array( 'image_id' => null ) );
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'invalid_post_ref', $error->get_error_code() );
+	}
+
+	public function test_wc_product_gallery_image_ids_null_is_refused(): void {
+		$wc      = new Mcpwp_WooCommerce();
+		$method  = new ReflectionMethod( Mcpwp_WooCommerce::class, 'set_product_data' );
+		$method->setAccessible( true );
+		$product = new class() {
+			public function set_image_id( $id ) {} // phpcs:ignore
+			public function set_gallery_image_ids( $ids ) {} // phpcs:ignore
+		};
+		$error = $method->invoke( $wc, $product, array( 'gallery_image_ids' => null ) );
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'invalid_post_ref', $error->get_error_code() );
+	}
+
+	public function test_wc_category_image_id_null_is_refused_on_update(): void {
+		$GLOBALS['_mcpwp_test_taxonomies'] = array(
+			'product_cat' => array(
+				'terms' => array(
+					45 => array( 'name' => 'Cat', 'slug' => 'cat', 'description' => '', 'parent' => 0, 'count' => 0 ),
+				),
+			),
+		);
+		$wc    = new Mcpwp_WooCommerce();
+		$error = $wc->update_product_category( 45, array( 'image_id' => null ) );
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'invalid_post_ref', $error->get_error_code() );
 	}
 
 	public function test_product_category_create_refuses_bad_image_before_insert_term(): void {

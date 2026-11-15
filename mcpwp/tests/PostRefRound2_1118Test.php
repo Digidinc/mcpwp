@@ -299,9 +299,24 @@ final class PostRefRound2_1118Test extends TestCase {
 	public function test_pages_featured_image_is_a_read_ref_on_create_and_bulk(): void {
 		$e = $this->token( self::PAGE_EDITOR );
 		$this->assertSame( 'not_found/404', $this->code( $this->check( 'POST', '/pages', array( 'title' => 'x', 'featured_image' => self::ATT_DRAFT ), $e ) ), '/pages featured_image' );
-		$this->assertSame( 'not_found/404', $this->code( $this->check( 'POST', '/pages/bulk', array( 'updates' => array( array( 'id' => self::OWN_PAGE, 'featured_image' => self::ATT_DRAFT ) ) ), $e ) ), '/pages/bulk updates[].featured_image' );
+		$this->assertSame( 'not_found/404', $this->code( $this->check( 'PUT', '/pages/bulk', array( 'updates' => array( array( 'id' => self::OWN_PAGE, 'featured_image' => self::ATT_DRAFT ) ) ), $e ) ), '/pages/bulk PUT updates[].featured_image' );
+		$this->assertSame( 'not_found/404', $this->code( $this->check( 'POST', '/pages/bulk', array( 'updates' => array( array( 'id' => self::OWN_PAGE, 'featured_image' => self::ATT_DRAFT ) ) ), $e ) ), '/pages/bulk POST updates[].featured_image' );
 		$this->assertSame( 'not_found/404', $this->code( $this->check( 'POST', '/pages/bulk', array( 'pages' => array( array( 'title' => 'x', 'featured_image' => self::ATT_DRAFT ) ) ), $e ) ), '/pages/bulk pages[].featured_image' );
 		$this->assertTrue( $this->check( 'POST', '/pages', array( 'title' => 'x', 'featured_image' => self::ATT_FREE ), $e ) );
+	}
+
+	public function test_wc_product_gallery_image_ids_user_run_guard(): void {
+		$saved_public = $GLOBALS['mcpwp_test_public_post_types'] ?? array();
+		$GLOBALS['mcpwp_test_public_post_types'] = array_merge( (array) $saved_public, array( 'product' ) );
+		$GLOBALS['mcpwp_test_user_caps'][ self::AUTHOR ]['edit_products'] = true;
+		$GLOBALS['mcpwp_test_post_caps'][ self::AUTHOR ]['edit_post'][ self::PRODUCT ] = true;
+		$a = $this->token();
+		$this->assertTrue( $this->check( 'PUT', '/woocommerce/products/' . self::PRODUCT, array( 'id' => self::PRODUCT, 'gallery_image_ids' => array( self::ATT_FREE ) ), $a ), 'Readable single id.' );
+		$this->assertTrue( $this->check( 'PUT', '/woocommerce/products/' . self::PRODUCT, array( 'id' => self::PRODUCT, 'gallery_image_ids' => array( self::ATT_FREE, self::ATT_FREE ) ), $a ), 'Readable list.' );
+		$this->assertTrue( $this->check( 'PUT', '/woocommerce/products/' . self::PRODUCT, array( 'id' => self::PRODUCT, 'gallery_image_ids' => array() ), $a ), 'Empty gallery.' );
+		$this->assertSame( 'not_found/404', $this->code( $this->check( 'PUT', '/woocommerce/products/' . self::PRODUCT, array( 'id' => self::PRODUCT, 'gallery_image_ids' => array( self::ATT_DRAFT ) ), $a ) ), 'Unreadable attachment in gallery.' );
+		$this->assertTrue( $this->check( 'PUT', '/woocommerce/products/' . self::PRODUCT, array( 'id' => self::PRODUCT, 'gallery_image_ids' => (string) self::ATT_FREE . ',' . (string) self::ATT_FREE ), $a ), 'CSV string is not guarded as an array value (handler enforces array).' );
+		$GLOBALS['mcpwp_test_public_post_types'] = $saved_public;
 	}
 
 	public function test_wc_category_image_id_is_a_read_user_ref(): void {

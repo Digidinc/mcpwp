@@ -446,7 +446,9 @@ final class PostRefInventoryGuard1101cTest extends TestCase {
 			foreach ( $specs as $spec ) {
 				list( $base, $class ) = Mcpwp_REST_API::post_ref_spec_parts( $spec );
 				$parts                = preg_split( '/\\[\\]\\.|:/', $base );
-				$declared[ end( $parts ) . '|' . $class ] = true;
+				$field                = (string) end( $parts );
+				$field                = preg_replace( '/\\[\\]$/', '', $field );
+				$declared[ $field . '|' . $class ] = true;
 			}
 		}
 		foreach ( self::NESTED as $entry => $class ) {

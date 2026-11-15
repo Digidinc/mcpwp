@@ -246,13 +246,20 @@ class Mcpwp_Posts {
 			return $check;
 		}
 
-		$previous = (int) get_post_meta( $post_id, '_thumbnail_id', true );
+		$previous_raw = function_exists( 'get_metadata_raw' )
+			? get_metadata_raw( 'post', $post_id, '_thumbnail_id', true )
+			: get_post_meta( $post_id, '_thumbnail_id', true );
+		if ( is_array( $previous_raw ) ) {
+			$previous_raw = isset( $previous_raw[0] ) ? $previous_raw[0] : '';
+		}
+		$had_stored_thumbnail = '' !== (string) $previous_raw && (int) $previous_raw > 0;
+		$previous               = (int) $previous_raw;
 
 		set_post_thumbnail( $post_id, $media_id );
 
 		$stored = (int) get_post_meta( $post_id, '_thumbnail_id', true );
 		if ( $stored !== (int) $media_id ) {
-			if ( $previous > 0 ) {
+			if ( $had_stored_thumbnail ) {
 				update_post_meta( $post_id, '_thumbnail_id', (int) $previous );
 			} else {
 				delete_post_thumbnail( $post_id );

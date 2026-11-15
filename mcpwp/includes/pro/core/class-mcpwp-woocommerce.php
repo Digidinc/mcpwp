@@ -427,7 +427,7 @@ class Mcpwp_WooCommerce {
 			$product->set_height( $data['height'] );
 		}
 
-		if ( isset( $data['image_id'] ) ) {
+		if ( array_key_exists( 'image_id', $data ) ) {
 			$image_resolution = Mcpwp_Posts::resolve_featured_image_field( $data['image_id'] );
 			if ( is_wp_error( $image_resolution ) ) {
 				return $image_resolution;
@@ -443,7 +443,7 @@ class Mcpwp_WooCommerce {
 			}
 		}
 
-		if ( isset( $data['gallery_image_ids'] ) ) {
+		if ( array_key_exists( 'gallery_image_ids', $data ) ) {
 			if ( ! is_array( $data['gallery_image_ids'] ) ) {
 				return new WP_Error(
 					'invalid_post_ref',
@@ -615,7 +615,7 @@ class Mcpwp_WooCommerce {
 		}
 
 		$thumb_resolution = null;
-		if ( isset( $data['image_id'] ) ) {
+		if ( array_key_exists( 'image_id', $data ) ) {
 			$thumb = $this->resolve_category_image_id( $data['image_id'] );
 			if ( is_wp_error( $thumb ) ) {
 				return $thumb;
@@ -686,7 +686,7 @@ class Mcpwp_WooCommerce {
 		}
 
 		$thumb_resolution = null;
-		if ( isset( $data['image_id'] ) ) {
+		if ( array_key_exists( 'image_id', $data ) ) {
 			$thumb = $this->resolve_category_image_id( $data['image_id'] );
 			if ( is_wp_error( $thumb ) ) {
 				return $thumb;
