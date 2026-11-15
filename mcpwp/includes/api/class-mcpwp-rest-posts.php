@@ -618,8 +618,7 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 	public function set_featured_image( $request ) {
 		$this->log_activity( 'set_featured_image', $request );
 
-		$post_id  = absint( $request->get_param( 'id' ) );
-		$media_id = absint( $request->get_param( 'media_id' ) );
+		$post_id = absint( $request->get_param( 'id' ) );
 
 		$post = get_post( $post_id );
 		// #1020/#1022 round-1 review WARN-1: the category check is folded
@@ -659,7 +658,12 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			);
 		}
 
-		if ( 0 === $media_id ) {
+		$media_resolution = Mcpwp_Posts::resolve_featured_image_field( $request->get_param( 'media_id' ) );
+		if ( is_wp_error( $media_resolution ) ) {
+			return $this->error_response_from_wp_error( $media_resolution );
+		}
+
+		if ( $media_resolution['remove'] ) {
 			delete_post_thumbnail( $post_id );
 			return $this->success_response(
 				array(
@@ -670,17 +674,11 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			);
 		}
 
-		// #1163: one check, shared with the generic post/page writers —
-		// set_post_thumbnail() silently deletes any existing thumbnail (and
-		// still "succeeds") for an id that is not an attachment WordPress
-		// can render as an image, so this has to be refused BEFORE the call,
-		// not inferred from its return value.
-		$featured_image_check = Mcpwp_Posts::validate_featured_image_id( $media_id );
-		if ( is_wp_error( $featured_image_check ) ) {
-			return $this->error_response_from_wp_error( $featured_image_check );
+		$media_id = (int) $media_resolution['id'];
+		$applied  = Mcpwp_Posts::apply_featured_image( $post_id, $media_id );
+		if ( is_wp_error( $applied ) ) {
+			return $this->error_response_from_wp_error( $applied );
 		}
-
-		set_post_thumbnail( $post_id, $media_id );
 
 		$image = wp_get_attachment_image_src( $media_id, 'full' );
 

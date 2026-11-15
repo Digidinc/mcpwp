@@ -171,12 +171,17 @@ class Mcpwp_Pages {
 			return $meta_refused;
 		}
 
-		// #1163: validate the featured image before anything is written —
-		// see Mcpwp_Posts::validate_featured_image_id()'s docblock.
-		if ( ! empty( $data['featured_image'] ) ) {
-			$featured_image_check = Mcpwp_Posts::validate_featured_image_id( $data['featured_image'] );
-			if ( is_wp_error( $featured_image_check ) ) {
-				return $featured_image_check;
+		$featured_resolution = null;
+		if ( isset( $data['featured_image'] ) ) {
+			$featured_resolution = Mcpwp_Posts::resolve_featured_image_field( $data['featured_image'] );
+			if ( is_wp_error( $featured_resolution ) ) {
+				return $featured_resolution;
+			}
+			if ( ! $featured_resolution['remove'] ) {
+				$featured_image_check = Mcpwp_Posts::validate_featured_image_id( $featured_resolution['id'] );
+				if ( is_wp_error( $featured_image_check ) ) {
+					return $featured_image_check;
+				}
 			}
 		}
 
@@ -195,9 +200,15 @@ class Mcpwp_Pages {
 			update_post_meta( $page_id, '_wp_page_template', sanitize_text_field( $data['template'] ) );
 		}
 
-		// Set featured image
-		if ( ! empty( $data['featured_image'] ) ) {
-			set_post_thumbnail( $page_id, absint( $data['featured_image'] ) );
+		if ( null !== $featured_resolution ) {
+			if ( $featured_resolution['remove'] ) {
+				delete_post_thumbnail( $page_id );
+			} else {
+				$applied = Mcpwp_Posts::apply_featured_image( $page_id, $featured_resolution['id'] );
+				if ( is_wp_error( $applied ) ) {
+					return $applied;
+				}
+			}
 		}
 
 		$terms_applied = Mcpwp_Post_Fields::apply_terms( $page_id, $resolved_terms );
@@ -274,13 +285,17 @@ class Mcpwp_Pages {
 			return $meta_refused;
 		}
 
-		// #1163: validate the featured image before anything is written —
-		// see Mcpwp_Posts::validate_featured_image_id()'s docblock. A falsy
-		// value (0/''/null) means "remove the current thumbnail", always safe.
-		if ( ! empty( $data['featured_image'] ) ) {
-			$featured_image_check = Mcpwp_Posts::validate_featured_image_id( $data['featured_image'] );
-			if ( is_wp_error( $featured_image_check ) ) {
-				return $featured_image_check;
+		$featured_resolution = null;
+		if ( isset( $data['featured_image'] ) ) {
+			$featured_resolution = Mcpwp_Posts::resolve_featured_image_field( $data['featured_image'] );
+			if ( is_wp_error( $featured_resolution ) ) {
+				return $featured_resolution;
+			}
+			if ( ! $featured_resolution['remove'] ) {
+				$featured_image_check = Mcpwp_Posts::validate_featured_image_id( $featured_resolution['id'] );
+				if ( is_wp_error( $featured_image_check ) ) {
+					return $featured_image_check;
+				}
 			}
 		}
 
@@ -357,12 +372,14 @@ class Mcpwp_Pages {
 			}
 		}
 
-		// Update featured image
-		if ( isset( $data['featured_image'] ) ) {
-			if ( empty( $data['featured_image'] ) ) {
+		if ( null !== $featured_resolution ) {
+			if ( $featured_resolution['remove'] ) {
 				delete_post_thumbnail( $page_id );
 			} else {
-				set_post_thumbnail( $page_id, absint( $data['featured_image'] ) );
+				$applied = Mcpwp_Posts::apply_featured_image( $page_id, $featured_resolution['id'] );
+				if ( is_wp_error( $applied ) ) {
+					return $applied;
+				}
 			}
 		}
 

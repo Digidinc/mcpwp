@@ -911,10 +911,23 @@ class Mcpwp_Action_Log {
 					return $result;
 				}
 				if ( isset( $snap['thumbnail_id'] ) ) {
+					$post_id = (int) $snap['post_id'];
 					if ( $snap['thumbnail_id'] ) {
-						set_post_thumbnail( (int) $snap['post_id'], (int) $snap['thumbnail_id'] );
+						$applied = Mcpwp_Posts::apply_featured_image( $post_id, (int) $snap['thumbnail_id'] );
+						if ( is_wp_error( $applied ) ) {
+							return new WP_Error(
+								'rollback_thumbnail_failed',
+								__( 'Post restored but the previous featured image attachment is missing or invalid.', 'mcpwp' ),
+								array(
+									'status'       => 409,
+									'post_id'      => $post_id,
+									'thumbnail_id' => (int) $snap['thumbnail_id'],
+									'reason'       => $applied->get_error_code(),
+								)
+							);
+						}
 					} else {
-						delete_post_thumbnail( (int) $snap['post_id'] );
+						delete_post_thumbnail( $post_id );
 					}
 				}
 				return true;

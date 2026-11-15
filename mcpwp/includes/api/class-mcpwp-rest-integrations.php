@@ -695,10 +695,33 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 		// silently clearing an existing thumbnail if it ever doesn't.
 		$featured_image_check = Mcpwp_Posts::validate_featured_image_id( $result['id'] );
 		if ( is_wp_error( $featured_image_check ) ) {
-			return $featured_image_check;
+			$data = $featured_image_check->get_error_data();
+			if ( ! is_array( $data ) ) {
+				$data = array();
+			}
+			$data['id']            = (int) $result['id'];
+			$data['attachment_id'] = (int) $result['id'];
+			return new WP_Error(
+				$featured_image_check->get_error_code(),
+				$featured_image_check->get_error_message(),
+				$data
+			);
 		}
 
-		set_post_thumbnail( $post_id, $result['id'] );
+		$applied = Mcpwp_Posts::apply_featured_image( $post_id, (int) $result['id'] );
+		if ( is_wp_error( $applied ) ) {
+			$data = $applied->get_error_data();
+			if ( ! is_array( $data ) ) {
+				$data = array();
+			}
+			$data['id']            = (int) $result['id'];
+			$data['attachment_id'] = (int) $result['id'];
+			return new WP_Error(
+				$applied->get_error_code(),
+				$applied->get_error_message(),
+				$data
+			);
+		}
 		$result['set_as_featured'] = true;
 		$result['post_id']         = $post_id;
 

@@ -563,7 +563,7 @@ trait Mcpwp_Sanitization {
 		}
 
 		if ( isset( $data['featured_image'] ) ) {
-			$sanitized['featured_image'] = absint( $data['featured_image'] );
+			$sanitized['featured_image'] = $data['featured_image'];
 		}
 
 		if ( isset( $data['categories'] ) ) {

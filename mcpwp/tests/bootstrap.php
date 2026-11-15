@@ -4864,6 +4864,19 @@ function get_post_thumbnail_id($post_id)
 
 function wp_get_attachment_image_src($attachment_id, $size = 'thumbnail')
 {
+    if (function_exists('image_downsize')) {
+        $downsize = image_downsize((int) $attachment_id, $size);
+        return $downsize ? $downsize : false;
+    }
+    $id = (int) $attachment_id;
+    $p  = get_post($id);
+    if ($p && 'attachment' === ($p->post_type ?? '')) {
+        $mime = isset($p->post_mime_type) ? (string) $p->post_mime_type : '';
+        if ('' !== $mime && 0 !== strpos($mime, 'image/')) {
+            return false;
+        }
+        return array('https://example.test/media/' . $id . '.jpg', 100, 100, false);
+    }
     return false;
 }
 
@@ -6079,12 +6092,52 @@ if (! function_exists('register_meta')) {
         return true;
     }
 }
+if (! function_exists('image_downsize')) {
+    function image_downsize($id, $size = 'medium')
+    {
+        $id = (int) $id;
+        if (isset($GLOBALS['mcpwp_test_image_downsize'][ $id ][ $size ])) {
+            $stub = $GLOBALS['mcpwp_test_image_downsize'][ $id ][ $size ];
+            return $stub ? $stub : false;
+        }
+        $p = get_post($id);
+        if (! $p || 'attachment' !== $p->post_type) {
+            return false;
+        }
+        $mime = isset($p->post_mime_type) ? (string) $p->post_mime_type : '';
+        if ('' !== $mime && 0 !== strpos($mime, 'image/')) {
+            return false;
+        }
+        return array('https://example.test/media/' . $id . '.jpg', 100, 100, false);
+    }
+}
+
+if (! function_exists('wp_get_attachment_image')) {
+    function wp_get_attachment_image($attachment_id, $size = 'thumbnail', $icon = false, $attr = '')
+    {
+        $downsize = image_downsize((int) $attachment_id, $size);
+        if (! $downsize) {
+            return '';
+        }
+        return '<img src="' . esc_url($downsize[0]) . '" />';
+    }
+}
+
 if (! function_exists('set_post_thumbnail')) {
-    function set_post_thumbnail($post, $thumbnail_id)
+  function set_post_thumbnail($post, $thumbnail_id)
     {
         $id = is_object($post) ? $post->ID : (int) $post;
-        update_post_meta($id, '_thumbnail_id', (int) $thumbnail_id);
-        return true;
+        $thumbnail_id = (int) $thumbnail_id;
+        if ($thumbnail_id && get_post($thumbnail_id) && '' !== wp_get_attachment_image($thumbnail_id, 'thumbnail')) {
+            update_post_meta($id, '_thumbnail_id', $thumbnail_id);
+            if (! isset($GLOBALS['_mcpwp_test_thumbnail_ids'])) {
+                $GLOBALS['_mcpwp_test_thumbnail_ids'] = array();
+            }
+            $GLOBALS['_mcpwp_test_thumbnail_ids'][ $id ] = $thumbnail_id;
+            return true;
+        }
+        delete_post_thumbnail($post);
+        return false;
     }
 }
 if (! function_exists('delete_post_thumbnail')) {
@@ -6092,13 +6145,17 @@ if (! function_exists('delete_post_thumbnail')) {
     {
         $id = is_object($post) ? $post->ID : (int) $post;
         delete_post_meta($id, '_thumbnail_id');
+        if (isset($GLOBALS['_mcpwp_test_thumbnail_ids'][ $id ])) {
+            unset($GLOBALS['_mcpwp_test_thumbnail_ids'][ $id ]);
+        }
         return true;
     }
 }
 if (! function_exists('wp_get_attachment_image_src')) {
     function wp_get_attachment_image_src($attachment_id, $size = 'thumbnail')
     {
-        return array( 'https://example.test/media/' . (int) $attachment_id . '.jpg', 100, 100, false );
+        $downsize = image_downsize((int) $attachment_id, $size);
+        return $downsize ? $downsize : false;
     }
 }
 
@@ -6114,13 +6171,7 @@ if (! function_exists('get_post_mime_type')) {
 }
 
 if (! function_exists('wp_attachment_is_image')) {
-    // #1163: real WP decides this from the attachment's mime type (and a
-    // file-extension fallback this stub does not need to model). Many
-    // existing test fixtures seed an 'attachment' post without ever
-    // setting post_mime_type; treating that as "unset, so assume image"
-    // (rather than "not set, so refuse") keeps every one of those fixtures
-    // a valid featured image as before. A test for the #1163 failure path
-    // sets post_mime_type explicitly to something non-image.
+    // Like core: mime type when present, otherwise check the stored file.
     function wp_attachment_is_image($post = null)
     {
         if (is_object($post) && isset($post->ID)) {
@@ -6128,11 +6179,23 @@ if (! function_exists('wp_attachment_is_image')) {
         } else {
             $p = get_post($post);
         }
-        if (! $p) {
+        if (! $p || 'attachment' !== $p->post_type) {
             return false;
         }
-        $mime = isset($p->post_mime_type) ? (string) $p->post_mime_type : '';
-        return '' === $mime || 0 === strpos($mime, 'image/');
+        $mime = get_post_mime_type($p);
+        if (is_string($mime) && '' !== $mime) {
+            return 0 === strpos($mime, 'image/');
+        }
+        if (function_exists('get_attached_file') && function_exists('wp_check_filetype')) {
+            $file = get_attached_file($p->ID);
+            if ($file) {
+                $info = wp_check_filetype($file);
+                if (! empty($info['type'])) {
+                    return 0 === strpos($info['type'], 'image/');
+                }
+            }
+        }
+        return '' === $mime;
     }
 }
 
