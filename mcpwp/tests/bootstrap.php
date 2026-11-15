@@ -5192,7 +5192,9 @@ function get_post_meta($post_id, $key = '', $single = false)
     if ( '_thumbnail_id' === $key && ! empty( $GLOBALS['mcpwp_test_thumbnail_readback_armed'][ $post_id ] ) && isset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ $post_id ] ) ) {
         return $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ $post_id ];
     }
-    $filtered = apply_filters('get_post_metadata', null, $post_id, $key, $single, 'post');
+    $filtered = ! empty( $GLOBALS['mcpwp_test_get_post_meta_applies_filters'] )
+        ? apply_filters( 'get_post_metadata', null, $post_id, $key, $single, 'post' )
+        : null;
     if (null !== $filtered) {
         if ($single) {
             return is_array($filtered) ? ($filtered[0] ?? '') : $filtered;

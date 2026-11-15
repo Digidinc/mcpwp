@@ -246,12 +246,15 @@ class Mcpwp_Posts {
 			return $check;
 		}
 
-		$previous_raw = function_exists( 'get_metadata_raw' )
-			? get_metadata_raw( 'post', $post_id, '_thumbnail_id', true )
-			: get_post_meta( $post_id, '_thumbnail_id', true );
-		if ( is_array( $previous_raw ) ) {
-			$previous_raw = isset( $previous_raw[0] ) ? $previous_raw[0] : '';
-		}
+		global $wpdb;
+		// Read the stored row directly: get_metadata_raw() and get_post_meta() both
+		// run get_post_metadata filters, which can supply a default without a DB row.
+		$previous_raw = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_thumbnail_id' ORDER BY meta_id DESC LIMIT 1",
+				$post_id
+			)
+		);
 		$had_stored_thumbnail = '' !== (string) $previous_raw && (int) $previous_raw > 0;
 		$previous               = (int) $previous_raw;
 

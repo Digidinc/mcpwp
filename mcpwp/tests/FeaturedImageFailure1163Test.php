@@ -168,7 +168,7 @@ final class FeaturedImageFailure1163Test extends TestCase {
 		$GLOBALS['_mcpwp_test_thumbnail_ids']     = array();
 		$GLOBALS['mcpwp_test_image_downsize']     = array();
 		$GLOBALS['_mcpwp_test_term_insert_count'] = 0;
-		unset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'], $GLOBALS['mcpwp_test_thumbnail_readback_armed'], $GLOBALS['mcpwp_test_public_post_types'] );
+		unset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'], $GLOBALS['mcpwp_test_thumbnail_readback_armed'], $GLOBALS['mcpwp_test_public_post_types'], $GLOBALS['mcpwp_test_get_post_meta_applies_filters'] );
 		$GLOBALS['mcpwp_test_fs']                 = $this->saved_mcpwp_test_fs;
 		$GLOBALS['_mcpwp_test_taxonomies']        = $this->saved_test_taxonomies;
 		$GLOBALS['_mcpwp_test_term_meta']         = $this->saved_test_term_meta;
@@ -410,12 +410,17 @@ final class FeaturedImageFailure1163Test extends TestCase {
 			return $value;
 		};
 		add_filter( 'get_post_metadata', $filter, 10, 3 );
+		$GLOBALS['mcpwp_test_get_post_meta_applies_filters'] = true;
 
-		$new_image = self::IMAGE_ID + 99;
-		$this->seed_attachment( $new_image, 'image/jpeg' );
-		$GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ self::POST_ID ] = self::MISSING_ID;
-		$error = Mcpwp_Posts::apply_featured_image( self::POST_ID, $new_image );
-		remove_filter( 'get_post_metadata', $filter, 10 );
+		try {
+			$new_image = self::IMAGE_ID + 99;
+			$this->seed_attachment( $new_image, 'image/jpeg' );
+			$GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ self::POST_ID ] = self::MISSING_ID;
+			$error = Mcpwp_Posts::apply_featured_image( self::POST_ID, $new_image );
+		} finally {
+			remove_filter( 'get_post_metadata', $filter, 10 );
+			unset( $GLOBALS['mcpwp_test_get_post_meta_applies_filters'] );
+		}
 
 		$this->assertInstanceOf( WP_Error::class, $error );
 		unset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ self::POST_ID ] );
