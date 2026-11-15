@@ -36,9 +36,9 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	const SUPPORTED_PROTOCOL_VERSIONS = array( '2024-11-05', '2025-03-26', '2025-06-18', '2025-11-25' );
 
 	/**
-	 * Newest revision this server speaks — the negotiation fallback above,
-	 * and the answer to a GET capability probe (handle_mcp_get()), which
-	 * carries no client-requested version to negotiate against at all.
+	 * Newest revision this server speaks — the negotiation fallback above.
+	 * Advertised only via `initialize` (and later messages under that
+	 * negotiation); GET /mcp no longer answers a capability probe (#1092).
 	 */
 	const LATEST_PROTOCOL_VERSION = '2025-11-25';
 
@@ -709,6 +709,12 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 		// argument is absent and allow_mcp_cors_headers() leaves the list
 		// alone rather than widen it for every route.
 		add_filter( 'rest_allowed_cors_headers', array( $this, 'allow_mcp_cors_headers' ), 10, 2 );
+
+		// rest_send_allow_header (priority 10) rebuilds Allow from every
+		// handler whose permission_callback passed — which includes GET once
+		// the caller authenticated. Pin Allow: POST after that for the #1092
+		// 405 answer so clients see the Streamable HTTP signal, not GET.
+		add_filter( 'rest_post_dispatch', array( $this, 'pin_mcp_get_allow_header' ), 11, 3 );
 	}
 
 	/**
@@ -762,13 +768,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * Register routes.
 	 */
 	public function register_routes() {
-		// Main MCP endpoint
+		// Main MCP endpoint. Streamable HTTP carries JSON-RPC on POST only —
+		// register that literal (not EDITABLE / PUT+PATCH) so Allow: POST on a
+		// 405 matches the methods this route actually accepts (RFC 9110 15.5.6).
 		register_rest_route(
 			$this->namespace,
 			'/mcp',
 			array(
 				array(
-					'methods'             => WP_REST_Server::CREATABLE,
+					'methods'             => 'POST',
 					'callback'            => array( $this, 'handle_mcp' ),
 					'permission_callback' => array( $this, 'check_permission' ),
 				),
@@ -787,39 +795,71 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	}
 
 	/**
-	 * Handle GET request for MCP endpoint.
+	 * Handle GET (and HEAD) for the MCP endpoint.
 	 *
-	 * Streamable HTTP MCP clients may issue a GET to open an SSE stream.
-	 * WordPress REST API doesn't natively support SSE, so we return server
-	 * metadata as a standard JSON response. This also serves as a health
-	 * check / capability discovery endpoint.
+	 * Streamable HTTP clients may open GET to receive a server-initiated SSE
+	 * stream. This server does not offer one, so per the transport spec it
+	 * answers 405 Method Not Allowed with Allow: POST and a JSON-RPC error
+	 * body (#1092). The route stays registered with check_permission so a
+	 * missing/invalid credential still returns the auth refusal (401 +
+	 * WWW-Authenticate when OAuth is on) before this handler runs — 405 must
+	 * not hide the discovery challenge.
 	 *
 	 * @param WP_REST_Request $request Request object.
 	 * @return WP_REST_Response Response.
 	 */
 	public function handle_mcp_get( $request ) {
-		$response = new WP_REST_Response(
-			array(
-				'jsonrpc' => '2.0',
-				'result'  => array(
-					// No client-requested version to negotiate against on a
-					// bare capability probe — answer with the latest this
-					// server speaks (#906), same fallback the negotiation
-					// rule uses when nothing else matches.
-					'protocolVersion' => self::LATEST_PROTOCOL_VERSION,
-					'serverInfo'      => array(
-						'name'    => $this->server_name,
-						'version' => $this->server_version,
-					),
-					'capabilities'    => array(
-						'tools'     => new \stdClass(),
-						'resources' => new \stdClass(),
-					),
-				),
-			),
-			200
+		$method   = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'GET';
+		$body     = $this->jsonrpc_error(
+			null,
+			-32600,
+			'Method Not Allowed. This server does not offer a server-initiated SSE stream; send JSON-RPC over POST.'
 		);
+		// HEAD must not carry a message body (RFC 9110); core also skips
+		// echoing one, but clear it here so dispatch-level readers agree.
+		$response = new WP_REST_Response( 'HEAD' === $method ? null : $body, 405 );
+		$response->header( 'Allow', 'POST' );
 		return $this->prepare_mcp_response( $response );
+	}
+
+	/**
+	 * Keep Allow: POST on a 405 GET/HEAD /mcp answer after core rebuilds Allow.
+	 *
+	 * Route matching is case-insensitive in core; compare the matched route
+	 * (or a folded get_route()) so a request like /MCPWP/v1/MCP still gets
+	 * the pin instead of core's Allow listing GET.
+	 *
+	 * @param WP_HTTP_Response|WP_REST_Response $response Response.
+	 * @param WP_REST_Server                    $server   REST server (unused).
+	 * @param WP_REST_Request                   $request  Request.
+	 * @return WP_HTTP_Response|WP_REST_Response
+	 */
+	public function pin_mcp_get_allow_header( $response, $server, $request ) {
+		if ( ! is_object( $response ) || ! is_object( $request ) || ! method_exists( $request, 'get_method' ) ) {
+			return $response;
+		}
+		$route = '';
+		if ( method_exists( $response, 'get_matched_route' ) ) {
+			$route = (string) $response->get_matched_route();
+		}
+		if ( '' === $route && method_exists( $request, 'get_route' ) ) {
+			$route = (string) $request->get_route();
+		}
+		if ( '/mcpwp/v1/mcp' !== $this->normalize_route_for_authorization( $route ) ) {
+			return $response;
+		}
+		$method = strtoupper( (string) $request->get_method() );
+		if ( 'GET' !== $method && 'HEAD' !== $method ) {
+			return $response;
+		}
+		$status = method_exists( $response, 'get_status' ) ? (int) $response->get_status() : 0;
+		if ( 405 !== $status ) {
+			return $response;
+		}
+		if ( method_exists( $response, 'header' ) ) {
+			$response->header( 'Allow', 'POST' );
+		}
+		return $response;
 	}
 
 	/**

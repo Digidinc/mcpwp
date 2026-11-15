@@ -208,12 +208,17 @@ final class McpTransportContractTest extends TestCase {
 		$this->assertSame( '{}', wp_json_encode( $raw['result'] ) );
 	}
 
-	public function test_the_get_health_check_is_json_too(): void {
+	public function test_get_without_sse_is_405_json_with_allow_post(): void {
+		// #1092 — no server-initiated stream; asking for text/event-stream
+		// still gets JSON, now as a 405 with Allow: POST rather than a
+		// fake capability probe.
 		$controller = new Mcpwp_REST_MCP();
 		$response   = $controller->handle_mcp_get( new WP_REST_Request( 'GET', '/mcpwp/v1/mcp', array(), array( 'Accept' => 'text/event-stream' ) ) );
 
-		$this->assertSame( 200, $response->get_status() );
+		$this->assertSame( 405, $response->get_status() );
 		$this->assertSame( 'application/json; charset=UTF-8', $response->get_headers()['Content-Type'] );
-		$this->assertNotEmpty( $response->get_data() );
+		$this->assertSame( 'POST', $response->get_headers()['Allow'] );
+		$this->assertArrayHasKey( 'error', $response->get_data() );
+		$this->assertArrayNotHasKey( 'result', $response->get_data() );
 	}
 }

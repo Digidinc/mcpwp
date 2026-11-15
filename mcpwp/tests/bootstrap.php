@@ -225,6 +225,7 @@ class WP_REST_Response
     private $data;
     private $status;
     private $headers = array();
+    private $matched_route = '';
 
     public function __construct($data = null, $status = 200)
     {
@@ -255,6 +256,17 @@ class WP_REST_Response
     public function get_headers()
     {
         return $this->headers;
+    }
+
+    /** Core sets this after match_request_to_handler(); used by Allow-pin filters. */
+    public function get_matched_route()
+    {
+        return $this->matched_route;
+    }
+
+    public function set_matched_route($route)
+    {
+        $this->matched_route = (string) $route;
     }
 }
 
