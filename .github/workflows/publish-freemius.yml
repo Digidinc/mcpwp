@@ -49,6 +49,7 @@ jobs:
       - name: Publish to Freemius
         env:
           FREEMIUS_BEARER_TOKEN: ${{ secrets.FREEMIUS_BEARER_TOKEN }}
+          FREEMIUS_WP_ORG_GATEKEEPER: ${{ secrets.FREEMIUS_WP_ORG_GATEKEEPER }}
           VERSION: ${{ inputs.version }}
         run: |
           if [ -z "$FREEMIUS_BEARER_TOKEN" ]; then
