@@ -46,7 +46,7 @@
 ## Native MCP Endpoint
 
 **POST** `/wp-json/mcpwp/v1/mcp`
-**GET** `/wp-json/mcpwp/v1/mcp` *(v1.1.8+ — server info / health check)*
+**GET** `/wp-json/mcpwp/v1/mcp` *(authenticated: 405 Method Not Allowed + `Allow: POST` — this server does not offer a server-initiated SSE stream; unauthenticated: same 401 auth refusal as other protected routes)*
 
 Direct JSON-RPC 2.0 MCP endpoint. Supports `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, and batch requests.
 
@@ -435,7 +435,7 @@ Every JSON-RPC **result** carries server-owned `_meta` (error objects do not):
 
 Transport guarantees for `POST /mcp`:
 
-- Every answer is `Content-Type: application/json`, whatever the `Accept` header asks for. The endpoint never streams (no `text/event-stream`); `GET /mcp` returns server info as JSON.
+- Every answer is `Content-Type: application/json`, whatever the `Accept` header asks for. The endpoint never streams (no `text/event-stream`); authenticated `GET /mcp` is 405 with `Allow: POST` and a JSON-RPC error body (#1092).
 - A `200` always has a body. A body-less `204` is returned only when the request contained nothing but notifications (messages without an `id`). A message **with** an `id` is always answered, even under a `notifications/*` method name.
 
 ### Idempotent tool calls (`params._meta.request_id`)

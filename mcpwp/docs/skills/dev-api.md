@@ -66,7 +66,7 @@ Twenty-four REST controllers (~18 k lines) that expose every WordPress operation
 
 `class-mcpwp-rest-mcp.php` — class `Mcpwp_REST_MCP`:
 
-**Route:** `POST mcpwp/v1/mcp` → `handle_mcp()`. Also handles `GET` (capability discovery / health check → `handle_mcp_get()`) and `OPTIONS` (CORS preflight, `permission_callback: '__return_true'`).
+**Route:** `POST mcpwp/v1/mcp` → `handle_mcp()`. Also handles `GET`/`HEAD` (`handle_mcp_get()` → authenticated 405 + `Allow: POST`, no SSE stream — #1092; auth refusal still wins first) and `OPTIONS` (CORS preflight, `permission_callback: '__return_true'`).
 
 **Protocol:** JSON-RPC 2.0. Supported methods: `initialize`, `notifications/initialized`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, `ping`. Batch requests (array body) limited to 10 per call.
 

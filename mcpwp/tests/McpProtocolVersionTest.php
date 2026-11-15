@@ -248,10 +248,15 @@ final class McpProtocolVersionTest extends TestCase {
 		$this->assertSame( '2025-11-25', $this->initialize( '' )['result']['protocolVersion'], 'Empty protocolVersion.' );
 	}
 
-	public function test_get_capability_probe_advertises_latest(): void {
-		$request = new WP_REST_Request( 'GET', '/mcpwp/v1/mcp' );
-		$data    = ( new Mcpwp_REST_MCP() )->handle_mcp_get( $request )->get_data();
-		$this->assertSame( '2025-11-25', $data['result']['protocolVersion'] );
+	public function test_get_no_longer_advertises_a_protocol_version(): void {
+		// #1092 — GET is 405 (no SSE stream), not a capability probe. Version
+		// negotiation stays on initialize.
+		$request  = new WP_REST_Request( 'GET', '/mcpwp/v1/mcp' );
+		$response = ( new Mcpwp_REST_MCP() )->handle_mcp_get( $request );
+		$data     = $response->get_data();
+		$this->assertSame( 405, $response->get_status() );
+		$this->assertArrayHasKey( 'error', $data );
+		$this->assertArrayNotHasKey( 'result', $data );
 	}
 
 	public function test_initialize_in_a_batch_governs_the_batch_over_the_header(): void {
