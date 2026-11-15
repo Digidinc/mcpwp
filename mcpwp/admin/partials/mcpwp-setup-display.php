@@ -96,25 +96,34 @@ $onboard_tool_done = class_exists( 'Mcpwp_Action_Log' )
 $onboard_all_done  = $onboard_key_done && $onboard_conn_done && $onboard_tool_done;
 
 /*
- * #1091: never put the primary / first-activation admin key into a copyable
- * ?api_key= connector URL. Prefer a just-created non-admin scoped key, else a
- * just-minted ChatGPT connector link (already least-privilege), else a
- * placeholder so the admin must create a scoped key or use Add to ChatGPT /
- * OAuth. The "Your API Key" display and header-based client configs still use
- * $display_key as before.
+ * #1091 / PR #1203 P2: never put an admin-role or admin-scope key into a
+ * copyable ?api_key= Claude Desktop URL. Prefer a just-created non-admin
+ * scoped key; never reuse the ChatGPT connector credential (rotating that
+ * link would silently cut off Claude Desktop). Else a YOUR_API_KEY template
+ * plus a create-key step. When local OAuth is on, also offer the key-less
+ * $mcp_url. Header-based client configs still use $display_key as before.
  */
 $claude_desktop_url_ready = false;
 $claude_desktop_url       = add_query_arg( 'api_key', 'YOUR_API_KEY', $mcp_url );
 if ( is_array( $new_scoped_key ?? null ) && ! empty( $new_scoped_key['key'] ) ) {
 	$claude_desktop_scopes = isset( $new_scoped_key['scopes'] ) ? (array) $new_scoped_key['scopes'] : array();
-	if ( ! in_array( 'admin', $claude_desktop_scopes, true ) ) {
+	$claude_desktop_role   = isset( $new_scoped_key['role'] ) ? (string) $new_scoped_key['role'] : '';
+	// Never embed admin-scope or admin-role (or a role whose definition is
+	// unrestricted like admin: empty categories, excluding custom).
+	$claude_desktop_adminish = in_array( 'admin', $claude_desktop_scopes, true )
+		|| 'admin' === $claude_desktop_role;
+	if ( ! $claude_desktop_adminish && '' !== $claude_desktop_role && 'custom' !== $claude_desktop_role ) {
+		$claude_desktop_role_def = isset( $role_definitions[ $claude_desktop_role ] )
+			? $role_definitions[ $claude_desktop_role ]
+			: null;
+		if ( is_array( $claude_desktop_role_def ) && empty( $claude_desktop_role_def['categories'] ) ) {
+			$claude_desktop_adminish = true;
+		}
+	}
+	if ( ! $claude_desktop_adminish ) {
 		$claude_desktop_url       = add_query_arg( 'api_key', $new_scoped_key['key'], $mcp_url );
 		$claude_desktop_url_ready = true;
 	}
-}
-if ( ! $claude_desktop_url_ready && ! empty( $chatgpt_new_url ) ) {
-	$claude_desktop_url       = $chatgpt_new_url;
-	$claude_desktop_url_ready = true;
 }
 ?>
 
@@ -616,9 +625,9 @@ if ( ! $claude_desktop_url_ready && ! empty( $chatgpt_new_url ) ) {
 			<p class="description">
 				<?php
 				if ( $is_hidden ) {
-					esc_html_e( 'Your key is saved. Generate a new one above to auto-fill this config.', 'mcpwp' );
+					esc_html_e( 'Your key is saved. Generate a new one above to auto-fill header-based configs (Claude Code, Cursor, Windsurf).', 'mcpwp' );
 				} else {
-					esc_html_e( 'Copy the config for your AI client and paste it in. Your API key has been pre-filled below.', 'mcpwp' );
+					esc_html_e( 'Header-based clients (Claude Code, Cursor, Windsurf) use the key shown above when it is visible. Claude Desktop uses a scoped-key URL or WordPress sign-in — never the primary admin key.', 'mcpwp' );
 				}
 				?>
 			</p>
@@ -655,7 +664,27 @@ if ( ! $claude_desktop_url_ready && ! empty( $chatgpt_new_url ) ) {
 			<!-- Claude Desktop -->
 			<div class="mcpwp-inner-tab-content" id="mcpwp-tab-claude-desktop" style="display:none;">
 
-				<!-- Method 1: API key — works today (#1091: never embed the primary admin key) -->
+				<?php if ( ! empty( $local_oauth_enabled ) ) : ?>
+				<!-- Preferred when local OAuth is on: key-less MCP URL (readme.txt / CONNECT-MATRIX) -->
+				<div class="mcpwp-connect-method">
+					<h4 class="mcpwp-connect-method__title">
+						<?php esc_html_e( 'WordPress sign-in (recommended)', 'mcpwp' ); ?>
+						<span class="mcpwp-status mcpwp-status-active"><?php esc_html_e( 'No key in the URL', 'mcpwp' ); ?></span>
+					</h4>
+					<p>
+						<?php esc_html_e( 'In Claude Desktop go to Settings → Connectors → Add custom connector and paste this address. Claude opens your WordPress login to authorize — no API key is stored in the client:', 'mcpwp' ); ?>
+					</p>
+					<div class="mcpwp-code-wrapper">
+						<pre class="mcpwp-code-block" id="mcpwp-claude-desktop-oauth-url"><?php echo esc_url( $mcp_url ); ?></pre>
+						<button type="button" class="button button-primary mcpwp-copy-code-btn" data-target="mcpwp-claude-desktop-oauth-url">
+							<span class="dashicons dashicons-clipboard"></span>
+							<?php esc_html_e( 'Copy URL', 'mcpwp' ); ?>
+						</button>
+					</div>
+				</div>
+				<?php endif; ?>
+
+				<!-- API key — works today (#1091: never embed an admin-role/scope key; never reuse ChatGPT's link) -->
 				<div class="mcpwp-connect-method">
 					<h4 class="mcpwp-connect-method__title">
 						<?php esc_html_e( 'API key', 'mcpwp' ); ?>
@@ -663,7 +692,7 @@ if ( ! $claude_desktop_url_ready && ! empty( $chatgpt_new_url ) ) {
 					</h4>
 					<?php if ( $claude_desktop_url_ready ) : ?>
 					<p>
-						<?php esc_html_e( 'In Claude Desktop go to Settings → Connectors → Add custom connector and paste this URL. It uses a scoped (non-admin) key, so the connection works immediately:', 'mcpwp' ); ?>
+						<?php esc_html_e( 'In Claude Desktop go to Settings → Connectors → Add custom connector and paste this URL. It uses a scoped (non-admin) key created for this client, so the connection works immediately:', 'mcpwp' ); ?>
 					</p>
 					<div class="mcpwp-code-wrapper">
 						<pre class="mcpwp-code-block" id="mcpwp-claude-desktop-url"><?php echo esc_url( $claude_desktop_url ); ?></pre>
@@ -675,12 +704,12 @@ if ( ! $claude_desktop_url_ready && ! empty( $chatgpt_new_url ) ) {
 					<div class="notice notice-warning inline" style="margin:10px 0 0;">
 						<p>
 							<strong><?php esc_html_e( 'This link contains a secret — treat it like a password.', 'mcpwp' ); ?></strong>
-							<?php esc_html_e( 'Revoke the key above if it ever leaks.', 'mcpwp' ); ?>
+							<?php esc_html_e( 'Revoke the key above if it ever leaks. Do not reuse the Add to ChatGPT link here — each client needs its own key.', 'mcpwp' ); ?>
 						</p>
 					</div>
 					<?php else : ?>
 					<p>
-						<?php esc_html_e( 'In Claude Desktop go to Settings → Connectors → Add custom connector and paste a URL that embeds a scoped key — never the primary admin key shown above.', 'mcpwp' ); ?>
+						<?php esc_html_e( 'In Claude Desktop go to Settings → Connectors → Add custom connector and paste a URL that embeds a scoped key — never the primary admin key shown above, and never the Add to ChatGPT link.', 'mcpwp' ); ?>
 					</p>
 					<div class="mcpwp-code-wrapper">
 						<pre class="mcpwp-code-block" id="mcpwp-claude-desktop-url"><?php echo esc_url( $claude_desktop_url ); ?></pre>
@@ -690,8 +719,19 @@ if ( ! $claude_desktop_url_ready && ! empty( $chatgpt_new_url ) ) {
 						</button>
 					</div>
 					<p class="description">
-						<?php esc_html_e( 'Create a role-based key above (leave Admin ops unchecked), replace YOUR_API_KEY in the template, then paste the URL. Or use Add to ChatGPT for a limited connector link, or OAuth sign-in below when enabled.', 'mcpwp' ); ?>
+						<?php esc_html_e( 'Create a Claude Desktop key below (Editor role, Admin ops off), then paste the filled URL. Prefer WordPress sign-in above when it is available.', 'mcpwp' ); ?>
 					</p>
+					<form method="post" class="mcpwp-regenerate-form" style="margin-top:12px;">
+						<?php wp_nonce_field( 'mcpwp_manage_scoped_keys', 'mcpwp_scoped_keys_nonce' ); ?>
+						<input type="hidden" name="mcpwp_scoped_key_label" value="<?php echo esc_attr( 'Claude Desktop' ); ?>" />
+						<input type="hidden" name="mcpwp_scoped_key_role" value="editor" />
+						<input type="hidden" name="mcpwp_scoped_key_scopes[]" value="read" />
+						<input type="hidden" name="mcpwp_scoped_key_scopes[]" value="write" />
+						<button type="submit" name="mcpwp_create_scoped_key" class="button button-primary">
+							<?php esc_html_e( 'Create a Claude Desktop key', 'mcpwp' ); ?>
+						</button>
+						<span class="description"><?php esc_html_e( 'Editor role, read + write — Admin ops left off on purpose.', 'mcpwp' ); ?></span>
+					</form>
 					<?php endif; ?>
 					<p class="mcpwp-connect-method__hint">
 						<?php esc_html_e( 'Prefer the key to never appear in a URL? The Claude Code and Cursor tabs send it as a request header instead — the safer option when your client supports it.', 'mcpwp' ); ?>

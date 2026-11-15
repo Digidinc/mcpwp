@@ -141,13 +141,13 @@ Claude Desktop supports two methods:
 
 **Method A — Custom Connector (Recommended, no files):**
 
-WP Admin > MCPWP > Setup copies the URL. Then in Claude Desktop > Settings > Connectors > Add custom connector:
+WP Admin > MCPWP > Setup → Claude Desktop shows the plain MCP URL when WordPress sign-in (local OAuth) is on. Then in Claude Desktop > Settings > Connectors > Add custom connector:
 
 - Name: `mcpwp-mysite` (or your site name)
 - Remote MCP server URL: `https://YOUR-SITE.com/wp-json/mcpwp/v1/mcp` (no key in the URL)
 - Leave the OAuth client fields empty: Claude opens your WordPress login to authorize, so no key is stored in the client
 
-Note: this needs WordPress sign-in (OAuth) enabled in the plugin. A `?api_key=` query string also works but writes the key into server and proxy access logs, so prefer OAuth. If you want an API key, use Method B (the `mcp-remote` / `mcpwp` bridge sends it as a header).
+Note: this needs WordPress sign-in (OAuth) enabled in the plugin. Setup never pastes the primary admin key into a Claude Desktop `?api_key=` URL, and it does not reuse the Add to ChatGPT connector link for Desktop — create a scoped (non-admin) key from that tab if you need a key-in-URL connector. A `?api_key=` query string also works but writes the key into server and proxy access logs, so prefer OAuth. If you want an API key in a header instead, use Method B (the `mcp-remote` / `mcpwp` bridge).
 
 **Method B — `claude_desktop_config.json` (stdio proxy via npm, for users who prefer file config):**
 ```json
