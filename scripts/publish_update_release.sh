@@ -219,6 +219,14 @@ PY
 		echo "ERROR: CLOUDFLARE_API_TOKEN not set — R2 not updated, live manifest stays stale" >&2
 		exit 1
 	fi
+	if [[ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]]; then
+		CF_ACCT="$(grep CLOUDFLARE_ACCOUNT_ID ~/.env.secrets 2>/dev/null | cut -d= -f2 || true)"
+		if [[ -n "$CF_ACCT" ]]; then
+			export CLOUDFLARE_ACCOUNT_ID="$CF_ACCT"
+		else
+			unset CLOUDFLARE_ACCOUNT_ID
+		fi
+	fi
 	CLOUDFLARE_API_TOKEN="$CF_TOKEN" npx --prefix "$WORKER_DIR" wrangler r2 object put mumcp-updates/version.json \
 		--file="$MANIFEST_FILE" --content-type="application/json" --remote
 	# The manifest's download_url is mcpwp-latest.zip — this key MUST exist in R2 or downloads 404.

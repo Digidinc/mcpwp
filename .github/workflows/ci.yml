@@ -36,29 +36,6 @@ jobs:
           find mcpwp -name "*.php" -not -path "*/freemius/*" \
             -exec php -l {} \; 2>&1 | grep "Parse error" && exit 1 || exit 0
 
-  proxy-worker-tests:
-    name: Proxy Worker Tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: mcpwp-agency-proxy/package-lock.json
-      - name: Install dependencies
-        run: cd mcpwp-agency-proxy && npm ci
-      - name: Run tests
-        run: cd mcpwp-agency-proxy && npm test
-      - name: Audit dependencies (runtime only)
-        # Only runtime deps ship to the Cloudflare Worker edge; build tooling
-        # (wrangler/miniflare/sharp) never reaches production, so gating merges
-        # on its advisories blocks product code over unreachable CVEs. Audit
-        # what actually ships. Dev-tooling advisories are tracked upstream and
-        # patched when wrangler bumps. See #691.
-        run: cd mcpwp-agency-proxy && npm audit --omit=dev --audit-level=high
-
   mcp-server-stdio-smoke:
     name: MCP Server Stdio Smoke
     runs-on: ubuntu-latest

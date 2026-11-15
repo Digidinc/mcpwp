@@ -70,7 +70,7 @@ Done 2026-06-11 (spai/mumega → mcpwp infra pass):
 
 | Item | Status |
 |------|--------|
-| `spai-proxy-worker/` → `mcpwp-agency-proxy/` (dir) | **done** — deployed worker already `mcpwp-agency-proxy`; ci.yml paths updated |
+| `spai-proxy-worker/` → `Digidinc/mcpwp-cloud` | **done** — extracted out of the public GPL repo into private cloud repo |
 | worker `spai-screenshot` → `mcpwp-screenshot` | **done** — redeployed, AUTH_TOKEN re-set, mcpwp.net integration re-pointed, old deleted |
 | dir `spai-updates-worker/` → `mcpwp-updates-worker/` (sitepilotai repo) | **done** |
 | dir `spai-gh-webhook/` → `mcpwp-gh-webhook/` (sitepilotai repo, not deployed) | **done** |

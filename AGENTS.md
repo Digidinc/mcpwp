@@ -17,7 +17,7 @@ This file is for AI agents (Claude, OpenClaw, Hermes, ChatGPT) contributing to M
 | `mcpwp/includes/traits/trait-mcpwp-api-auth.php` | API key validation (used in all REST controllers) |
 | `mcpwp/includes/class-mcpwp-loader.php` | Hook registration |
 | `mcpwp/includes/class-mcpwp-rate-limiter.php` | Rate limiting |
-| `mcpwp-agency-proxy/src/index.ts` | Cloudflare Worker — agency multi-site proxy |
+| `mcp-server/src/index.ts` | Node.js stdio-to-HTTP MCP proxy (`@mcpwp.net/mcpwp`) |
 | `docs/FREE_PRO_SPLIT.md` | Free vs Pro tool tier rules |
 | `docs/openapi-chatgpt.yaml` | ChatGPT OpenAPI schema |
 
