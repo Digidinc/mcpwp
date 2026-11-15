@@ -171,6 +171,15 @@ class Mcpwp_Pages {
 			return $meta_refused;
 		}
 
+		// #1163: validate the featured image before anything is written —
+		// see Mcpwp_Posts::validate_featured_image_id()'s docblock.
+		if ( ! empty( $data['featured_image'] ) ) {
+			$featured_image_check = Mcpwp_Posts::validate_featured_image_id( $data['featured_image'] );
+			if ( is_wp_error( $featured_image_check ) ) {
+				return $featured_image_check;
+			}
+		}
+
 		// Content guardrails (#957): enforced centrally by
 		// Mcpwp_Content_Guardrails::on_insert_post_data(), a wp_insert_post_data
 		// filter that runs inside the wp_insert_post() call below — not here.
@@ -263,6 +272,16 @@ class Mcpwp_Pages {
 		$meta_refused = Mcpwp_Post_Fields::meta_write_refusal( $page_id, $clean_meta, 'page' );
 		if ( is_wp_error( $meta_refused ) ) {
 			return $meta_refused;
+		}
+
+		// #1163: validate the featured image before anything is written —
+		// see Mcpwp_Posts::validate_featured_image_id()'s docblock. A falsy
+		// value (0/''/null) means "remove the current thumbnail", always safe.
+		if ( ! empty( $data['featured_image'] ) ) {
+			$featured_image_check = Mcpwp_Posts::validate_featured_image_id( $data['featured_image'] );
+			if ( is_wp_error( $featured_image_check ) ) {
+				return $featured_image_check;
+			}
 		}
 
 		$before = array(

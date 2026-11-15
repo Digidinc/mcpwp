@@ -6102,6 +6102,40 @@ if (! function_exists('wp_get_attachment_image_src')) {
     }
 }
 
+if (! function_exists('get_post_mime_type')) {
+    function get_post_mime_type($post = '')
+    {
+        $p = get_post($post);
+        if (is_object($p)) {
+            return isset($p->post_mime_type) ? $p->post_mime_type : '';
+        }
+        return false;
+    }
+}
+
+if (! function_exists('wp_attachment_is_image')) {
+    // #1163: real WP decides this from the attachment's mime type (and a
+    // file-extension fallback this stub does not need to model). Many
+    // existing test fixtures seed an 'attachment' post without ever
+    // setting post_mime_type; treating that as "unset, so assume image"
+    // (rather than "not set, so refuse") keeps every one of those fixtures
+    // a valid featured image as before. A test for the #1163 failure path
+    // sets post_mime_type explicitly to something non-image.
+    function wp_attachment_is_image($post = null)
+    {
+        if (is_object($post) && isset($post->ID)) {
+            $p = $post;
+        } else {
+            $p = get_post($post);
+        }
+        if (! $p) {
+            return false;
+        }
+        $mime = isset($p->post_mime_type) ? (string) $p->post_mime_type : '';
+        return '' === $mime || 0 === strpos($mime, 'image/');
+    }
+}
+
 // Site-info surface (#906): lets Mcpwp_Core::get_site_info() — the real
 // wp_site_info result — run in-process so its declared outputSchema is
 // validated against what the code actually produces.

@@ -83,6 +83,52 @@ class Mcpwp_Posts {
 	}
 
 	/**
+	 * Validate a featured-image attachment id BEFORE anything is changed
+	 * (#1163). `set_post_thumbnail()` only succeeds when WordPress can
+	 * render the id as an `<img>` (`wp_get_attachment_image()`); otherwise
+	 * it DELETES any existing `_thumbnail_id` meta and still returns a
+	 * truthy result (`delete_post_meta()`'s return, not `false`), so a
+	 * caller cannot tell "set" from "silently cleared the real thumbnail"
+	 * from that return value alone. Checking here, before the generic
+	 * post/page create and update paths and the dedicated featured-image
+	 * route ever call `set_post_thumbnail()`, means a failed id never
+	 * touches the post and is never reported as a success — the single
+	 * chokepoint every featured-image setter in this plugin now shares.
+	 *
+	 * @param int $media_id Requested attachment id.
+	 * @return true|WP_Error True when it is safe to call set_post_thumbnail().
+	 */
+	public static function validate_featured_image_id( $media_id ) {
+		$media_id   = absint( $media_id );
+		$attachment = get_post( $media_id );
+
+		if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
+			return new WP_Error(
+				'invalid_media',
+				__( 'Invalid media ID: not an attachment.', 'mcpwp' ),
+				array(
+					'status'   => 400,
+					'media_id' => $media_id,
+				)
+			);
+		}
+
+		if ( ! wp_attachment_is_image( $media_id ) ) {
+			return new WP_Error(
+				'invalid_media',
+				__( 'That attachment is not an image and cannot be set as a featured image.', 'mcpwp' ),
+				array(
+					'status'   => 400,
+					'media_id' => $media_id,
+					'hint'     => 'set_post_thumbnail() only accepts attachments WordPress can render as an image (wp_attachment_is_image()). Upload or choose an image attachment instead.',
+				)
+			);
+		}
+
+		return true;
+	}
+
+	/**
 	 * Fields update_post() acts on. Anything else is refused by name (#803):
 	 * a field that is accepted and ignored is a 200 that did nothing.
 	 *
@@ -479,6 +525,15 @@ class Mcpwp_Posts {
 			return $meta_refused;
 		}
 
+		// #1163: validate the featured image before anything is written —
+		// see validate_featured_image_id()'s docblock.
+		if ( ! empty( $data['featured_image'] ) ) {
+			$featured_image_check = self::validate_featured_image_id( $data['featured_image'] );
+			if ( is_wp_error( $featured_image_check ) ) {
+				return $featured_image_check;
+			}
+		}
+
 		// Content guardrails (#957): enforced centrally by
 		// Mcpwp_Content_Guardrails::on_insert_post_data(), a wp_insert_post_data
 		// filter that runs inside the wp_insert_post() call below — not here.
@@ -620,6 +675,16 @@ class Mcpwp_Posts {
 		$meta_refused = Mcpwp_Post_Fields::meta_write_refusal( $post_id, $clean_meta, $post->post_type );
 		if ( is_wp_error( $meta_refused ) ) {
 			return $meta_refused;
+		}
+
+		// #1163: validate the featured image before anything is written —
+		// see validate_featured_image_id()'s docblock. A falsy value (0/''/
+		// null) means "remove the current thumbnail", which is always safe.
+		if ( ! empty( $data['featured_image'] ) ) {
+			$featured_image_check = self::validate_featured_image_id( $data['featured_image'] );
+			if ( is_wp_error( $featured_image_check ) ) {
+				return $featured_image_check;
+			}
 		}
 
 		$before = array(

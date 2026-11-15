@@ -670,13 +670,14 @@ class Mcpwp_REST_Posts extends Mcpwp_REST_API {
 			);
 		}
 
-		$attachment = get_post( $media_id );
-		if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
-			return $this->error_response(
-				'invalid_media',
-				__( 'Invalid media ID.', 'mcpwp' ),
-				400
-			);
+		// #1163: one check, shared with the generic post/page writers —
+		// set_post_thumbnail() silently deletes any existing thumbnail (and
+		// still "succeeds") for an id that is not an attachment WordPress
+		// can render as an image, so this has to be refused BEFORE the call,
+		// not inferred from its return value.
+		$featured_image_check = Mcpwp_Posts::validate_featured_image_id( $media_id );
+		if ( is_wp_error( $featured_image_check ) ) {
+			return $this->error_response_from_wp_error( $featured_image_check );
 		}
 
 		set_post_thumbnail( $post_id, $media_id );

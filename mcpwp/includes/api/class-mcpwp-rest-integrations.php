@@ -690,6 +690,14 @@ class Mcpwp_REST_Integrations extends Mcpwp_REST_API {
 			return $result;
 		}
 
+		// #1163: the provider is expected to always hand back a real image
+		// attachment, but check anyway rather than trust that and risk
+		// silently clearing an existing thumbnail if it ever doesn't.
+		$featured_image_check = Mcpwp_Posts::validate_featured_image_id( $result['id'] );
+		if ( is_wp_error( $featured_image_check ) ) {
+			return $featured_image_check;
+		}
+
 		set_post_thumbnail( $post_id, $result['id'] );
 		$result['set_as_featured'] = true;
 		$result['post_id']         = $post_id;
