@@ -562,7 +562,7 @@ trait Mcpwp_Sanitization {
 			$sanitized['slug'] = sanitize_title( $data['slug'] );
 		}
 
-		if ( isset( $data['featured_image'] ) ) {
+		if ( array_key_exists( 'featured_image', $data ) ) {
 			$sanitized['featured_image'] = $data['featured_image'];
 		}
 

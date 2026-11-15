@@ -5162,6 +5162,9 @@ function get_post_meta($post_id, $key = '', $single = false)
         }
         return $out;
     }
+    if ( '_thumbnail_id' === $key && ! empty( $GLOBALS['mcpwp_test_thumbnail_readback_armed'][ $post_id ] ) && isset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ $post_id ] ) ) {
+        return $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ $post_id ];
+    }
     if (isset($GLOBALS['_mcpwp_test_meta'][ $post_id ][ $key ])) {
         return $GLOBALS['_mcpwp_test_meta'][ $post_id ][ $key ];
     }
@@ -6124,7 +6127,7 @@ if (! function_exists('wp_get_attachment_image')) {
 }
 
 if (! function_exists('set_post_thumbnail')) {
-  function set_post_thumbnail($post, $thumbnail_id)
+    function set_post_thumbnail($post, $thumbnail_id)
     {
         $id = is_object($post) ? $post->ID : (int) $post;
         $thumbnail_id = (int) $thumbnail_id;
@@ -6134,6 +6137,9 @@ if (! function_exists('set_post_thumbnail')) {
                 $GLOBALS['_mcpwp_test_thumbnail_ids'] = array();
             }
             $GLOBALS['_mcpwp_test_thumbnail_ids'][ $id ] = $thumbnail_id;
+            if ( isset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ $id ] ) ) {
+                $GLOBALS['mcpwp_test_thumbnail_readback_armed'][ $id ] = true;
+            }
             return true;
         }
         delete_post_thumbnail($post);
