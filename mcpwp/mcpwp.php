@@ -15,7 +15,7 @@
  * Plugin URI:        https://mcpwp.net/
  * Description:       Connect WordPress to AI assistants via the Model Context Protocol (MCP). Manage posts, pages, media, and Elementor through natural language.
  * x-release-please-start-version
- * Version:           3.14.15
+ * Version:           3.14.16
  * x-release-please-end
  * Requires at least: 6.1
  * Requires PHP:      7.4
@@ -71,7 +71,7 @@ if ( defined( 'MCPWP_VERSION' ) ) {
 /**
  * Plugin version.
  */
-define( 'MCPWP_VERSION', '3.14.15' ); // x-release-please-version
+define( 'MCPWP_VERSION', '3.14.16' ); // x-release-please-version
 
 /**
  * Whether custom MCP tool scope filtering is supported.
@@ -232,6 +232,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-state.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-store.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-key-store-health.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-key-hygiene.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-proxy-trust.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-oauth-transport.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/traits/trait-mcpwp-api-auth.php';
@@ -546,6 +547,13 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 		require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 		Mcpwp_Activator::activate();
 		update_option( 'mcpwp_db_version', MCPWP_VERSION );
+
+		// Revoke keys whose secret matches a stored value. One-time and
+		// bounded; an unfinished sweep continues on an administrator's
+		// admin_init (Mcpwp_Key_Hygiene::init()).
+		if ( ! Mcpwp_Key_Hygiene::is_done() ) {
+			Mcpwp_Key_Hygiene::run_safely();
+		}
 
 		// Site graph tables were just created/verified by activate() above —
 		// kick off (or resume) the backfill (#943 S1). Own status option, not
@@ -898,6 +906,10 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// An unreadable API key store refuses every key; say so to an admin (#1096).
 	Mcpwp_Key_Store_Health::init();
 
+	// Keys whose secret matched a stored value: finish the one-time sweep,
+	// and tell an admin which keys were revoked.
+	Mcpwp_Key_Hygiene::init();
+
 	// OAuth refused over plain HTTP: say so to an admin, since MCP clients
 	// rarely show the error text.
 	Mcpwp_OAuth_Transport::init();
@@ -919,6 +931,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-activator.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-encryption.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-migrate.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-key-hygiene.php';
 	// #943 S1 review round 2, W1: the mcpwp_db_version compare in
 	// plugins_loaded only calls on_upgrade_schedule_backfill() when the
 	// version actually changed — a plain deactivate/reactivate on an
@@ -939,6 +952,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 			try {
 				Mcpwp_Migrate::run();
 				Mcpwp_Activator::adopt_spai_credentials(); // #1098.
+				Mcpwp_Key_Hygiene::run_safely();
 			} catch ( \Throwable $e ) {
 				if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 					// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
@@ -959,6 +973,7 @@ if ( ! function_exists( 'mcpwp_activate' ) ) {
 		try {
 			Mcpwp_Migrate::run();
 			Mcpwp_Activator::adopt_spai_credentials(); // #1098.
+			Mcpwp_Key_Hygiene::run_safely();
 		} catch ( \Throwable $e ) {
 			if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log

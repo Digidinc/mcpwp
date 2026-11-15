@@ -5,6 +5,14 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.16](https://github.com/Digidinc/mcpwp/compare/v3.14.15...v3.14.16) (2026-11-15)
+
+
+### Bug Fixes
+
+* **auth:** revoke key records whose secret matches a stored value ([#1194](https://github.com/Digidinc/mcpwp/issues/1194)) ([de72a1d](https://github.com/Digidinc/mcpwp/commit/de72a1d7afcacfb4b04debe65e074b2092506c56))
+* **posts:** keep the existing featured image when setting a new one fails ([#1195](https://github.com/Digidinc/mcpwp/issues/1195)) ([97c9f43](https://github.com/Digidinc/mcpwp/commit/97c9f436e22b95983da69e6b85145c4f2fad8b9c))
+
 ## [3.14.15](https://github.com/Digidinc/mcpwp/compare/v3.14.14...v3.14.15) (2026-11-14)
 
 

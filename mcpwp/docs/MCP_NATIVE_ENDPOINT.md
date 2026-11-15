@@ -18,6 +18,13 @@ The endpoint receives JSON-RPC 2.0 requests and translates them to internal Word
 POST https://yoursite.com/wp-json/mcpwp/v1/mcp
 ```
 
+This server does **not** offer a server-initiated SSE stream. An authenticated
+`GET` (or `HEAD`) on the same URL answers **405 Method Not Allowed** with
+`Allow: POST` and a JSON-RPC error body (#1092 / Streamable HTTP). A missing
+or invalid credential still returns the usual **401** auth refusal first
+(including `WWW-Authenticate` when OAuth is enabled) so discovery is unchanged.
+`OPTIONS` remains the open CORS preflight.
+
 ## Authentication
 
 Use the same `X-API-Key` header as other MCPWP endpoints:

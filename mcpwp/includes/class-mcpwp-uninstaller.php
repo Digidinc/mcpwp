@@ -254,6 +254,11 @@ class Mcpwp_Uninstaller {
 		'mcpwp_action_log',
 	);
 
+	/** @var array<string> User meta written outside the OAuth server (notice dismissals). */
+	const LEGACY_USER_META = array(
+		'mcpwp_key_hygiene_notice_dismissed',
+	);
+
 	/** @var array<string> Core options and action-log migration markers (#995). */
 	const LEGACY_OPTIONS = array(
 		'mcpwp_api_key',
@@ -262,6 +267,12 @@ class Mcpwp_Uninstaller {
 		'mcpwp_api_keys_last_used',
 		'mcpwp_api_keys_lock',
 		'mcpwp_spai_credentials_adopted', // #1098: exact name, no wildcard (#1159).
+		// The key hygiene sweep's flag, position, revoked list, pending list and lock.
+		'mcpwp_key_hygiene_swept',
+		'mcpwp_key_hygiene_state',
+		'mcpwp_key_hygiene_revoked',
+		'mcpwp_key_hygiene_pending',
+		'mcpwp_key_hygiene_lock',
 		'mcpwp_settings',
 		'mcpwp_version',
 		'mcpwp_db_version',
@@ -311,6 +322,7 @@ class Mcpwp_Uninstaller {
 		// Per-site schedules deactivation clears only on the current site.
 		'mcpwp_compute_signals',
 		'mcpwp_figma_sync_design_tokens',
+		'mcpwp_key_hygiene_sweep',
 	);
 
 	/**
@@ -360,6 +372,9 @@ class Mcpwp_Uninstaller {
 		}
 		foreach ( self::LEGACY_CRON_HOOKS as $hook ) {
 			wp_clear_scheduled_hook( $hook );
+		}
+		foreach ( self::LEGACY_USER_META as $meta_key ) {
+			delete_metadata( 'user', 0, $meta_key, '', true );
 		}
 	}
 

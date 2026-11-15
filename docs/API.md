@@ -46,7 +46,7 @@
 ## Native MCP Endpoint
 
 **POST** `/wp-json/mcpwp/v1/mcp`
-**GET** `/wp-json/mcpwp/v1/mcp` *(v1.1.8+ — server info / health check)*
+**GET** `/wp-json/mcpwp/v1/mcp` *(authenticated: 405 Method Not Allowed + `Allow: POST` — this server does not offer a server-initiated SSE stream; unauthenticated: same 401 auth refusal as other protected routes)*
 
 Direct JSON-RPC 2.0 MCP endpoint. Supports `initialize`, `tools/list`, `tools/call`, `resources/list`, `resources/read`, and batch requests.
 
@@ -153,6 +153,12 @@ All API requests require authentication via API key.
 1. Go to **WordPress Admin → MCPWP → Setup**
 2. Copy your API key or generate a new one
 
+#### Key hygiene on upgrade
+
+After an upgrade, MCPWP checks every active API key once against the credential values stored in the database (`mcpwp_api_key`, `spai_api_key`, the `spai_api_keys` hashes, and the hashes of the other keys). Keys whose secret matches a stored value are revoked. Normal keys are not affected. The check runs in small bounded steps and continues on the next admin page load until it is finished. It changes nothing while the key store cannot be read.
+
+Revoked keys are listed by id and label, never by hash, in an admin notice and under **Tools → Site Health**. Create a new key under **MCPWP → Setup** for any client that used one of them. A 2.8 single key (`spai_api_key`) stored in MD5 form is adopted as revoked when other keys exist, so create a new key for any client that still uses it.
+
 ### Authentication Methods
 
 #### Header Authentication (Recommended)
@@ -171,10 +177,12 @@ curl -H "Authorization: Bearer mcpwp_your_api_key_here" \
 
 #### Query Parameter
 
-For MCP clients that don't support custom headers (e.g., Claude Desktop custom connectors):
+For MCP clients that don't support custom headers (e.g., Claude Desktop custom connectors). The MCP endpoint accepts JSON-RPC over **POST** only — a plain GET returns 405:
 
 ```bash
-curl "https://your-site.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_api_key_here"
+curl -X POST "https://your-site.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"example","version":"1.0"}}}'
 ```
 
 > **Note:** Prefer header authentication when possible. Query parameters may appear in server access logs.
@@ -429,7 +437,7 @@ Every JSON-RPC **result** carries server-owned `_meta` (error objects do not):
 
 Transport guarantees for `POST /mcp`:
 
-- Every answer is `Content-Type: application/json`, whatever the `Accept` header asks for. The endpoint never streams (no `text/event-stream`); `GET /mcp` returns server info as JSON.
+- Every answer is `Content-Type: application/json`, whatever the `Accept` header asks for. The endpoint never streams (no `text/event-stream`); authenticated `GET /mcp` is 405 with `Allow: POST` and a JSON-RPC error body (#1092).
 - A `200` always has a body. A body-less `204` is returned only when the request contained nothing but notifications (messages without an `id`). A message **with** an `id` is always answered, even under a `notifications/*` method name.
 
 ### Idempotent tool calls (`params._meta.request_id`)
