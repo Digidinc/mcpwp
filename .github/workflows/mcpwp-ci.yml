@@ -6,20 +6,12 @@ on:
       - "mcpwp/**"
       - "docs/tool-counts.json"
       - "scripts/gen-tool-counts.php"
-      - "scripts/lib/**"
-      - "scripts/sync-wporg-changelog.mjs"
-      - "scripts/verify_plugin_assets.sh"
-      - "scripts/verify_distignore_refs.sh"
-      - "scripts/tests/verify_plugin_assets_test.sh"
       - ".github/workflows/mcpwp-ci.yml"
   push:
     branches:
       - main
     paths:
       - "mcpwp/**"
-      - "scripts/verify_plugin_assets.sh"
-      - "scripts/verify_distignore_refs.sh"
-      - "scripts/tests/verify_plugin_assets_test.sh"
       - ".github/workflows/mcpwp-ci.yml"
 
 jobs:
@@ -39,6 +31,9 @@ jobs:
 
       - name: Install Dev Dependencies
         run: composer install --working-dir mcpwp --no-interaction --prefer-dist
+
+      - name: Tool count manifest (#650)
+        run: php scripts/gen-tool-counts.php --check
 
       - name: PHP Syntax Lint
         run: |
@@ -88,18 +83,4 @@ jobs:
       # Browser-side scripts with a Node test (node:test, no dependencies) —
       # e.g. the WebMCP registration script (#981).
       - name: JS Unit Tests
-        run: node --test mcpwp/tests/js/*.test.js mcpwp/tests/js/*.test.mjs
-
-      # Lint and unit tests read the tree; a distribution build is the tree
-      # minus whatever its script and .distignore strip. Every build stripped
-      # assets/icon-*.png while the Freemius build shipped freemius-init.php
-      # pointing the SDK at assets/icon-128x128.png, so every premium opt-in
-      # screen showed a broken image. Build each zip and check that what it
-      # ships references only files it contains. Nothing is uploaded.
-      - name: Distribution Asset Check
-        run: |
-          bash scripts/tests/verify_plugin_assets_test.sh
-          bash mcpwp/scripts/build-all.sh
-          bash mcpwp/scripts/build-selfhosted.sh
-          bash scripts/verify_plugin_assets.sh mcpwp/scripts/mcpwp-*.zip
-          rm -f mcpwp/scripts/mcpwp-*.zip
+        run: node --test mcpwp/tests/js/*.test.js

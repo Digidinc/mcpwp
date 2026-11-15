@@ -15,8 +15,11 @@ require_once dirname( __DIR__, 2 ) . '/includes/mcp/class-mcpwp-mcp-figma-integr
 
 final class Mcpwp_Tool_Count_Snapshot {
 
-	/** @var string MCP protocol for tools/list emission tests. */
+	/** MCP protocol for tools/list emission tests. */
 	const PROTOCOL = '2025-11-25';
+
+	/** GitHub About description (≤350 chars) — keep in sync with docs/launch/REPO-METADATA.md. */
+	const GITHUB_ABOUT_SUGGESTED = 'Turn any WordPress site into an MCP server — let Claude, Cursor, and any MCP client build pages, edit Elementor, run WooCommerce, and manage media/SEO through natural language. 190+ tools free, 300+ with Pro. Governed, approval-gated, auditable.';
 
 	/**
 	 * Largest capability map used for public tool-count claims.
@@ -55,6 +58,25 @@ final class Mcpwp_Tool_Count_Snapshot {
 	}
 
 	/**
+	 * Refuse to generate counts when the local tree would skew Free tier.
+	 *
+	 * @throws RuntimeException When agency marker or MCPWP_TESTS would force Pro.
+	 */
+	public static function assert_clean_generation_context(): void {
+		$marker = dirname( __DIR__, 2 ) . '/includes/agency-license.php';
+		if ( is_file( $marker ) ) {
+			throw new RuntimeException(
+				'includes/agency-license.php is present — remove it before generating tool counts (it forces Pro and skews Free counts).'
+			);
+		}
+		if ( defined( 'MCPWP_TESTS' ) && MCPWP_TESTS ) {
+			throw new RuntimeException(
+				'MCPWP_TESTS grants Pro under CLI — do not define it when generating tool counts.'
+			);
+		}
+	}
+
+	/**
 	 * @param bool $pro When false, counts the Free install catalog (staging discovery tools included).
 	 * @return array{
 	 *   free_registry:int,
@@ -66,6 +88,7 @@ final class Mcpwp_Tool_Count_Snapshot {
 	 * }
 	 */
 	public static function compute( bool $pro = true ): array {
+		self::assert_clean_generation_context();
 		self::prime_integrations();
 		self::set_tier( $pro );
 		$controller = self::controller();
@@ -100,17 +123,19 @@ final class Mcpwp_Tool_Count_Snapshot {
 	 * @return array<string,mixed>
 	 */
 	public static function build_manifest(): array {
+		self::assert_clean_generation_context();
 		$pro_counts  = self::compute( true );
 		$free_counts = self::compute( false );
 
 		$marketing_free = self::marketing_plus_label( (int) $free_counts['tools_list_full'] );
 		$marketing_pro  = self::marketing_plus_label( (int) $pro_counts['tools_list_full'] );
+		$phrase_short   = sprintf( '%s tools free, %s with Pro', $marketing_free, $marketing_pro );
 
 		return array(
-			'schema'       => 1,
-			'methodology'  => 'tools/list profile=full against the PHPUnit stub site with every optional integration reported active (same worst-case catalog as ToolListBudgetTest). Free counts use the Free license stub; Pro counts use the Pro stub.',
+			'schema'      => 1,
+			'methodology' => 'tools/list profile=full on the PHPUnit worst-case catalog (every optional plugin + integration reported active — same ceiling as ToolListBudgetTest). Free registry ≈160 tools by default; Free tools/list ≈190 without the four staging discovery prompts, ≈194 with them. Pro registry ≈183 by default; Pro tools/list up to 309 on this catalog. Counts use the Free Freemius stub (explicit non-paying) vs Pro stub — not merely nulling the stub.',
 			'generated_at' => gmdate( 'c' ),
-			'counts'       => array(
+			'counts'      => array(
 				'tools_list_full_free'  => (int) $free_counts['tools_list_full'],
 				'tools_list_full_pro'   => (int) $pro_counts['tools_list_full'],
 				'tools_list_core'       => (int) $pro_counts['tools_list_core'],
@@ -120,21 +145,30 @@ final class Mcpwp_Tool_Count_Snapshot {
 				'pro_only_tools'        => (int) $pro_counts['pro_only_tools'],
 			),
 			'marketing'    => array(
-				'free_tools'        => $marketing_free,
-				'pro_tools_total'   => $marketing_pro,
-				'phrase_short'      => sprintf( '%s tools free, %s with Pro', $marketing_free, $marketing_pro ),
-				'phrase_free_only'  => sprintf( '%s tools free', $marketing_free ),
-				'phrase_pro_total'  => sprintf( '%s with Pro', $marketing_pro ),
-				'core_profile'      => (string) (int) $pro_counts['tools_list_core'],
+				'free_tools'       => $marketing_free,
+				'pro_tools_total'  => $marketing_pro,
+				'phrase_short'     => $phrase_short,
+				'phrase_free_only' => sprintf( '%s tools free', $marketing_free ),
+				'phrase_pro_total' => sprintf( '%s with Pro', $marketing_pro ),
+				'core_profile'     => (string) (int) $pro_counts['tools_list_core'],
 			),
 			'github_about' => array(
-				'suggested' => sprintf(
-					'⚡ %s MCP tools for WordPress — connect Claude, ChatGPT, Cursor, or any MCP client. Build pages, edit Elementor, manage WooCommerce, media & SEO through natural language. Free + Pro.',
-					$marketing_pro
-				),
+				'suggested' => self::GITHUB_ABOUT_SUGGESTED,
 				'note'      => 'Set manually in GitHub repo Settings → About (#498).',
 			),
 		);
+	}
+
+	/**
+	 * Compare two docs/tool-counts.json blobs ignoring regenerated_at.
+	 */
+	public static function normalize_manifest_json( string $json ): string {
+		$data = json_decode( $json, true );
+		if ( ! is_array( $data ) ) {
+			return $json;
+		}
+		unset( $data['generated_at'] );
+		return wp_json_encode( $data, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) . "\n";
 	}
 
 	private static function prime_integrations(): void {
@@ -163,7 +197,9 @@ final class Mcpwp_Tool_Count_Snapshot {
 	 * @return bool Previous pro state (unused; for call symmetry).
 	 */
 	private static function set_tier( bool $pro ): bool {
-		$GLOBALS['mcpwp_test_fs'] = $pro ? new Mcpwp_Test_Fs_Stub( true, true, false, 'pro' ) : null;
+		$GLOBALS['mcpwp_test_fs'] = $pro
+			? new Mcpwp_Test_Fs_Stub( true, true, false, 'pro' )
+			: new Mcpwp_Test_Fs_Stub( false, false, false, '' );
 		self::reset_license();
 		return $pro;
 	}

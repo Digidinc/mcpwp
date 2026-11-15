@@ -8,19 +8,16 @@
 > (if) the repo goes public.
 
 ## Description (#498 / #650)
-Live GitHub About text still says **239 tools / 100% free** — both are stale. Checked-in source
+Live GitHub About text still shows stale counts from before #650/#498. Checked-in source
 of truth: **`docs/tool-counts.json`** (generated from the PHPUnit catalog via
 `scripts/gen-tool-counts.php`). Do not hand-edit marketing counts elsewhere without updating
 that file and the matching docs.
 
-**Recommended description (matches `docs/tool-counts.json` → `github_about.suggested`):**
-```
-Turn any WordPress site into an MCP server — let Claude, Cursor, and any MCP client build
-pages, edit Elementor, run WooCommerce, and manage media/SEO through natural language.
-190+ tools free, 300+ with Pro. Governed, approval-gated, auditable.
-```
-(Regenerate `docs/tool-counts.json` when tools change; copy `marketing.phrase_short` or
-`github_about.suggested` from that file.)
+**Recommended description (single source — copy verbatim from `docs/tool-counts.json` → `github_about.suggested`; marketing phrase: 190+ tools free, 300+ with Pro):**
+
+Same text as `Mcpwp_Tool_Count_Snapshot::GITHUB_ABOUT_SUGGESTED` in
+`mcpwp/tests/support/class-mcpwp-tool-count-snapshot.php` (regenerated into the JSON by
+`php scripts/gen-tool-counts.php`). Do not hand-edit the About blurb in launch docs.
 
 ## Topics (current set is already good — minor adds)
 Live: ai, claude, mcp, model-context-protocol, woocommerce, wordpress, wordpress-plugin, elementor.

@@ -1,5 +1,7 @@
 # MCPWP — Connect Claude, Gemini, or GPT to Your WordPress Site in 2 Minutes
 
+> **Historical draft (2026-03):** tool-count figures below predate `docs/tool-counts.json`. Current marketing: **190+ tools free, 300+ with Pro**.
+
 WordPress powers 43% of the web. AI agents are transforming how sites are built and managed. But connecting the two has always required custom code, fragile REST wrappers, or expensive SaaS tools.
 
 **MCPWP** closes that gap. One plugin, 250+ MCP tools, every major MCP client.

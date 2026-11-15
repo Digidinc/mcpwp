@@ -117,7 +117,7 @@ For multiple sites, add separate entries with unique names:
 
 Tools appear automatically. Try: *"Show me my site info"* or *"Onboard me to this site"*
 
-## Available Tools (200+)
+## Available Tools (190+ free, 300+ with Pro)
 
 All tools come from the WordPress plugin. Update the plugin to get new tools — no npm update needed.
 
