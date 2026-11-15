@@ -191,9 +191,9 @@ MCPWP includes a multi-site agency stack for managing client sites at scale.
 1 MCP token  →  N client WordPress sites
 ```
 
-### Multi-Site Proxy
+### Multi-Site Fleet Gateway
 
-One Cloudflare Worker fronts all registered client sites. Claude (or any agent) lists sites and addresses them by domain:
+Hosted multi-site control plane (`proxy.mcpwp.net`) fronts registered client sites from one MCP connection. Claude (or any agent) lists sites and addresses them by domain:
 
 ```
 wp_list_sites()
@@ -299,7 +299,7 @@ Create keys via **WP Admin → MCPWP → Setup**, or `wp_create_api_key(label, r
 
 ## Roadmap
 
-**Current release: v3.11.1** (2026-09-10). Full history in [`mcpwp/CHANGELOG.md`](mcpwp/CHANGELOG.md).
+**Current release: v3.14.x**. Full history in [`mcpwp/CHANGELOG.md`](mcpwp/CHANGELOG.md).
 
 **3.11 "Truth & Reliability"** — the plugin must never report a change that did not happen:
 - **3.11.0:** batch-weighted rate limits, idempotent tool calls (`_meta.request_id`), option-access policy with secret-preserving writes, terms and meta on post writes, approval by default for deletes with no undo.
@@ -334,5 +334,5 @@ GPL v2 or later. See [mcpwp.net](https://mcpwp.net) for current packaging, prici
 ---
 
 <p align="center">
-  Built by <a href="https://mumega.com">Mumega</a>
+  Built by <a href="https://mcpwp.net">Digid Inc. / Mumega</a>
 </p>

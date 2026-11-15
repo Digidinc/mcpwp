@@ -597,5 +597,5 @@ GPL v2 or later (same as MCPWP plugin)
 ## Support
 
 For issues or questions:
-- GitHub: https://github.com/Mumega-com/mcp-for-wp
+- GitHub: https://github.com/Digidinc/mcpwp
 - Email: support@mumega.com

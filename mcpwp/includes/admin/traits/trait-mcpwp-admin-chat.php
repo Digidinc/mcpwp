@@ -162,9 +162,16 @@ trait Mcpwp_Admin_Chat_Trait {
 			$model_used  = 'gemini/gemini-2.5-flash';
 
 		} else {
-			// Fall back to free Cloudflare Workers AI.
-			$chat_endpoint = get_option( 'mcpwp_chat_endpoint', 'https://mcpwp-chat.weathered-scene-2272.workers.dev' );
-			$chat_secret   = get_option( 'mcpwp_chat_secret', '' );
+			// Fall back to custom chat endpoint when configured on this site.
+			$chat_endpoint = trim( (string) get_option( 'mcpwp_chat_endpoint', '' ) );
+			if ( '' === $chat_endpoint ) {
+				wp_send_json_error(
+					array(
+						'message' => __( 'No AI provider configured. Connect OpenAI or Gemini under MCPWP > Integrations, or configure mcpwp_chat_endpoint.', 'mcpwp' ),
+					)
+				);
+			}
+			$chat_secret = get_option( 'mcpwp_chat_secret', '' );
 
 			$response = wp_remote_post( $chat_endpoint, array(
 				'timeout' => 30,

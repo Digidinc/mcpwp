@@ -8,14 +8,13 @@ accounts (Claude, Meta, GitHub OAuth, Smithery, etc.) and, for the demo-site pac
 reviewer API key the owner mints on `demo.mcpwp.net`.
 
 Canonical claims used throughout (checked against `docs/launch/PH-LAUNCH-KIT.md`,
-`mcpwp/readme.txt`, and live URLs on 2026-09-26): 180+ tools free / 290+ with Pro; approval
+`mcpwp/readme.txt`, and live URLs): 180+ tools free / 290+ with Pro; approval
 gate is opt-in; publishing needs an admin-scoped key as of 3.13; verified AI clients are Claude
 Desktop, Claude Code, and Cursor; no EU AI Act or competitor-numbers claims are made anywhere in
-this set; the `Mumega-com/mcpwp` repo is private, so no GitHub links appear in any listing copy
-except where a package is explicitly blocked on that changing. Support contact is
+this set; the `Digidinc/mcpwp` repository is public under GPL-2.0 (`https://github.com/Digidinc/mcpwp`)
+with a root `glama.json` for Glama maintainer verification. Support contact is
 `support@mumega.com`, published at `https://mcpwp.net/contact/`; the demo/test site is
-`https://demo.mcpwp.net`, confirmed live on 2026-09-26 (`/wp-json/` returns the `mcpwp/v1`
-namespace).
+`https://demo.mcpwp.net` (`/wp-json/` returns the `mcpwp/v1` namespace).
 
 ## The one recurring step: mint a reviewer key on the demo site
 
@@ -34,10 +33,10 @@ both read and write tools to be callable by reviewers.
 |---|---|---|---|
 | [Claude connector directory](claude-connector-directory.md) | Developer portal (claude.ai/directory/manage) | Mint reviewer key on demo.mcpwp.net; export icon PNG; submit | 20–30 min |
 | [Meta Muse](meta-muse.md) | Developer portal (muse.ai/platform) | Same reviewer key; provide name; re-export icon at 512×512; submit | 15–20 min |
-| [Official MCP registry](mcp-registry.md) | CLI (`mcp-publisher`) | **Decide first**: update the stale `io.github.mumega848/mcpwp` in place, or accept a permanent duplicate under `io.github.mumega-com/mcpwp` — see the file for why this is close to irreversible; then run GitHub OAuth + `mcp-publisher publish` | 15–20 min (+ decision time) |
-| [Smithery](smithery.md) | Web form / CLI (`smithery.ai/new`) | Same reviewer key; publish by URL (no public repo needed) | 15 min |
-| [Glama](glama.md) | Auto-crawl of public GitHub repo | **Owner decision: repo visibility** — no form once public | 0 min (after decision) |
-| [mcp.so](mcp-so.md) | Web form (`mcp.so/submit`) | **Owner decision: repo visibility**; pick free vs. $39 tier once public | 5 min (after decision) |
+| [Official MCP registry](mcp-registry.md) | CLI (`mcp-publisher`) | **Decide first**: update the existing `io.github.mumega848/mcpwp` listing in place (via `mcp-server/server.json` after `npm publish --provenance`), or publish a separate remote entry under `io.github.digidinc/mcpwp` (`docs/launch/registry-server.json`); then run GitHub OAuth + `mcp-publisher publish` | 15–20 min (+ decision time) |
+| [Smithery](smithery.md) | Web form / CLI (`smithery.ai/new`) | Same reviewer key; publish by URL (or connect `Digidinc/mcpwp`) | 15 min |
+| [Glama](glama.md) | Auto-crawl of public GitHub repo (`glama.json` at root) | **READY** — `Digidinc/mcpwp` is public and root `glama.json` is committed; submit/claim on `glama.ai/mcp/servers` | 2 min |
+| [mcp.so](mcp-so.md) | Web form (`mcp.so/submit`) | **READY** — `Digidinc/mcpwp` is public; pick free vs. $39 tier and submit | 5 min |
 | [mcpservers.org](mcpservers-org.md) | Web form (`mcpservers.org/submit`) | Submit — no repo or demo site needed | 10 min |
 | [PulseMCP](pulsemcp.md) | None — auto-ingests from the official registry | Nothing beyond the registry decision above; verify listing after it publishes | 0 min |
 
@@ -51,17 +50,13 @@ both read and write tools to be callable by reviewers.
 3. **Official MCP registry** — do this only after the duplicate-listing decision is made;
    PulseMCP follows automatically once it's done.
 4. **Smithery** — same reviewer key as step 1, so it's nearly free to do right after.
-5. **Glama and mcp.so** — whenever the repo-visibility decision lands; both are then near-zero
-   effort.
+5. **Glama and mcp.so** — `Digidinc/mcpwp` is now public and `glama.json` is at the repo root;
+   both are ready to submit/claim immediately.
 
 ## Remaining owner decisions (not resolved by this pass)
 - **MCP registry duplicate-listing question** — `mcp-registry.md` lays out the two branches
   (update `io.github.mumega848/mcpwp` in place vs. publish a second name under
-  `io.github.mumega-com/mcpwp`) and why the registry has no self-service way to undo the wrong
+  `io.github.digidinc/mcpwp`) and why the registry has no self-service way to undo the wrong
   choice.
-- **Repo visibility** — still private as of 2026-09-26; blocks Glama and mcp.so outright, and
-  softly affects the MCP registry listing's usefulness (the repo link is dead to visitors even
-  if OAuth ownership still verifies). Tracked separately in `docs/launch/PH-LAUNCH-KIT.md`'s
-  pre-launch checklist.
 - **Icon assets** — `docs/launch/gallery/src/icon.svg` (256×256) exists but needs raster export
   at whatever size each portal asks for (Muse specifically wants 512×512).

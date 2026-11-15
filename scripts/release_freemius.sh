@@ -15,6 +15,7 @@ Required:
 Options:
   --token TOKEN                  Freemius bearer token (or FREEMIUS_BEARER_TOKEN)
   --product-id ID                Freemius product id (default: 23824 or FREEMIUS_PRODUCT_ID)
+                                 (set FREEMIUS_WP_ORG_GATEKEEPER in env to inject wp_org_gatekeeper)
   --release-mode MODE            release mode for tag update (default: released).
                                 Allowed: released | pending | beta | all.
                                 Alias: unreleased -> pending.

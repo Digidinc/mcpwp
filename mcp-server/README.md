@@ -25,7 +25,7 @@ The WordPress plugin exposes a complete MCP endpoint at `/wp-json/mcpwp/v1/mcp`.
 ### 1. Install WordPress Plugin
 
 Install **MCPWP** on your WordPress site:
-1. Download from [GitHub releases](https://github.com/Mumega-com/mcpwp/releases) or your Freemius account
+1. Download from [GitHub releases](https://github.com/Digidinc/mcpwp/releases) or [mcpwp.net](https://mcpwp.net)
 2. Upload to WordPress: **WP Admin > Plugins > Add New > Upload Plugin**
 3. Activate and copy your API key from **MCPWP** (top-level admin menu)
 
@@ -38,7 +38,7 @@ npx -y @mcpwp.net/mcpwp --setup
 This will:
 - Prompt for your WordPress URL and API key
 - Test the connection
-- Save configuration to `~/.mumega-mcp/config.json`
+- Save configuration to `~/.mcpwp/config.json`
 - Show Claude Desktop config snippet
 
 ### 3. Configure Your MCP Client
@@ -50,7 +50,7 @@ This will:
   "mcpServers": {
     "mcpwp-mysite": {
       "command": "npx",
-      "args": ["-y", "mcpwp"],
+      "args": ["-y", "@mcpwp.net/mcpwp"],
       "env": {
         "WP_URL": "https://your-site.com",
         "WP_API_KEY": "mcpwp_your_key"
@@ -67,7 +67,7 @@ This will:
   "mcpServers": {
     "wordpress": {
       "command": "npx",
-      "args": ["-y", "mcpwp"],
+      "args": ["-y", "@mcpwp.net/mcpwp"],
       "env": {
         "WP_URL": "https://your-site.com",
         "WP_API_KEY": "mcpwp_your_key"
@@ -99,12 +99,12 @@ For multiple sites, add separate entries with unique names:
   "mcpServers": {
     "mcpwp-production": {
       "command": "npx",
-      "args": ["-y", "mcpwp"],
+      "args": ["-y", "@mcpwp.net/mcpwp"],
       "env": { "WP_URL": "https://example.com", "WP_API_KEY": "mcpwp_..." }
     },
     "mcpwp-staging": {
       "command": "npx",
-      "args": ["-y", "mcpwp"],
+      "args": ["-y", "@mcpwp.net/mcpwp"],
       "env": { "WP_URL": "https://staging.example.com", "WP_API_KEY": "mcpwp_..." }
     }
   }
@@ -170,7 +170,7 @@ WP_CONFIG_PATH=~/custom/config.json # Optional, custom config path
 
 ### Config File
 
-Location: `~/.mumega-mcp/config.json`
+Location: `~/.mcpwp/config.json`
 
 ```json
 {
@@ -214,7 +214,7 @@ Verify:
 ### No Tools Appearing
 
 1. Restart your MCP client
-2. Check config: `cat ~/.mumega-mcp/config.json`
+2. Check config: `cat ~/.mcpwp/config.json`
 3. Test connection: `WP_URL=... WP_API_KEY=... npx @mcpwp.net/mcpwp --test`
 4. Check client logs for MCP errors
 
@@ -235,7 +235,7 @@ Verify:
 ## Development
 
 ```bash
-git clone https://github.com/Mumega-com/mcpwp.git
+git clone https://github.com/Digidinc/mcpwp.git
 cd mcpwp/mcp-server
 bun install
 bun run build       # Single-file bundle to dist/index.js
@@ -249,5 +249,5 @@ MIT © Mumega
 ---
 
 **Documentation:** https://mcpwp.net
-**Issues:** https://github.com/Mumega-com/mcpwp/issues
-**WordPress Plugin:** https://github.com/Mumega-com/mcpwp/releases
+**Issues:** https://github.com/Digidinc/mcpwp/issues
+**WordPress Plugin:** https://github.com/Digidinc/mcpwp/releases

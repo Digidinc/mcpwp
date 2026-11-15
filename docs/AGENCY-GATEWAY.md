@@ -3,7 +3,7 @@
 The agency gateway lets an operator connect **one** MCP client (Claude, Cursor, etc.) and manage **all** their MCPWP-running WordPress sites through it — instead of adding a separate connector per site. One token, one connection, a `_site` selector to switch. Tool count stays flat (~252) no matter how many sites you add.
 
 - **Live endpoint:** `https://proxy.mcpwp.net/mcp`
-- **Source:** `mcpwp-agency-proxy/` (Cloudflare Worker, Hono, TypeScript) — deployed as `mcpwp-agency-proxy`.
+- **Source:** Private cloud repository `Digidinc/mcpwp-cloud` (Cloudflare Worker, Hono, TypeScript) — extracted out of this public GPLv2 plugin repository.
 - **Status:** hardened + adversarial-reviewed for the operator's own sites. Onboarding *third-party* customers is gated on the OAuth-custody upgrade (issue #549) so the gateway holds revocable tokens, not master keys.
 
 ## Why

@@ -220,7 +220,7 @@ Go to WordPress Admin → MCPWP → Settings and increase rate limits.
 - [MCP Protocol Reference](docs/MCP_NATIVE_ENDPOINT.md)
 - [Elementor Widget Reference](docs/ELEMENTOR_WIDGET_REFERENCE.md)
 - [REST API Reference](docs/API.md)
-- GitHub: https://github.com/Mumega-com/mcp-for-wp
+- GitHub: https://github.com/Digidinc/mcpwp
 
 ---
 

@@ -75,6 +75,36 @@ if "define( 'MCPWP_FREEMIUS_BUILD'" not in content:
 path.write_text(content, encoding="utf-8")
 PY
 
+if [[ -n "${FREEMIUS_WP_ORG_GATEKEEPER:-}" ]]; then
+	echo "    Injecting wp_org_gatekeeper into includes/freemius-init.php..."
+	python3 - "$DEST/includes/freemius-init.php" <<'PY'
+import os
+import re
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+gatekeeper = os.environ["FREEMIUS_WP_ORG_GATEKEEPER"]
+escaped = gatekeeper.replace("\\", "\\\\").replace("'", "\\'")
+entry_line = f"\t\t\t\t'wp_org_gatekeeper'   => '{escaped}',"
+
+content = path.read_text(encoding="utf-8")
+existing_re = re.compile(r"^[ \t]*'wp_org_gatekeeper'[ \t]*=>[ \t]*'(?:\\.|[^'\\])*',[ \t]*$", re.MULTILINE)
+if existing_re.search(content):
+    content = existing_re.sub(lambda _m: entry_line, content, count=1)
+else:
+    anchor = "'is_org_compliant'    => true,"
+    if anchor not in content:
+        sys.stderr.write("Error: 'is_org_compliant' anchor not found in includes/freemius-init.php\n")
+        sys.exit(1)
+    content = content.replace(anchor, anchor + "\n" + entry_line, 1)
+
+path.write_text(content, encoding="utf-8")
+PY
+else
+	echo "    [INFO] FREEMIUS_WP_ORG_GATEKEEPER not set; skipping wp_org_gatekeeper injection"
+fi
+
 echo "    Applying .distignore with Freemius exceptions..."
 if [[ -f "$DEST/.distignore" ]]; then
 	while IFS= read -r pattern; do
@@ -137,6 +167,38 @@ if grep -q "includes/freemius-init.php" "$ZIP_MANIFEST"; then
 else
 	echo "    [FAIL] Freemius bootstrap missing"
 	exit 1
+fi
+
+if grep -Eq "'wp_org_gatekeeper'[[:space:]]*=>" "$PLUGIN_DIR/includes/freemius-init.php"; then
+	echo "    [FAIL] Source includes/freemius-init.php contains a hardcoded wp_org_gatekeeper secret"
+	exit 1
+else
+	echo "    [OK] Source includes/freemius-init.php has no hardcoded wp_org_gatekeeper"
+fi
+
+if command -v php >/dev/null 2>&1; then
+	if php -l "$DEST/includes/freemius-init.php" >/dev/null 2>&1; then
+		echo "    [OK] Packaged includes/freemius-init.php PHP syntax valid"
+	else
+		echo "    [FAIL] Packaged includes/freemius-init.php failed PHP syntax check"
+		exit 1
+	fi
+fi
+
+if [[ -n "${FREEMIUS_WP_ORG_GATEKEEPER:-}" ]]; then
+	if unzip -p "$OUTPUT_ZIP" mcpwp/includes/freemius-init.php | grep -Eq "'wp_org_gatekeeper'[[:space:]]*=>"; then
+		echo "    [OK] wp_org_gatekeeper injected into packaged Freemius zip"
+	else
+		echo "    [FAIL] FREEMIUS_WP_ORG_GATEKEEPER was set, but wp_org_gatekeeper is missing in packaged zip"
+		exit 1
+	fi
+else
+	if unzip -p "$OUTPUT_ZIP" mcpwp/includes/freemius-init.php | grep -Eq "'wp_org_gatekeeper'[[:space:]]*=>"; then
+		echo "    [FAIL] wp_org_gatekeeper unexpectedly present when FREEMIUS_WP_ORG_GATEKEEPER is unset"
+		exit 1
+	else
+		echo "    [OK] No wp_org_gatekeeper in zip (FREEMIUS_WP_ORG_GATEKEEPER unset)"
+	fi
 fi
 
 if grep -qx "mcpwp/$FREEMIUS_ICON" "$ZIP_MANIFEST"; then

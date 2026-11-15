@@ -174,10 +174,10 @@ CREATE TABLE activity (
 
 | Asset | Location | Reuse |
 |-------|----------|-------|
-| MCP Gateway Worker | `wp-ai-gateway.weathered-scene-2272.workers.dev` | Proxy site operations |
-| D1 Database | `site-pilot-ai` (1528167f) | Extend with dashboard tables |
-| KV Namespace | `WP_CACHE` (9b337083) | Session/cache storage |
-| Cloudflare Account | Admin@digid.ca | Deploy Pages + Workers |
+| MCP Gateway Worker | `<your-gateway>.workers.dev` | Proxy site operations |
+| D1 Database | `site-pilot-ai` (`<d1-database-id>`) | Extend with dashboard tables |
+| KV Namespace | `WP_CACHE` (`<kv-namespace-id>`) | Session/cache storage |
+| Cloudflare Account | `<cloudflare-account>` | Deploy Pages + Workers |
 
 ---
 

@@ -20,6 +20,7 @@ trap "rm -rf $STAGING" EXIT
 
 # Copy required files
 cp manifest.json "$STAGING/"
+cp package.json "$STAGING/"
 cp README.md "$STAGING/"
 cp -r dist/ "$STAGING/dist/"
 

@@ -1,11 +1,6 @@
 # GitHub Repo Metadata — recommended values (#514)
 
-> STATUS: DRAFT — Hadi applies these via repo **Settings** (description/topics/website) and the **Sponsor** button. I do not change live repo settings.
->
-> **The `Mumega-com/mcpwp` repo is currently private.** Do not link it in any public
-> launch copy, and do not use the "Open Source" topic/tag anywhere, until
-> [OWNER DECISION: make repo public?] is resolved. Everything below only applies once
-> (if) the repo goes public.
+> STATUS: READY TO APPLY — `https://github.com/Digidinc/mcpwp` is public under GPL-2.0. Hadi applies these via repo **Settings** (description/topics/website) and the **Sponsor** button.
 
 ## Description (the stale "239 tools" claim is the #514 item)
 Live now: `⚡ 239 MCP tools for WordPress …` — **239 is inflated/unverified.** Counting the
@@ -25,8 +20,7 @@ hard-codes a number; it drifts with every release.)
 
 ## Topics (current set is already good — minor adds)
 Live: ai, claude, mcp, model-context-protocol, woocommerce, wordpress, wordpress-plugin, elementor.
-**Add:** `ai-agents`, `cursor`, `seo`, `model-context-protocol-server`. (GitHub caps at 20; all fit.)
-**Do not add** `open-source` — the repo is private.
+**Add:** `ai-agents`, `cursor`, `seo`, `model-context-protocol-server`, `open-source`. (GitHub caps at 20; all fit.)
 
 ## Website
 Set repo **Website** to `https://mcpwp.net`.

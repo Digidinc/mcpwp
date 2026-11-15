@@ -61,7 +61,7 @@ fi
 # The prefix wildcard is the point: the real names in this repo are
 # FREEMIUS_BEARER_TOKEN and CF_API_TOKEN, not bare TOKEN, and a pattern
 # anchored to the start of the name catches neither.
-assignment="(^|[[:space:];({]|export +)[A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|APIKEY|BEARER|PRIVATE_?KEY|CREDENTIAL|ACCESS_KEY)[A-Za-z0-9_]*="
+assignment="(^|[[:space:];({]|export +)[A-Za-z0-9_]*(TOKEN|SECRET|PASSWORD|PASSWD|PASSPHRASE|API_?KEY|APIKEY|BEARER|PRIVATE_?KEY|CREDENTIAL|ACCESS_KEY|GATEKEEPER)[A-Za-z0-9_]*="
 
 # The value is read from somewhere rather than written down: \$VAR, \${VAR},
 # \$(cmd), \`cmd\`. Every legitimate use in this repo has this shape.

@@ -134,4 +134,4 @@ mode (JavaScript semantics), while MCPWP evaluates it as PCRE with the `u` and `
 
 ## Request a Plugin
 
-Want MCPWP to support your favorite plugin? [File a feature request](https://github.com/Mumega-com/mcp-for-wp/issues/new?template=feature_request.md) with the plugin name and what tools you'd need.
+Want MCPWP to support your favorite plugin? [File a feature request](https://github.com/Digidinc/mcpwp/issues/new?template=feature_request.md) with the plugin name and what tools you'd need.

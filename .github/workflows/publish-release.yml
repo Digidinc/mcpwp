@@ -36,7 +36,7 @@ jobs:
       - name: Publish to canonical R2 channel
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: "e39eaf94f33092c4efd029d94ae1e9dd"
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           MCPWP_WORKER_DIR: ${{ github.workspace }}
         run: bash scripts/publish_update_release.sh --build --r2-only
 

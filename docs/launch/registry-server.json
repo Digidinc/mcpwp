@@ -1,12 +1,13 @@
 {
-  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-07-09/server.schema.json",
-  "name": "io.github.mumega-com/mcpwp",
-  "description": "Turn any WordPress site into an MCP server. Lets AI clients (Claude, Cursor, ChatGPT, Windsurf) build pages, edit Elementor, run WooCommerce, and manage media/SEO through natural language — governed, approval-gated, and auditable.",
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.digidinc/mcpwp",
+  "title": "MCPWP",
+  "description": "Turn any WordPress site into a governed MCP server for Claude, Cursor, ChatGPT, and Windsurf.",
   "repository": {
-    "url": "https://github.com/Mumega-com/mcpwp",
+    "url": "https://github.com/Digidinc/mcpwp",
     "source": "github"
   },
-  "version": "3.14.0",
+  "version": "3.14.15",
   "websiteUrl": "https://mcpwp.net",
   "remotes": [
     {
@@ -15,7 +16,7 @@
       "headers": [
         {
           "name": "X-API-Key",
-          "description": "Per-site MCPWP API key (generated in WP Admin > MCPWP > Settings). Each WordPress install is its own MCP server endpoint.",
+          "description": "Per-site MCPWP API key (generated in WP Admin > MCPWP > Setup). Each WordPress install is its own MCP server endpoint.",
           "isRequired": true,
           "isSecret": true
         }

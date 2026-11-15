@@ -56,17 +56,15 @@ if ( ! function_exists( 'mcpwp_fs' ) ) {
 				'type'                => 'plugin',
 				'public_key'          => 'pk_24f806380f2ccf8a5e3283dac895b',
 				// Free + premium distribution. The premium source sets is_premium
-				// true; Freemius auto-generates the free wp.org version (is_premium
-				// flipped) using wp_org_gatekeeper.
+				// true; when FREEMIUS_WP_ORG_GATEKEEPER is set in the build
+				// environment, scripts/build-freemius.sh injects wp_org_gatekeeper
+				// into the packaged Freemius build only (never committed to source).
 				'is_premium'          => true,
 				'is_premium_only'     => false,
 				'has_premium_version' => true,
 				'has_addons'          => false,
 				'has_paid_plans'      => true,
 				'is_org_compliant'    => true,
-				// Authorizes Freemius to generate the free wp.org build. Stripped
-				// from the free version automatically.
-				'wp_org_gatekeeper'   => 'OA7#BoRiBNqdf52FvzEf!!074aRLPs8fspif$7K1#4u4Csys1fQlCecVcUTOs2mcpeVHi#C2j9d09fOTvbC0HloPT7fFee5WdS3G',
 				// is_require_payment=false + anonymous mode allowed: free tier is
 				// usable immediately (Skip), Pro is a passive Upgrade nag rather
 				// than a hard license/payment gate at first activation. The free

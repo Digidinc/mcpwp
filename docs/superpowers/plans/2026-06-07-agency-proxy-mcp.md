@@ -64,7 +64,7 @@ mkdir -p spai-proxy-worker/src spai-proxy-worker/test
 name = "mcpwp-agency-proxy"
 main = "src/index.ts"
 compatibility_date = "2024-11-05"
-account_id = "e39eaf94f33092c4efd029d94ae1e9dd"
+account_id = "<CLOUDFLARE_ACCOUNT_ID>"
 
 routes = [
   { pattern = "proxy.mcpwp.net/*", zone_name = "mcpwp.net" }

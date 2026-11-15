@@ -8,9 +8,10 @@
  */
 
 import { randomBytes } from "crypto";
-import { appendFileSync } from "fs";
+import { appendFileSync, readFileSync } from "fs";
 import { homedir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
+import { fileURLToPath } from "url";
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -30,7 +31,22 @@ import { withUpstreamInstructions } from "./initialize.js";
 import { McpProxy } from "./proxy.js";
 import { runSetup } from "./setup.js";
 
-const VERSION = "3.0.0";
+const FALLBACK_VERSION = "3.0.3";
+
+function resolvePackageVersion(): string {
+  try {
+    const pkgPath = join(dirname(fileURLToPath(import.meta.url)), "..", "package.json");
+    const parsed = JSON.parse(readFileSync(pkgPath, "utf-8")) as { version?: unknown };
+    if (typeof parsed.version === "string" && parsed.version.trim() !== "") {
+      return parsed.version.trim();
+    }
+  } catch {
+    // Standalone bundle without adjacent package.json (e.g. .mcpb archive).
+  }
+  return FALLBACK_VERSION;
+}
+
+const VERSION = resolvePackageVersion();
 
 function log(level: string, message: string, data?: any): void {
   const ts = new Date().toISOString();
@@ -69,7 +85,8 @@ Config File:
   ~/.mcpwp/config.json
 
 Documentation:
-  https://github.com/Mumega-com/mcpwp
+  https://mcpwp.net
+  https://github.com/Digidinc/mcpwp
 `);
   process.exit(0);
 }

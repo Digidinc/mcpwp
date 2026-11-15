@@ -733,7 +733,7 @@ An `initialize` in the same JSON-RPC batch wins over the header. The npm proxy (
 own `initialize` against WordPress with the version its host negotiated and forwards the answer as the
 header on every request after that. Both proxies also pass WordPress's `initialize` `instructions`
 (the "Finding Tools" guidance) on to the client (#1074): the npm proxy patches them into the SDK's
-`initialize` response; the agency gateway (`mcpwp-agency-proxy/`) sends the selected site's (the only
+`initialize` response; the hosted agency gateway (`Digidinc/mcpwp-cloud`) sends the selected site's (the only
 site, or the `_site` / `X-Mcpwp-Site` hint) plus a `_site` note, or a short generic version when none
 is selected, and forwards the client's `MCP-Protocol-Version` on every upstream call.
 

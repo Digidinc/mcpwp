@@ -8,11 +8,11 @@ All submissions use the same core content. Do them in this order — npm publish
 
 ```bash
 cd mcp-server/
-npm login            # one-time — use npmjs.com account
-npm publish --access public
+npm login            # one-time — or publish via GitHub Actions OIDC
+npm publish --provenance --access public
 ```
 
-Verify: https://www.npmjs.com/package/mcpwp
+Verify: https://www.npmjs.com/package/@mcpwp.net/mcpwp
 
 ---
 
@@ -32,7 +32,7 @@ cd mcp-server/
 mcp-publisher publish
 ```
 
-Verify: `curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.Mumega-com/mcpwp"`
+Verify: `curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=mcpwp"`
 
 ---
 
@@ -90,7 +90,7 @@ The plugin's `.mcp.json` config:
 - Name: MCPWP
 - Description: MCP server for WordPress — 200+ tools for content, Elementor, WooCommerce, SEO, and more
 - npm: `mcpwp`
-- GitHub: https://github.com/Mumega-com/mcpwp
+- GitHub: https://github.com/Digidinc/mcpwp
 - Category: CMS / Content Management
 - Tags: wordpress, woocommerce, elementor, seo, cms
 
@@ -102,7 +102,7 @@ The plugin's `.mcp.json` config:
 
 **Required:**
 - npm package name: `mcpwp`
-- GitHub URL: https://github.com/Mumega-com/mcpwp
+- GitHub URL: https://github.com/Digidinc/mcpwp
 - Short description: MCP for WordPress — posts, pages, Elementor, WooCommerce, SEO
 
 Smithery auto-imports from npm + GitHub, minimal extra work.
@@ -123,7 +123,7 @@ Same info as smithery — npm package + GitHub URL.
 
 Add one line to the CMS section:
 ```markdown
-- [mcpwp](https://github.com/Mumega-com/mcpwp) - MCP operator layer for WordPress. 200+ tools for posts, pages, Elementor, WooCommerce, SEO, media, and more.
+- [mcpwp](https://github.com/Digidinc/mcpwp) - MCP operator layer for WordPress. 200+ tools for posts, pages, Elementor, WooCommerce, SEO, media, and more.
 ```
 
 ---
@@ -149,6 +149,6 @@ Add entry to the marketplace JSON. Format matches existing entries.
 npx @mcpwp.net/mcpwp --setup
 ```
 
-**GitHub:** https://github.com/Mumega-com/mcpwp  
+**GitHub:** https://github.com/Digidinc/mcpwp  
 **Homepage:** https://mcpwp.net  
 **License:** MIT

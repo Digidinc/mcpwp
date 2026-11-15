@@ -12,8 +12,9 @@ jobs:
       - name: List mumcp-updates bucket
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: "e39eaf94f33092c4efd029d94ae1e9dd"
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
         run: |
+          if [ -z "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then unset CLOUDFLARE_ACCOUNT_ID; fi
           npx -y wrangler@latest r2 object get mumcp-updates/version.json --remote --pipe > /tmp/version.json
           echo "--- version.json (first 20 lines) ---"
           head -20 /tmp/version.json

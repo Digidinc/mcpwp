@@ -79,7 +79,7 @@ File: `includes/freemius-init.php`. Loaded only when `defined('MCPWP_FREEMIUS_BU
 | `is_premium` | `true` | This ZIP is the premium source |
 | `is_premium_only` | `false` | Free users can install too |
 | `has_premium_version` | `true` | Tells Freemius there is a premium upgrade |
-| `wp_org_gatekeeper` | `OA7#...` | Authorizes Freemius to auto-generate the free WP.org build |
+| `wp_org_gatekeeper` | *(injected at build via `FREEMIUS_WP_ORG_GATEKEEPER`)* | Authorizes Freemius to auto-generate the free WP.org build (never committed to public source) |
 | `trial.days` | `14` | Trial length (`is_require_payment: true`) |
 | `menu.first-path` | `admin.php?page=mcpwp` | Freemius "Get Started" link target |
 | `menu.account` / `pricing` | `true` | Renders Freemius account + pricing sub-pages |

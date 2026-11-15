@@ -288,7 +288,7 @@ mcpwp/
 ## Support
 
 For issues or questions:
-- GitHub: https://github.com/Mumega-com/mcp-for-wp
+- GitHub: https://github.com/Digidinc/mcpwp
 - Email: support@mumega.com
 - Documentation: See `docs/MCP_NATIVE_ENDPOINT.md`
 
