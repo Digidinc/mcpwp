@@ -3,13 +3,17 @@
  * Upgrade-time key hygiene: keys whose secret matches a stored verifier are revoked.
  *
  * Covered: a matching record is revoked whichever stored verifier it matches;
- * plaintext option leftovers are not candidates; normal records are untouched;
- * several records at once; the sweep is bounded and resumes (including under
- * real bcrypt); progress survives added records; an unreadable or locked store
- * fails closed; a refused revoke is reported and retried; a store write between
- * snapshot and revoke returns changed; the notice and the Site Health item are
- * gated and escaped and never show a hash; admin ajax/admin-post/REST/cron skip
- * the sweep; the plugin wires the sweep into upgrade, activation and admin_init.
+ * plaintext option leftovers and non-verifier record hashes are not candidates;
+ * normal records are untouched; several records at once; the sweep is bounded
+ * and resumes (including under real bcrypt); progress survives added records;
+ * an unreadable or locked store fails closed; a refused revoke is reported and
+ * retried; a match whose target was revoked/deleted/regenerated elsewhere does
+ * not stick the sweep; matched state stores fingerprints only; admin does the
+ * external pass under a short budget and cron finishes record-vs-record (with a
+ * tiny admin fallback); a store write between snapshot and revoke returns
+ * changed; the notice and the Site Health item are gated and escaped and never
+ * show a hash; admin ajax/admin-post/REST/cron skip the admin_init sweep; the
+ * plugin wires upgrade, activation, admin_init and the cron hook.
  *
  * @package MCPWP
  */
@@ -36,21 +40,30 @@ final class KeyHygieneSweepTest extends TestCase {
 	/** A budget no test reaches: one run finishes the sweep. */
 	private const LONG = 600.0;
 
+	/** @var array<string,mixed> */
+	private $server_backup = array();
+
+	/** @var mixed */
+	private $pagenow_backup;
+
 	protected function setUp(): void {
-		$GLOBALS['mcpwp_test_options']      = array();
-		$GLOBALS['mcpwp_test_transients']   = array();
-		$GLOBALS['mcpwp_test_current_user'] = 0;
-		$GLOBALS['mcpwp_test_user_caps']    = array();
-		$GLOBALS['mcpwp_test_user_meta']    = array();
-		$GLOBALS['mcpwp_test_filters']      = array();
-		$GLOBALS['mcpwp_test_wpdb_options'] = array();
-		$GLOBALS['mcpwp_test_object_cache'] = array();
-		$GLOBALS['mcpwp_test_doing_ajax']        = false;
-		$GLOBALS['mcpwp_test_doing_cron']        = false;
-		$GLOBALS['mcpwp_test_rest_request']      = false;
-		$GLOBALS['mcpwp_test_is_admin_post']     = false;
-		$GLOBALS['mcpwp_test_wpdb_col_charset']  = 'utf8mb4';
-		unset( $GLOBALS['mcpwp_test_key_hygiene_between'] );
+		$this->server_backup  = $_SERVER;
+		$this->pagenow_backup = $GLOBALS['pagenow'] ?? null;
+		$GLOBALS['mcpwp_test_options']         = array();
+		$GLOBALS['mcpwp_test_transients']      = array();
+		$GLOBALS['mcpwp_test_current_user']    = 0;
+		$GLOBALS['mcpwp_test_user_caps']       = array();
+		$GLOBALS['mcpwp_test_user_meta']       = array();
+		$GLOBALS['mcpwp_test_filters']         = array();
+		$GLOBALS['mcpwp_test_actions']         = array();
+		$GLOBALS['mcpwp_test_wpdb_options']    = array();
+		$GLOBALS['mcpwp_test_object_cache']    = array();
+		$GLOBALS['mcpwp_test_doing_ajax']      = false;
+		$GLOBALS['mcpwp_test_doing_cron']      = false;
+		$GLOBALS['mcpwp_test_wpdb_col_charset'] = 'utf8mb4';
+		$GLOBALS['mcpwp_test_cron']            = array();
+		unset( $GLOBALS['pagenow'] );
+		unset( $_SERVER['REQUEST_URI'], $_SERVER['PHP_SELF'], $_SERVER['SCRIPT_NAME'], $_SERVER['SCRIPT_FILENAME'] );
 		$_GET  = array();
 		$_POST = array();
 	}
@@ -61,10 +74,16 @@ final class KeyHygieneSweepTest extends TestCase {
 		$GLOBALS['mcpwp_test_wpdb_options']     = array();
 		$GLOBALS['mcpwp_test_doing_ajax']       = false;
 		$GLOBALS['mcpwp_test_doing_cron']       = false;
-		$GLOBALS['mcpwp_test_rest_request']     = false;
-		$GLOBALS['mcpwp_test_is_admin_post']    = false;
 		$GLOBALS['mcpwp_test_wpdb_col_charset'] = 'utf8mb4';
-		unset( $GLOBALS['mcpwp_test_key_hygiene_between'] );
+		$GLOBALS['mcpwp_test_filters']         = array();
+		$GLOBALS['mcpwp_test_actions']         = array();
+		$GLOBALS['mcpwp_test_cron']            = array();
+		$_SERVER = $this->server_backup;
+		if ( null === $this->pagenow_backup ) {
+			unset( $GLOBALS['pagenow'] );
+		} else {
+			$GLOBALS['pagenow'] = $this->pagenow_backup;
+		}
 		$_POST = array();
 	}
 
@@ -435,25 +454,28 @@ final class KeyHygieneSweepTest extends TestCase {
 			)
 		);
 
-		$GLOBALS['mcpwp_test_key_hygiene_between'] = static function () {
-			Mcpwp_Key_Store::mutate(
-				static function ( array $keys ) {
-					$keys[] = array(
-						'id'           => 'k_injected',
-						'label'        => 'Injected',
-						'hash'         => md5( 'injected' ),
-						'scopes'       => array( 'read' ),
-						'created_at'   => '2026-01-01 00:00:00',
-						'last_used_at' => null,
-						'revoked_at'   => null,
-					);
-					return array( $keys, true );
-				}
-			);
-		};
+		add_action(
+			'mcpwp_key_hygiene_between_checks',
+			static function () {
+				Mcpwp_Key_Store::mutate(
+					static function ( array $keys ) {
+						$keys[] = array(
+							'id'           => 'k_injected',
+							'label'        => 'Injected',
+							'hash'         => md5( 'injected' ),
+							'scopes'       => array( 'read' ),
+							'created_at'   => '2026-01-01 00:00:00',
+							'last_used_at' => null,
+							'revoked_at'   => null,
+						);
+						return array( $keys, true );
+					}
+				);
+			}
+		);
 
 		$outcome = Mcpwp_Key_Hygiene::run( self::LONG, 100000 );
-		unset( $GLOBALS['mcpwp_test_key_hygiene_between'] );
+		unset( $GLOBALS['mcpwp_test_actions']['mcpwp_key_hygiene_between_checks'] );
 
 		$this->assertSame( 'changed', $outcome['status'] );
 		$this->assertNull( $this->by_id( 'k_match' )['revoked_at'], 'No revoke applied on a changed store.' );
@@ -683,15 +705,15 @@ final class KeyHygieneSweepTest extends TestCase {
 		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
 		$GLOBALS['mcpwp_test_doing_ajax'] = false;
 
-		$GLOBALS['mcpwp_test_is_admin_post'] = true;
+		add_filter( 'mcpwp_key_hygiene_is_admin_post', static function () { return true; } );
 		Mcpwp_Key_Hygiene::maybe_run_for_admin();
 		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
-		$GLOBALS['mcpwp_test_is_admin_post'] = false;
+		$GLOBALS['mcpwp_test_filters'] = array();
 
-		$GLOBALS['mcpwp_test_rest_request'] = true;
+		add_filter( 'mcpwp_key_hygiene_is_rest_request', static function () { return true; } );
 		Mcpwp_Key_Hygiene::maybe_run_for_admin();
 		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
-		$GLOBALS['mcpwp_test_rest_request'] = false;
+		$GLOBALS['mcpwp_test_filters'] = array();
 
 		$GLOBALS['mcpwp_test_doing_cron'] = true;
 		Mcpwp_Key_Hygiene::maybe_run_for_admin();
@@ -700,6 +722,25 @@ final class KeyHygieneSweepTest extends TestCase {
 
 		Mcpwp_Key_Hygiene::maybe_run_for_admin();
 		$this->assertTrue( Mcpwp_Key_Hygiene::is_done() );
+	}
+
+	public function test_admin_post_skip_matches_script_name_only(): void {
+		update_option( Mcpwp_Key_Store::OPTION, array( $this->record( 'k1', 'One', md5( 'one' ) ) ) );
+		$this->become_admin();
+
+		$_SERVER['REQUEST_URI'] = '/wp-admin/admin.php?page=mcpwp&redirect_to=admin-post.php';
+		Mcpwp_Key_Hygiene::maybe_run_for_admin();
+		$this->assertTrue( Mcpwp_Key_Hygiene::is_done(), 'admin-post.php in a query string must not skip the sweep.' );
+
+		delete_option( Mcpwp_Key_Hygiene::FLAG );
+		$_SERVER['REQUEST_URI'] = '/wp-admin/admin-post.php?action=something';
+		Mcpwp_Key_Hygiene::maybe_run_for_admin();
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done(), 'The admin-post.php script itself is skipped.' );
+
+		unset( $_SERVER['REQUEST_URI'] );
+		$GLOBALS['pagenow'] = 'admin-post.php';
+		Mcpwp_Key_Hygiene::maybe_run_for_admin();
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
 	}
 
 	public function test_the_plugin_runs_the_sweep_on_upgrade_activation_and_admin_init(): void {
@@ -713,6 +754,8 @@ final class KeyHygieneSweepTest extends TestCase {
 		Mcpwp_Key_Hygiene::init();
 		$callbacks = array_column( $GLOBALS['mcpwp_test_actions']['admin_init'][10] ?? array(), 'callback' );
 		$this->assertContains( array( 'Mcpwp_Key_Hygiene', 'maybe_run_for_admin' ), $callbacks );
+		$cron = array_column( $GLOBALS['mcpwp_test_actions'][ Mcpwp_Key_Hygiene::CRON_HOOK ][10] ?? array(), 'callback' );
+		$this->assertContains( array( 'Mcpwp_Key_Hygiene', 'maybe_run_for_cron' ), $cron );
 	}
 
 	public function test_the_uninstaller_removes_the_sweep_options(): void {
@@ -721,5 +764,220 @@ final class KeyHygieneSweepTest extends TestCase {
 			$this->assertContains( $option, Mcpwp_Uninstaller::LEGACY_OPTIONS );
 		}
 		$this->assertContains( Mcpwp_Key_Hygiene::DISMISSED_META, Mcpwp_Uninstaller::LEGACY_USER_META );
+		$this->assertContains( Mcpwp_Key_Hygiene::CRON_HOOK, Mcpwp_Uninstaller::LEGACY_CRON_HOOKS );
+	}
+
+	// ── review follow-ups ────────────────────────────────────────────────
+
+	private function seed_refused_match( string $id = 'k_match' ): string {
+		$legacy = md5( 'legacy-stuck-' . $id );
+		update_option( 'mcpwp_api_key', $legacy );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array( $this->record( $id, "label \u{1F600}", md5( $legacy ) ) )
+		);
+		$GLOBALS['mcpwp_test_wpdb_col_charset'] = 'latin1';
+		$outcome = Mcpwp_Key_Hygiene::run( self::LONG );
+		$this->assertSame( 'unsupported_characters', $outcome['status'] );
+		$this->assertSame( array( $id ), array_column( Mcpwp_Key_Hygiene::pending_records(), 'id' ) );
+		$GLOBALS['mcpwp_test_wpdb_col_charset'] = 'utf8mb4';
+		return $legacy;
+	}
+
+	public function test_a_match_revoked_elsewhere_clears_pending_and_can_finish(): void {
+		$this->seed_refused_match( 'k_elsewhere' );
+		$state = get_option( Mcpwp_Key_Hygiene::STATE_OPTION );
+		$this->assertIsArray( $state );
+		$this->assertNotEmpty( $state['matched'] );
+		foreach ( $state['matched'] as $info ) {
+			$this->assertArrayHasKey( 'candidate_fp', $info );
+			$this->assertArrayNotHasKey( 'candidate', $info );
+		}
+
+		Mcpwp_Key_Store::mutate(
+			static function ( array $keys ) {
+				foreach ( $keys as $i => $record ) {
+					if ( isset( $record['id'] ) && 'k_elsewhere' === $record['id'] ) {
+						$keys[ $i ]['revoked_at'] = '2026-04-01 00:00:00';
+					}
+				}
+				return array( $keys, true );
+			}
+		);
+
+		$outcome = Mcpwp_Key_Hygiene::run( self::LONG );
+		$this->assertSame( 'done', $outcome['status'] );
+		$this->assertSame( array(), Mcpwp_Key_Hygiene::pending_records() );
+		$this->assertSame( 'good', Mcpwp_Key_Hygiene::run_site_status_test()['status'] );
+		$this->assertTrue( Mcpwp_Key_Hygiene::is_done() );
+	}
+
+	public function test_a_match_deleted_elsewhere_clears_pending_and_can_finish(): void {
+		$this->seed_refused_match( 'k_deleted' );
+
+		Mcpwp_Key_Store::mutate(
+			static function ( array $keys ) {
+				return array( array(), true );
+			}
+		);
+
+		$outcome = Mcpwp_Key_Hygiene::run( self::LONG );
+		$this->assertSame( 'done', $outcome['status'] );
+		$this->assertSame( array(), Mcpwp_Key_Hygiene::pending_records() );
+		$this->assertTrue( Mcpwp_Key_Hygiene::is_done() );
+	}
+
+	public function test_a_match_regenerated_elsewhere_clears_pending_and_can_finish(): void {
+		$this->seed_refused_match( 'k_regen' );
+
+		Mcpwp_Key_Store::mutate(
+			static function ( array $keys ) {
+				foreach ( $keys as $i => $record ) {
+					if ( isset( $record['id'] ) && 'k_regen' === $record['id'] ) {
+						$keys[ $i ]['hash'] = md5( 'brand-new-secret' );
+					}
+				}
+				return array( $keys, true );
+			}
+		);
+
+		$outcome = Mcpwp_Key_Hygiene::run( self::LONG );
+		$this->assertSame( 'done', $outcome['status'] );
+		$this->assertSame( array(), Mcpwp_Key_Hygiene::pending_records() );
+		$this->assertNull( $this->by_id( 'k_regen' )['revoked_at'], 'A regenerated record is not revoked for the old match.' );
+		$this->assertTrue( Mcpwp_Key_Hygiene::is_done() );
+	}
+
+	public function test_a_plaintext_record_hash_is_not_an_internal_candidate(): void {
+		$plaintext = 'mcpwp_' . str_repeat( 'q', 48 );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array(
+				$this->record( 'k_plain_hash', 'Plain', $plaintext ),
+				$this->record( 'k_hashed_plain', 'Hashed', wp_hash_password( $plaintext ) ),
+			)
+		);
+
+		$outcome = Mcpwp_Key_Hygiene::run( self::LONG );
+		$this->assertSame( 'done', $outcome['status'] );
+		$this->assertSame( array(), $outcome['revoked'] );
+		$this->assertNull( $this->by_id( 'k_hashed_plain' )['revoked_at'] );
+		$this->assertNull( $this->by_id( 'k_plain_hash' )['revoked_at'] );
+	}
+
+	public function test_matched_state_never_stores_the_candidate_string(): void {
+		$legacy = md5( 'legacy-fp-only' );
+		update_option( 'mcpwp_api_key', $legacy );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array( $this->record( 'k_match', "label \u{1F600}", md5( $legacy ) ) )
+		);
+		$GLOBALS['mcpwp_test_wpdb_col_charset'] = 'latin1';
+		Mcpwp_Key_Hygiene::run( self::LONG );
+		$GLOBALS['mcpwp_test_wpdb_col_charset'] = 'utf8mb4';
+
+		$state = get_option( Mcpwp_Key_Hygiene::STATE_OPTION );
+		$this->assertIsArray( $state );
+		$encoded = wp_json_encode( $state );
+		$this->assertIsString( $encoded );
+		$this->assertStringNotContainsString( $legacy, $encoded );
+		$this->assertStringNotContainsString( md5( $legacy ), $encoded );
+		foreach ( $state['matched'] as $info ) {
+			$this->assertArrayHasKey( 'candidate_fp', $info );
+			$this->assertArrayNotHasKey( 'candidate', $info );
+			$this->assertStringStartsWith( 'c', $info['candidate_fp'] );
+		}
+	}
+
+	public function test_cron_path_completes_record_vs_record_work(): void {
+		$other = wp_hash_password( 'other-secret-cron' );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array(
+				$this->record( 'k_other', 'Other', $other ),
+				$this->record( 'k_match', 'Match', wp_hash_password( $other ) ),
+				$this->record( 'k_ok', 'Ok', wp_hash_password( 'mcpwp_' . str_repeat( 'o', 48 ) ) ),
+			)
+		);
+
+		$this->become_admin();
+		Mcpwp_Key_Hygiene::maybe_run_for_admin();
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done(), 'Admin external pass alone cannot finish record-vs-record work.' );
+		$this->assertNotFalse( wp_next_scheduled( Mcpwp_Key_Hygiene::CRON_HOOK ) );
+
+		$runs = 0;
+		do {
+			Mcpwp_Key_Hygiene::maybe_run_for_cron();
+			++$runs;
+		} while ( ! Mcpwp_Key_Hygiene::is_done() && $runs < 50 );
+
+		$this->assertTrue( Mcpwp_Key_Hygiene::is_done() );
+		$this->assertNotEmpty( $this->by_id( 'k_match' )['revoked_at'] );
+		$this->assertNull( $this->by_id( 'k_other' )['revoked_at'] );
+		$this->assertFalse( wp_next_scheduled( Mcpwp_Key_Hygiene::CRON_HOOK ) );
+	}
+
+	public function test_admin_path_is_time_bounded_and_schedules_cron(): void {
+		$legacy = wp_hash_password( 'admin-bound-legacy' );
+		update_option( 'mcpwp_api_key', $legacy );
+		$records = array();
+		for ( $i = 0; $i < 12; $i++ ) {
+			$records[] = $this->record( 'ab' . $i, 'Admin ' . $i, wp_hash_password( 'mcpwp_admin_' . $i . str_repeat( 'z', 40 ) ) );
+		}
+		$records[] = $this->record( 'ab_match', 'Match', wp_hash_password( $legacy ) );
+		update_option( Mcpwp_Key_Store::OPTION, $records );
+
+		$this->become_admin();
+		$started = microtime( true );
+		Mcpwp_Key_Hygiene::maybe_run_for_admin();
+		$elapsed = microtime( true ) - $started;
+
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
+		$this->assertLessThan( 1.0, $elapsed, 'Admin path must stay well under a second even with bcrypt.' );
+		$this->assertNotFalse( wp_next_scheduled( Mcpwp_Key_Hygiene::CRON_HOOK ) );
+	}
+
+	public function test_admin_fallback_slices_can_finish_without_cron(): void {
+		$other = md5( 'fallback-other' );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array(
+				$this->record( 'k_other', 'Other', $other ),
+				$this->record( 'k_match', 'Match', md5( $other ) ),
+			)
+		);
+		$this->become_admin();
+
+		// Disable cron scheduling side-effects by clearing after each admin pass.
+		$runs = 0;
+		do {
+			Mcpwp_Key_Hygiene::maybe_run_for_admin();
+			wp_clear_scheduled_hook( Mcpwp_Key_Hygiene::CRON_HOOK );
+			++$runs;
+		} while ( ! Mcpwp_Key_Hygiene::is_done() && $runs < 200 );
+
+		$this->assertTrue( Mcpwp_Key_Hygiene::is_done() );
+		$this->assertNotEmpty( $this->by_id( 'k_match' )['revoked_at'] );
+		$this->assertLessThan( 200, $runs );
+	}
+
+	public function test_duplicate_hash_records_are_all_revoked(): void {
+		$legacy = md5( 'legacy-dup' );
+		$hash   = md5( $legacy );
+		update_option( 'mcpwp_api_key', $legacy );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array(
+				$this->record( 'k_a', 'A', $hash ),
+				$this->record( 'k_b', 'B', $hash ),
+			)
+		);
+
+		$outcome = Mcpwp_Key_Hygiene::run( self::LONG );
+		$this->assertSame( 'done', $outcome['status'] );
+		$this->assertNotEmpty( $this->by_id( 'k_a' )['revoked_at'] );
+		$this->assertNotEmpty( $this->by_id( 'k_b' )['revoked_at'] );
+		$auth = new Mcpwp_Key_Hygiene_Test_Auth();
+		$this->assertNull( $auth->scoped_lookup( $legacy ) );
 	}
 }

@@ -6,15 +6,16 @@
  * upgrade, every ACTIVE record in the scoped store (`mcpwp_api_keys`) is
  * checked against stored verifiers beside it — values of `mcpwp_api_key` and
  * `spai_api_key` that pass Mcpwp_Key_State::is_stored_verifier(), each
- * `spai_api_keys[*].hash`, and the hash of every other record — with the same
- * matcher authentication uses (Mcpwp_Api_Auth::is_api_key_hash_match()). A
- * record that verifies against one of them is revoked. A normal record never
- * does: its secret is a random key that appears nowhere as a verifier. A
- * record that carries a stored verifier VERBATIM — the shape
- * Mcpwp_Activator::adopt_spai_credentials() writes, since it never re-hashes
- * a verifier — does not match either: the matcher never accepts a stored
- * value as its own key. Plaintext option leftovers are not candidates: they
- * are credentials, not verifiers, and a record that verifies one must stay
+ * `spai_api_keys[*].hash`, and the hash of every other record that is itself
+ * a stored verifier — with the same matcher authentication uses
+ * (Mcpwp_Api_Auth::is_api_key_hash_match()). A record that verifies against
+ * one of them is revoked. A normal record never does: its secret is a random
+ * key that appears nowhere as a verifier. A record that carries a stored
+ * verifier VERBATIM — the shape Mcpwp_Activator::adopt_spai_credentials()
+ * writes, since it never re-hashes a verifier — does not match either: the
+ * matcher never accepts a stored value as its own key. Plaintext option
+ * leftovers and non-verifier record hashes are not candidates: they are
+ * credentials, not verifiers, and a record that verifies one must stay
  * active so that credential still authenticates.
  *
  * One-time and resumable:
@@ -23,21 +24,28 @@
  *   on where this one stopped;
  * - progress is keyed per (record, candidate) so adding a record or a hash
  *   does not discard checks already done;
- * - each record is checked against the small external verifier set first;
- *   record-vs-record checks continue in smaller slices under the same budget;
+ * - each record is checked against the small external verifier set first
+ *   (admin_init, short budget); record-vs-record checks continue on a spaced
+ *   WP-Cron event with a larger budget, with a tiny admin_init fallback slice
+ *   so a site without working cron still finishes;
  * - revocation happens inside Mcpwp_Key_Store::mutate() (lock + compare-and-
- *   swap), and each match is re-verified under the lock;
+ *   swap), and each match is re-verified under the lock from a fingerprint
+ *   (the matched candidate string is never persisted);
+ * - a matched entry whose target is no longer an active record (revoked or
+ *   deleted elsewhere) is dropped and its pending entry cleared, so the sweep
+ *   can complete;
  * - the autoloaded flag is set only when every active record has been checked
  *   against every candidate and that final state was confirmed under the lock.
  *
  * Request gating: resumed on normal administrator screen loads only — not on
- * wp_doing_ajax(), admin-post.php, REST, or cron.
+ * wp_doing_ajax(), admin-post.php, REST, or cron. The WP-Cron handler is a
+ * separate hook and is not gated by that admin skip list.
  *
  * Fails closed: an unreadable store, a busy lock or a refused write revokes
- * nothing and leaves the flag unset. A refused revoke keeps the match and is
- * reported in Site Health (ids only) so the next eligible request can retry.
- * A record without a hash string is never revoked — it cannot be evaluated
- * (and authenticates nothing).
+ * nothing and leaves the flag unset. A refused revoke keeps the match (as a
+ * fingerprint) and is reported in Site Health (ids only) so the next eligible
+ * request or cron pass can retry. A record without a hash string is never
+ * revoked — it cannot be evaluated (and authenticates nothing).
  *
  * Revoked records are listed (id and label, never a hash) in an admin notice
  * and a Site Health item.
@@ -75,11 +83,35 @@ class Mcpwp_Key_Hygiene {
 	/** Nonce field name. */
 	const NONCE_FIELD = 'mcpwp_key_hygiene_nonce';
 
-	/** Seconds of hash checks per run. Well under the store lock's TTL. */
+	/** WP-Cron hook for the record-vs-record phase. */
+	const CRON_HOOK = 'mcpwp_key_hygiene_sweep';
+
+	/** Seconds between cron passes. */
+	const CRON_SPACING = 60;
+
+	/** Default seconds of hash checks per run (activation / full pass). */
 	const TIME_BUDGET = 1.0;
 
-	/** Hash checks per run, whichever limit is hit first. */
+	/** Default hash checks per run (activation / full pass). */
 	const MAX_CHECKS = 100;
+
+	/** Admin external-phase budget (seconds). */
+	const ADMIN_TIME_BUDGET = 0.15;
+
+	/** Admin external-phase check cap. */
+	const ADMIN_MAX_CHECKS = 40;
+
+	/** Admin fallback internal-slice budget (seconds). */
+	const ADMIN_FALLBACK_TIME_BUDGET = 0.05;
+
+	/** Admin fallback internal-slice check cap. */
+	const ADMIN_FALLBACK_MAX_CHECKS = 5;
+
+	/** Cron pass budget (seconds). */
+	const CRON_TIME_BUDGET = 5.0;
+
+	/** Cron pass check cap. */
+	const CRON_MAX_CHECKS = 500;
 
 	/**
 	 * Register hooks.
@@ -88,6 +120,7 @@ class Mcpwp_Key_Hygiene {
 	 */
 	public static function init() {
 		add_action( 'admin_init', array( __CLASS__, 'maybe_run_for_admin' ) );
+		add_action( self::CRON_HOOK, array( __CLASS__, 'maybe_run_for_cron' ) );
 		add_filter( 'site_status_tests', array( __CLASS__, 'register_site_status_test' ) );
 		add_action( 'admin_notices', array( __CLASS__, 'render_notice' ) );
 		add_action( 'admin_post_' . self::DISMISS_ACTION, array( __CLASS__, 'handle_dismiss' ) );
@@ -103,9 +136,11 @@ class Mcpwp_Key_Hygiene {
 	}
 
 	/**
-	 * admin_init: continue an unfinished sweep. One autoloaded read on a site
-	 * that has finished; only an administrator's normal screen load does the
-	 * work (not ajax, admin-post, REST, or cron).
+	 * admin_init: external verifiers under a short budget, schedule cron for
+	 * record-vs-record work, then a tiny internal fallback slice so a site
+	 * without working cron still finishes. One autoloaded read when done;
+	 * only an administrator's normal screen load does the work (not ajax,
+	 * admin-post, REST, or cron).
 	 *
 	 * @return void
 	 */
@@ -116,11 +151,34 @@ class Mcpwp_Key_Hygiene {
 		if ( self::should_skip_request() ) {
 			return;
 		}
-		self::run_safely();
+		self::run_safely( self::ADMIN_TIME_BUDGET, self::ADMIN_MAX_CHECKS, 'external' );
+		self::schedule_cron();
+		if ( ! self::is_done() ) {
+			self::run_safely( self::ADMIN_FALLBACK_TIME_BUDGET, self::ADMIN_FALLBACK_MAX_CHECKS, 'internal' );
+			self::schedule_cron();
+		}
 	}
 
 	/**
-	 * Whether this request should not run the sweep.
+	 * WP-Cron: continue the sweep with a larger budget; re-schedule until done.
+	 *
+	 * @return void
+	 */
+	public static function maybe_run_for_cron() {
+		if ( self::is_done() ) {
+			self::clear_cron();
+			return;
+		}
+		self::run_safely( self::CRON_TIME_BUDGET, self::CRON_MAX_CHECKS, 'all' );
+		if ( self::is_done() ) {
+			self::clear_cron();
+			return;
+		}
+		self::schedule_cron( true );
+	}
+
+	/**
+	 * Whether this request should not run the admin_init sweep.
 	 *
 	 * @return bool
 	 */
@@ -134,10 +192,13 @@ class Mcpwp_Key_Hygiene {
 		if ( defined( 'DOING_CRON' ) && DOING_CRON ) {
 			return true;
 		}
-		if ( ! empty( $GLOBALS['mcpwp_test_rest_request'] ) ) {
-			return true;
-		}
-		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+		$is_rest = ( defined( 'REST_REQUEST' ) && REST_REQUEST );
+		/**
+		 * Whether the current request is a REST request for key-hygiene skip.
+		 *
+		 * @param bool $is_rest Detected REST request.
+		 */
+		if ( apply_filters( 'mcpwp_key_hygiene_is_rest_request', $is_rest ) ) {
 			return true;
 		}
 		if ( self::is_admin_post_request() ) {
@@ -147,38 +208,72 @@ class Mcpwp_Key_Hygiene {
 	}
 
 	/**
-	 * Whether the current request is admin-post.php.
+	 * Whether the current request is admin-post.php (script name only).
 	 *
 	 * @return bool
 	 */
 	private static function is_admin_post_request() {
-		if ( ! empty( $GLOBALS['mcpwp_test_is_admin_post'] ) ) {
-			return true;
-		}
+		$detected = false;
 		global $pagenow;
 		if ( isset( $pagenow ) && 'admin-post.php' === $pagenow ) {
-			return true;
+			$detected = true;
 		}
-		foreach ( array( 'PHP_SELF', 'SCRIPT_NAME', 'SCRIPT_FILENAME', 'REQUEST_URI' ) as $key ) {
-			if ( empty( $_SERVER[ $key ] ) || ! is_string( $_SERVER[ $key ] ) ) {
-				continue;
-			}
-			$path = str_replace( '\\', '/', $_SERVER[ $key ] );
-			if ( false !== strpos( $path, 'admin-post.php' ) ) {
-				return true;
+		if ( ! $detected ) {
+			foreach ( array( 'PHP_SELF', 'SCRIPT_NAME', 'SCRIPT_FILENAME', 'REQUEST_URI' ) as $key ) {
+				if ( empty( $_SERVER[ $key ] ) || ! is_string( $_SERVER[ $key ] ) ) {
+					continue;
+				}
+				if ( self::server_value_is_admin_post( $_SERVER[ $key ] ) ) {
+					$detected = true;
+					break;
+				}
 			}
 		}
-		return false;
+		/**
+		 * Whether the current request is admin-post.php for key-hygiene skip.
+		 *
+		 * @param bool $detected Detected admin-post request.
+		 */
+		return (bool) apply_filters( 'mcpwp_key_hygiene_is_admin_post', $detected );
+	}
+
+	/**
+	 * Whether a server path/URI names admin-post.php as its script.
+	 *
+	 * Query-string occurrences (e.g. admin.php?redirect=admin-post.php) do not
+	 * count — only the script basename does.
+	 *
+	 * @param string $value Server value.
+	 * @return bool
+	 */
+	private static function server_value_is_admin_post( $value ) {
+		$value = str_replace( '\\', '/', (string) $value );
+		$path  = $value;
+		if ( function_exists( 'wp_parse_url' ) ) {
+			$parsed = wp_parse_url( $value, PHP_URL_PATH );
+			if ( is_string( $parsed ) && '' !== $parsed ) {
+				$path = $parsed;
+			}
+		} else {
+			$q = strpos( $value, '?' );
+			if ( false !== $q ) {
+				$path = substr( $value, 0, $q );
+			}
+		}
+		return 'admin-post.php' === basename( $path );
 	}
 
 	/**
 	 * Run the sweep, never letting it fatal the request.
 	 *
+	 * @param float|null  $time_budget Seconds of hash checks (null: TIME_BUDGET).
+	 * @param int|null    $max_checks  Hash checks (null: MAX_CHECKS).
+	 * @param string|null $phases      'all', 'external', or 'internal' (null: all).
 	 * @return array|null Outcome, or null when it threw.
 	 */
-	public static function run_safely() {
+	public static function run_safely( $time_budget = null, $max_checks = null, $phases = null ) {
 		try {
-			return self::run();
+			return self::run( $time_budget, $max_checks, $phases );
 		} catch ( \Throwable $e ) {
 			if ( defined( 'WP_DEBUG_LOG' ) && WP_DEBUG_LOG ) {
 				// phpcs:ignore WordPress.PHP.DevelopmentFunctions.error_log_error_log
@@ -191,17 +286,19 @@ class Mcpwp_Key_Hygiene {
 	/**
 	 * One bounded pass of the sweep.
 	 *
-	 * @param float|null $time_budget Seconds of hash checks (null: TIME_BUDGET).
-	 * @param int|null   $max_checks  Hash checks (null: MAX_CHECKS). At least one
+	 * @param float|null  $time_budget Seconds of hash checks (null: TIME_BUDGET).
+	 * @param int|null    $max_checks  Hash checks (null: MAX_CHECKS). At least one
 	 *                                check runs per pass, so every pass progresses.
+	 * @param string|null $phases      'all' (default), 'external', or 'internal'.
 	 * @return array{status:string,revoked:array} status is 'done' (finished, flag
 	 *         set), 'partial' (budget ran out; run again), 'unreadable', 'busy',
 	 *         'changed' (the store changed under the sweep; run again) or the
 	 *         Mcpwp_Key_Store::mutate() reason that refused the write.
 	 */
-	public static function run( $time_budget = null, $max_checks = null ) {
+	public static function run( $time_budget = null, $max_checks = null, $phases = null ) {
 		$time_budget = null === $time_budget ? self::TIME_BUDGET : (float) $time_budget;
 		$max_checks  = null === $max_checks ? self::MAX_CHECKS : max( 1, (int) $max_checks );
+		$phases      = self::normalize_phases( $phases );
 		$outcome     = array(
 			'status'  => 'done',
 			'revoked' => array(),
@@ -254,9 +351,15 @@ class Mcpwp_Key_Hygiene {
 			$started      = microtime( true );
 			$out_of       = false;
 
-			// External verifiers first (small set), then record-vs-record slices.
-			$phases = array( $external, $internal );
-			foreach ( $phases as $phase_candidates ) {
+			$phase_list = array();
+			if ( in_array( 'external', $phases, true ) ) {
+				$phase_list[] = $external;
+			}
+			if ( in_array( 'internal', $phases, true ) ) {
+				$phase_list[] = $internal;
+			}
+
+			foreach ( $phase_list as $phase_candidates ) {
 				foreach ( $targets as $target => $meta ) {
 					if ( isset( $matched[ $target ] ) ) {
 						continue;
@@ -275,9 +378,9 @@ class Mcpwp_Key_Hygiene {
 						$done[ $target ][ $cfp ] = true;
 						if ( $matcher->matches( $candidate, $hash ) ) {
 							$matched[ $target ] = array(
-								'id'        => $meta['id'],
-								'label'     => $meta['label'],
-								'candidate' => $candidate,
+								'id'           => $meta['id'],
+								'label'        => $meta['label'],
+								'candidate_fp' => $cfp,
 							);
 							break;
 						}
@@ -285,10 +388,10 @@ class Mcpwp_Key_Hygiene {
 				}
 			}
 
-			// Test hook: a concurrent write between checks and revoke.
-			if ( ! empty( $GLOBALS['mcpwp_test_key_hygiene_between'] ) && is_callable( $GLOBALS['mcpwp_test_key_hygiene_between'] ) ) {
-				call_user_func( $GLOBALS['mcpwp_test_key_hygiene_between'] );
-			}
+			/**
+			 * Fires between the check phase and the revoke write (tests only).
+			 */
+			do_action( 'mcpwp_key_hygiene_between_checks' );
 
 			$complete = ! $out_of && self::all_targets_done( $targets, $all, $done, $matched );
 			if ( ! empty( $matched ) || $complete ) {
@@ -311,7 +414,11 @@ class Mcpwp_Key_Hygiene {
 				}
 				$outcome['revoked'] = $write['result']['revoked'];
 				self::record_revoked( $write['result']['revoked'] );
-				self::clear_pending_ids( array_column( $write['result']['revoked'], 'id' ) );
+				$clear_ids = array_column( $write['result']['revoked'], 'id' );
+				if ( ! empty( $write['result']['resolved'] ) && is_array( $write['result']['resolved'] ) ) {
+					$clear_ids = array_merge( $clear_ids, $write['result']['resolved'] );
+				}
+				self::clear_pending_ids( $clear_ids );
 				foreach ( array_keys( $matched ) as $target ) {
 					unset( $done[ $target ] );
 				}
@@ -329,6 +436,7 @@ class Mcpwp_Key_Hygiene {
 			delete_option( self::STATE_OPTION );
 			delete_option( self::PENDING_OPTION );
 			update_option( self::FLAG, 1, true );
+			self::clear_cron();
 			return $outcome;
 		} finally {
 			Mcpwp_OAuth_Clients::release_lock( $lock, self::LOCK );
@@ -336,17 +444,73 @@ class Mcpwp_Key_Hygiene {
 	}
 
 	/**
+	 * Normalize the phases argument.
+	 *
+	 * @param mixed $phases Requested phases.
+	 * @return array<int,string>
+	 */
+	private static function normalize_phases( $phases ) {
+		if ( null === $phases || 'all' === $phases || '' === $phases ) {
+			return array( 'external', 'internal' );
+		}
+		if ( 'external' === $phases ) {
+			return array( 'external' );
+		}
+		if ( 'internal' === $phases ) {
+			return array( 'internal' );
+		}
+		return array( 'external', 'internal' );
+	}
+
+	/**
+	 * Schedule a spaced cron pass when the sweep is unfinished.
+	 *
+	 * @param bool $force Replace an existing schedule.
+	 * @return void
+	 */
+	public static function schedule_cron( $force = false ) {
+		if ( self::is_done() ) {
+			self::clear_cron();
+			return;
+		}
+		if ( ! function_exists( 'wp_schedule_single_event' ) ) {
+			return;
+		}
+		$next = function_exists( 'wp_next_scheduled' ) ? wp_next_scheduled( self::CRON_HOOK ) : false;
+		if ( $next && ! $force ) {
+			return;
+		}
+		if ( $next && $force && function_exists( 'wp_unschedule_event' ) ) {
+			wp_unschedule_event( $next, self::CRON_HOOK );
+		}
+		wp_schedule_single_event( time() + self::CRON_SPACING, self::CRON_HOOK );
+	}
+
+	/**
+	 * Drop any scheduled cron pass.
+	 *
+	 * @return void
+	 */
+	public static function clear_cron() {
+		if ( function_exists( 'wp_clear_scheduled_hook' ) ) {
+			wp_clear_scheduled_hook( self::CRON_HOOK );
+		}
+	}
+
+	/**
 	 * The mutator that revokes the matched records.
 	 *
 	 * Applies nothing (result null) when the store signature changed since the
-	 * snapshot. Otherwise re-verifies each match under the lock and revokes
-	 * only those that still match.
+	 * snapshot. Otherwise re-resolves each match's candidate under the lock,
+	 * re-verifies, and revokes every active record for that target. A match
+	 * whose target is no longer active is dropped (and returned in resolved)
+	 * so the sweep can complete.
 	 *
 	 * @param string $store_sig Snapshot signature.
 	 * @param array  $external  External verifier candidates.
 	 * @param array  $internal  Internal candidates from the snapshot.
 	 * @param array  $done      Target => candidate_fp => true.
-	 * @param array  $matched   Target => id/label/candidate.
+	 * @param array  $matched   Target => id/label/candidate_fp.
 	 * @param bool   $complete  Whether every snapshot target was fully checked.
 	 * @param string $now       Revocation time.
 	 * @return callable
@@ -356,13 +520,25 @@ class Mcpwp_Key_Hygiene {
 			if ( self::store_signature( $keys ) !== $store_sig ) {
 				return array( null, null );
 			}
-			$matcher = new Mcpwp_Key_Hygiene_Matcher();
-			$revoked = array();
-			$left    = array();
+			$matcher  = new Mcpwp_Key_Hygiene_Matcher();
+			$revoked  = array();
+			$left     = array();
+			$resolved = array();
 			foreach ( $matched as $target => $info ) {
-				$candidate = isset( $info['candidate'] ) ? (string) $info['candidate'] : '';
+				$fp        = isset( $info['candidate_fp'] ) ? (string) $info['candidate_fp'] : '';
 				$id        = isset( $info['id'] ) ? (string) $info['id'] : '';
+				$candidate = '' !== $fp ? self::resolve_candidate( $fp, $external, $internal ) : '';
 				$applied   = false;
+
+				if ( '' === $candidate ) {
+					// Cannot re-verify: drop the match and re-check this target.
+					unset( $done[ $target ] );
+					if ( '' !== $id ) {
+						$resolved[] = $id;
+					}
+					continue;
+				}
+
 				foreach ( $keys as $index => $record ) {
 					if ( ! self::is_active_with_hash( $record ) ) {
 						continue;
@@ -370,8 +546,8 @@ class Mcpwp_Key_Hygiene {
 					if ( self::target_key( $record['hash'] ) !== $target ) {
 						continue;
 					}
-					if ( '' === $candidate || ! $matcher->matches( $candidate, $record['hash'] ) ) {
-						break;
+					if ( ! $matcher->matches( $candidate, $record['hash'] ) ) {
+						continue;
 					}
 					$keys[ $index ]['revoked_at'] = $now;
 					$revoked[]                    = array(
@@ -380,10 +556,24 @@ class Mcpwp_Key_Hygiene {
 						'revoked_at' => $now,
 					);
 					$applied = true;
-					break;
 				}
-				if ( ! $applied ) {
+
+				if ( $applied ) {
+					continue;
+				}
+
+				// Still an active record for this target? Keep for retry.
+				$still_active = false;
+				foreach ( $keys as $record ) {
+					if ( self::is_active_with_hash( $record ) && self::target_key( $record['hash'] ) === $target ) {
+						$still_active = true;
+						break;
+					}
+				}
+				if ( $still_active ) {
 					$left[ $target ] = $info;
+				} elseif ( '' !== $id ) {
+					$resolved[] = $id;
 				}
 			}
 
@@ -401,9 +591,27 @@ class Mcpwp_Key_Hygiene {
 					'complete' => $still_complete && empty( $left ),
 					'matched'  => $left,
 					'done'     => $done,
+					'resolved' => $resolved,
 				),
 			);
 		};
+	}
+
+	/**
+	 * Re-resolve a candidate string from its fingerprint under the lock.
+	 *
+	 * @param string $fp       Candidate fingerprint.
+	 * @param array  $external External candidates.
+	 * @param array  $internal Internal candidates.
+	 * @return string Empty when not found.
+	 */
+	private static function resolve_candidate( $fp, array $external, array $internal ) {
+		foreach ( self::normalize_candidates( array_merge( $external, $internal ) ) as $candidate ) {
+			if ( self::candidate_fp( $candidate ) === $fp ) {
+				return $candidate;
+			}
+		}
+		return '';
 	}
 
 	/**
@@ -453,7 +661,7 @@ class Mcpwp_Key_Hygiene {
 	}
 
 	/**
-	 * Hash strings from every store record (revoked included).
+	 * Hash strings from every store record that are themselves stored verifiers.
 	 *
 	 * @param array $keys Store records.
 	 * @return array<string>
@@ -461,7 +669,7 @@ class Mcpwp_Key_Hygiene {
 	private static function internal_candidates( array $keys ) {
 		$values = array();
 		foreach ( $keys as $record ) {
-			if ( is_array( $record ) && isset( $record['hash'] ) && is_string( $record['hash'] ) && '' !== $record['hash'] ) {
+			if ( is_array( $record ) && isset( $record['hash'] ) && is_string( $record['hash'] ) && Mcpwp_Key_State::is_stored_verifier( $record['hash'] ) ) {
 				$values[] = $record['hash'];
 			}
 		}
@@ -541,13 +749,14 @@ class Mcpwp_Key_Hygiene {
 	}
 
 	/**
-	 * Fingerprint of one candidate string.
+	 * Fingerprint of one candidate string (HMAC with site salt).
 	 *
 	 * @param string $candidate Candidate.
 	 * @return string
 	 */
 	private static function candidate_fp( $candidate ) {
-		return 'c' . hash( 'sha256', (string) $candidate );
+		$salt = function_exists( 'wp_salt' ) ? wp_salt( 'auth' ) : 'mcpwp-key-hygiene';
+		return 'c' . hash_hmac( 'sha256', (string) $candidate, $salt );
 	}
 
 	/**
@@ -571,7 +780,8 @@ class Mcpwp_Key_Hygiene {
 
 	/**
 	 * Load durable progress. Orphaned entries from removed records are kept
-	 * harmlessly; new records simply have empty done sets.
+	 * harmlessly; new records simply have empty done sets. Matched entries
+	 * store only a candidate fingerprint — never the candidate string.
 	 *
 	 * @return array{done:array,matched:array}
 	 */
@@ -588,16 +798,24 @@ class Mcpwp_Key_Hygiene {
 		$matched_in = isset( $state['matched'] ) && is_array( $state['matched'] ) ? $state['matched'] : array();
 		$matched    = array();
 		foreach ( $matched_in as $target => $info ) {
-			if ( ! is_string( $target ) ) {
+			if ( ! is_string( $target ) || ! is_array( $info ) ) {
 				continue;
 			}
-			if ( is_array( $info ) && isset( $info['candidate'] ) ) {
-				$matched[ $target ] = array(
-					'id'        => isset( $info['id'] ) && is_scalar( $info['id'] ) ? (string) $info['id'] : '',
-					'label'     => isset( $info['label'] ) && is_scalar( $info['label'] ) ? (string) $info['label'] : '',
-					'candidate' => (string) $info['candidate'],
-				);
+			$fp = '';
+			if ( isset( $info['candidate_fp'] ) && is_scalar( $info['candidate_fp'] ) ) {
+				$fp = (string) $info['candidate_fp'];
+			} elseif ( isset( $info['candidate'] ) && is_scalar( $info['candidate'] ) && '' !== (string) $info['candidate'] ) {
+				// One-time migrate: fingerprint a previously stored candidate and drop the plaintext.
+				$fp = self::candidate_fp( (string) $info['candidate'] );
 			}
+			if ( '' === $fp ) {
+				continue;
+			}
+			$matched[ $target ] = array(
+				'id'           => isset( $info['id'] ) && is_scalar( $info['id'] ) ? (string) $info['id'] : '',
+				'label'        => isset( $info['label'] ) && is_scalar( $info['label'] ) ? (string) $info['label'] : '',
+				'candidate_fp' => $fp,
+			);
 		}
 		return array(
 			'done'    => $done,
@@ -606,18 +824,33 @@ class Mcpwp_Key_Hygiene {
 	}
 
 	/**
-	 * Persist the sweep position.
+	 * Persist the sweep position (fingerprints only in matched).
 	 *
 	 * @param array $done    Target => candidate_fp => true.
-	 * @param array $matched Target => id/label/candidate.
+	 * @param array $matched Target => id/label/candidate_fp.
 	 * @return void
 	 */
 	private static function save_state( array $done, array $matched ) {
+		$safe = array();
+		foreach ( $matched as $target => $info ) {
+			if ( ! is_string( $target ) || ! is_array( $info ) ) {
+				continue;
+			}
+			$fp = isset( $info['candidate_fp'] ) ? (string) $info['candidate_fp'] : '';
+			if ( '' === $fp ) {
+				continue;
+			}
+			$safe[ $target ] = array(
+				'id'           => isset( $info['id'] ) ? (string) $info['id'] : '',
+				'label'        => isset( $info['label'] ) ? (string) $info['label'] : '',
+				'candidate_fp' => $fp,
+			);
+		}
 		update_option(
 			self::STATE_OPTION,
 			array(
 				'done'    => $done,
-				'matched' => $matched,
+				'matched' => $safe,
 			),
 			false
 		);
@@ -650,9 +883,9 @@ class Mcpwp_Key_Hygiene {
 	}
 
 	/**
-	 * Drop pending entries that were revoked.
+	 * Drop pending entries that were revoked or resolved elsewhere.
 	 *
-	 * @param array $ids Revoked ids.
+	 * @param array $ids Ids to clear.
 	 * @return void
 	 */
 	private static function clear_pending_ids( array $ids ) {
@@ -833,7 +1066,7 @@ class Mcpwp_Key_Hygiene {
 			$result['status']         = 'critical';
 			$result['label']          = __( 'MCPWP matched API keys but could not revoke them', 'mcpwp' );
 			$result['badge']['color'] = 'red';
-			$result['description']    = '<p>' . esc_html__( 'API keys matched a stored verifier but could not be revoked. The sweep will retry on the next eligible admin screen load.', 'mcpwp' ) . '</p>' . $ids_html;
+			$result['description']    = '<p>' . esc_html__( 'API keys matched a stored verifier but could not be revoked. The sweep will retry on the next eligible admin screen load or scheduled pass.', 'mcpwp' ) . '</p>' . $ids_html;
 			$result['actions']        = '<p><a href="' . esc_url( admin_url( 'admin.php?page=mcpwp' ) ) . '">' . esc_html__( 'Open Setup', 'mcpwp' ) . '</a></p>';
 			return $result;
 		}

@@ -322,6 +322,7 @@ class Mcpwp_Uninstaller {
 		// Per-site schedules deactivation clears only on the current site.
 		'mcpwp_compute_signals',
 		'mcpwp_figma_sync_design_tokens',
+		'mcpwp_key_hygiene_sweep',
 	);
 
 	/**
