@@ -34,6 +34,9 @@ final class ToolCountsSourceOfTruthTest extends TestCase {
 	/** @var string|null */
 	private $agency_marker_backup;
 
+	/** @var string|null */
+	private $agency_marker_temp;
+
 	protected function tearDown(): void {
 		$GLOBALS['mcpwp_test_fs']                = null;
 		$GLOBALS['mcpwp_test_filters']           = array();
@@ -41,6 +44,7 @@ final class ToolCountsSourceOfTruthTest extends TestCase {
 		$GLOBALS['mcpwp_test_dispatched_routes'] = array();
 		Mcpwp_Integration::clear_cache();
 		$this->restore_agency_marker();
+		Mcpwp_Tool_Count_Snapshot::$agency_marker_path_override = null;
 	}
 
 	public function test_manifest_matches_live_catalog(): void {
@@ -98,11 +102,10 @@ final class ToolCountsSourceOfTruthTest extends TestCase {
 	}
 
 	public function test_refuses_when_agency_marker_present(): void {
-		$marker = dirname( __DIR__ ) . '/includes/agency-license.php';
-		if ( is_file( $marker ) ) {
-			$this->agency_marker_backup = (string) file_get_contents( $marker );
-		}
-		file_put_contents( $marker, "<?php\nreturn '" . Mcpwp_License::AGENCY_MARKER_TOKEN . "';\n" );
+		$scratch = getenv( 'HOME' ) ?: '/home';
+		$this->agency_marker_temp = tempnam( $scratch, 'mcpwp-agency-' );
+		Mcpwp_Tool_Count_Snapshot::$agency_marker_path_override = $this->agency_marker_temp;
+		file_put_contents( $this->agency_marker_temp, "<?php\nreturn '" . Mcpwp_License::AGENCY_MARKER_TOKEN . "';\n" );
 
 		$this->expectException( RuntimeException::class );
 		$this->expectExceptionMessage( 'agency-license.php' );
@@ -183,7 +186,18 @@ final class ToolCountsSourceOfTruthTest extends TestCase {
 
 		$dirs = array( $root . '/docs', $root . '/mcp-server' );
 		foreach ( $dirs as $dir ) {
-			$iter = new RecursiveIteratorIterator( new RecursiveDirectoryIterator( $dir ) );
+			$inner = new RecursiveDirectoryIterator( $dir, FilesystemIterator::SKIP_DOTS );
+			$filter = new RecursiveCallbackFilterIterator(
+				$inner,
+				static function ( $current ) {
+					if ( $current->isDir() ) {
+						$name = $current->getFilename();
+						return 'node_modules' !== $name;
+					}
+					return true;
+				}
+			);
+			$iter = new RecursiveIteratorIterator( $filter );
 			foreach ( $iter as $file ) {
 				if ( ! $file->isFile() ) {
 					continue;
@@ -219,14 +233,10 @@ final class ToolCountsSourceOfTruthTest extends TestCase {
 	}
 
 	private function restore_agency_marker(): void {
-		$marker = dirname( __DIR__ ) . '/includes/agency-license.php';
-		if ( null !== $this->agency_marker_backup ) {
-			file_put_contents( $marker, $this->agency_marker_backup );
-			$this->agency_marker_backup = null;
-			return;
+		if ( null !== $this->agency_marker_temp && is_file( $this->agency_marker_temp ) ) {
+			unlink( $this->agency_marker_temp );
+			$this->agency_marker_temp = null;
 		}
-		if ( is_file( $marker ) ) {
-			unlink( $marker );
-		}
+		$this->agency_marker_backup = null;
 	}
 }

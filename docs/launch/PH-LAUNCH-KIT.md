@@ -80,7 +80,7 @@ Desktop, Claude Code, Cursor, or any MCP-compatible client — can now operate y
 natural language: build Elementor pages, publish posts, run SEO audits, manage menus,
 upload media, and more.
 
-**190+ tools free, 300+ with Pro, across 21 categories.** Free covers content, Elementor
+**190+ tools free, 300+ with Pro, across 20 categories.** Free covers content, Elementor
 read/write, media, SEO, menus, Gutenberg blocks, taxonomy, webhooks, and admin — plus a
 set of AI/stock-photo tools that work with your own OpenAI, Gemini, ElevenLabs, or Pexels
 key. Pro adds advanced Elementor builders and templates, theme builder, WooCommerce, SEO
@@ -188,7 +188,7 @@ click; applied changes roll back with one click."
 
 ### Slide 2 — The tool surface
 **Headline:** "190+ tools free. 300+ with Pro."
-**Visual:** Dark background (Ink 950). A clean category grid showing the 21 categories
+**Visual:** Dark background (Ink 950). A clean category grid showing the 20 categories
 (10 free, 11 Pro) with tool counts — styled like a terminal output or structured card
 grid. Blue 600 accents on category names.
 **Caption:** "Content, Elementor, WooCommerce, SEO, media, menus, LMS, and more —

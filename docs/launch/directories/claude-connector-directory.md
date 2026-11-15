@@ -57,7 +57,7 @@ Syncs automatically from a connected server. Already satisfied: every tool in 3.
 > (or sign in with OAuth, on by default), and Claude can build Elementor pages, publish posts, run SEO audits,
 > manage menus and media, and more — through natural language.
 >
-> 190+ tools free, 300+ with Pro, across 21 categories: content, Elementor read/write, media,
+> 190+ tools free, 300+ with Pro, across 20 categories: content, Elementor read/write, media,
 > SEO, menus, Gutenberg blocks, taxonomy, webhooks, admin, and AI/stock-photo tools that use
 > your own OpenAI, Gemini, ElevenLabs, or Pexels key. Pro adds advanced Elementor builders,
 > theme builder, WooCommerce, SEO Pro, LMS, translation, staging pushes, and Figma.

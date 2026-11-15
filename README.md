@@ -30,7 +30,7 @@
 
 ---
 
-MCPWP turns any WordPress site into an MCP server. AI assistants manage site operations through natural language — pages, Elementor layouts, media, SEO, menus, approvals, analytics, and more. 190+ tools free (300+ with Pro) across 21 categories, live-discovered on connect.
+MCPWP turns any WordPress site into an MCP server. AI assistants manage site operations through natural language — pages, Elementor layouts, media, SEO, menus, approvals, analytics, and more. 190+ tools free (300+ with Pro) across 20 tool categories, live-discovered on connect.
 
 ```
 You: "Build a landing page with a hero, 3 feature cards, and a CTA"

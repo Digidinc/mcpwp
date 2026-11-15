@@ -1,7 +1,7 @@
 {
     "schema": 1,
-    "methodology": "tools/list profile=full on the PHPUnit worst-case catalog (every optional plugin + integration reported active \u2014 same ceiling as ToolListBudgetTest). Free registry \u2248160 tools by default; Free tools/list \u2248190 without the four staging discovery prompts, \u2248194 with them. Pro registry \u2248183 by default; Pro tools/list up to 309 on this catalog. Counts use the Free Freemius stub (explicit non-paying) vs Pro stub \u2014 not merely nulling the stub.",
-    "generated_at": "2026-11-15T20:18:57+00:00",
+    "methodology": "tools/list profile=full. Registries: Free 180 + Pro 118 tool definitions in code. Default-capability tools/list: Free \u2248160, Pro \u2248183 (before optional plugins). Worst-case catalog tools/list (every optional plugin + integration reported active \u2014 same ceiling as ToolListBudgetTest): Free \u2248190\u2013194 (includes four staging discovery prompts on Free tier); Pro up to 309. Counts use the Free Freemius stub (explicit non-paying) vs Pro stub \u2014 not merely nulling the stub.",
+    "generated_at": "2026-11-15T20:50:36+00:00",
     "counts": {
         "tools_list_full_free": 194,
         "tools_list_full_pro": 309,
@@ -20,7 +20,7 @@
         "core_profile": "26"
     },
     "github_about": {
-        "suggested": "Turn any WordPress site into an MCP server \u2014 let Claude, Cursor, and any MCP client build pages, edit Elementor, run WooCommerce, and manage media/SEO through natural language. 190+ tools free, 300+ with Pro. Governed, approval-gated, auditable.",
+        "suggested": "Turn any WordPress site into an MCP server \u2014 let Claude, Cursor, and any MCP client build pages, edit Elementor, manage WooCommerce with Pro, and handle media/SEO through natural language. 190+ tools free, 300+ with Pro. Governed, approval-gated, auditable.",
         "note": "Set manually in GitHub repo Settings \u2192 About (#498)."
     }
 }

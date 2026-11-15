@@ -167,7 +167,7 @@ Blueprints, Approvals, Webhooks, Gutenberg, Taxonomy, LMS, Analytics, Admin.
 
 Entry animation: cards fade + translateY(+20px) → (0px) with 6-frame stagger between
 cards. All cards visible by frame 1590 (this scene shows a representative subset of the
-21 total categories, not all of them).
+20 total categories, not all of them).
 
 Lower-third: "190+ tools free, 300+ with Pro, covering every surface of WordPress."
 

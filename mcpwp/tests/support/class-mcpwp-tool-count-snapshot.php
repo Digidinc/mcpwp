@@ -19,7 +19,14 @@ final class Mcpwp_Tool_Count_Snapshot {
 	const PROTOCOL = '2025-11-25';
 
 	/** GitHub About description (≤350 chars) — keep in sync with docs/launch/REPO-METADATA.md. */
-	const GITHUB_ABOUT_SUGGESTED = 'Turn any WordPress site into an MCP server — let Claude, Cursor, and any MCP client build pages, edit Elementor, run WooCommerce, and manage media/SEO through natural language. 190+ tools free, 300+ with Pro. Governed, approval-gated, auditable.';
+	const GITHUB_ABOUT_SUGGESTED = 'Turn any WordPress site into an MCP server — let Claude, Cursor, and any MCP client build pages, edit Elementor, manage WooCommerce with Pro, and handle media/SEO through natural language. 190+ tools free, 300+ with Pro. Governed, approval-gated, auditable.';
+
+	/**
+	 * Test-only override for agency marker path (never write includes/agency-license.php in tests).
+	 *
+	 * @var string|null
+	 */
+	public static $agency_marker_path_override = null;
 
 	/**
 	 * Largest capability map used for public tool-count claims.
@@ -62,8 +69,15 @@ final class Mcpwp_Tool_Count_Snapshot {
 	 *
 	 * @throws RuntimeException When agency marker or MCPWP_TESTS would force Pro.
 	 */
+	public static function agency_marker_path(): string {
+		if ( is_string( self::$agency_marker_path_override ) && '' !== self::$agency_marker_path_override ) {
+			return self::$agency_marker_path_override;
+		}
+		return dirname( __DIR__, 2 ) . '/includes/agency-license.php';
+	}
+
 	public static function assert_clean_generation_context(): void {
-		$marker = dirname( __DIR__, 2 ) . '/includes/agency-license.php';
+		$marker = self::agency_marker_path();
 		if ( is_file( $marker ) ) {
 			throw new RuntimeException(
 				'includes/agency-license.php is present — remove it before generating tool counts (it forces Pro and skews Free counts).'
@@ -133,7 +147,7 @@ final class Mcpwp_Tool_Count_Snapshot {
 
 		return array(
 			'schema'      => 1,
-			'methodology' => 'tools/list profile=full on the PHPUnit worst-case catalog (every optional plugin + integration reported active — same ceiling as ToolListBudgetTest). Free registry ≈160 tools by default; Free tools/list ≈190 without the four staging discovery prompts, ≈194 with them. Pro registry ≈183 by default; Pro tools/list up to 309 on this catalog. Counts use the Free Freemius stub (explicit non-paying) vs Pro stub — not merely nulling the stub.',
+			'methodology' => 'tools/list profile=full. Registries: Free 180 + Pro 118 tool definitions in code. Default-capability tools/list: Free ≈160, Pro ≈183 (before optional plugins). Worst-case catalog tools/list (every optional plugin + integration reported active — same ceiling as ToolListBudgetTest): Free ≈190–194 (includes four staging discovery prompts on Free tier); Pro up to 309. Counts use the Free Freemius stub (explicit non-paying) vs Pro stub — not merely nulling the stub.',
 			'generated_at' => gmdate( 'c' ),
 			'counts'      => array(
 				'tools_list_full_free'  => (int) $free_counts['tools_list_full'],
