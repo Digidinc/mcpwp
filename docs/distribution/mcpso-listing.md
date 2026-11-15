@@ -10,7 +10,7 @@ MCPWP — WordPress MCP Server
 Full WordPress control via MCP — content, Elementor, SEO, media, menus, approvals.
 
 ## Description
-MCPWP turns any WordPress site into a fully-featured MCP server. AI agents connect with a single URL and API key, then manage the entire site through 200+ tools spanning content, Elementor page building, media, SEO, navigation menus, webhooks, and an approval queue for safe human-in-the-loop operation.
+MCPWP turns any WordPress site into a fully-featured MCP server. AI agents connect with a single URL and API key, then manage the entire site through 300+ tools spanning content, Elementor page building, media, SEO, navigation menus, webhooks, and an approval queue for safe human-in-the-loop operation.
 
 **Highlights:**
 - Elementor layout editing with widget schema validation and auto-fix

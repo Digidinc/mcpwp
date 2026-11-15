@@ -7,21 +7,20 @@
 > [OWNER DECISION: make repo public?] is resolved. Everything below only applies once
 > (if) the repo goes public.
 
-## Description (the stale "239 tools" claim is the #514 item)
-Live now: `⚡ 239 MCP tools for WordPress …` — **239 is inflated/unverified.** Counting the
-Free and Pro registries directly on `origin/main` gives **172 core Free tools + 9 AI/stock
-tools = 181 usable Free**, and **118 Pro tools + 4 Figma = 303 total with Pro**. Don't ship
-a hard count that overstates.
+## Description (#498 / #650)
+Live GitHub About text still says **239 tools / 100% free** — both are stale. Checked-in source
+of truth: **`docs/tool-counts.json`** (generated from the PHPUnit catalog via
+`scripts/gen-tool-counts.php`). Do not hand-edit marketing counts elsewhere without updating
+that file and the matching docs.
 
-**Recommended description (accurate, no inflated count):**
+**Recommended description (matches `docs/tool-counts.json` → `github_about.suggested`):**
 ```
 Turn any WordPress site into an MCP server — let Claude, Cursor, and any MCP client build
 pages, edit Elementor, run WooCommerce, and manage media/SEO through natural language.
-180+ tools free, 290+ with Pro. Governed, approval-gated, auditable.
+190+ tools free, 300+ with Pro. Governed, approval-gated, auditable.
 ```
-(If you want a count, use "180+ tools free, 290+ with Pro" — counted from the registries
-on `origin/main` — not 239 or 171. Recount via `tools/list` before any marketing copy
-hard-codes a number; it drifts with every release.)
+(Regenerate `docs/tool-counts.json` when tools change; copy `marketing.phrase_short` or
+`github_about.suggested` from that file.)
 
 ## Topics (current set is already good — minor adds)
 Live: ai, claude, mcp, model-context-protocol, woocommerce, wordpress, wordpress-plugin, elementor.

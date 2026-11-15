@@ -44,7 +44,7 @@ Verify: `curl "https://registry.modelcontextprotocol.io/v0.1/servers?search=io.g
 
 **Required info:**
 - Name: `MCPWP — MCP for WordPress`
-- Description: Connect Claude Desktop to any WordPress site with one click. Manage posts, pages, Elementor, WooCommerce, SEO, and 200+ tools — with human approval gates.
+- Description: Connect Claude Desktop to any WordPress site with one click. Manage posts, pages, Elementor, WooCommerce, SEO, and 300+ tools — with human approval gates.
 - Homepage: https://mcpwp.net
 - Documentation: https://mcpwp.net/docs
 - Logo: (create a 128×128 PNG icon and add to mcp-server/assets/icon.png)
@@ -88,7 +88,7 @@ The plugin's `.mcp.json` config:
 
 **Required:**
 - Name: MCPWP
-- Description: MCP server for WordPress — 200+ tools for content, Elementor, WooCommerce, SEO, and more
+- Description: MCP server for WordPress — 300+ tools for content, Elementor, WooCommerce, SEO, and more
 - npm: `mcpwp`
 - GitHub: https://github.com/Mumega-com/mcpwp
 - Category: CMS / Content Management
@@ -123,7 +123,7 @@ Same info as smithery — npm package + GitHub URL.
 
 Add one line to the CMS section:
 ```markdown
-- [mcpwp](https://github.com/Mumega-com/mcpwp) - MCP operator layer for WordPress. 200+ tools for posts, pages, Elementor, WooCommerce, SEO, media, and more.
+- [mcpwp](https://github.com/Mumega-com/mcpwp) - MCP operator layer for WordPress. 300+ tools for posts, pages, Elementor, WooCommerce, SEO, media, and more.
 ```
 
 ---
@@ -139,10 +139,10 @@ Add entry to the marketplace JSON. Format matches existing entries.
 ## Core Content (reuse across all submissions)
 
 **One-liner:**
-> MCP operator layer for WordPress. Connect Claude, Codex, or Cursor to any WordPress site — posts, pages, Elementor, WooCommerce, SEO, and 200+ tools with human approval gates.
+> MCP operator layer for WordPress. Connect Claude, Codex, or Cursor to any WordPress site — posts, pages, Elementor, WooCommerce, SEO, and 300+ tools with human approval gates.
 
 **Short description (100 words):**
-> MCPWP connects any MCP client (Claude, Codex, Cursor, Windsurf) to WordPress sites via the Model Context Protocol. It exposes 200+ tools covering content creation, Elementor page building, WooCommerce product/order management, SEO audits, media uploads, menus, settings, and more. Every destructive action runs through a human approval gate before executing. Built-in agent playbooks automate multi-step workflows like full-site audits, SEO fixes, and page builds. The plugin installs on any WordPress 5.9+ site; the npm proxy bridges stdio clients to the PHP endpoint. Pro adds WooCommerce analytics, Elementor Pro, design references, and advanced SEO integrations.
+> MCPWP connects any MCP client (Claude, Codex, Cursor, Windsurf) to WordPress sites via the Model Context Protocol. It exposes 300+ tools covering content creation, Elementor page building, WooCommerce product/order management, SEO audits, media uploads, menus, settings, and more. Every destructive action runs through a human approval gate before executing. Built-in agent playbooks automate multi-step workflows like full-site audits, SEO fixes, and page builds. The plugin installs on any WordPress 5.9+ site; the npm proxy bridges stdio clients to the PHP endpoint. Pro adds WooCommerce analytics, Elementor Pro, design references, and advanced SEO integrations.
 
 **npm install:**
 ```bash

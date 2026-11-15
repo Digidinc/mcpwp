@@ -7,8 +7,10 @@ or the MCP registry, and no API key has been minted.** Final submissions need th
 accounts (Claude, Meta, GitHub OAuth, Smithery, etc.) and, for the demo-site packages, a
 reviewer API key the owner mints on `demo.mcpwp.net`.
 
-Canonical claims used throughout (checked against `docs/launch/PH-LAUNCH-KIT.md`,
-`mcpwp/readme.txt`, and live URLs on 2026-09-26): 180+ tools free / 290+ with Pro; approval
+Canonical tool-count claims: **`docs/tool-counts.json`** (regenerate with
+`php scripts/gen-tool-counts.php` after adding tools; `ToolCountsSourceOfTruthTest` fails on
+drift). Marketing phrase today: **190+ tools free, 300+ with Pro** (also written
+**190+ tools free / 300+ with Pro** where a slash reads better); approval
 gate is opt-in; publishing needs an admin-scoped key as of 3.13; verified AI clients are Claude
 Desktop, Claude Code, and Cursor; no EU AI Act or competitor-numbers claims are made anywhere in
 this set; the `Mumega-com/mcpwp` repo is private, so no GitHub links appear in any listing copy

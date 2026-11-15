@@ -19,6 +19,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { applyChangelogSync, mdToHtml } from './lib/version-json-changelog.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(__dirname, '..');
@@ -166,71 +167,16 @@ const testedMatch = readme.match(/^Tested up to:\s*(.+?)\s*$/m);
 const tested = testedMatch ? testedMatch[1] : null;
 
 // ---- version.json ----
-// readme.txt keeps Markdown — WP.org renders it. version.json does not: its
-// "changelog" is raw HTML dropped into the update-details modal, so **bold**
-// and `code` arrive as literal asterisks and backticks. Convert on the way in.
-function mdToHtml(s) {
-  return s
-    .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>')
-    // Inline bold renders as <b>, NOT <strong>. Version headers are the only
-    // <strong> in this blob, and the demote pass identifies them by
-    // <strong>x.y.z</strong>. A bullet reading "restore behaviour removed in
-    // **3.9.2**" would otherwise produce a byte-identical string mid-sentence:
-    // the next demote turns it into a block <h4> inside a paragraph, and the
-    // already-present check then sees <h4>3.9.2</h4> and skips writing the real
-    // 3.9.2 entry entirely. Same glyph on screen, unambiguous to the parser.
-    .replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>');
-}
-
+// Structured changelog_entries (#572) is the editable source; the legacy HTML
+// "changelog" string is regenerated for consumers that still read the blob.
 const vjson = JSON.parse(readFileSync(VERSION_JSON, 'utf8'));
-const joined = bullets.map(mdToHtml).join('; ');
-// Self-hosted sites render this blob in the update-details modal — it is the
-// only place they see release notes at all, so upgrade notices belong here.
-//
-// The notice goes AFTER its version header, never before it. Leading with it
-// read better for exactly one release: entries are concatenated with no
-// delimiter, so the next release prepends in front of the notice and the
-// notice silently becomes the newest entry's. That happened on the live
-// manifest — 3.9.3's "AI toggle" notice ended up under the 3.10.0 heading,
-// attributing a posture change to the wrong version. Anchored behind the
-// header it travels with the release it describes.
-const notice = upgradeNotes.length > 0
-  ? `<p><strong>Heads up:</strong> ${upgradeNotes.map(mdToHtml).join(' ')}</p>`
-  : '';
-const newestTag = bullets.length > 0
-  ? `<strong>${version}</strong> — ${joined}${notice}`
-  : `<strong>${version}</strong>${notice}`;
-// Exactly one entry may be <strong> — the newest. Everything older is <h4>.
-//
-// This used to demote only the immediately-previous entry, which silently
-// assumed the rest of the blob was already correct. It was not: entries written
-// before the demote step existed stayed bold forever, so by 3.9.3 the update
-// modal presented sixteen versions as "newest". Repairing only the data would
-// have left the next stale entry to accumulate again, so the pass below
-// re-derives the whole invariant on every run and is self-healing.
-//
-// It targets ONLY version headers — <strong> wrapping a bare version number.
-// A blanket demote would also eat the inline bold inside entry text, since
-// mdToHtml() renders "**security:**" as <strong>security:</strong>.
-const VERSION_HEADER = /<strong>(\d+\.\d+\.\d+)<\/strong>/g;
-
-const beforeDemote = vjson.changelog;
-vjson.changelog = vjson.changelog.replace(VERSION_HEADER, '<h4>$1</h4>');
-const staleDemoted = (beforeDemote.match(VERSION_HEADER) || []).length;
-
-const escaped = version.replace(/\./g, '\\.');
-const alreadyPresent = new RegExp(`<h4>${escaped}</h4>`).test(vjson.changelog);
-if (!alreadyPresent) {
-  vjson.changelog = `${newestTag}${vjson.changelog}`;
-  console.log(`version.json: prepended ${version} changelog entry`);
-} else {
-  // Already recorded — promote it back to the single bold entry.
-  vjson.changelog = vjson.changelog.replace(`<h4>${version}</h4>`, `<strong>${version}</strong>`);
-  console.log(`version.json: ${version} already present, kept as newest`);
-}
-if (staleDemoted > 1) {
-  console.log(`version.json: demoted ${staleDemoted - 1} stale <strong> version header(s)`);
+const hadEntries = Array.isArray(vjson.changelog_entries) && vjson.changelog_entries.length > 0;
+const beforeHtml = typeof vjson.changelog === 'string' ? vjson.changelog : '';
+applyChangelogSync(vjson, version, bullets, upgradeNotes);
+if (!hadEntries && beforeHtml) {
+  console.log(`version.json: migrated legacy HTML changelog into changelog_entries (${vjson.changelog_entries.length} versions)`);
+} else if (vjson.changelog_entries[0]?.version === version) {
+  console.log(`version.json: upserted ${version} in changelog_entries and refreshed changelog HTML`);
 }
 if (tested && vjson.tested !== tested) {
   vjson.tested = tested;

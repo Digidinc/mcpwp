@@ -42,7 +42,7 @@ Syncs automatically from a connected server. Already satisfied: every tool in 3.
 | Field | Answer |
 |---|---|
 | Server name (≤100 chars) | `MCPWP` |
-| One-liner (≤200 chars) | `Turn any WordPress site into an MCP server. Build pages, edit Elementor, run SEO audits, and manage media through 180+ governed, approval-gated tools.` (156 chars) |
+| One-liner (≤200 chars) | `Turn any WordPress site into an MCP server. Build pages, edit Elementor, run SEO audits, and manage media through 190+ governed, approval-gated tools.` (156 chars) |
 | Description (≤2000 chars) | See below |
 | Categories (1–5) | Portal's exact taxonomy wasn't enumerated in the docs pulled for this package — pick the closest live options at submit time. Best-fit guesses: Website/CMS or Developer Tools, plus Productivity. |
 | Documentation URL | `https://docs.mcpwp.net/` |
@@ -57,7 +57,7 @@ Syncs automatically from a connected server. Already satisfied: every tool in 3.
 > (or sign in with OAuth, on by default), and Claude can build Elementor pages, publish posts, run SEO audits,
 > manage menus and media, and more — through natural language.
 >
-> 180+ tools free, 290+ with Pro, across 21 categories: content, Elementor read/write, media,
+> 190+ tools free, 300+ with Pro, across 21 categories: content, Elementor read/write, media,
 > SEO, menus, Gutenberg blocks, taxonomy, webhooks, admin, and AI/stock-photo tools that use
 > your own OpenAI, Gemini, ElevenLabs, or Pexels key. Pro adds advanced Elementor builders,
 > theme builder, WooCommerce, SEO Pro, LMS, translation, staging pushes, and Figma.

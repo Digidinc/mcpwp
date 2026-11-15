@@ -4,6 +4,10 @@ on:
   pull_request:
     paths:
       - "mcpwp/**"
+      - "docs/tool-counts.json"
+      - "scripts/gen-tool-counts.php"
+      - "scripts/lib/**"
+      - "scripts/sync-wporg-changelog.mjs"
       - "scripts/verify_plugin_assets.sh"
       - "scripts/verify_distignore_refs.sh"
       - "scripts/tests/verify_plugin_assets_test.sh"
@@ -84,7 +88,7 @@ jobs:
       # Browser-side scripts with a Node test (node:test, no dependencies) —
       # e.g. the WebMCP registration script (#981).
       - name: JS Unit Tests
-        run: node --test mcpwp/tests/js/*.test.js
+        run: node --test mcpwp/tests/js/*.test.js mcpwp/tests/js/*.test.mjs
 
       # Lint and unit tests read the tree; a distribution build is the tree
       # minus whatever its script and .distignore strip. Every build stripped

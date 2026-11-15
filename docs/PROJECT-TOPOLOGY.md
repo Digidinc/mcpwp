@@ -29,7 +29,7 @@ mcpwp.net (media) runs on WordPress, **operated by the mumcp plugin** (installed
 
 ```
 mcpwp.net (the operated WordPress media site)
-   ├── mumcp plugin  → the HANDS (239+ MCP tools, deep control of WordPress)
+   ├── mumcp plugin  → the HANDS (300+ MCP tools, deep control of WordPress)
    └── mupot         → the AUTHORITY (identity, capabilities, gates, receipts)
 ```
 

@@ -23,7 +23,7 @@ We just launched MCPWP on Product Hunt.
 Install the plugin on any WordPress site. Generate an API key. Paste one config block.
 
 Your AI (Claude, Cursor, or any MCP client) can now operate your entire site — pages,
-Elementor, WooCommerce, SEO, menus, media — through 180+ structured tools free (290+
+Elementor, WooCommerce, SEO, menus, media — through 190+ structured tools free (300+
 with Pro).
 
 With an opt-in approval gate.
@@ -53,7 +53,7 @@ ship.
 
 **Post 3 — The specificity post (post ~40 min after launch)**
 
-What does 180+ free tools (290+ with Pro) actually mean?
+What does 190+ free tools (300+ with Pro) actually mean?
 
 Content: create pages, posts, bulk ops, search, clone, template.
 Elementor: build full pages, edit sections, patch widgets, find-replace.
@@ -103,7 +103,7 @@ Brand voice, design decisions, client preferences — persistent.
 
 MCPWP free tier is a direct download: mcpwp.net.
 
-Free includes: 180+ tools, approval gate, audit log, rollback, site memory,
+Free includes: 190+ tools, approval gate, audit log, rollback, site memory,
 Elementor read/write.
 
 Pro ($59/yr): advanced Elementor builders, WooCommerce, SEO Pro, LMS, Figma.
@@ -131,8 +131,8 @@ Attach the 1200x630 landscape video or the carousel (6 slides).
 Today we launched MCPWP on Product Hunt.
 
 It turns any WordPress site into an MCP server — so AI agents (Claude, Cursor, or any MCP
-client) can operate the site in natural language through 180+ structured tools free
-(290+ with Pro).
+client) can operate the site in natural language through 190+ structured tools free
+(300+ with Pro).
 
 I want to explain the part we think is most important, because it's different from every
 other AI-for-WordPress tool:
@@ -168,7 +168,7 @@ the install experience. We're targeting under 5 minutes from download to first t
 ## 3. Show HN — Hacker News
 
 **Post title:**
-"Show HN: MCPWP — MCP server for WordPress with 180+ tools, an approval gate, and an audit log"
+"Show HN: MCPWP — MCP server for WordPress with 190+ tools, an approval gate, and an audit log"
 
 **Opening comment (the first comment, posted immediately by OP):**
 
@@ -179,7 +179,7 @@ directly on the live site. Nothing was auditable. Nothing was reversible.
 
 MCPWP is what we built to fix that.
 
-The core idea: expose WordPress as an MCP server (180+ tools free, 290+ with Pro, across
+The core idea: expose WordPress as an MCP server (190+ tools free, 300+ with Pro, across
 content, Elementor, WooCommerce, SEO, media, menus, and more) with an opt-in
 human-in-the-loop approval gate. Route a write through it and it goes into an approval
 queue — you approve, the change applies; you reject, nothing happens. Either way it's in
@@ -219,7 +219,7 @@ data format, or how the approval gate is implemented.
   the comment. Don't be defensive — be specific.
 - If someone asks about the governance model: explain the `wp_create_approval_request` →
   `wp_apply_approval` / `wp_rollback_approval` flow.
-- If someone pushes back on "180+ tools is too many for LLMs to handle": acknowledge the
+- If someone pushes back on "190+ tools is too many for LLMs to handle": acknowledge the
   context-window tension and explain tool discovery + role-scoped key scoping reduces the
   effective surface per agent.
 - Do not engage with off-topic trolling. Do engage with every sincere technical question.

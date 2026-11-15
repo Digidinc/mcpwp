@@ -1,0 +1,26 @@
+{
+    "schema": 1,
+    "methodology": "tools/list profile=full against the PHPUnit stub site with every optional integration reported active (same worst-case catalog as ToolListBudgetTest). Free counts use the Free license stub; Pro counts use the Pro stub.",
+    "generated_at": "2026-11-15T19:35:13+00:00",
+    "counts": {
+        "tools_list_full_free": 194,
+        "tools_list_full_pro": 309,
+        "tools_list_core": 26,
+        "free_registry": 180,
+        "pro_registry": 118,
+        "pro_staging_discovery": 4,
+        "pro_only_tools": 115
+    },
+    "marketing": {
+        "free_tools": "190+",
+        "pro_tools_total": "300+",
+        "phrase_short": "190+ tools free, 300+ with Pro",
+        "phrase_free_only": "190+ tools free",
+        "phrase_pro_total": "300+ with Pro",
+        "core_profile": "26"
+    },
+    "github_about": {
+        "suggested": "\u26a1 300+ MCP tools for WordPress \u2014 connect Claude, ChatGPT, Cursor, or any MCP client. Build pages, edit Elementor, manage WooCommerce, media & SEO through natural language. Free + Pro.",
+        "note": "Set manually in GitHub repo Settings \u2192 About (#498)."
+    }
+}

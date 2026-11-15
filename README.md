@@ -5,7 +5,7 @@
 <h1 align="center">MCPWP</h1>
 
 <p align="center">
-  <strong>WordPress MCP server. 180+ tools free, 290+ with Pro. Works with Claude, ChatGPT, OpenClaw, Hermes, Cursor, and any MCP client.</strong>
+  <strong>WordPress MCP server. 190+ tools free, 300+ with Pro. Works with Claude, ChatGPT, OpenClaw, Hermes, Cursor, and any MCP client.</strong>
 </p>
 
 <p align="center">
@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/Digidinc/mcpwp/stargazers"><img src="https://img.shields.io/github/stars/Digidinc/mcpwp?style=flat-square" alt="Stars"></a>
   <a href="https://github.com/Digidinc/mcpwp/releases"><img src="https://img.shields.io/github/v/release/Digidinc/mcpwp?style=flat-square" alt="Release"></a>
-  <img src="https://img.shields.io/badge/tools-180%2B%20free%20%C2%B7%20290%2B%20pro-blue?style=flat-square" alt="180+ free tools, 290+ with Pro">
+  <img src="https://img.shields.io/badge/tools-190%2B%20free%20%C2%B7%20300%2B%20pro-blue?style=flat-square" alt="190+ free tools, 300+ with Pro">
   <img src="https://img.shields.io/badge/MCP-compatible-brightgreen?style=flat-square" alt="MCP">
   <img src="https://img.shields.io/badge/OpenClaw-skill%20available-orange?style=flat-square" alt="OpenClaw">
   <img src="https://img.shields.io/badge/WordPress-5.0%2B-21759b?style=flat-square" alt="WordPress">
@@ -30,7 +30,7 @@
 
 ---
 
-MCPWP turns any WordPress site into an MCP server. AI assistants manage site operations through natural language — pages, Elementor layouts, media, SEO, menus, approvals, analytics, and more. 180+ tools free (290+ with Pro) across 21 categories, live-discovered on connect.
+MCPWP turns any WordPress site into an MCP server. AI assistants manage site operations through natural language — pages, Elementor layouts, media, SEO, menus, approvals, analytics, and more. 190+ tools free (300+ with Pro) across 21 categories, live-discovered on connect.
 
 ```
 You: "Build a landing page with a hero, 3 feature cards, and a CTA"
@@ -69,7 +69,7 @@ graph LR
 
 | | MCPWP | AI Engine (Meow) | WordPress MCP Adapter | InstaWP mcp-wp |
 |---|---|---|---|---|
-| **Tools** | **180+ free / 290+ Pro** | ~30 | ~15 | ~10 |
+| **Tools** | **190+ free / 300+ Pro** | ~30 | ~15 | ~10 |
 | **Elementor** | Full (build + edit + templates + theme) | No | No | No |
 | **Agency proxy** | Multi-site (N clients, 1 token) | No | No | No |
 | **Audit log + rollback** | Yes | No | No | No |
@@ -158,7 +158,7 @@ Or build your own using the [OpenAPI schema](integrations/chatgpt/openapi.yaml).
 
 ## Tools
 
-MCPWP uses live tool discovery — the exact `tools/list` result adapts to active plugins, license plan, and API key scope. Always call `wp_onboard` first on a new connection — it returns a full site briefing with content inventory, active integrations, and recommended first actions.
+MCPWP uses live tool discovery — the exact `tools/list` result adapts to active plugins, license plan, and API key scope. Marketing-facing counts are generated in [`docs/tool-counts.json`](docs/tool-counts.json) (`php scripts/gen-tool-counts.php`; enforced by `ToolCountsSourceOfTruthTest`). Always call `wp_onboard` first on a new connection — it returns a full site briefing with content inventory, active integrations, and recommended first actions.
 
 | Category | Tools |
 |----------|-------|
