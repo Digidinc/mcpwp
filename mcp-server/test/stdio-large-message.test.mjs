@@ -31,7 +31,8 @@ const MIB = 1024 * 1024;
 const REPLY_TIMEOUT_MS = 30_000;
 
 /** Fake WP endpoint: answers initialize and tools/call, records body sizes. */
-function startFakeWp() {
+function startFakeWp(options = {}) {
+  const { toolsCallDelayMs = 0 } = options;
   const seen = [];
   const server = createServer((req, res) => {
     const chunks = [];
@@ -44,8 +45,15 @@ function startFakeWp() {
         msg.method === "initialize"
           ? { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "fake-wp", version: "0" } }
           : { content: [{ type: "text", text: `fake-wp received ${raw.length} bytes` }] };
-      res.setHeader("Content-Type", "application/json");
-      res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+      const respond = () => {
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ jsonrpc: "2.0", id: msg.id, result }));
+      };
+      if (msg.method !== "initialize" && toolsCallDelayMs > 0) {
+        setTimeout(respond, toolsCallDelayMs);
+      } else {
+        respond();
+      }
     });
   });
   return new Promise((ok) =>
@@ -270,6 +278,34 @@ test("closing stdin after the handshake exits cleanly with no extra stdout", asy
     assert.equal(signal, null);
     assert.equal(code, 0);
     assert.equal(p.stdoutSnapshot(), stdoutAfterHandshake);
+  } finally {
+    if (p.child.exitCode === null) p.stop();
+    wp.server.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("stdin EOF during an in-flight tools/call still delivers the response before exit", async () => {
+  const wp = await startFakeWp({ toolsCallDelayMs: 400 });
+  const home = mkdtempSync(join(tmpdir(), "mcpwp-smoke-"));
+  const p = startProxy(wp.port, home);
+  try {
+    await handshake(p);
+    const stdoutBefore = p.stdoutSnapshot();
+    p.send({
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "wp_site_info", arguments: {} },
+    });
+    p.child.stdin.end();
+    const res = await p.reply(2, REPLY_TIMEOUT_MS);
+    assert.equal(res.result?.isError, undefined, JSON.stringify(res).slice(0, 300));
+    assert.match(res.result.content[0].text, /fake-wp received/);
+    assert.ok(p.stdoutSnapshot().length > stdoutBefore.length, "tools/call response should be on stdout");
+    const { code, signal } = await p.waitForExit(REPLY_TIMEOUT_MS);
+    assert.equal(signal, null);
+    assert.equal(code, 0);
   } finally {
     if (p.child.exitCode === null) p.stop();
     wp.server.close();

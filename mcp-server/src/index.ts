@@ -462,11 +462,6 @@ async function main() {
       maxBufferSize: STDIO_MAX_BUFFER_SIZE,
     });
     await server.connect(transport);
-    process.stdin.on("end", () => {
-      if (!exitingAfterTransportClose) {
-        process.exit(0);
-      }
-    });
     // #1176: see exitAfterTransportClosed() — any close of this transport is
     // unrecoverable today, so chain onto whatever onclose server.connect()
     // already installed and exit after it runs.
