@@ -83,6 +83,153 @@ class Mcpwp_Posts {
 	}
 
 	/**
+	 * Validate a featured-image attachment id BEFORE anything is changed
+	 * (#1163). Core `set_post_thumbnail()` accepts an id when
+	 * `wp_get_attachment_image( $id, 'thumbnail' )` is non-empty (PDF
+	 * previews and filter-supplied downsize data qualify; `wp_attachment_is_image()`
+	 * alone does not match that rule). When the check fails, core deletes
+	 * any existing `_thumbnail_id` and the return value still does not
+	 * distinguish success from a silent clear. Refusing here — and
+	 * confirming with `apply_featured_image()` after the set — keeps every
+	 * featured-image setter aligned with core.
+	 *
+	 * @param int $media_id Positive attachment id (already canonical).
+	 * @return true|WP_Error True when it is safe to call set_post_thumbnail().
+	 */
+	public static function validate_featured_image_id( $media_id ) {
+		$media_id = (int) $media_id;
+
+		if ( $media_id <= 0 ) {
+			return new WP_Error(
+				'invalid_media',
+				__( 'Invalid media ID.', 'mcpwp' ),
+				array(
+					'status'   => 400,
+					'media_id' => $media_id,
+				)
+			);
+		}
+
+		$attachment = get_post( $media_id );
+
+		if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
+			return new WP_Error(
+				'invalid_media',
+				__( 'Invalid media ID: not an attachment.', 'mcpwp' ),
+				array(
+					'status'   => 400,
+					'media_id' => $media_id,
+				)
+			);
+		}
+
+		if ( '' === wp_get_attachment_image( $media_id, 'thumbnail' ) ) {
+			return new WP_Error(
+				'invalid_media',
+				__( 'That attachment cannot be rendered as a thumbnail image.', 'mcpwp' ),
+				array(
+					'status'   => 400,
+					'media_id' => $media_id,
+					'hint'     => 'set_post_thumbnail() only keeps an id when wp_get_attachment_image( $id, "thumbnail" ) returns markup. Upload an image attachment or one with a generated preview.',
+				)
+			);
+		}
+
+		return true;
+	}
+
+	/**
+	 * Resolve featured_image / media_id input before validation (#1163 P2).
+	 *
+	 * Removal values: 0, '0', '', false (unchanged). `null` is refused (400).
+	 * Arrays, negatives, and non-integers are refused for every principal
+	 * (bot keys skip the OAuth read-user guard on featured_image).
+	 *
+	 * @param mixed $value Raw request/body value.
+	 * @return array{remove:bool,id?:int}|WP_Error
+	 */
+	public static function resolve_featured_image_field( $value ) {
+		if ( null === $value ) {
+			return new WP_Error(
+				'invalid_post_ref',
+				__( 'featured_image cannot be null; omit the field or use 0 to remove the thumbnail.', 'mcpwp' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		if ( class_exists( 'Mcpwp_REST_API', false ) && Mcpwp_REST_API::is_ambiguous_post_ref_value( $value ) ) {
+			return new WP_Error(
+				'invalid_post_ref',
+				__( 'Post ids must be plain positive integers.', 'mcpwp' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		if ( false === $value || '' === $value || 0 === $value || '0' === $value ) {
+			return array( 'remove' => true );
+		}
+
+		if ( is_string( $value ) && '' === trim( $value ) ) {
+			return array( 'remove' => true );
+		}
+
+		if ( class_exists( 'Mcpwp_REST_API', false ) ) {
+			$id = Mcpwp_REST_API::canonical_post_id_token( $value );
+			if ( null === $id ) {
+				return new WP_Error(
+					'invalid_post_ref',
+					__( 'Post ids must be plain positive integers.', 'mcpwp' ),
+					array( 'status' => 400 )
+				);
+			}
+			if ( $id <= 0 ) {
+				return array( 'remove' => true );
+			}
+			return array( 'remove' => false, 'id' => $id );
+		}
+
+		$id = absint( $value );
+		if ( $id <= 0 ) {
+			return new WP_Error(
+				'invalid_post_ref',
+				__( 'Post ids must be plain positive integers.', 'mcpwp' ),
+				array( 'status' => 400 )
+			);
+		}
+
+		return array( 'remove' => false, 'id' => $id );
+	}
+
+	/**
+	 * Set a featured image and verify core actually stored it (#1163).
+	 *
+	 * @param int $post_id  Post id.
+	 * @param int $media_id Attachment id (already validated).
+	 * @return true|WP_Error
+	 */
+	public static function apply_featured_image( $post_id, $media_id ) {
+		$check = self::validate_featured_image_id( $media_id );
+		if ( is_wp_error( $check ) ) {
+			return $check;
+		}
+
+		set_post_thumbnail( $post_id, $media_id );
+
+		if ( (int) get_post_thumbnail_id( $post_id ) !== (int) $media_id ) {
+			return new WP_Error(
+				'invalid_media',
+				__( 'Featured image could not be set.', 'mcpwp' ),
+				array(
+					'status'   => 400,
+					'media_id' => (int) $media_id,
+				)
+			);
+		}
+
+		return true;
+	}
+
+	/**
 	 * Fields update_post() acts on. Anything else is refused by name (#803):
 	 * a field that is accepted and ignored is a 200 that did nothing.
 	 *
@@ -479,6 +626,20 @@ class Mcpwp_Posts {
 			return $meta_refused;
 		}
 
+		$featured_resolution = null;
+		if ( isset( $data['featured_image'] ) ) {
+			$featured_resolution = self::resolve_featured_image_field( $data['featured_image'] );
+			if ( is_wp_error( $featured_resolution ) ) {
+				return $featured_resolution;
+			}
+			if ( ! $featured_resolution['remove'] ) {
+				$featured_image_check = self::validate_featured_image_id( $featured_resolution['id'] );
+				if ( is_wp_error( $featured_image_check ) ) {
+					return $featured_image_check;
+				}
+			}
+		}
+
 		// Content guardrails (#957): enforced centrally by
 		// Mcpwp_Content_Guardrails::on_insert_post_data(), a wp_insert_post_data
 		// filter that runs inside the wp_insert_post() call below — not here.
@@ -501,9 +662,15 @@ class Mcpwp_Posts {
 			wp_set_post_tags( $post_id, $tags );
 		}
 
-		// Set featured image
-		if ( ! empty( $data['featured_image'] ) ) {
-			set_post_thumbnail( $post_id, absint( $data['featured_image'] ) );
+		if ( null !== $featured_resolution ) {
+			if ( $featured_resolution['remove'] ) {
+				delete_post_thumbnail( $post_id );
+			} else {
+				$applied = self::apply_featured_image( $post_id, $featured_resolution['id'] );
+				if ( is_wp_error( $applied ) ) {
+					return $applied;
+				}
+			}
 		}
 
 		$terms_applied = Mcpwp_Post_Fields::apply_terms( $post_id, $resolved_terms );
@@ -622,6 +789,20 @@ class Mcpwp_Posts {
 			return $meta_refused;
 		}
 
+		$featured_resolution = null;
+		if ( isset( $data['featured_image'] ) ) {
+			$featured_resolution = self::resolve_featured_image_field( $data['featured_image'] );
+			if ( is_wp_error( $featured_resolution ) ) {
+				return $featured_resolution;
+			}
+			if ( ! $featured_resolution['remove'] ) {
+				$featured_image_check = self::validate_featured_image_id( $featured_resolution['id'] );
+				if ( is_wp_error( $featured_image_check ) ) {
+					return $featured_image_check;
+				}
+			}
+		}
+
 		$before = array(
 			'title'  => Mcpwp_Agent_Text::decode( $post->post_title ),
 			'status' => $post->post_status,
@@ -686,12 +867,14 @@ class Mcpwp_Posts {
 			wp_set_post_tags( $post_id, $tags );
 		}
 
-		// Update featured image
-		if ( isset( $data['featured_image'] ) ) {
-			if ( empty( $data['featured_image'] ) ) {
+		if ( null !== $featured_resolution ) {
+			if ( $featured_resolution['remove'] ) {
 				delete_post_thumbnail( $post_id );
 			} else {
-				set_post_thumbnail( $post_id, absint( $data['featured_image'] ) );
+				$applied = self::apply_featured_image( $post_id, $featured_resolution['id'] );
+				if ( is_wp_error( $applied ) ) {
+					return $applied;
+				}
 			}
 		}
 

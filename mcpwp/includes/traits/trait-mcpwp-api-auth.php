@@ -2431,7 +2431,7 @@ trait Mcpwp_Api_Auth {
 			// they would otherwise be swallowed by ===
 			'/woocommerce/products/categories'     => array(), // product_cat TERM id.
 			'/woocommerce/products/tags'           => array(), // product_tag TERM id.
-			'/woocommerce/products'                => array( 'id' ),
+			'/woocommerce/products'                => array( 'id', 'image_id@read-user', 'gallery_image_ids[]@read-user' ),
 			// Only product_id names a post here: a product archetype's own
 			// {id} is a row in the mcpwp product-archetypes OPTION
 			// (get_product_archetype_by_id()), never a wp_posts id — declaring

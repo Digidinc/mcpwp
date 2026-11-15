@@ -1255,14 +1255,15 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			$value = $canonical['value'];
 		}
 
-		// The featured image goes through the same check as the dedicated
-		// route: it has to be an attachment.
+		// Same rule as the dedicated featured-image route (#1163): core
+		// accepts the id when wp_get_attachment_image( $id, 'thumbnail' )
+		// is non-empty (not wp_attachment_is_image() alone).
 		// Compared lowercase: meta_key collates case-insensitively, so
 		// '_THUMBNAIL_ID' is the same row (#1121).
 		if ( '_thumbnail_id' === strtolower( $key ) && ! empty( $value ) ) {
-			$attachment = get_post( absint( $value ) );
-			if ( ! $attachment || 'attachment' !== $attachment->post_type ) {
-				return $this->error_response( 'invalid_media', __( '_thumbnail_id must be the ID of a media attachment.', 'mcpwp' ), 400 );
+			$featured_image_check = Mcpwp_Posts::validate_featured_image_id( $value );
+			if ( is_wp_error( $featured_image_check ) ) {
+				return $this->error_response_from_wp_error( $featured_image_check );
 			}
 		}
 
