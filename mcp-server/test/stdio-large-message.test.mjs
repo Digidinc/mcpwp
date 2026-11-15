@@ -9,9 +9,9 @@
  * On overflow the SDK also drops its stdin listener and nulls out the
  * server's transport reference, so every later response (including `ping`)
  * went nowhere — the process stayed alive but stopped answering (#1176). The
- * proxy now sends a JSON-RPC parse error (id: null, since the oversized
- * line's own id was never parsed) and exits non-zero so the host can restart
- * it instead of babysitting a hung process.
+ * proxy now logs the failure on stderr, writes a JSON-RPC line with id: null
+ * (spec-correct for an unparseable request; TS-SDK clients may ignore it),
+ * and exits non-zero so the user or harness can restart it.
  *
  * Runs the real bundle (dist/index.js, or $MCPWP_BUNDLE) as a child process
  * against a local fake WordPress MCP endpoint. Build first: `bun run build`.
@@ -28,7 +28,7 @@ import { fileURLToPath } from "node:url";
 const here = dirname(fileURLToPath(import.meta.url));
 const bundle = resolve(process.env.MCPWP_BUNDLE || join(here, "..", "dist", "index.js"));
 const MIB = 1024 * 1024;
-const REPLY_TIMEOUT_MS = 20_000;
+const REPLY_TIMEOUT_MS = 30_000;
 
 /** Fake WP endpoint: answers initialize and tools/call, records body sizes. */
 function startFakeWp() {
@@ -77,7 +77,9 @@ function startProxy(port, home) {
   const waiters = new Map();
   const messages = [];
   let out = "";
+  let stdoutAll = "";
   child.stdout.on("data", (d) => {
+    stdoutAll += d;
     out += d;
     let i;
     while ((i = out.indexOf("\n")) !== -1) {
@@ -91,6 +93,7 @@ function startProxy(port, home) {
   });
   return {
     child,
+    stdoutSnapshot: () => stdoutAll,
     stderr: () => stderr,
     send(msg) {
       child.stdin.write(JSON.stringify(msg) + "\n");
@@ -214,19 +217,21 @@ test("a line over the 16 MiB cap is logged to stderr, not dropped silently", asy
   }
 });
 
-test("a line over the 16 MiB cap gets a JSON-RPC parse error, not a silent hang (#1176)", async () => {
+test("a line over the 16 MiB cap emits a spec-shaped id:null error on stdout before exiting (#1176)", async () => {
   const wp = await startFakeWp();
   const home = mkdtempSync(join(tmpdir(), "mcpwp-smoke-"));
   const p = startProxy(wp.port, home);
   try {
     await handshake(p);
+    const stdoutBefore = p.stdoutSnapshot();
     p.send(toolsCallOfSize(2, 17 * MIB));
 
-    // The rejected line's own id was never parsed, so the proxy answers with
-    // id: null per JSON-RPC 2.0 §5.1 instead of leaving the client hanging.
+    // The rejected line's own id was never parsed, so the proxy writes
+    // id: null per JSON-RPC 2.0 §5.1 (TS-SDK clients may discard it).
     const errorReply = await p.waitForMessage((m) => m.id === null && m.error, OVERFLOW_TIMEOUT_MS);
     assert.equal(errorReply.error.code, -32700);
     assert.match(errorReply.error.message, /16777216/);
+    assert.equal(p.stdoutSnapshot(), stdoutBefore + JSON.stringify(errorReply) + "\n");
   } finally {
     p.stop();
     wp.server.close();
@@ -244,9 +249,29 @@ test("the proxy exits non-zero after an over-cap line instead of hanging forever
 
     const { code, signal } = await p.waitForExit(OVERFLOW_TIMEOUT_MS);
     assert.equal(signal, null, `expected the proxy to exit on its own, not be killed by a signal (got ${signal})`);
-    assert.equal(code, 1, "expected a non-zero exit so the host knows to restart it");
+    assert.equal(code, 1, "expected a non-zero exit so the proxy can be restarted");
   } finally {
     p.stop();
+    wp.server.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("closing stdin after the handshake exits cleanly with no extra stdout", async () => {
+  const wp = await startFakeWp();
+  const home = mkdtempSync(join(tmpdir(), "mcpwp-smoke-"));
+  const p = startProxy(wp.port, home);
+  try {
+    await handshake(p);
+    const stdoutAfterHandshake = p.stdoutSnapshot();
+    assert.ok(stdoutAfterHandshake.trim().length > 0, "initialize response should be on stdout");
+    p.child.stdin.end();
+    const { code, signal } = await p.waitForExit(REPLY_TIMEOUT_MS);
+    assert.equal(signal, null);
+    assert.equal(code, 0);
+    assert.equal(p.stdoutSnapshot(), stdoutAfterHandshake);
+  } finally {
+    if (p.child.exitCode === null) p.stop();
     wp.server.close();
     rmSync(home, { recursive: true, force: true });
   }

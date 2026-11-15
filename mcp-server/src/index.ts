@@ -309,10 +309,12 @@ const STDIO_OVERFLOW_PATTERN = /ReadBuffer exceeded maximum size of \d+ bytes/;
 // response the server tries to send goes through `this._transport?.send()`
 // and is silently dropped — the process stays alive but never answers again,
 // including `ping`. There is no other path in this file that closes the
-// transport, so treat any close as fatal: tell the client what happened (with
-// `id: null`, since the oversized line's own id was never parsed — JSON-RPC
-// 2.0 §5.1) and exit non-zero so the host restarts this process instead of
-// leaving a hung one behind.
+// transport, so treat any close as fatal: still emit one JSON-RPC line with
+// `id: null` (the oversized line's own id was never parsed — JSON-RPC 2.0 §5.1),
+// mainly for hosts that read raw stdout; the official TS SDK may reject that
+// shape, so the stderr line below plus a non-zero exit are the real signals.
+// Exit non-zero so the user or harness can restart the proxy instead of
+// babysitting a hung process. A retried over-cap call will hit the same path.
 let exitingAfterTransportClose = false;
 function exitAfterTransportClosed(): void {
   if (exitingAfterTransportClose) return;
@@ -324,7 +326,7 @@ function exitAfterTransportClosed(): void {
     : lastTransportErrorMessage
       ? `stdio transport error: ${lastTransportErrorMessage}`
       : "the stdio transport closed unexpectedly";
-  log("error", `${reason} — exiting so the host can restart this process`);
+  log("error", `${reason} — exiting so the proxy can be restarted`);
 
   const payload =
     JSON.stringify({
@@ -441,11 +443,18 @@ async function main() {
   try {
     // A write to stdout that fails (e.g. the host already closed its end)
     // would otherwise be an unhandled 'error' event and crash with a raw
-    // Node stack instead of the clear message #1176 asks for.
+    // Node stack instead of the clear message #1176 asks for. EPIPE outside
+    // the overflow exit path still leaves a live process with a dead stdout;
+    // route it through the same fatal exit helper.
     process.stdout.on("error", (err: NodeJS.ErrnoException) => {
-      if (err.code !== "EPIPE") {
-        log("error", "stdout write error", err.message);
+      if (err.code === "EPIPE") {
+        if (!exitingAfterTransportClose) {
+          lastTransportErrorMessage = lastTransportErrorMessage ?? "stdout closed (EPIPE)";
+          exitAfterTransportClosed();
+        }
+        return;
       }
+      log("error", "stdout write error", err.message);
     });
 
     // (stdin, stdout, options): undefined selects the process streams.
@@ -453,6 +462,11 @@ async function main() {
       maxBufferSize: STDIO_MAX_BUFFER_SIZE,
     });
     await server.connect(transport);
+    process.stdin.on("end", () => {
+      if (!exitingAfterTransportClose) {
+        process.exit(0);
+      }
+    });
     // #1176: see exitAfterTransportClosed() — any close of this transport is
     // unrecoverable today, so chain onto whatever onclose server.connect()
     // already installed and exit after it runs.
