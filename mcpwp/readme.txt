@@ -157,6 +157,11 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.17 =
+* fix: **docs:** one generated source for tool counts and consistent public metadata ([#1200](https://github.com/Digidinc/mcpwp/issues/1200))
+* fix: **mcp:** answer GET on the MCP endpoint with 405 and an Allow header ([#1199](https://github.com/Digidinc/mcpwp/issues/1199))
+* fix: **posts:** featured image follow-ups (write order, restore on failure, null and float ids, category read check) ([#1201](https://github.com/Digidinc/mcpwp/issues/1201))
+
 = 3.14.16 =
 * fix: **auth:** revoke key records whose secret matches a stored value ([#1194](https://github.com/Digidinc/mcpwp/issues/1194))
 * fix: **posts:** keep the existing featured image when setting a new one fails ([#1195](https://github.com/Digidinc/mcpwp/issues/1195))
