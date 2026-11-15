@@ -157,6 +157,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.16 =
+* fix: **auth:** revoke key records whose secret matches a stored value ([#1194](https://github.com/Digidinc/mcpwp/issues/1194))
+* fix: **posts:** keep the existing featured image when setting a new one fails ([#1195](https://github.com/Digidinc/mcpwp/issues/1195))
+
 = 3.14.15 =
 * fix: **freemius:** ship the plugin icon the freemius bootstrap points at ([#1188](https://github.com/Digidinc/mcpwp/issues/1188))
 
