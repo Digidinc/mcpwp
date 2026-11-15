@@ -1,10 +1,17 @@
 /**
- * Stdio smoke test for the built proxy bundle (#1123).
+ * Stdio smoke test for the built proxy bundle (#1123, #1176).
  *
  * The SDK's StdioServerTransport caps one inbound line at 10 MiB by default
  * and, on overflow, closes the session without a reply. wp_upload_media_b64
  * accepts files up to 10 MB decoded (~13.3 MB as base64), so the proxy raises
  * the cap to 16 MiB and logs transport errors to stderr.
+ *
+ * On overflow the SDK also drops its stdin listener and nulls out the
+ * server's transport reference, so every later response (including `ping`)
+ * went nowhere — the process stayed alive but stopped answering (#1176). The
+ * proxy now sends a JSON-RPC parse error (id: null, since the oversized
+ * line's own id was never parsed) and exits non-zero so the host can restart
+ * it instead of babysitting a hung process.
  *
  * Runs the real bundle (dist/index.js, or $MCPWP_BUNDLE) as a child process
  * against a local fake WordPress MCP endpoint. Build first: `bun run build`.
@@ -68,6 +75,7 @@ function startProxy(port, home) {
     if (err.code !== "EPIPE") stderr += `\n[test] stdin error: ${err.message}`;
   });
   const waiters = new Map();
+  const messages = [];
   let out = "";
   child.stdout.on("data", (d) => {
     out += d;
@@ -75,7 +83,9 @@ function startProxy(port, home) {
     while ((i = out.indexOf("\n")) !== -1) {
       const line = out.slice(0, i);
       out = out.slice(i + 1);
+      if (!line) continue;
       const msg = JSON.parse(line);
+      messages.push(msg);
       waiters.get(msg.id)?.(msg);
     }
   });
@@ -87,10 +97,40 @@ function startProxy(port, home) {
     },
     reply(id, timeoutMs = REPLY_TIMEOUT_MS) {
       return new Promise((ok, fail) => {
+        const already = messages.find((m) => m.id === id);
+        if (already) return ok(already);
         const t = setTimeout(() => fail(new Error(`no reply to id ${id} in ${timeoutMs}ms; stderr: ${stderr.slice(-400)}`)), timeoutMs);
         waiters.set(id, (m) => {
           clearTimeout(t);
           ok(m);
+        });
+      });
+    },
+    /** Poll already-received + future stdout messages for one matching `predicate`. */
+    waitForMessage(predicate, timeoutMs = REPLY_TIMEOUT_MS) {
+      return new Promise((ok, fail) => {
+        const deadline = Date.now() + timeoutMs;
+        const tick = () => {
+          const found = messages.find(predicate);
+          if (found) return ok(found);
+          if (Date.now() >= deadline) {
+            return fail(new Error(`no matching stdout message within ${timeoutMs}ms; stderr: ${stderr.slice(-400)}`));
+          }
+          setTimeout(tick, 100);
+        };
+        tick();
+      });
+    },
+    /** Resolve once the child process has exited (already-exited is fine too). */
+    waitForExit(timeoutMs = REPLY_TIMEOUT_MS) {
+      return new Promise((ok, fail) => {
+        if (child.exitCode !== null || child.signalCode !== null) {
+          return ok({ code: child.exitCode, signal: child.signalCode });
+        }
+        const t = setTimeout(() => fail(new Error(`process did not exit within ${timeoutMs}ms; stderr: ${stderr.slice(-400)}`)), timeoutMs);
+        child.once("exit", (code, signal) => {
+          clearTimeout(t);
+          ok({ code, signal });
         });
       });
     },
@@ -146,6 +186,11 @@ for (const mib of [9, 11, 13.5]) {
   });
 }
 
+// The overflow takes ~3s on a quiet box (the SDK concatenates per chunk,
+// which is quadratic) and far longer under load, so wait generously before
+// anything downstream of it (the stderr log, the JSON-RPC error, the exit).
+const OVERFLOW_TIMEOUT_MS = 30_000;
+
 test("a line over the 16 MiB cap is logged to stderr, not dropped silently", async () => {
   const wp = await startFakeWp();
   const home = mkdtempSync(join(tmpdir(), "mcpwp-smoke-"));
@@ -153,18 +198,53 @@ test("a line over the 16 MiB cap is logged to stderr, not dropped silently", asy
   try {
     await handshake(p);
     p.send(toolsCallOfSize(2, 17 * MIB));
-    // The overflow takes ~3s on a quiet box (the SDK concatenates per chunk,
-    // which is quadratic) and far longer under load, so wait generously.
-    const OVERFLOW_LOG_TIMEOUT_MS = 30_000;
-    const deadline = Date.now() + OVERFLOW_LOG_TIMEOUT_MS;
+    const deadline = Date.now() + OVERFLOW_TIMEOUT_MS;
     while (!/maximum size of 16777216 bytes/.test(p.stderr()) && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 100));
     }
     assert.match(
       p.stderr(),
       /\[error\] stdio transport error.*maximum size of 16777216 bytes/s,
-      `no overflow log on stderr within ${OVERFLOW_LOG_TIMEOUT_MS}ms; stderr tail: ${p.stderr().slice(-400)}`
+      `no overflow log on stderr within ${OVERFLOW_TIMEOUT_MS}ms; stderr tail: ${p.stderr().slice(-400)}`
     );
+  } finally {
+    p.stop();
+    wp.server.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a line over the 16 MiB cap gets a JSON-RPC parse error, not a silent hang (#1176)", async () => {
+  const wp = await startFakeWp();
+  const home = mkdtempSync(join(tmpdir(), "mcpwp-smoke-"));
+  const p = startProxy(wp.port, home);
+  try {
+    await handshake(p);
+    p.send(toolsCallOfSize(2, 17 * MIB));
+
+    // The rejected line's own id was never parsed, so the proxy answers with
+    // id: null per JSON-RPC 2.0 §5.1 instead of leaving the client hanging.
+    const errorReply = await p.waitForMessage((m) => m.id === null && m.error, OVERFLOW_TIMEOUT_MS);
+    assert.equal(errorReply.error.code, -32700);
+    assert.match(errorReply.error.message, /16777216/);
+  } finally {
+    p.stop();
+    wp.server.close();
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("the proxy exits non-zero after an over-cap line instead of hanging forever (#1176)", async () => {
+  const wp = await startFakeWp();
+  const home = mkdtempSync(join(tmpdir(), "mcpwp-smoke-"));
+  const p = startProxy(wp.port, home);
+  try {
+    await handshake(p);
+    p.send(toolsCallOfSize(2, 17 * MIB));
+
+    const { code, signal } = await p.waitForExit(OVERFLOW_TIMEOUT_MS);
+    assert.equal(signal, null, `expected the proxy to exit on its own, not be killed by a signal (got ${signal})`);
+    assert.equal(code, 1, "expected a non-zero exit so the host knows to restart it");
   } finally {
     p.stop();
     wp.server.close();

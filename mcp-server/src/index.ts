@@ -288,7 +288,9 @@ const server = new Server(
 
 // Surface protocol/transport errors on stderr. Without this the SDK drops them
 // silently, so a closed session looks like a hang to the host (#1123).
+let lastTransportErrorMessage: string | undefined;
 server.onerror = (error: Error) => {
+  lastTransportErrorMessage = error.message;
   log("error", "stdio transport error", error.message);
 };
 
@@ -296,6 +298,58 @@ server.onerror = (error: Error) => {
 // it closes the session without replying. wp_upload_media_b64 takes files up to
 // 10 MB decoded (~13.3 MB base64), so leave headroom for the JSON envelope.
 const STDIO_MAX_BUFFER_SIZE = 16 * 1024 * 1024;
+
+// The SDK's ReadBuffer throws this exact message (shared/stdio.js) when a
+// single inbound line exceeds maxBufferSize.
+const STDIO_OVERFLOW_PATTERN = /ReadBuffer exceeded maximum size of \d+ bytes/;
+
+// #1176: on overflow the SDK's StdioServerTransport removes its stdin
+// listener and calls transport.onclose(), which the SDK's Protocol.connect()
+// uses to null out its own `_transport` reference. After that, every later
+// response the server tries to send goes through `this._transport?.send()`
+// and is silently dropped — the process stays alive but never answers again,
+// including `ping`. There is no other path in this file that closes the
+// transport, so treat any close as fatal: tell the client what happened (with
+// `id: null`, since the oversized line's own id was never parsed — JSON-RPC
+// 2.0 §5.1) and exit non-zero so the host restarts this process instead of
+// leaving a hung one behind.
+let exitingAfterTransportClose = false;
+function exitAfterTransportClosed(): void {
+  if (exitingAfterTransportClose) return;
+  exitingAfterTransportClose = true;
+
+  const overflow = lastTransportErrorMessage !== undefined && STDIO_OVERFLOW_PATTERN.test(lastTransportErrorMessage);
+  const reason = overflow
+    ? `an inbound message exceeded the stdio cap (${STDIO_MAX_BUFFER_SIZE} bytes)`
+    : lastTransportErrorMessage
+      ? `stdio transport error: ${lastTransportErrorMessage}`
+      : "the stdio transport closed unexpectedly";
+  log("error", `${reason} — exiting so the host can restart this process`);
+
+  const payload =
+    JSON.stringify({
+      jsonrpc: "2.0",
+      id: null,
+      error: {
+        code: -32700,
+        message: overflow
+          ? `Parse error: message exceeded the ${STDIO_MAX_BUFFER_SIZE}-byte stdio limit`
+          : `Parse error: ${reason}`,
+      },
+    }) + "\n";
+
+  const exit = () => process.exit(1);
+  const fallback = setTimeout(exit, 2000);
+  try {
+    process.stdout.write(payload, () => {
+      clearTimeout(fallback);
+      exit();
+    });
+  } catch {
+    clearTimeout(fallback);
+    exit();
+  }
+}
 
 // Host protocol version (#906). The SDK answers the host's `initialize` itself;
 // this derives the version it answered with the same rule, from the SDK's
@@ -385,11 +439,28 @@ server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
 
 async function main() {
   try {
+    // A write to stdout that fails (e.g. the host already closed its end)
+    // would otherwise be an unhandled 'error' event and crash with a raw
+    // Node stack instead of the clear message #1176 asks for.
+    process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+      if (err.code !== "EPIPE") {
+        log("error", "stdout write error", err.message);
+      }
+    });
+
     // (stdin, stdout, options): undefined selects the process streams.
     const transport = new StdioServerTransport(undefined, undefined, {
       maxBufferSize: STDIO_MAX_BUFFER_SIZE,
     });
     await server.connect(transport);
+    // #1176: see exitAfterTransportClosed() — any close of this transport is
+    // unrecoverable today, so chain onto whatever onclose server.connect()
+    // already installed and exit after it runs.
+    const deliverClose = transport.onclose;
+    transport.onclose = () => {
+      deliverClose?.();
+      exitAfterTransportClosed();
+    };
     // Observe (never alter) inbound messages through the public Transport
     // interface, to learn the host's requested protocol version.
     const deliver = transport.onmessage;
