@@ -321,7 +321,7 @@ class Mcpwp_Route_Capability_Map {
 			'DELETE /site-blueprints/(?P<id>[a-z0-9_-]+)' => array( 'admin', 'manage_options', 'admin scope: only an administrator principal reaches it as a user' ),
 			'POST /site-blueprints/(?P<id>[a-z0-9_-]+)/deploy' => array( 'admin', 'manage_options', 'admin scope: only an administrator principal reaches it as a user' ),
 			'POST /mcp' => array( 'read', 'none', 'JSON-RPC envelope: every tools/call is re-checked as its own sub-request' ),
-			'GET /mcp' => array( 'read', 'none', 'JSON-RPC envelope: every tools/call is re-checked as its own sub-request' ),
+			'GET /mcp' => array( 'read', 'none', 'no SSE stream: authenticated 405 + Allow: POST; unauthenticated auth refusal first (#1092)' ),
 			'OPTIONS /mcp' => array( 'read', 'none', 'JSON-RPC envelope: every tools/call is re-checked as its own sub-request' ),
 			'GET /oauth/authorize' => array( 'read', 'none', 'public pre-authentication endpoint (no credential involved)' ),
 			'POST /oauth/authorize' => array( 'write', 'none', 'public pre-authentication endpoint (no credential involved)' ),

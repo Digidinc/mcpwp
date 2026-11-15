@@ -177,10 +177,12 @@ curl -H "Authorization: Bearer mcpwp_your_api_key_here" \
 
 #### Query Parameter
 
-For MCP clients that don't support custom headers (e.g., Claude Desktop custom connectors):
+For MCP clients that don't support custom headers (e.g., Claude Desktop custom connectors). The MCP endpoint accepts JSON-RPC over **POST** only — a plain GET returns 405:
 
 ```bash
-curl "https://your-site.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_api_key_here"
+curl -X POST "https://your-site.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"example","version":"1.0"}}}'
 ```
 
 > **Note:** Prefer header authentication when possible. Query parameters may appear in server access logs.

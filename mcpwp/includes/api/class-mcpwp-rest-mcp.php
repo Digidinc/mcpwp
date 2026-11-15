@@ -768,13 +768,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * Register routes.
 	 */
 	public function register_routes() {
-		// Main MCP endpoint
+		// Main MCP endpoint. Streamable HTTP carries JSON-RPC on POST only —
+		// register that literal (not EDITABLE / PUT+PATCH) so Allow: POST on a
+		// 405 matches the methods this route actually accepts (RFC 9110 15.5.6).
 		register_rest_route(
 			$this->namespace,
 			'/mcp',
 			array(
 				array(
-					'methods'             => WP_REST_Server::CREATABLE,
+					'methods'             => 'POST',
 					'callback'            => array( $this, 'handle_mcp' ),
 					'permission_callback' => array( $this, 'check_permission' ),
 				),
@@ -807,14 +809,15 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	 * @return WP_REST_Response Response.
 	 */
 	public function handle_mcp_get( $request ) {
-		$response = new WP_REST_Response(
-			$this->jsonrpc_error(
-				null,
-				-32600,
-				'Method Not Allowed. This server does not offer a server-initiated SSE stream; send JSON-RPC over POST.'
-			),
-			405
+		$method   = method_exists( $request, 'get_method' ) ? strtoupper( (string) $request->get_method() ) : 'GET';
+		$body     = $this->jsonrpc_error(
+			null,
+			-32600,
+			'Method Not Allowed. This server does not offer a server-initiated SSE stream; send JSON-RPC over POST.'
 		);
+		// HEAD must not carry a message body (RFC 9110); core also skips
+		// echoing one, but clear it here so dispatch-level readers agree.
+		$response = new WP_REST_Response( 'HEAD' === $method ? null : $body, 405 );
 		$response->header( 'Allow', 'POST' );
 		return $this->prepare_mcp_response( $response );
 	}
@@ -822,16 +825,27 @@ class Mcpwp_REST_MCP extends Mcpwp_REST_API {
 	/**
 	 * Keep Allow: POST on a 405 GET/HEAD /mcp answer after core rebuilds Allow.
 	 *
+	 * Route matching is case-insensitive in core; compare the matched route
+	 * (or a folded get_route()) so a request like /MCPWP/v1/MCP still gets
+	 * the pin instead of core's Allow listing GET.
+	 *
 	 * @param WP_HTTP_Response|WP_REST_Response $response Response.
 	 * @param WP_REST_Server                    $server   REST server (unused).
 	 * @param WP_REST_Request                   $request  Request.
 	 * @return WP_HTTP_Response|WP_REST_Response
 	 */
 	public function pin_mcp_get_allow_header( $response, $server, $request ) {
-		if ( ! is_object( $response ) || ! is_object( $request ) || ! method_exists( $request, 'get_route' ) || ! method_exists( $request, 'get_method' ) ) {
+		if ( ! is_object( $response ) || ! is_object( $request ) || ! method_exists( $request, 'get_method' ) ) {
 			return $response;
 		}
-		if ( '/mcpwp/v1/mcp' !== (string) $request->get_route() ) {
+		$route = '';
+		if ( method_exists( $response, 'get_matched_route' ) ) {
+			$route = (string) $response->get_matched_route();
+		}
+		if ( '' === $route && method_exists( $request, 'get_route' ) ) {
+			$route = (string) $request->get_route();
+		}
+		if ( '/mcpwp/v1/mcp' !== $this->normalize_route_for_authorization( $route ) ) {
 			return $response;
 		}
 		$method = strtoupper( (string) $request->get_method() );
