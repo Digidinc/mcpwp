@@ -267,10 +267,11 @@ class Mcpwp_Uninstaller {
 		'mcpwp_api_keys_last_used',
 		'mcpwp_api_keys_lock',
 		'mcpwp_spai_credentials_adopted', // #1098: exact name, no wildcard (#1159).
-		// The key hygiene sweep's flag, position, revoked list and lock.
+		// The key hygiene sweep's flag, position, revoked list, pending list and lock.
 		'mcpwp_key_hygiene_swept',
 		'mcpwp_key_hygiene_state',
 		'mcpwp_key_hygiene_revoked',
+		'mcpwp_key_hygiene_pending',
 		'mcpwp_key_hygiene_lock',
 		'mcpwp_settings',
 		'mcpwp_version',

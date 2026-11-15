@@ -1,13 +1,15 @@
 <?php
 /**
- * Upgrade-time key hygiene: keys whose secret matches a stored value are revoked.
+ * Upgrade-time key hygiene: keys whose secret matches a stored verifier are revoked.
  *
- * Covered: a matching record is revoked whichever stored value it matches;
- * normal records are untouched; several records at once; the sweep is
- * bounded and resumes; an unreadable or locked store fails closed; a rerun
- * changes nothing; the notice and the Site Health item are gated and escaped
- * and never show a hash; the plugin wires the sweep into upgrade, activation
- * and admin_init.
+ * Covered: a matching record is revoked whichever stored verifier it matches;
+ * plaintext option leftovers are not candidates; normal records are untouched;
+ * several records at once; the sweep is bounded and resumes (including under
+ * real bcrypt); progress survives added records; an unreadable or locked store
+ * fails closed; a refused revoke is reported and retried; a store write between
+ * snapshot and revoke returns changed; the notice and the Site Health item are
+ * gated and escaped and never show a hash; admin ajax/admin-post/REST/cron skip
+ * the sweep; the plugin wires the sweep into upgrade, activation and admin_init.
  *
  * @package MCPWP
  */
@@ -43,15 +45,27 @@ final class KeyHygieneSweepTest extends TestCase {
 		$GLOBALS['mcpwp_test_filters']      = array();
 		$GLOBALS['mcpwp_test_wpdb_options'] = array();
 		$GLOBALS['mcpwp_test_object_cache'] = array();
-		$_GET                               = array();
-		$_POST                              = array();
+		$GLOBALS['mcpwp_test_doing_ajax']        = false;
+		$GLOBALS['mcpwp_test_doing_cron']        = false;
+		$GLOBALS['mcpwp_test_rest_request']      = false;
+		$GLOBALS['mcpwp_test_is_admin_post']     = false;
+		$GLOBALS['mcpwp_test_wpdb_col_charset']  = 'utf8mb4';
+		unset( $GLOBALS['mcpwp_test_key_hygiene_between'] );
+		$_GET  = array();
+		$_POST = array();
 	}
 
 	protected function tearDown(): void {
-		$GLOBALS['mcpwp_test_current_user'] = 0;
-		$GLOBALS['mcpwp_test_user_caps']    = array();
-		$GLOBALS['mcpwp_test_wpdb_options'] = array();
-		$_POST                              = array();
+		$GLOBALS['mcpwp_test_current_user']     = 0;
+		$GLOBALS['mcpwp_test_user_caps']        = array();
+		$GLOBALS['mcpwp_test_wpdb_options']     = array();
+		$GLOBALS['mcpwp_test_doing_ajax']       = false;
+		$GLOBALS['mcpwp_test_doing_cron']       = false;
+		$GLOBALS['mcpwp_test_rest_request']     = false;
+		$GLOBALS['mcpwp_test_is_admin_post']    = false;
+		$GLOBALS['mcpwp_test_wpdb_col_charset'] = 'utf8mb4';
+		unset( $GLOBALS['mcpwp_test_key_hygiene_between'] );
+		$_POST = array();
 	}
 
 	// ── fixtures ─────────────────────────────────────────────────────────
@@ -109,7 +123,7 @@ final class KeyHygieneSweepTest extends TestCase {
 		);
 
 		$auth = new Mcpwp_Key_Hygiene_Test_Auth();
-		$this->assertNotNull( $auth->scoped_lookup( $legacy_hash ), 'Precondition: the record is active and its secret is the stored value.' );
+		$this->assertNotNull( $auth->scoped_lookup( $legacy_hash ), 'Precondition: the record is active and its secret is the stored verifier.' );
 
 		$outcome = Mcpwp_Key_Hygiene::run( self::LONG );
 
@@ -123,7 +137,7 @@ final class KeyHygieneSweepTest extends TestCase {
 		$this->assertNull( get_option( Mcpwp_Key_Hygiene::STATE_OPTION, null ), 'No position is left behind.' );
 	}
 
-	public function test_each_kind_of_stored_value_is_a_candidate(): void {
+	public function test_each_kind_of_stored_verifier_is_a_candidate(): void {
 		$spai_single = wp_hash_password( 'spai-single' );
 		$spai_record = wp_hash_password( 'spai-record' );
 		$other_hash  = wp_hash_password( 'other-secret' );
@@ -155,7 +169,7 @@ final class KeyHygieneSweepTest extends TestCase {
 	public function test_a_record_carrying_a_stored_verifier_verbatim_is_not_revoked(): void {
 		// The shape adopt_spai_credentials() writes: a stored verifier is carried
 		// into the store as it is, never re-hashed, so the record's hash IS the
-		// stored string. Its secret is still only the key nobody has written down.
+		// stored string. Its secret is still only the original key material.
 		$legacy = wp_hash_password( 'mcpwp_' . str_repeat( 'v', 48 ) );
 		$md5    = md5( 'mcpwp_' . str_repeat( 'w', 48 ) );
 		update_option( 'mcpwp_api_key', $legacy );
@@ -174,10 +188,9 @@ final class KeyHygieneSweepTest extends TestCase {
 		$this->assertSame( $store, get_option( Mcpwp_Key_Store::OPTION ) );
 	}
 
-	public function test_a_record_hashing_a_plaintext_credential_still_in_the_database_is_revoked(): void {
-		// A pre-1.0.14 site stored its single key as plaintext. A record that
-		// hashes that value has a secret anyone who can read wp_options already
-		// has, so it is revoked and the admin is told to create a new key.
+	public function test_a_plaintext_option_value_is_not_a_candidate(): void {
+		// Only stored verifiers are candidates. A plaintext leftover in
+		// mcpwp_api_key is not one, so a record that verifies it stays active.
 		$plaintext = 'mcpwp_' . str_repeat( 'p', 48 );
 		update_option( 'mcpwp_api_key', $plaintext );
 		update_option( Mcpwp_Key_Store::OPTION, array( $this->record( 'k_plain', 'Adopted plaintext', wp_hash_password( $plaintext ) ) ) );
@@ -185,8 +198,55 @@ final class KeyHygieneSweepTest extends TestCase {
 		$outcome = Mcpwp_Key_Hygiene::run( self::LONG );
 
 		$this->assertSame( 'done', $outcome['status'] );
-		$this->assertSame( array( 'k_plain' ), array_column( $outcome['revoked'], 'id' ) );
-		$this->assertNotEmpty( $this->by_id( 'k_plain' )['revoked_at'] );
+		$this->assertSame( array(), $outcome['revoked'] );
+		$this->assertNull( $this->by_id( 'k_plain' )['revoked_at'] );
+	}
+
+	public function test_plaintext_2_8_adopted_record_stays_active_and_authenticates(): void {
+		// 2.8 shape: plaintext spai_api_key copied into mcpwp_api_key, then
+		// adopt_spai_credentials() writes spai_legacy_single as
+		// wp_hash_password(K). The sweep must leave that record active so K
+		// still authenticates.
+		$k = 'mcpwp_' . str_repeat( 'k', 48 );
+		update_option( 'spai_api_key', $k );
+		update_option( 'mcpwp_api_key', $k );
+		update_option( 'spai_api_keys', array( array( 'id' => 'other', 'hash' => wp_hash_password( 'other' ) ) ) );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array(
+				$this->record( 'spai_legacy_single', 'Legacy single', wp_hash_password( $k ) ),
+				$this->record( 'spai_other', 'Other', wp_hash_password( 'other-key' ) ),
+			)
+		);
+
+		$auth = new Mcpwp_Key_Hygiene_Test_Auth();
+		$this->assertNotNull( $auth->scoped_lookup( $k ), 'Precondition: K authenticates.' );
+
+		$outcome = Mcpwp_Key_Hygiene::run( self::LONG );
+
+		$this->assertSame( 'done', $outcome['status'] );
+		$this->assertSame( array(), $outcome['revoked'] );
+		$this->assertNull( $this->by_id( 'spai_legacy_single' )['revoked_at'] );
+		$this->assertNotNull( $auth->scoped_lookup( $k ), 'K still authenticates after the sweep.' );
+	}
+
+	public function test_md5_shaped_candidates_include_both_hex_cases(): void {
+		$md5_lower = md5( 'md5-hex-case' );
+		$md5_upper = strtoupper( $md5_lower );
+		update_option( 'mcpwp_api_key', $md5_lower );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array(
+				$this->record( 'k_from_upper', 'From upper', wp_hash_password( $md5_upper ) ),
+				$this->record( 'k_normal', 'Normal', wp_hash_password( 'mcpwp_' . str_repeat( 'z', 48 ) ) ),
+			)
+		);
+
+		$outcome = Mcpwp_Key_Hygiene::run( self::LONG );
+
+		$this->assertSame( 'done', $outcome['status'] );
+		$this->assertNotEmpty( $this->by_id( 'k_from_upper' )['revoked_at'] );
+		$this->assertNull( $this->by_id( 'k_normal' )['revoked_at'] );
 	}
 
 	public function test_normal_records_are_untouched_and_the_store_is_not_rewritten(): void {
@@ -246,11 +306,9 @@ final class KeyHygieneSweepTest extends TestCase {
 		$records[] = $this->record( 'k_match', 'Match', md5( $legacy ) );
 		update_option( Mcpwp_Key_Store::OPTION, $records );
 
-		$runs     = 0;
-		$statuses = array();
+		$runs = 0;
 		do {
-			$outcome    = Mcpwp_Key_Hygiene::run( self::LONG, 3 );
-			$statuses[] = $outcome['status'];
+			$outcome = Mcpwp_Key_Hygiene::run( self::LONG, 3 );
 			++$runs;
 			if ( 'partial' === $outcome['status'] ) {
 				$this->assertFalse( Mcpwp_Key_Hygiene::is_done(), 'No flag while records are unchecked.' );
@@ -259,9 +317,8 @@ final class KeyHygieneSweepTest extends TestCase {
 		} while ( 'partial' === $outcome['status'] && $runs < 100 );
 
 		$this->assertSame( 'done', $outcome['status'] );
-		$this->assertGreaterThan( 3, $runs, 'Three checks per run cannot cover 7 records x 8 candidates at once.' );
-		// 7 targets x 8 candidates = 56 checks at most; resuming never repeats one.
-		$this->assertLessThanOrEqual( 19, $runs );
+		$this->assertGreaterThan( 3, $runs, 'Three checks per run cannot cover 7 records x candidates at once.' );
+		$this->assertLessThanOrEqual( 40, $runs );
 		$this->assertNotEmpty( $this->by_id( 'k_match' )['revoked_at'] );
 		for ( $i = 0; $i < 6; $i++ ) {
 			$this->assertNull( $this->by_id( 'k' . $i )['revoked_at'] );
@@ -284,7 +341,7 @@ final class KeyHygieneSweepTest extends TestCase {
 		$this->assertNotEmpty( $this->by_id( 'k_match' )['revoked_at'] );
 	}
 
-	public function test_a_new_record_mid_sweep_starts_it_over_and_is_checked(): void {
+	public function test_a_new_record_mid_sweep_keeps_prior_progress_and_is_checked(): void {
 		$legacy = md5( 'legacy' );
 		update_option( 'mcpwp_api_key', $legacy );
 		update_option(
@@ -295,8 +352,10 @@ final class KeyHygieneSweepTest extends TestCase {
 			)
 		);
 		$this->assertSame( 'partial', Mcpwp_Key_Hygiene::run( self::LONG, 1 )['status'] );
+		$state_before = get_option( Mcpwp_Key_Hygiene::STATE_OPTION );
+		$this->assertIsArray( $state_before );
+		$this->assertNotEmpty( $state_before['done'] );
 
-		// A record arrives between passes.
 		Mcpwp_Key_Store::mutate(
 			function ( array $keys ) use ( $legacy ) {
 				$keys[] = $this->record( 'k_new', 'New', md5( $legacy ) );
@@ -306,7 +365,7 @@ final class KeyHygieneSweepTest extends TestCase {
 
 		do {
 			$outcome = Mcpwp_Key_Hygiene::run( self::LONG, 1 );
-		} while ( 'partial' === $outcome['status'] );
+		} while ( in_array( $outcome['status'], array( 'partial', 'changed' ), true ) );
 
 		$this->assertSame( 'done', $outcome['status'] );
 		$this->assertNotEmpty( $this->by_id( 'k_new' )['revoked_at'] );
@@ -336,6 +395,79 @@ final class KeyHygieneSweepTest extends TestCase {
 		$this->assertCount( 1, Mcpwp_Key_Hygiene::revoked_records() );
 	}
 
+	public function test_bcrypt_time_budget_bounds_work_and_the_sweep_resumes(): void {
+		$legacy = wp_hash_password( 'bcrypt-legacy' );
+		update_option( 'mcpwp_api_key', $legacy );
+		$records = array();
+		for ( $i = 0; $i < 6; $i++ ) {
+			$records[] = $this->record( 'bk' . $i, 'Bcrypt ' . $i, wp_hash_password( 'mcpwp_bcrypt_' . $i . str_repeat( 'y', 40 ) ) );
+		}
+		$records[] = $this->record( 'bk_match', 'Match', wp_hash_password( $legacy ) );
+		update_option( Mcpwp_Key_Store::OPTION, $records );
+
+		$first = Mcpwp_Key_Hygiene::run( 0.05, 100000 );
+		$this->assertSame( 'partial', $first['status'], 'A tight time budget must stop before finishing real bcrypt checks.' );
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
+		$this->assertIsArray( get_option( Mcpwp_Key_Hygiene::STATE_OPTION ) );
+
+		$runs = 1;
+		do {
+			$outcome = Mcpwp_Key_Hygiene::run( 0.5, 100000 );
+			++$runs;
+		} while ( 'partial' === $outcome['status'] && $runs < 200 );
+
+		$this->assertSame( 'done', $outcome['status'] );
+		$this->assertGreaterThan( 1, $runs );
+		$this->assertNotEmpty( $this->by_id( 'bk_match' )['revoked_at'] );
+		for ( $i = 0; $i < 6; $i++ ) {
+			$this->assertNull( $this->by_id( 'bk' . $i )['revoked_at'] );
+		}
+	}
+
+	public function test_a_write_between_snapshot_and_revoke_returns_changed_and_keeps_progress(): void {
+		$legacy = md5( 'legacy-changed' );
+		update_option( 'mcpwp_api_key', $legacy );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array(
+				$this->record( 'k_match', 'Match', md5( $legacy ) ),
+				$this->record( 'k_other', 'Other', md5( 'other' ) ),
+			)
+		);
+
+		$GLOBALS['mcpwp_test_key_hygiene_between'] = static function () {
+			Mcpwp_Key_Store::mutate(
+				static function ( array $keys ) {
+					$keys[] = array(
+						'id'           => 'k_injected',
+						'label'        => 'Injected',
+						'hash'         => md5( 'injected' ),
+						'scopes'       => array( 'read' ),
+						'created_at'   => '2026-01-01 00:00:00',
+						'last_used_at' => null,
+						'revoked_at'   => null,
+					);
+					return array( $keys, true );
+				}
+			);
+		};
+
+		$outcome = Mcpwp_Key_Hygiene::run( self::LONG, 100000 );
+		unset( $GLOBALS['mcpwp_test_key_hygiene_between'] );
+
+		$this->assertSame( 'changed', $outcome['status'] );
+		$this->assertNull( $this->by_id( 'k_match' )['revoked_at'], 'No revoke applied on a changed store.' );
+		$this->assertIsArray( get_option( Mcpwp_Key_Hygiene::STATE_OPTION ), 'Progress is kept for the next run.' );
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
+
+		do {
+			$outcome = Mcpwp_Key_Hygiene::run( self::LONG, 100000 );
+		} while ( in_array( $outcome['status'], array( 'partial', 'changed' ), true ) );
+
+		$this->assertSame( 'done', $outcome['status'] );
+		$this->assertNotEmpty( $this->by_id( 'k_match' )['revoked_at'] );
+	}
+
 	// ── fails closed ─────────────────────────────────────────────────────
 
 	public function test_an_unreadable_store_revokes_nothing_and_leaves_the_flag_unset(): void {
@@ -351,7 +483,6 @@ final class KeyHygieneSweepTest extends TestCase {
 	}
 
 	public function test_a_store_that_turns_unreadable_under_the_lock_fails_closed(): void {
-		// The cached copy reads fine; the database row does not.
 		update_option( Mcpwp_Key_Store::OPTION, array( $this->record( 'k1', 'One', md5( 'one' ) ) ) );
 		$GLOBALS['mcpwp_test_wpdb_options'][ Mcpwp_Key_Store::OPTION ] = self::CORRUPT;
 
@@ -392,6 +523,34 @@ final class KeyHygieneSweepTest extends TestCase {
 		$this->assertSame( 'unreadable', $outcome['status'] );
 	}
 
+	public function test_a_refused_revoke_is_reported_and_retried(): void {
+		$legacy = md5( 'legacy-pending' );
+		update_option( 'mcpwp_api_key', $legacy );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array( $this->record( 'k_match', "label \u{1F600}", md5( $legacy ) ) )
+		);
+		$GLOBALS['mcpwp_test_wpdb_col_charset'] = 'latin1';
+
+		$outcome = Mcpwp_Key_Hygiene::run( self::LONG );
+		$this->assertSame( 'unsupported_characters', $outcome['status'] );
+		$this->assertNull( $this->by_id( 'k_match' )['revoked_at'] );
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
+		$this->assertSame( array( 'k_match' ), array_column( Mcpwp_Key_Hygiene::pending_records(), 'id' ) );
+
+		$health = Mcpwp_Key_Hygiene::run_site_status_test();
+		$this->assertSame( 'critical', $health['status'] );
+		$this->assertStringContainsString( 'could not be revoked', $health['description'] );
+		$this->assertStringContainsString( 'k_match', $health['description'] );
+		$this->assertStringNotContainsString( md5( $legacy ), $health['description'] );
+
+		$GLOBALS['mcpwp_test_wpdb_col_charset'] = 'utf8mb4';
+		$retry = Mcpwp_Key_Hygiene::run( self::LONG );
+		$this->assertSame( 'done', $retry['status'] );
+		$this->assertNotEmpty( $this->by_id( 'k_match' )['revoked_at'] );
+		$this->assertSame( array(), Mcpwp_Key_Hygiene::pending_records() );
+	}
+
 	// ── idempotent ───────────────────────────────────────────────────────
 
 	public function test_a_rerun_changes_nothing(): void {
@@ -408,9 +567,7 @@ final class KeyHygieneSweepTest extends TestCase {
 		$after_first = get_option( Mcpwp_Key_Store::OPTION );
 		$listed      = Mcpwp_Key_Hygiene::revoked_records();
 
-		// Finished: a second run is a no-op.
 		$this->assertSame( array(), Mcpwp_Key_Hygiene::run( self::LONG )['revoked'] );
-		// Even with the flag cleared, nothing new is revoked or listed twice.
 		delete_option( Mcpwp_Key_Hygiene::FLAG );
 		$again = Mcpwp_Key_Hygiene::run( self::LONG );
 		$this->assertSame( 'done', $again['status'] );
@@ -457,7 +614,7 @@ final class KeyHygieneSweepTest extends TestCase {
 		$this->assertStringContainsString( '&lt;script&gt;alert(1)&lt;/script&gt;', $html );
 		$this->assertStringNotContainsString( $hash, $html );
 		$this->assertStringNotContainsString( md5( 'legacy' ), $html );
-		$this->assertStringContainsString( 'secret matched a value stored', $html );
+		$this->assertStringContainsString( 'secret matched a stored verifier', $html );
 		$this->assertStringContainsString( 'Create a new key', $html );
 		$this->assertStringContainsString( 'spai_api_key', $html );
 		$this->assertStringContainsString( 'MD5', $html );
@@ -517,6 +674,34 @@ final class KeyHygieneSweepTest extends TestCase {
 		$this->assertTrue( Mcpwp_Key_Hygiene::is_done() );
 	}
 
+	public function test_admin_init_skips_ajax_admin_post_rest_and_cron(): void {
+		update_option( Mcpwp_Key_Store::OPTION, array( $this->record( 'k1', 'One', md5( 'one' ) ) ) );
+		$this->become_admin();
+
+		$GLOBALS['mcpwp_test_doing_ajax'] = true;
+		Mcpwp_Key_Hygiene::maybe_run_for_admin();
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
+		$GLOBALS['mcpwp_test_doing_ajax'] = false;
+
+		$GLOBALS['mcpwp_test_is_admin_post'] = true;
+		Mcpwp_Key_Hygiene::maybe_run_for_admin();
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
+		$GLOBALS['mcpwp_test_is_admin_post'] = false;
+
+		$GLOBALS['mcpwp_test_rest_request'] = true;
+		Mcpwp_Key_Hygiene::maybe_run_for_admin();
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
+		$GLOBALS['mcpwp_test_rest_request'] = false;
+
+		$GLOBALS['mcpwp_test_doing_cron'] = true;
+		Mcpwp_Key_Hygiene::maybe_run_for_admin();
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
+		$GLOBALS['mcpwp_test_doing_cron'] = false;
+
+		Mcpwp_Key_Hygiene::maybe_run_for_admin();
+		$this->assertTrue( Mcpwp_Key_Hygiene::is_done() );
+	}
+
 	public function test_the_plugin_runs_the_sweep_on_upgrade_activation_and_admin_init(): void {
 		$src = (string) file_get_contents( dirname( __DIR__ ) . '/mcpwp.php' );
 
@@ -532,7 +717,7 @@ final class KeyHygieneSweepTest extends TestCase {
 
 	public function test_the_uninstaller_removes_the_sweep_options(): void {
 		require_once dirname( __DIR__ ) . '/includes/class-mcpwp-uninstaller.php';
-		foreach ( array( Mcpwp_Key_Hygiene::FLAG, Mcpwp_Key_Hygiene::STATE_OPTION, Mcpwp_Key_Hygiene::REVOKED_OPTION, Mcpwp_Key_Hygiene::LOCK ) as $option ) {
+		foreach ( array( Mcpwp_Key_Hygiene::FLAG, Mcpwp_Key_Hygiene::STATE_OPTION, Mcpwp_Key_Hygiene::REVOKED_OPTION, Mcpwp_Key_Hygiene::PENDING_OPTION, Mcpwp_Key_Hygiene::LOCK ) as $option ) {
 			$this->assertContains( $option, Mcpwp_Uninstaller::LEGACY_OPTIONS );
 		}
 		$this->assertContains( Mcpwp_Key_Hygiene::DISMISSED_META, Mcpwp_Uninstaller::LEGACY_USER_META );
