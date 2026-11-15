@@ -5,6 +5,15 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.17](https://github.com/Digidinc/mcpwp/compare/v3.14.16...v3.14.17) (2026-11-15)
+
+
+### Bug Fixes
+
+* **docs:** one generated source for tool counts and consistent public metadata ([#1200](https://github.com/Digidinc/mcpwp/issues/1200)) ([1ace7aa](https://github.com/Digidinc/mcpwp/commit/1ace7aa2f80a562ec6443b996e1176eccb985105))
+* **mcp:** answer GET on the MCP endpoint with 405 and an Allow header ([#1199](https://github.com/Digidinc/mcpwp/issues/1199)) ([b35c86c](https://github.com/Digidinc/mcpwp/commit/b35c86ce0a1c6dc41d9afbbec34e1dc5d05c08c7))
+* **posts:** featured image follow-ups (write order, restore on failure, null and float ids, category read check) ([#1201](https://github.com/Digidinc/mcpwp/issues/1201)) ([02672de](https://github.com/Digidinc/mcpwp/commit/02672de69051a8c67ca07561eb3c3ff046790a6d))
+
 ## [3.14.16](https://github.com/Digidinc/mcpwp/compare/v3.14.15...v3.14.16) (2026-11-15)
 
 
