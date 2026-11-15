@@ -158,6 +158,11 @@ final class PostRefInventoryGuard1101cTest extends TestCase {
 		'includes/pro/core/class-mcpwp-elementor-pro.php source_element_id' => 'not-a-post: copied OUT of a part\'s own meta into the response (output)',
 		'includes/pro/core/class-mcpwp-elementor-pro.php source_page_id'    => 'not-a-post: copied OUT of a part\'s own meta into the response (output)',
 		'includes/pro/core/class-mcpwp-elementor-pro.php template_id'       => 'source', // /elementor/landing-page template_id.
+		'includes/pro/core/class-mcpwp-woocommerce.php image_id'            => 'read-user',
+		'includes/pro/core/class-mcpwp-woocommerce.php gallery_image_ids'   => 'read-user',
+		'includes/pro/core/class-mcpwp-woocommerce.php images'              => 'not-a-post: product image objects in the response, not an input id',
+		'includes/pro/core/class-mcpwp-woocommerce.php page'                => 'not-a-post: pagination',
+		'includes/pro/core/class-mcpwp-woocommerce.php parent'              => 'not-a-post: product_cat term parent id',
 		'includes/traits/trait-mcpwp-sanitization.php featured_image' => 'read-user',
 		'includes/traits/trait-mcpwp-sanitization.php id'             => 'write',
 		'includes/traits/trait-mcpwp-sanitization.php ids'            => 'not-a-post: list filter (post__in), clamped to published for user-run principals',
@@ -441,7 +446,9 @@ final class PostRefInventoryGuard1101cTest extends TestCase {
 			foreach ( $specs as $spec ) {
 				list( $base, $class ) = Mcpwp_REST_API::post_ref_spec_parts( $spec );
 				$parts                = preg_split( '/\\[\\]\\.|:/', $base );
-				$declared[ end( $parts ) . '|' . $class ] = true;
+				$field                = (string) end( $parts );
+				$field                = preg_replace( '/\\[\\]$/', '', $field );
+				$declared[ $field . '|' . $class ] = true;
 			}
 		}
 		foreach ( self::NESTED as $entry => $class ) {
@@ -476,6 +483,7 @@ final class PostRefInventoryGuard1101cTest extends TestCase {
 		'includes/core/class-mcpwp-media.php',
 		'includes/core/class-mcpwp-post-fields.php',
 		'includes/pro/core/class-mcpwp-elementor-pro.php',
+		'includes/pro/core/class-mcpwp-woocommerce.php',
 	);
 
 	private static function nested_sweep(): array {

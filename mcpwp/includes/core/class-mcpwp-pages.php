@@ -172,7 +172,7 @@ class Mcpwp_Pages {
 		}
 
 		$featured_resolution = null;
-		if ( isset( $data['featured_image'] ) ) {
+		if ( array_key_exists( 'featured_image', $data ) ) {
 			$featured_resolution = Mcpwp_Posts::resolve_featured_image_field( $data['featured_image'] );
 			if ( is_wp_error( $featured_resolution ) ) {
 				return $featured_resolution;
@@ -286,7 +286,7 @@ class Mcpwp_Pages {
 		}
 
 		$featured_resolution = null;
-		if ( isset( $data['featured_image'] ) ) {
+		if ( array_key_exists( 'featured_image', $data ) ) {
 			$featured_resolution = Mcpwp_Posts::resolve_featured_image_field( $data['featured_image'] );
 			if ( is_wp_error( $featured_resolution ) ) {
 				return $featured_resolution;

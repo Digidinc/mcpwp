@@ -173,6 +173,39 @@ class Mcpwp_Posts {
 			return array( 'remove' => true );
 		}
 
+		if ( is_string( $value ) && 1 === preg_match( '/^\s*[+-]?0+\s*$/', $value ) ) {
+			return array( 'remove' => true );
+		}
+
+		if ( is_float( $value ) ) {
+			if ( ! is_finite( $value ) || $value < 0 || floor( $value ) !== $value || $value >= 9007199254740992.0 ) {
+				return new WP_Error(
+					'invalid_post_ref',
+					__( 'Post ids must be plain positive integers.', 'mcpwp' ),
+					array( 'status' => 400 )
+				);
+			}
+			if ( 0.0 === $value ) {
+				return array( 'remove' => true );
+			}
+			return array( 'remove' => false, 'id' => (int) $value );
+		}
+
+		if ( is_string( $value ) && is_numeric( $value ) ) {
+			$as_float = (float) $value;
+			if ( $as_float < 0 || ! is_finite( $as_float ) || floor( $as_float ) !== $as_float || $as_float >= 9007199254740992.0 ) {
+				return new WP_Error(
+					'invalid_post_ref',
+					__( 'Post ids must be plain positive integers.', 'mcpwp' ),
+					array( 'status' => 400 )
+				);
+			}
+			if ( 0.0 === $as_float ) {
+				return array( 'remove' => true );
+			}
+			return array( 'remove' => false, 'id' => (int) $as_float );
+		}
+
 		if ( class_exists( 'Mcpwp_REST_API', false ) ) {
 			$id = Mcpwp_REST_API::canonical_post_id_token( $value );
 			if ( null === $id ) {
@@ -213,9 +246,27 @@ class Mcpwp_Posts {
 			return $check;
 		}
 
+		global $wpdb;
+		// Read the stored row directly: get_metadata_raw() and get_post_meta() both
+		// run get_post_metadata filters, which can supply a default without a DB row.
+		$previous_raw = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_thumbnail_id' ORDER BY meta_id DESC LIMIT 1",
+				$post_id
+			)
+		);
+		$had_stored_thumbnail = '' !== (string) $previous_raw && (int) $previous_raw > 0;
+		$previous               = (int) $previous_raw;
+
 		set_post_thumbnail( $post_id, $media_id );
 
-		if ( (int) get_post_thumbnail_id( $post_id ) !== (int) $media_id ) {
+		$stored = (int) get_post_meta( $post_id, '_thumbnail_id', true );
+		if ( $stored !== (int) $media_id ) {
+			if ( $had_stored_thumbnail ) {
+				update_post_meta( $post_id, '_thumbnail_id', (int) $previous );
+			} else {
+				delete_post_thumbnail( $post_id );
+			}
 			return new WP_Error(
 				'invalid_media',
 				__( 'Featured image could not be set.', 'mcpwp' ),
@@ -627,7 +678,7 @@ class Mcpwp_Posts {
 		}
 
 		$featured_resolution = null;
-		if ( isset( $data['featured_image'] ) ) {
+		if ( array_key_exists( 'featured_image', $data ) ) {
 			$featured_resolution = self::resolve_featured_image_field( $data['featured_image'] );
 			if ( is_wp_error( $featured_resolution ) ) {
 				return $featured_resolution;
@@ -790,7 +841,7 @@ class Mcpwp_Posts {
 		}
 
 		$featured_resolution = null;
-		if ( isset( $data['featured_image'] ) ) {
+		if ( array_key_exists( 'featured_image', $data ) ) {
 			$featured_resolution = self::resolve_featured_image_field( $data['featured_image'] );
 			if ( is_wp_error( $featured_resolution ) ) {
 				return $featured_resolution;

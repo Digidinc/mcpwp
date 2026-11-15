@@ -427,7 +427,7 @@ class Mcpwp_WooCommerce {
 			$product->set_height( $data['height'] );
 		}
 
-		if ( isset( $data['image_id'] ) ) {
+		if ( array_key_exists( 'image_id', $data ) ) {
 			$image_resolution = Mcpwp_Posts::resolve_featured_image_field( $data['image_id'] );
 			if ( is_wp_error( $image_resolution ) ) {
 				return $image_resolution;
@@ -443,7 +443,7 @@ class Mcpwp_WooCommerce {
 			}
 		}
 
-		if ( isset( $data['gallery_image_ids'] ) ) {
+		if ( array_key_exists( 'gallery_image_ids', $data ) ) {
 			if ( ! is_array( $data['gallery_image_ids'] ) ) {
 				return new WP_Error(
 					'invalid_post_ref',
@@ -614,21 +614,26 @@ class Mcpwp_WooCommerce {
 			$args['parent'] = (int) $data['parent'];
 		}
 
+		$thumb_resolution = null;
+		if ( array_key_exists( 'image_id', $data ) ) {
+			$thumb = $this->resolve_category_image_id( $data['image_id'] );
+			if ( is_wp_error( $thumb ) ) {
+				return $thumb;
+			}
+			$thumb_resolution = $thumb;
+		}
+
 		$result = wp_insert_term( sanitize_text_field( $data['name'] ), 'product_cat', $args );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
 
-		if ( isset( $data['image_id'] ) ) {
-			$thumb = $this->resolve_category_image_id( $data['image_id'] );
-			if ( is_wp_error( $thumb ) ) {
-				return $thumb;
-			}
-			if ( $thumb['remove'] ) {
+		if ( null !== $thumb_resolution ) {
+			if ( $thumb_resolution['remove'] ) {
 				delete_term_meta( $result['term_id'], 'thumbnail_id' );
 			} else {
-				update_term_meta( $result['term_id'], 'thumbnail_id', (int) $thumb['id'] );
+				update_term_meta( $result['term_id'], 'thumbnail_id', (int) $thumb_resolution['id'] );
 			}
 		}
 
@@ -680,6 +685,15 @@ class Mcpwp_WooCommerce {
 			$args['parent'] = (int) $data['parent'];
 		}
 
+		$thumb_resolution = null;
+		if ( array_key_exists( 'image_id', $data ) ) {
+			$thumb = $this->resolve_category_image_id( $data['image_id'] );
+			if ( is_wp_error( $thumb ) ) {
+				return $thumb;
+			}
+			$thumb_resolution = $thumb;
+		}
+
 		if ( ! empty( $args ) ) {
 			$result = wp_update_term( $id, 'product_cat', $args );
 			if ( is_wp_error( $result ) ) {
@@ -687,15 +701,11 @@ class Mcpwp_WooCommerce {
 			}
 		}
 
-		if ( isset( $data['image_id'] ) ) {
-			$thumb = $this->resolve_category_image_id( $data['image_id'] );
-			if ( is_wp_error( $thumb ) ) {
-				return $thumb;
-			}
-			if ( $thumb['remove'] ) {
+		if ( null !== $thumb_resolution ) {
+			if ( $thumb_resolution['remove'] ) {
 				delete_term_meta( $id, 'thumbnail_id' );
 			} else {
-				update_term_meta( $id, 'thumbnail_id', (int) $thumb['id'] );
+				update_term_meta( $id, 'thumbnail_id', (int) $thumb_resolution['id'] );
 			}
 		}
 

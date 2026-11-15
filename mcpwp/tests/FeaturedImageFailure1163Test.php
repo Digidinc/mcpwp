@@ -11,8 +11,98 @@ use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-posts.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-content.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-integrations.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-pages.php';
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-action-log.php';
+require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-woocommerce.php';
+
+if ( ! class_exists( 'WooCommerce', false ) ) {
+	class WooCommerce {} // phpcs:ignore
+}
+if ( ! function_exists( 'WC' ) ) {
+	function WC() {
+		return (object) array( 'version' => '9.0.0' );
+	}
+}
+if ( ! function_exists( 'wp_insert_term' ) ) {
+	function wp_insert_term( $name, $taxonomy, $args = array() ) {
+		$GLOBALS['_mcpwp_test_term_insert_count'] = (int) ( $GLOBALS['_mcpwp_test_term_insert_count'] ?? 0 ) + 1;
+		$id                                       = 11960 + $GLOBALS['_mcpwp_test_term_insert_count'];
+		if ( ! isset( $GLOBALS['_mcpwp_test_taxonomies'][ $taxonomy ]['terms'] ) ) {
+			$GLOBALS['_mcpwp_test_taxonomies'][ $taxonomy ] = array( 'terms' => array() );
+		}
+		$GLOBALS['_mcpwp_test_taxonomies'][ $taxonomy ]['terms'][ $id ] = array(
+			'name'        => (string) $name,
+			'slug'        => isset( $args['slug'] ) ? (string) $args['slug'] : sanitize_title( $name ),
+			'description' => isset( $args['description'] ) ? (string) $args['description'] : '',
+			'parent'      => isset( $args['parent'] ) ? (int) $args['parent'] : 0,
+			'count'       => 0,
+		);
+		return array( 'term_id' => $id, 'term_taxonomy_id' => $id );
+	}
+}
+if ( ! function_exists( 'wp_update_term' ) ) {
+	function wp_update_term( $term_id, $taxonomy, $args = array() ) {
+		$term = get_term( $term_id, $taxonomy );
+		if ( ! $term ) {
+			return new WP_Error( 'invalid_term', 'Missing' );
+		}
+		$t = &$GLOBALS['_mcpwp_test_taxonomies'][ $taxonomy ]['terms'][ (int) $term_id ];
+		if ( isset( $args['name'] ) ) {
+			$t['name'] = (string) $args['name'];
+		}
+		if ( isset( $args['slug'] ) ) {
+			$t['slug'] = (string) $args['slug'];
+		}
+		if ( isset( $args['description'] ) ) {
+			$t['description'] = (string) $args['description'];
+		}
+		return array( 'term_id' => (int) $term_id, 'term_taxonomy_id' => (int) $term_id );
+	}
+}
+if ( ! function_exists( 'get_term_meta' ) ) {
+	function get_term_meta( $term_id, $key = '', $single = false ) {
+		$store = $GLOBALS['_mcpwp_test_term_meta'][ (int) $term_id ] ?? array();
+		if ( '' === $key ) {
+			return $store;
+		}
+		return isset( $store[ $key ] ) ? $store[ $key ] : ( $single ? '' : array() );
+	}
+}
+if ( ! function_exists( 'update_term_meta' ) ) {
+	function update_term_meta( $term_id, $key, $value ) {
+		$GLOBALS['_mcpwp_test_term_meta'][ (int) $term_id ][ $key ] = $value;
+		return true;
+	}
+}
+if ( ! function_exists( 'delete_term_meta' ) ) {
+	function delete_term_meta( $term_id, $key ) {
+		unset( $GLOBALS['_mcpwp_test_term_meta'][ (int) $term_id ][ $key ] );
+		return true;
+	}
+}
+
+if ( ! class_exists( 'Mcpwp_Test_Generate_Img_Provider', false ) ) {
+	class Mcpwp_Test_Generate_Img_Provider { // phpcs:ignore
+		public function generate_image_to_media( $prompt, $args ) {
+			return array( 'id' => 11634 );
+		}
+	}
+}
+
+if ( ! class_exists( 'Mcpwp_Test_Generate_Img_Manager', false ) ) {
+	class Mcpwp_Test_Generate_Img_Manager extends Mcpwp_Integration_Manager { // phpcs:ignore
+		public function has_provider_key( $provider ) {
+			return true;
+		}
+		public function get_provider_key( $provider ) {
+			return 'stub-key';
+		}
+		public function get_provider_instance( $provider ) {
+			return new Mcpwp_Test_Generate_Img_Provider();
+		}
+	}
+}
 
 final class FeaturedImageFailure1163Test extends TestCase {
 
@@ -23,7 +113,31 @@ final class FeaturedImageFailure1163Test extends TestCase {
 	private const PDF_PREVIEW   = 11635;
 	private const MISSING_ID    = 116399;
 
+	/** @var mixed */
+	private $saved_mcpwp_test_fs;
+
+	/** @var array */
+	private $saved_test_taxonomies;
+
+	/** @var array */
+	private $saved_test_term_meta;
+
+	/** @var mixed */
+	private $saved_integration_manager;
+
+	/** @var mixed */
+	private $saved_license_instance;
+
 	protected function setUp(): void {
+		$this->saved_mcpwp_test_fs            = $GLOBALS['mcpwp_test_fs'] ?? null;
+		$this->saved_test_taxonomies          = $GLOBALS['_mcpwp_test_taxonomies'] ?? array();
+		$this->saved_test_term_meta           = $GLOBALS['_mcpwp_test_term_meta'] ?? array();
+		$manager_ref                          = new ReflectionProperty( Mcpwp_Integration_Manager::class, 'instance' );
+		$manager_ref->setAccessible( true );
+		$this->saved_integration_manager      = $manager_ref->getValue();
+		$license_ref                          = new ReflectionProperty( Mcpwp_License::class, 'instance' );
+		$license_ref->setAccessible( true );
+		$this->saved_license_instance         = $license_ref->getValue();
 		$GLOBALS['mcpwp_test_options']           = array();
 		$GLOBALS['_mcpwp_test_posts']            = array();
 		$GLOBALS['_mcpwp_test_meta']             = array();
@@ -49,11 +163,21 @@ final class FeaturedImageFailure1163Test extends TestCase {
 	}
 
 	protected function tearDown(): void {
-		$GLOBALS['_mcpwp_test_posts']           = array();
-		$GLOBALS['_mcpwp_test_meta']            = array();
-		$GLOBALS['_mcpwp_test_thumbnail_ids']   = array();
-		$GLOBALS['mcpwp_test_image_downsize']   = array();
-		unset( $GLOBALS['mcpwp_test_public_post_types'] );
+		$GLOBALS['_mcpwp_test_posts']             = array();
+		$GLOBALS['_mcpwp_test_meta']              = array();
+		$GLOBALS['_mcpwp_test_thumbnail_ids']     = array();
+		$GLOBALS['mcpwp_test_image_downsize']     = array();
+		$GLOBALS['_mcpwp_test_term_insert_count'] = 0;
+		unset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'], $GLOBALS['mcpwp_test_thumbnail_readback_armed'], $GLOBALS['mcpwp_test_public_post_types'], $GLOBALS['mcpwp_test_get_post_meta_applies_filters'] );
+		$GLOBALS['mcpwp_test_fs']                 = $this->saved_mcpwp_test_fs;
+		$GLOBALS['_mcpwp_test_taxonomies']        = $this->saved_test_taxonomies;
+		$GLOBALS['_mcpwp_test_term_meta']         = $this->saved_test_term_meta;
+		$manager_ref                              = new ReflectionProperty( Mcpwp_Integration_Manager::class, 'instance' );
+		$manager_ref->setAccessible( true );
+		$manager_ref->setValue( null, $this->saved_integration_manager );
+		$license_ref                              = new ReflectionProperty( Mcpwp_License::class, 'instance' );
+		$license_ref->setAccessible( true );
+		$license_ref->setValue( null, $this->saved_license_instance );
 	}
 
 	private function seed_content( int $id, string $type, string $title ): void {
@@ -233,6 +357,145 @@ final class FeaturedImageFailure1163Test extends TestCase {
 		$this->assertSame( 0, (int) get_post_meta( self::POST_ID, '_thumbnail_id', true ) );
 	}
 
+	public function test_featured_image_removal_accepts_empty_string_and_signed_zero_tokens(): void {
+		foreach ( array( '', '0', 0.0, '+00', '-0' ) as $value ) {
+			set_post_thumbnail( self::POST_ID, self::IMAGE_ID );
+			$result = $this->posts()->update_post( self::POST_ID, array( 'featured_image' => $value ) );
+			$this->assertIsArray( $result, var_export( $value, true ) );
+			$this->assertSame( 0, (int) get_post_meta( self::POST_ID, '_thumbnail_id', true ), var_export( $value, true ) );
+		}
+	}
+
+	public function test_whole_number_float_ids_are_accepted_on_featured_image(): void {
+		$new_image = self::IMAGE_ID + 50;
+		$this->seed_attachment( $new_image, 'image/png' );
+		$result = $this->posts()->update_post( self::POST_ID, array( 'featured_image' => (float) $new_image ) );
+		$this->assertIsArray( $result );
+		$this->assertSame( $new_image, (int) get_post_meta( self::POST_ID, '_thumbnail_id', true ) );
+		$five = Mcpwp_Posts::resolve_featured_image_field( '5.0' );
+		$this->assertIsArray( $five );
+		$this->assertFalse( $five['remove'] );
+		$this->assertSame( 5, $five['id'] );
+	}
+
+	public function test_featured_image_null_on_a_body_field_is_refused(): void {
+		$error = $this->posts()->update_post( self::POST_ID, array( 'featured_image' => null ) );
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'invalid_post_ref', $error->get_error_code() );
+		$this->assert_thumbnail_unchanged( self::POST_ID, self::IMAGE_ID );
+	}
+
+	public function test_apply_featured_image_restores_previous_thumbnail_when_read_back_fails(): void {
+		$new_image = self::IMAGE_ID + 77;
+		$this->seed_attachment( $new_image, 'image/jpeg' );
+		$GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ self::POST_ID ] = self::MISSING_ID;
+		$error = Mcpwp_Posts::apply_featured_image( self::POST_ID, $new_image );
+		$this->assertInstanceOf( WP_Error::class, $error );
+		unset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ self::POST_ID ] );
+		$this->assertSame( self::IMAGE_ID, (int) ( $GLOBALS['_mcpwp_test_meta'][ self::POST_ID ]['_thumbnail_id'] ?? 0 ) );
+		$this->assertSame( 'invalid_media', $error->get_error_code() );
+		$this->assert_thumbnail_unchanged( self::POST_ID, self::IMAGE_ID );
+	}
+
+	public function test_apply_featured_image_restore_uses_raw_meta_not_filtered_default(): void {
+		$default_thumb = self::IMAGE_ID + 88;
+		$this->seed_attachment( $default_thumb, 'image/jpeg' );
+		delete_post_thumbnail( self::POST_ID );
+		$this->assertSame( 0, (int) get_post_thumbnail_id( self::POST_ID ) );
+
+		$filter = static function ( $value, $object_id, $meta_key ) use ( $default_thumb ) {
+			if ( '_thumbnail_id' === $meta_key && self::POST_ID === (int) $object_id && null === $value ) {
+				return $default_thumb;
+			}
+			return $value;
+		};
+		add_filter( 'get_post_metadata', $filter, 10, 3 );
+		$GLOBALS['mcpwp_test_get_post_meta_applies_filters'] = true;
+
+		try {
+			$new_image = self::IMAGE_ID + 99;
+			$this->seed_attachment( $new_image, 'image/jpeg' );
+			$GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ self::POST_ID ] = self::MISSING_ID;
+			$error = Mcpwp_Posts::apply_featured_image( self::POST_ID, $new_image );
+		} finally {
+			remove_filter( 'get_post_metadata', $filter, 10 );
+			unset( $GLOBALS['mcpwp_test_get_post_meta_applies_filters'] );
+		}
+
+		$this->assertInstanceOf( WP_Error::class, $error );
+		unset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ self::POST_ID ] );
+		$this->assertArrayNotHasKey( '_thumbnail_id', $GLOBALS['_mcpwp_test_meta'][ self::POST_ID ] ?? array() );
+		$this->assertSame( 0, (int) get_post_thumbnail_id( self::POST_ID ) );
+	}
+
+	public function test_wc_product_image_id_null_is_refused(): void {
+		$wc      = new Mcpwp_WooCommerce();
+		$method  = new ReflectionMethod( Mcpwp_WooCommerce::class, 'set_product_data' );
+		$method->setAccessible( true );
+		$product = new class() {
+			public function set_image_id( $id ) {} // phpcs:ignore
+			public function set_gallery_image_ids( $ids ) {} // phpcs:ignore
+		};
+		$error = $method->invoke( $wc, $product, array( 'image_id' => null ) );
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'invalid_post_ref', $error->get_error_code() );
+	}
+
+	public function test_wc_product_gallery_image_ids_null_is_refused(): void {
+		$wc      = new Mcpwp_WooCommerce();
+		$method  = new ReflectionMethod( Mcpwp_WooCommerce::class, 'set_product_data' );
+		$method->setAccessible( true );
+		$product = new class() {
+			public function set_image_id( $id ) {} // phpcs:ignore
+			public function set_gallery_image_ids( $ids ) {} // phpcs:ignore
+		};
+		$error = $method->invoke( $wc, $product, array( 'gallery_image_ids' => null ) );
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'invalid_post_ref', $error->get_error_code() );
+	}
+
+	public function test_wc_category_image_id_null_is_refused_on_update(): void {
+		$GLOBALS['_mcpwp_test_taxonomies'] = array(
+			'product_cat' => array(
+				'terms' => array(
+					45 => array( 'name' => 'Cat', 'slug' => 'cat', 'description' => '', 'parent' => 0, 'count' => 0 ),
+				),
+			),
+		);
+		$wc    = new Mcpwp_WooCommerce();
+		$error = $wc->update_product_category( 45, array( 'image_id' => null ) );
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'invalid_post_ref', $error->get_error_code() );
+	}
+
+	public function test_product_category_create_refuses_bad_image_before_insert_term(): void {
+		$GLOBALS['_mcpwp_test_term_insert_count'] = 0;
+		$wc = new Mcpwp_WooCommerce();
+		$error = $wc->create_product_category(
+			array(
+				'name'     => 'Should not land',
+				'image_id' => self::PDF_ID,
+			)
+		);
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'invalid_media', $error->get_error_code() );
+		$this->assertSame( 0, (int) ( $GLOBALS['_mcpwp_test_term_insert_count'] ?? 0 ) );
+	}
+
+	public function test_product_category_update_refuses_bad_image_before_renaming(): void {
+		$GLOBALS['_mcpwp_test_taxonomies'] = array(
+			'product_cat' => array(
+				'terms' => array(
+					44 => array( 'name' => 'Keep', 'slug' => 'keep', 'description' => '', 'parent' => 0, 'count' => 0 ),
+				),
+			),
+		);
+		$wc    = new Mcpwp_WooCommerce();
+		$error = $wc->update_product_category( 44, array( 'name' => 'Renamed', 'image_id' => self::PDF_ID ) );
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( 'Keep', $GLOBALS['_mcpwp_test_taxonomies']['product_cat']['terms'][44]['name'] );
+	}
+
 	public function test_create_post_refuses_bad_attachment_before_insert(): void {
 		$before = count( $GLOBALS['_mcpwp_test_posts'] );
 		$error  = $this->posts()->create_post(
@@ -305,14 +568,31 @@ final class FeaturedImageFailure1163Test extends TestCase {
 	}
 
 	public function test_generate_featured_image_validation_error_keeps_attachment_id_in_data(): void {
-		$base = Mcpwp_Posts::validate_featured_image_id( self::PDF_ID );
-		$this->assertInstanceOf( WP_Error::class, $base );
-		$data = $base->get_error_data();
-		$data['id']            = self::PDF_ID;
-		$data['attachment_id'] = self::PDF_ID;
-		$merged                = new WP_Error( $base->get_error_code(), $base->get_error_message(), $data );
-		$payload               = $merged->get_error_data();
-		$this->assertSame( self::PDF_ID, (int) $payload['id'] );
-		$this->assertSame( self::PDF_ID, (int) $payload['attachment_id'] );
+		$manager_ref = new ReflectionProperty( Mcpwp_Integration_Manager::class, 'instance' );
+		$manager_ref->setAccessible( true );
+		$manager_ref->setValue( null, new Mcpwp_Test_Generate_Img_Manager() );
+
+		$GLOBALS['mcpwp_test_fs'] = new Mcpwp_Test_Fs_Stub( true, true, false, 'pro' );
+		$license_ref              = new ReflectionProperty( Mcpwp_License::class, 'instance' );
+		$license_ref->setAccessible( true );
+		$license_ref->setValue( null, null );
+
+		$controller = new class() extends Mcpwp_REST_Integrations {
+			public function check_permission( $request ) {
+				return true;
+			}
+		};
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/integrations/generate-featured-image' );
+		$request->set_param( 'post_id', self::POST_ID );
+		$request->set_param( 'prompt', 'hero shot' );
+		$request->set_param( 'provider', 'openai' );
+
+		$response = $controller->generate_featured_image( $request );
+		$this->assertInstanceOf( WP_Error::class, $response );
+		$this->assertSame( 'invalid_media', $response->get_error_code() );
+		$data = $response->get_error_data();
+		$this->assertSame( self::PDF_ID, (int) $data['id'] );
+		$this->assertSame( self::PDF_ID, (int) $data['attachment_id'] );
+		$this->assert_thumbnail_unchanged( self::POST_ID, self::IMAGE_ID );
 	}
 }

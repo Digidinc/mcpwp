@@ -2429,7 +2429,7 @@ trait Mcpwp_Api_Auth {
 
 			// === WooCommerce — term/customer sub-paths BEFORE the post ones
 			// they would otherwise be swallowed by ===
-			'/woocommerce/products/categories'     => array(), // product_cat TERM id.
+			'/woocommerce/products/categories'     => array( 'image_id@read-user' ), // Route {id} is a TERM id; image_id is an attachment.
 			'/woocommerce/products/tags'           => array(), // product_tag TERM id.
 			'/woocommerce/products'                => array( 'id', 'image_id@read-user', 'gallery_image_ids[]@read-user' ),
 			// Only product_id names a post here: a product archetype's own
