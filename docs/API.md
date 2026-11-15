@@ -153,6 +153,12 @@ All API requests require authentication via API key.
 1. Go to **WordPress Admin → MCPWP → Setup**
 2. Copy your API key or generate a new one
 
+#### Key hygiene on upgrade
+
+After an upgrade, MCPWP checks every active API key once against the credential values stored in the database (`mcpwp_api_key`, `spai_api_key`, the `spai_api_keys` hashes, and the hashes of the other keys). Keys whose secret matches a stored value are revoked. Normal keys are not affected. The check runs in small bounded steps and continues on the next admin page load until it is finished. It changes nothing while the key store cannot be read.
+
+Revoked keys are listed by id and label, never by hash, in an admin notice and under **Tools → Site Health**. Create a new key under **MCPWP → Setup** for any client that used one of them. A 2.8 single key (`spai_api_key`) stored in MD5 form is adopted as revoked when other keys exist, so create a new key for any client that still uses it.
+
 ### Authentication Methods
 
 #### Header Authentication (Recommended)

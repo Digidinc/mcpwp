@@ -176,6 +176,10 @@ final class StagedStatusValueAuditTest extends TestCase {
 		// ── False positive from the grep's word boundary ────────────────
 		'traits/trait-mcpwp-api-auth.php' => 'false positive: this file — docblocks/comments discussing \'status\' and ' .
 			'calling update_option() for unrelated bookkeeping (e.g. rate-limit state), not a status-staging handler.',
+		'class-mcpwp-key-hygiene.php' => 'false positive: the matched \'status\' literals are the key-hygiene sweep\'s ' .
+			'own outcome field (done/partial/unreadable/busy) and the Site Health result\'s status; update_option() ' .
+			'stores the sweep flag, its resume position and the list of revoked key records. Nothing here stages a ' .
+			'post/product visibility status, and the file never writes a post.',
 		// #957: the file's update_option() calls (mcpwp_content_guardrails
 		// settings, mcpwp_content_guardrails_publish_log) never store a
 		// 'status' key at all — the 'status' => ... literal the regex
