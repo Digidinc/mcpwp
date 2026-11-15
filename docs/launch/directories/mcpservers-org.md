@@ -17,7 +17,7 @@ decision.
 |---|---|
 | Server Name | `MCPWP` |
 | Category | `Development` fits best among the live dropdown options (Development, Productivity, Database, Search, Web Scraping, File System, Version Control, Communication, Cloud Service, Cloud Storage, Marketing, Finance, Design, Memory, Other) — MCPWP doesn't map cleanly to any of these; "Development" or "Other" are the closest fits. Consider suggesting a "CMS"/"WordPress" category doesn't exist yet, so pick "Development." |
-| Short Description | `Turn any WordPress site into an MCP server — build pages, edit Elementor, run SEO audits, and manage content through 180+ governed, approval-gated tools.` |
+| Short Description | `Turn any WordPress site into an MCP server — build pages, edit Elementor, run SEO audits, and manage content through 190+ governed, approval-gated tools.` |
 | Repository, Website or Documentation | `https://mcpwp.net` (or `https://docs.mcpwp.net/` if the form wants docs specifically) |
 | Official MCP Registry Name (optional) | Leave blank until the official-registry duplicate-listing decision (see `docs/launch/directories/mcp-registry.md`) is resolved — filling this in now would point at whichever name turns out to be wrong. Revisit after that decision. |
 | This server supports remote connections | Yes — check this box |

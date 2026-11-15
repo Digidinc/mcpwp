@@ -1,5 +1,7 @@
 # MCPWP Product Roadmap
 
+> **Historical snapshot (June 2026 planning):** tool-count figures in this doc predate `docs/tool-counts.json`. Current marketing: **190+ tools free, 300+ with Pro**.
+
 Updated: 2026-06-19  
 Current version: 3.3.3
 

@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - "mcpwp/**"
+      - "docs/tool-counts.json"
+      - "scripts/gen-tool-counts.php"
       - "scripts/verify_plugin_assets.sh"
       - "scripts/verify_distignore_refs.sh"
       - "scripts/tests/verify_plugin_assets_test.sh"
@@ -35,6 +37,9 @@ jobs:
 
       - name: Install Dev Dependencies
         run: composer install --working-dir mcpwp --no-interaction --prefer-dist
+
+      - name: Tool count manifest (#650)
+        run: php scripts/gen-tool-counts.php --check
 
       - name: PHP Syntax Lint
         run: |

@@ -10,6 +10,10 @@ I'm Hadi, the founder of Mumega. We shipped MCPWP today and I'm excited to share
 
 **What MCPWP does:** Turns any WordPress site into an MCP server. Install the plugin, generate a key, paste one config block — your AI assistant (Claude, Gemini, GPT, Cursor, or anything MCP-compatible) can now manage your entire site.
 
+> **Historical draft:** counts below are stale — see `docs/tool-counts.json` (**190+ tools free, 300+ with Pro**).
+
+> **Historical draft:** counts below are stale — see `docs/tool-counts.json` (**190+ tools free, 300+ with Pro**).
+
 250+ tools across 15 categories: Elementor page building, content CRUD, SEO audits, media uploads, menu management, WooCommerce, approvals with rollback, and persistent site memory.
 
 **Why we think this is different from existing WP+AI tools:**

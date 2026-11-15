@@ -8,7 +8,7 @@ The agency gateway lets an operator connect **one** MCP client (Claude, Cursor, 
 
 ## Why
 
-Adding 3 sites as 3 separate MCP connectors loads ~750 tools into the client (250 × 3) — context bloat and tool confusion. The gateway collapses that: one connector, ~252 tools, and you pick the target site per call.
+Adding 3 sites as 3 separate MCP connectors loads a large combined tool surface into the client (per-site worst-case tools/list × N — see `docs/tool-counts.json`) — context bloat and tool confusion. The gateway collapses that: one connector and you pick the target site per call.
 
 ```
 Claude ──one agency token──► proxy.mcpwp.net ──each site's own key──► site-a.com

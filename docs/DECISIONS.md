@@ -22,7 +22,7 @@
 **Context.** We want mcpwp.net to be run by governed AI agents as a live showcase. Naive approach: build the PM/RBAC/task system inside WordPress. mupot's own doctrine forbids this: *"the runtime governs; the tool stays a tool — don't build the OS into the tool"* — and it duplicates mupot's in-flight `v0.24.0 Project Operations`.
 
 **Decision.** WordPress becomes a **mupot connector that happens to be a full site** — a web-login control surface, peer to Telegram(Hermes) and the console (mupot docs already name "a web login" as such a peer). Two planes:
-- **mumcp plugin** = the hands (239+ MCP tools, control *of* WordPress).
+- **mumcp plugin** = the hands (190+ tools free, 300+ with Pro — control *of* WordPress).
 - **mupot connector** = the authority (identity, capabilities, gates, receipts).
 
 Flow: mupot capability check → authorizes → mumcp tool executes → receipt. The connector **routes to** mumcp tools through the gate; never reimplements them. Identity server-derived; no escalation.

@@ -7,21 +7,17 @@
 > [OWNER DECISION: make repo public?] is resolved. Everything below only applies once
 > (if) the repo goes public.
 
-## Description (the stale "239 tools" claim is the #514 item)
-Live now: `⚡ 239 MCP tools for WordPress …` — **239 is inflated/unverified.** Counting the
-Free and Pro registries directly on `origin/main` gives **172 core Free tools + 9 AI/stock
-tools = 181 usable Free**, and **118 Pro tools + 4 Figma = 303 total with Pro**. Don't ship
-a hard count that overstates.
+## Description (#498 / #650)
+Live GitHub About text still shows stale counts from before #650/#498. Checked-in source
+of truth: **`docs/tool-counts.json`** (generated from the PHPUnit catalog via
+`scripts/gen-tool-counts.php`). Do not hand-edit marketing counts elsewhere without updating
+that file and the matching docs.
 
-**Recommended description (accurate, no inflated count):**
-```
-Turn any WordPress site into an MCP server — let Claude, Cursor, and any MCP client build
-pages, edit Elementor, run WooCommerce, and manage media/SEO through natural language.
-180+ tools free, 290+ with Pro. Governed, approval-gated, auditable.
-```
-(If you want a count, use "180+ tools free, 290+ with Pro" — counted from the registries
-on `origin/main` — not 239 or 171. Recount via `tools/list` before any marketing copy
-hard-codes a number; it drifts with every release.)
+**Recommended description (single source — copy verbatim from `docs/tool-counts.json` → `github_about.suggested`; marketing phrase: 190+ tools free, 300+ with Pro):**
+
+Same text as `Mcpwp_Tool_Count_Snapshot::GITHUB_ABOUT_SUGGESTED` in
+`mcpwp/tests/support/class-mcpwp-tool-count-snapshot.php` (regenerated into the JSON by
+`php scripts/gen-tool-counts.php`). Do not hand-edit the About blurb in launch docs.
 
 ## Topics (current set is already good — minor adds)
 Live: ai, claude, mcp, model-context-protocol, woocommerce, wordpress, wordpress-plugin, elementor.

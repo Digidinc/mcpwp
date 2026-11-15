@@ -41,7 +41,7 @@ reviewers for the "end to end testing" they run.
 | Connection type | **Existing MCP** |
 | Hosted MCP endpoint URL | `https://demo.mcpwp.net/wp-json/mcpwp/v1/mcp` — live and confirmed serving the `mcpwp/v1` namespace (2026-09-26). Owner mints a reviewer key here before submitting (see Owner actions) — none has been created as part of this docs pass. |
 | Documentation | `https://docs.mcpwp.net/` |
-| Access requirements | "Requires a WordPress site with MCPWP installed and an API key generated in WP Admin → MCPWP → Setup, or OAuth via the mumcp.com broker. Free tier covers 180+ tools; a Pro license (Freemius, $59/yr+) unlocks 290+. The demo site above ships a reviewer key with write scope for testing." |
+| Access requirements | "Requires a WordPress site with MCPWP installed and an API key generated in WP Admin → MCPWP → Setup, or OAuth via the mumcp.com broker. Free tier covers 190+ tools; upgrading unlocks 300+ with Pro. The demo site above ships a reviewer key with write scope for testing." |
 | Authentication methods | Check **API keys** (the `X-API-Key` header) and **OAuth with PKCE** (the mumcp.com broker path — RFC 8414/9728 discovery, PKCE S256 authorize + token exchange, per `readme.txt`). Leave "Other" unchecked. |
 
 ### Review

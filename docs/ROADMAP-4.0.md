@@ -122,7 +122,7 @@ Goal: execute the accepted Gateway + Modular Monolith refactor.
   constants, callback transport, scope filter) as the public v4 API. mumega-motion
   theme integration (mumega-motion-theme#4) is the reference implementation.
 
-Exit criteria: all 272 tools dispatch through the gateway; agency proxy manages ≥3
+Exit criteria: all catalog tools dispatch through the gateway (count tracked in `docs/tool-counts.json`, not a fixed number); agency proxy manages ≥3
 real sites; motion theme updates itself via the documented contract.
 
 ## Workstream D — wp.org Channel

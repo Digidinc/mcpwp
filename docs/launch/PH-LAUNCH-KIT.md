@@ -47,7 +47,7 @@ that determines whether someone clicks through.
 | # | Tagline | Char count | Notes |
 |---|---------|-----------|-------|
 | **A (recommended)** | **Your WordPress site, operated by AI agents** | 46 | Specific, owned-surface framing, no hype verb |
-| B | MCP server for WordPress — 180+ tools, approval-gated | 55 | Tool count is a differentiator; "approval-gated" separates from autonomous slop |
+| B | MCP server for WordPress — 190+ tools, approval-gated | 55 | Tool count is a differentiator; "approval-gated" separates from autonomous slop |
 | C | Give Claude and Cursor the keys to WordPress | 46 | Names verified AI clients directly — relevant to PH audience |
 | D | The governance layer for AI-operated WordPress sites | 52 | Positions the moat (governance) but "governance" may feel dry to general PH |
 | E | WordPress MCP server. AI builds pages. You approve. | 51 | Verb-driven; the three-beat rhythm works for skimmers |
@@ -61,7 +61,7 @@ that determines whether someone clicks through.
 ### Short (≤260 chars — the PH "tagline/description" slot)
 
 MCPWP turns any WordPress site into an MCP server. AI agents (Claude, Cursor, and any MCP
-client) manage content, Elementor layouts, SEO, and media through 180+ tools — with an
+client) manage content, Elementor layouts, SEO, and media through 190+ tools — with an
 opt-in approval gate and full audit log. Free direct download; Pro from $59/yr.
 
 **Char count: 256**
@@ -80,7 +80,7 @@ Desktop, Claude Code, Cursor, or any MCP-compatible client — can now operate y
 natural language: build Elementor pages, publish posts, run SEO audits, manage menus,
 upload media, and more.
 
-**180+ tools free, 290+ with Pro, across 21 categories.** Free covers content, Elementor
+**190+ tools free, 300+ with Pro, across 20 categories.** Free covers content, Elementor
 read/write, media, SEO, menus, Gutenberg blocks, taxonomy, webhooks, and admin — plus a
 set of AI/stock-photo tools that work with your own OpenAI, Gemini, ElevenLabs, or Pexels
 key. Pro adds advanced Elementor builders and templates, theme builder, WooCommerce, SEO
@@ -133,7 +133,7 @@ nobody could say what happened or undo it.
 That's what MCPWP is built to solve.
 
 The idea is simple: WordPress is already an API. MCP is already a protocol. The plugin
-connects them properly — 180+ structured tools free (290+ with Pro), an opt-in approval
+connects them properly — 190+ structured tools free (300+ with Pro), an opt-in approval
 gate with rollback, a full audit log, and persistent memory across sessions. Your AI agent
 can build an Elementor landing page, run an SEO audit on 50 pages, reorganize a menu, and
 queue a change for your approval — all in one session, all reversible.
@@ -142,7 +142,7 @@ What makes this different from the other WP+AI tools:
 
 - The official WordPress MCP adapter is a thin bridge to WordPress's Abilities API — by
   default it exposes three meta-tools, and abilities are private until you register them.
-  MCPWP works out of the box: Elementor, SEO, media, and 180+ other tools, no setup beyond
+  MCPWP works out of the box: Elementor, SEO, media, and 190+ other tools, no setup beyond
   an API key.
 - MCPWP is self-hosted — your site, your data, no cloud dependency.
 - The approval gate and rollback are built into the architecture, not bolted on. Stage a
@@ -187,8 +187,8 @@ Control Room approval panel visible below it.
 click; applied changes roll back with one click."
 
 ### Slide 2 — The tool surface
-**Headline:** "180+ tools free. 290+ with Pro."
-**Visual:** Dark background (Ink 950). A clean category grid showing the 21 categories
+**Headline:** "190+ tools free. 300+ with Pro."
+**Visual:** Dark background (Ink 950). A clean category grid showing the 20 categories
 (10 free, 11 Pro) with tool counts — styled like a terminal output or structured card
 grid. Blue 600 accents on category names.
 **Caption:** "Content, Elementor, WooCommerce, SEO, media, menus, LMS, and more —
@@ -254,7 +254,7 @@ The official adapter bridges WordPress's Abilities API — by default it exposes
 meta-tools (discover / get-ability-info / execute-ability), and abilities are private
 unless a site owner registers them. MCPWP ships a working surface out of the box:
 Elementor page building, an opt-in approval gate with rollback, persistent site memory,
-SEO tooling, and 180+ free tools with no extra configuration. Free is functional on its
+SEO tooling, and 190+ free tools with no extra configuration. Free is functional on its
 own; Pro adds the deeper Elementor build tools, WooCommerce, SEO Pro, LMS, and
 translation.
 
@@ -276,7 +276,7 @@ Claude's public connector directory listing; that's a separate step we haven't c
 API-key auth also works in Claude Desktop, Claude Code, and Cursor via manual MCP config.
 
 ### Q4: "What's the difference between Free and Pro?"
-Free (self-hosted, direct download): 180+ tools — content, Elementor read/write, media,
+Free (self-hosted, direct download): 190+ tools — content, Elementor read/write, media,
 SEO, menus, Gutenberg, taxonomy, webhooks, admin, plus AI/stock-photo tools that use your
 own provider key. The approval gate, audit log, rollback, and site memory are all in Free
 — they aren't Pro-gated. Pro ($59/yr for one site, $199 lifetime; $99/yr for three sites,
