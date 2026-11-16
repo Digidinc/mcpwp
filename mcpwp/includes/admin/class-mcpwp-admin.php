@@ -62,7 +62,7 @@ class Mcpwp_Admin {
 	const NEW_PRIMARY_KEY_TRANSIENT_TTL = 60;
 
 	/** Seconds a scoped-key form_uid spent marker blocks duplicate submits (PRG). */
-	const SCOPED_FORM_SPENT_TTL = 180;
+	const SCOPED_FORM_SPENT_TTL = 12 * HOUR_IN_SECONDS;
 
 	/** TTL for setup-page notice transients after a PRG redirect. */
 	const SETUP_NOTICE_TTL = 180;

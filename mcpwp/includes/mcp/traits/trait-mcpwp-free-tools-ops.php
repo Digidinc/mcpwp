@@ -89,7 +89,7 @@ trait Mcpwp_Free_Tools_Ops_Trait {
 				),
 				'scopes' => array(
 					'type'        => 'array',
-					'description' => 'Key scopes (read, write, admin). Auto-set for non-admin roles.',
+					'description' => 'Key scopes (read, write, admin). Admin requires write. Auto-set for non-admin roles.',
 					'items'       => array(
 						'type' => 'string',
 						'enum' => array( 'read', 'write', 'admin' ),

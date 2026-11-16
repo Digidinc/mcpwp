@@ -6916,6 +6916,11 @@ trait Mcpwp_Api_Auth {
 	 *               - custom role whose category list resolves empty (#1041):
 	 *                 array{error:'empty_custom_categories', message:string,
 	 *                 invalid_categories:array}
+	 *               - admin without write (#1210): array{error:'invalid_scopes',
+	 *                 message:string}; nothing was written. Admin requires write —
+	 *                 include write together with admin. Empty scopes here still
+	 *                 use the role ceiling; REST/MCP `scopes` default to read
+	 *                 when omitted, so those callers must pass write with admin.
 	 *               - key store busy (#1096): array{error:'keystore_busy',
 	 *                 message:string, retry_after:int}; nothing was written.
 	 *
@@ -6937,6 +6942,16 @@ trait Mcpwp_Api_Auth {
 				array( 'read', 'write', 'admin' )
 			)
 		);
+		// #1210: admin implies write. An explicit request that asks for admin
+		// without write is refused (invalid_scopes) rather than silently
+		// adding write — that silent expand was how clearing Write on the
+		// Setup form while leaving Admin ops checked still minted a write
+		// key. Include write together with admin. Empty scopes still take the
+		// role ceiling here; REST/MCP default omitted scopes to read.
+		$scope_refusal = self::refusal_for_admin_without_write( $requested_scopes );
+		if ( null !== $scope_refusal ) {
+			return $scope_refusal;
+		}
 		$scopes = $this->sanitize_scopes( $scopes );
 
 		// #1041 NIT-A: accept role case-insensitively and trimmed — trim()
@@ -7557,6 +7572,27 @@ trait Mcpwp_Api_Auth {
 		return empty( $sanitized ) ? null : $sanitized;
 	}
 
+	/**
+	 * Refusal shape when an explicit scope list asks for admin without write (#1210).
+	 *
+	 * Used by create (and any future update) so a caller who unchecked Write
+	 * but left Admin ops never gets write minted under the old "admin expands
+	 * to write" rule. Null when the list is fine (including empty — empty
+	 * still means "default to the role ceiling" at create time).
+	 *
+	 * @param array $requested_scopes Already intersected with read/write/admin.
+	 * @return array{error:string,message:string}|null
+	 */
+	public static function refusal_for_admin_without_write( array $requested_scopes ) {
+		if ( in_array( 'admin', $requested_scopes, true ) && ! in_array( 'write', $requested_scopes, true ) ) {
+			return array(
+				'error'   => 'invalid_scopes',
+				'message' => __( 'Admin scope requires write scope. Include "write" together with "admin", or clear Admin ops for a read-only key.', 'mcpwp' ),
+			);
+		}
+		return null;
+	}
+
 	protected function sanitize_scopes( $scopes ) {
 		$allowed = array( 'read', 'write', 'admin' );
 		$scopes  = array_map( 'sanitize_key', (array) $scopes );
@@ -7573,6 +7609,17 @@ trait Mcpwp_Api_Auth {
 			// normalize_api_key_record() preserves legacy scopeless admin keys without
 			// this fallback (see normalize_record_scopes()).
 			return array( 'read' );
+		}
+
+		// #1210: admin requires write. A well-formed grant is read+write+admin.
+		// Legacy / hand-seeded records that stored admin without write must NOT
+		// keep admin and must NOT gain write — drop admin, keep the rest.
+		// Create refuses that shape instead (refusal_for_admin_without_write).
+		if ( in_array( 'admin', $scopes, true ) && ! in_array( 'write', $scopes, true ) ) {
+			$scopes = array_values( array_diff( $scopes, array( 'admin' ) ) );
+			if ( empty( $scopes ) ) {
+				return array( 'read' );
+			}
 		}
 
 		if ( in_array( 'admin', $scopes, true ) ) {

@@ -36,7 +36,7 @@ final class CustomCodeRoundSixApiTest extends TestCase {
 			$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
 			$property = new ReflectionProperty( Mcpwp_REST_Elementor_Pro::class, 'current_api_key_record' );
 			$property->setAccessible( true );
-			$property->setValue( $controller, array( 'scopes' => array( 'admin' ), 'role' => 'admin' ) );
+			$property->setValue( $controller, array( 'scopes' => array( 'read', 'write', 'admin' ), 'role' => 'admin' ) );
 			$response = $controller->get_custom_code( new WP_REST_Request( 'GET', '/', array( 'id' => 682 ) ) );
 			$snippet = $response->get_data()['snippet'];
 			$this->assertTrue( $snippet['quarantined'] );

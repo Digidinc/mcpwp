@@ -737,23 +737,27 @@ final class ApiKeyStoreRace1096Test extends TestCase {
 
 	public function test_a_label_with_backslashes_round_trips_through_mutate(): void {
 		$auth  = new Mcpwp_Keystore_Race_Test_Auth();
+		$auth->create_scoped_api_key( 'seed', array( 'read' ), 'admin' );
 		$label = 'C:\\\\path\\\\to\\\\client';
 		$made  = $auth->create_scoped_api_key( $label, array( 'read' ), 'editor' );
 
-		$this->assertArrayHasKey( 'key', $made, 'Backslash labels must be writable through the test WPDB CAS parser.' );
+		$this->assertArrayHasKey( 'key', $made, 'Backslash labels must survive the keystore UPDATE (compare-and-swap) path.' );
 		$listed = $auth->list_scoped_api_keys( false );
-		$this->assertCount( 1, $listed );
-		$this->assertSame( $label, $listed[0]['label'] );
+		$this->assertCount( 2, $listed );
+		$labels = array_column( $listed, 'label' );
+		$this->assertContains( $label, $labels );
 	}
 
 	public function test_a_label_with_an_escaped_quote_round_trips_through_mutate(): void {
 		$auth  = new Mcpwp_Keystore_Race_Test_Auth();
+		$auth->create_scoped_api_key( 'seed', array( 'read' ), 'admin' );
 		$label = 'client\'s \\path';
 		$made  = $auth->create_scoped_api_key( $label, array( 'read' ), 'editor' );
 
 		$this->assertArrayHasKey( 'key', $made );
 		$listed = $auth->list_scoped_api_keys( false );
-		$this->assertSame( $label, $listed[0]['label'] );
+		$labels = array_column( $listed, 'label' );
+		$this->assertContains( $label, $labels );
 	}
 
 	public function test_what_the_column_can_hold_is_accepted(): void {

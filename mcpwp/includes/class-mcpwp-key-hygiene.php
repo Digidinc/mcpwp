@@ -329,7 +329,10 @@ class Mcpwp_Key_Hygiene {
 	 *         Mcpwp_Key_Store::mutate() reason that refused the write.
 	 */
 	public static function run( $time_budget = null, $max_checks = null, $phases = null ) {
-		if ( ! empty( $GLOBALS['mcpwp_test_key_hygiene_run_throw'] ) ) {
+		$test_throw = ( defined( 'MCPWP_TESTS' ) && MCPWP_TESTS )
+			? ! empty( $GLOBALS['mcpwp_test_key_hygiene_run_throw'] )
+			: false;
+		if ( apply_filters( 'mcpwp_test_key_hygiene_run_throw', $test_throw ) ) {
 			throw new \RuntimeException( 'mcpwp_test_key_hygiene_run_throw' );
 		}
 		$time_budget = null === $time_budget ? self::TIME_BUDGET : (float) $time_budget;

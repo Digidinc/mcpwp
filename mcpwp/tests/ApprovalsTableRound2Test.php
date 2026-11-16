@@ -81,7 +81,7 @@ final class ApprovalsTableRound2Test extends TestCase {
 		$this->assertTrue( $exempt( 'k-admin', array( 'key_record' => mcpwp_test_admin_key( 'k-admin' ) ) ) );
 		$this->assertFalse( $exempt( 'k-write', array( 'key_record' => array( 'id' => 'k-write', 'role' => 'admin', 'scopes' => array( 'read', 'write' ) ) ) ), 'A write-scope admin-role key is an agent.' );
 		$this->assertFalse( $exempt( 'oauth-user:9', array( 'key_record' => array( 'id' => 'oauth-user:9', 'type' => 'oauth', 'scopes' => array( 'read', 'write', 'admin' ) ) ) ) );
-		$this->assertFalse( $exempt( 'broker:1', array( 'key_record' => array( 'id' => 'broker:1', 'type' => 'broker', 'scopes' => array( 'admin' ) ) ) ) );
+		$this->assertFalse( $exempt( 'broker:1', array( 'key_record' => array( 'id' => 'broker:1', 'type' => 'broker', 'scopes' => array( 'read', 'write', 'admin' ) ) ) ) );
 		$this->assertFalse( $exempt( 'webmcp:user:1', array( 'wp_user_id' => 1 ) ) );
 	}
 

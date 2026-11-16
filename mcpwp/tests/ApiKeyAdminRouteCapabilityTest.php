@@ -103,7 +103,7 @@ final class ApiKeyAdminRouteCapabilityTest extends TestCase {
 	// ---------------------------------------------------------------
 
 	public function test_an_admin_scoped_key_still_lists_api_keys(): void {
-		$admin_key = ( new Mcpwp_REST_Site_Updates() )->create_scoped_api_key( 'owner', array( 'admin' ) );
+		$admin_key = ( new Mcpwp_REST_Site_Updates() )->create_scoped_api_key( 'owner', array( 'read', 'write', 'admin' ) );
 
 		$controller = new Mcpwp_REST_Site_Updates();
 		$request    = new WP_REST_Request( 'GET', '/mcpwp/v1/api-keys' );
@@ -115,7 +115,7 @@ final class ApiKeyAdminRouteCapabilityTest extends TestCase {
 	}
 
 	public function test_an_admin_scoped_key_still_creates_api_keys(): void {
-		$admin_key = ( new Mcpwp_REST_Site_Updates() )->create_scoped_api_key( 'owner', array( 'admin' ) );
+		$admin_key = ( new Mcpwp_REST_Site_Updates() )->create_scoped_api_key( 'owner', array( 'read', 'write', 'admin' ) );
 
 		$controller = new Mcpwp_REST_Site_Updates();
 		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/api-keys', array( 'label' => 'sub-agent', 'scopes' => array( 'read' ) ) );
@@ -127,7 +127,7 @@ final class ApiKeyAdminRouteCapabilityTest extends TestCase {
 	}
 
 	public function test_an_admin_scoped_key_still_revokes_api_keys(): void {
-		$admin_key = ( new Mcpwp_REST_Site_Updates() )->create_scoped_api_key( 'owner', array( 'admin' ) );
+		$admin_key = ( new Mcpwp_REST_Site_Updates() )->create_scoped_api_key( 'owner', array( 'read', 'write', 'admin' ) );
 		$victim    = ( new Mcpwp_REST_Site_Updates() )->create_scoped_api_key( 'victim', array( 'read' ) );
 
 		$controller = new Mcpwp_REST_Site_Updates();
@@ -140,7 +140,7 @@ final class ApiKeyAdminRouteCapabilityTest extends TestCase {
 	}
 
 	public function test_an_admin_scoped_key_still_resets_the_rate_limit(): void {
-		$admin_key = ( new Mcpwp_REST_Site_Updates() )->create_scoped_api_key( 'owner', array( 'admin' ) );
+		$admin_key = ( new Mcpwp_REST_Site_Updates() )->create_scoped_api_key( 'owner', array( 'read', 'write', 'admin' ) );
 
 		$controller = new Mcpwp_REST_Site_Updates();
 		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/rate-limit', array( 'identifier' => 'key:someone' ) );

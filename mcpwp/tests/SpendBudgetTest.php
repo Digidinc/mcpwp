@@ -57,7 +57,7 @@ final class SpendBudgetTest extends TestCase {
 		Mcpwp_REST_MCP::reset_verdict_memo();
 		Mcpwp_REST_Batch::$is_batch_sub_request = false;
 
-		$this->key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'spend', array( 'admin' ) );
+		$this->key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'spend', array( 'read', 'write', 'admin' ) );
 
 		Mcpwp_Rate_Limiter::get_instance()->update_settings(
 			array(

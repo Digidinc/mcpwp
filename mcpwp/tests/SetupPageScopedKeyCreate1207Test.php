@@ -242,6 +242,69 @@ final class SetupPageScopedKeyCreate1207Test extends TestCase {
 		$this->assertNotEmpty( $dup );
 		$this->assertFalse( get_transient( Mcpwp_Admin::setup_pending_errors_transient_name( 1 ) ) );
 		$this->assertGreaterThan( Mcpwp_Admin::NEW_PRIMARY_KEY_TRANSIENT_TTL, Mcpwp_Admin::SCOPED_FORM_SPENT_TTL );
+		$this->assertGreaterThanOrEqual( 12 * HOUR_IN_SECONDS, Mcpwp_Admin::SCOPED_FORM_SPENT_TTL );
+	}
+
+	public function test_replayed_form_uid_still_blocked_after_legacy_three_minute_window(): void {
+		$_POST = $this->claude_desktop_post();
+		( new Mcpwp_Admin() )->handle_setup_page_load();
+
+		$spent_name = 'mcpwp_scoped_form_spent_1_' . self::FORM_UID;
+		$ttl        = (int) ( $GLOBALS['mcpwp_test_transients'][ $spent_name ]['ttl'] ?? 0 );
+		$this->assertGreaterThanOrEqual( 12 * HOUR_IN_SECONDS, $ttl );
+
+		// Five minutes after submit the spent marker must still block a replay (old TTL was 3 minutes).
+		$GLOBALS['mcpwp_test_transients'][ $spent_name ]['expires'] = time() + $ttl - ( 5 * MINUTE_IN_SECONDS );
+
+		$_POST = $this->claude_desktop_post();
+		try {
+			( new Mcpwp_Admin() )->handle_setup_page_load();
+			$this->fail( 'Expected redirect on duplicate form submit after five minutes.' );
+		} catch ( Mcpwp_Test_Redirect_Signal $e ) {
+			$this->assertStringContainsString( 'mcpwp_setup_notice=1', $e->getMessage() );
+		}
+
+		$this->assertCount( 1, ( new Mcpwp_Admin() )->list_scoped_api_keys( false ) );
+	}
+
+	public function test_duplicate_submit_notice_does_not_reference_message_above(): void {
+		$_POST = $this->claude_desktop_post();
+		( new Mcpwp_Admin() )->handle_setup_page_load();
+
+		$_POST = $this->claude_desktop_post();
+		try {
+			( new Mcpwp_Admin() )->handle_setup_page_load();
+		} catch ( Mcpwp_Test_Redirect_Signal $e ) {
+			$pending = get_transient( Mcpwp_Admin::setup_pending_errors_transient_name( 1 ) );
+			$this->assertIsArray( $pending );
+			$msg = (string) ( $pending[0]['message'] ?? '' );
+			$this->assertStringNotContainsString( 'message above', strtolower( $msg ) );
+			return;
+		}
+		$this->fail( 'Expected redirect on duplicate submit.' );
+	}
+
+	public function test_early_post_handler_refuses_admin_scope_without_write(): void {
+		$_POST = array(
+			'mcpwp_create_scoped_key'       => '1',
+			'mcpwp_scoped_keys_nonce'       => 'valid',
+			'mcpwp_scoped_key_label'        => 'Bad',
+			'mcpwp_scoped_key_role'         => 'custom',
+			'mcpwp_scoped_key_scopes'       => array( 'read', 'admin' ),
+			'mcpwp_scoped_key_categories'   => array( 'content' ),
+			'mcpwp_scoped_form_uid'         => 'adminnowrite',
+		);
+
+		try {
+			( new Mcpwp_Admin() )->handle_setup_page_load();
+			$this->fail( 'Expected redirect on invalid scopes.' );
+		} catch ( Mcpwp_Test_Redirect_Signal $e ) {
+			$pending = get_transient( Mcpwp_Admin::setup_pending_errors_transient_name( 1 ) );
+			$this->assertIsArray( $pending );
+			$this->assertSame( 'mcpwp_scoped_key_error', $pending[0]['code'] ?? null );
+		}
+
+		$this->assertSame( array(), get_option( 'mcpwp_api_keys', array() ) );
 	}
 
 	public function test_fresh_activation_transient_in_bucket_zero_shows_once_on_setup(): void {

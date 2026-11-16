@@ -132,7 +132,7 @@ trait Mcpwp_Admin_Setup_Trait {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
 			return;
 		}
-		if ( isset( $_POST['mcpwp_create_scoped_key'] ) ) {
+		if ( isset( $_POST['mcpwp_create_scoped_key'] ) || isset( $_POST['mcpwp_create_readonly_scoped_key'] ) ) {
 			$this->handle_setup_scoped_key_create_post();
 		}
 	}
@@ -161,7 +161,7 @@ trait Mcpwp_Admin_Setup_Trait {
 				add_settings_error(
 					'mcpwp_messages',
 					'mcpwp_scoped_key_duplicate_submit',
-					__( 'That key was already created. Copy it from the message above or create a new key with a fresh form.', 'mcpwp' ),
+					__( 'That submit already created a key. Reload the Setup page to create another key.', 'mcpwp' ),
 					'error'
 				);
 				$this->redirect_setup_scoped_key_form_error( $return_tab );
@@ -170,10 +170,13 @@ trait Mcpwp_Admin_Setup_Trait {
 
 		$label  = isset( $_POST['mcpwp_scoped_key_label'] ) ? sanitize_text_field( wp_unslash( $_POST['mcpwp_scoped_key_label'] ) ) : '';
 		$scopes = isset( $_POST['mcpwp_scoped_key_scopes'] ) ? array_map( 'sanitize_key', (array) wp_unslash( $_POST['mcpwp_scoped_key_scopes'] ) ) : array();
-		if ( empty( $scopes ) ) {
+		if ( isset( $_POST['mcpwp_create_readonly_scoped_key'] ) ) {
+			$scopes = array( 'read' );
+		} elseif ( empty( $scopes ) ) {
 			$scopes = array( 'read' );
 		}
 
+		// #1041 WARN-B: '' when missing — create_scoped_api_key() applies its default.
 		$role            = isset( $_POST['mcpwp_scoped_key_role'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_scoped_key_role'] ) ) : '';
 		$tool_categories = isset( $_POST['mcpwp_scoped_key_categories'] ) ? array_map( 'sanitize_key', (array) wp_unslash( $_POST['mcpwp_scoped_key_categories'] ) ) : array();
 
@@ -356,6 +359,76 @@ trait Mcpwp_Admin_Setup_Trait {
 		$broker_notice     = isset( $_GET['broker'] ) ? sanitize_key( wp_unslash( $_GET['broker'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- read-only display flag, no state change.
 
 		include MCPWP_PLUGIN_DIR . 'admin/partials/mcpwp-setup-display.php';
+	}
+
+	/**
+	 * Process Setup form create-scoped-key POSTs (#1210).
+	 *
+	 * `mcpwp_create_readonly_scoped_key` forces scopes to read only (ignores
+	 * Write/Admin ops checkboxes). Admin without write is refused as an error
+	 * settings notice (`invalid_scopes`), never silently expanded to write.
+	 *
+	 * @return array|null Newly created key payload, or null.
+	 */
+	public function process_create_scoped_key_post() {
+		if ( ! isset( $_POST['mcpwp_create_scoped_key'] ) && ! isset( $_POST['mcpwp_create_readonly_scoped_key'] ) ) {
+			return null;
+		}
+
+		check_admin_referer( 'mcpwp_manage_scoped_keys', 'mcpwp_scoped_keys_nonce' );
+
+		$label  = isset( $_POST['mcpwp_scoped_key_label'] ) ? sanitize_text_field( wp_unslash( $_POST['mcpwp_scoped_key_label'] ) ) : '';
+		$scopes = isset( $_POST['mcpwp_scoped_key_scopes'] ) ? array_map( 'sanitize_key', (array) wp_unslash( $_POST['mcpwp_scoped_key_scopes'] ) ) : array();
+		if ( isset( $_POST['mcpwp_create_readonly_scoped_key'] ) ) {
+			$scopes = array( 'read' );
+		} elseif ( empty( $scopes ) ) {
+			$scopes = array( 'read' ); // Least privilege — unchecking all scopes = read-only.
+		}
+
+		// #1041 WARN-B: '' (not 'admin') when the field is missing — lets
+		// create_scoped_api_key() apply its own default (custom, when
+		// tool_categories was supplied; admin otherwise) rather than this
+		// call site pre-empting it. The real form always submits the
+		// select's value, so this only matters for a raw/crafted POST.
+		$role            = isset( $_POST['mcpwp_scoped_key_role'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_scoped_key_role'] ) ) : '';
+		$tool_categories = isset( $_POST['mcpwp_scoped_key_categories'] ) ? array_map( 'sanitize_key', (array) wp_unslash( $_POST['mcpwp_scoped_key_categories'] ) ) : array();
+
+		$new_scoped_key = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories );
+
+		// #1041: the key editor must not be able to save a custom role with
+		// no categories — create_scoped_api_key() now refuses that and
+		// returns an error shape instead of a key record. Surface it as a
+		// form error rather than the "created" success message, and don't
+		// treat the error shape as a key (no 'key' field to display).
+		if ( is_array( $new_scoped_key ) && isset( $new_scoped_key['error'] ) ) {
+			add_settings_error(
+				'mcpwp_messages',
+				'mcpwp_scoped_key_error',
+				$new_scoped_key['message'],
+				'error'
+			);
+			return null;
+		}
+
+		// The role actually stored, not the pre-call $role variable —
+		// #1041 WARN-B means an omitted/empty $role here may have
+		// resolved to 'custom' or 'admin' inside create_scoped_api_key(),
+		// and the message must reflect what was actually minted.
+		$actual_role = isset( $new_scoped_key['role'] ) ? $new_scoped_key['role'] : $role;
+		$roles       = self::get_role_definitions();
+		$role_label  = isset( $roles[ $actual_role ] ) ? $roles[ $actual_role ]['label'] : $actual_role;
+		add_settings_error(
+			'mcpwp_messages',
+			'mcpwp_scoped_key_created',
+			sprintf(
+				/* translators: %s: role label */
+				__( 'API key created (role: %s). Copy it now — it will not be shown again.', 'mcpwp' ),
+				$role_label
+			),
+			'updated'
+		);
+
+		return $new_scoped_key;
 	}
 
 	/**

@@ -87,7 +87,8 @@ final class ElementorLibraryListAndPublishStatusTest extends TestCase {
 		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
 
 		$controller = new Mcpwp_REST_Elementor_Pro( null );
-		$admin_key  = $controller->create_scoped_api_key( 'admin', array( 'admin' ), 'admin' )['key'];
+		// #1210: admin scope requires write; bare admin is refused at create.
+		$admin_key  = $controller->create_scoped_api_key( 'admin', array( 'read', 'write', 'admin' ), 'admin' )['key'];
 
 		$request = new WP_REST_Request(
 			'PUT',

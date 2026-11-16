@@ -213,6 +213,40 @@
 		var previewCat = document.getElementById('mcpwp-role-preview-categories');
 		var checkboxes = document.querySelectorAll('.mcpwp-category-checkbox');
 		var catLabels  = mcpwpAdmin.catLabels || {};
+		var writeCb    = document.getElementById('mcpwp_scoped_key_scope_write');
+		var adminCb    = document.getElementById('mcpwp_scoped_key_scope_admin');
+		var readonlyBtn = document.getElementById('mcpwp-readonly-key-preset');
+
+		// #1210: Admin ops requires Write. Clearing Write unchecks and disables
+		// Admin ops; the Read-only preset clears both in one click.
+		function syncAdminWithWrite() {
+			if (!writeCb || !adminCb) return;
+			if (!writeCb.checked) {
+				adminCb.checked = false;
+				adminCb.disabled = true;
+			} else {
+				adminCb.disabled = false;
+			}
+		}
+
+		function applyReadOnlyPreset() {
+			if (writeCb) writeCb.checked = false;
+			if (adminCb) {
+				adminCb.checked = false;
+				adminCb.disabled = true;
+			}
+		}
+
+		if (writeCb) {
+			writeCb.addEventListener('change', syncAdminWithWrite);
+			syncAdminWithWrite();
+		}
+		if (readonlyBtn) {
+			readonlyBtn.addEventListener('click', function(e) {
+				e.preventDefault();
+				applyReadOnlyPreset();
+			});
+		}
 
 		function updateRoleUI() {
 			var sel  = roleSelect.options[roleSelect.selectedIndex];

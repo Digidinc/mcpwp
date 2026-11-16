@@ -259,7 +259,7 @@ final class McpToolResourceLinkTest extends TestCase {
 	 */
 	public function test_resource_link_does_not_survive_replay_to_an_older_protocol_version(): void {
 		$controller = new Mcpwp_REST_MCP();
-		$created    = $this->fixture_api_key( $controller, 'k', array( 'admin' ) );
+		$created    = $this->fixture_api_key( $controller, 'k', array( 'read', 'write', 'admin' ) );
 
 		$fresh_request = new WP_REST_Request(
 			'POST',

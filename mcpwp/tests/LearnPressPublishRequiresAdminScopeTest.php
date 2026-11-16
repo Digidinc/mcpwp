@@ -59,7 +59,7 @@ final class LearnPressPublishRequiresAdminScopeTest extends TestCase {
 	}
 
 	private function admin_key( $controller ): string {
-		return $controller->create_scoped_api_key( 'admin key', array( 'admin' ), 'admin' )['key'];
+		return $controller->create_scoped_api_key( 'admin key', array( 'read', 'write', 'admin' ), 'admin' )['key'];
 	}
 
 	// ── Courses (default status is 'draft' — the safe default) ─────────────
