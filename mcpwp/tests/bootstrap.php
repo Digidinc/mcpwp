@@ -964,6 +964,32 @@ function mcpwp_test_cap_filters_grant($capability, $user_id)
     return true;
 }
 
+/**
+ * Whether this option is served from core's alloptions (autoload yes).
+ *
+ * update_option( $name, $value ) with $autoload=null records null here; that
+ * matches core's "leave autoload alone" / default-yes for a first write.
+ * Only an explicit false/'no' is non-autoloaded (#1209 P2-1).
+ *
+ * @param string $name Option name.
+ * @return bool
+ */
+function mcpwp_test_option_served_from_alloptions($name)
+{
+    $name = (string) $name;
+    if (! array_key_exists($name, $GLOBALS['mcpwp_test_options'] ?? array())
+        && ! array_key_exists($name, $GLOBALS['mcpwp_test_wpdb_options'] ?? array())
+        && ! (isset($GLOBALS['mcpwp_test_option_cache_stale']) && array_key_exists($name, $GLOBALS['mcpwp_test_option_cache_stale']))
+    ) {
+        return false;
+    }
+    if (! array_key_exists($name, $GLOBALS['mcpwp_test_options_autoload'] ?? array())) {
+        return true;
+    }
+    $autoload = $GLOBALS['mcpwp_test_options_autoload'][ $name ];
+    return ! (false === $autoload || 'no' === $autoload);
+}
+
 function get_option($name, $default = false)
 {
 	$pre = apply_filters('pre_option_' . $name, false, $name, $default);
@@ -978,10 +1004,17 @@ function get_option($name, $default = false)
     // so no other test's reads change.
     if (isset($GLOBALS['mcpwp_test_object_cache']['options:notoptions'][ $name ])) {
         return apply_filters('option_' . $name, $default, $name);
+    }
+    // Core get_option(): autoloaded options are served from alloptions first.
+    // A stale value armed in mcpwp_test_option_cache_stale models that
+    // alloptions snapshot; it wins until alloptions is refreshed/deleted —
+    // deleting only the per-option cache entry does not (#1209 P2-1).
+    if (isset($GLOBALS['mcpwp_test_option_cache_stale']) && array_key_exists($name, $GLOBALS['mcpwp_test_option_cache_stale'])
+        && mcpwp_test_option_served_from_alloptions($name)
+    ) {
+        $value = $GLOBALS['mcpwp_test_option_cache_stale'][ $name ];
     } elseif (isset($GLOBALS['mcpwp_test_option_cache_stale']) && array_key_exists($name, $GLOBALS['mcpwp_test_option_cache_stale'])) {
-        // A stale object-cache copy (#1096): a test arms this to model the cached
-        // snapshot a reader gets from the options API while the database row has
-        // moved on. Dropped by wp_cache_delete() of the option, or of `alloptions`.
+        // Non-autoloaded: the per-option object-cache entry.
         $value = $GLOBALS['mcpwp_test_option_cache_stale'][ $name ];
     } elseif (array_key_exists($name, $GLOBALS['mcpwp_test_options'])) {
         $value = $GLOBALS['mcpwp_test_options'][ $name ];
@@ -1709,6 +1742,7 @@ function wp_generate_uuid4()
 
 function wp_hash_password($password)
 {
+    $GLOBALS['mcpwp_test_wp_hash_password_calls'] = (int) ($GLOBALS['mcpwp_test_wp_hash_password_calls'] ?? 0) + 1;
     return password_hash((string) $password, PASSWORD_BCRYPT);
 }
 
@@ -1720,6 +1754,7 @@ function wp_hash_password($password)
  */
 function wp_check_password($password, $hash)
 {
+    $GLOBALS['mcpwp_test_wp_check_password_calls'] = (int) ($GLOBALS['mcpwp_test_wp_check_password_calls'] ?? 0) + 1;
     $password = (string) $password;
     $hash     = (string) $hash;
     if (strlen($hash) <= 32) {
@@ -4059,11 +4094,13 @@ if (! function_exists('wp_schedule_single_event')) {
 if (! function_exists('wp_cache_delete')) {
     function wp_cache_delete($key, $group = '')
     {
-        // #1096: a stale options-cache copy armed by a test goes with the entry.
+        // #1096 / #1209 P2-1: stale copies model the object cache. Autoloaded
+        // options live in alloptions — deleting only the per-option entry must
+        // NOT drop that stale alloptions view (unlike a non-autoloaded option).
         if ('options' === $group) {
             if ('alloptions' === $key) {
                 $GLOBALS['mcpwp_test_option_cache_stale'] = array();
-            } else {
+            } elseif (! mcpwp_test_option_served_from_alloptions((string) $key)) {
                 unset($GLOBALS['mcpwp_test_option_cache_stale'][ (string) $key ]);
             }
         }
@@ -4179,10 +4216,12 @@ if (! function_exists('wp_cache_set')) {
             'ttl'     => (int) $expire,
         );
         // A set replaces whatever stale copy a test armed (#1096).
+        // Autoloaded: only refreshing alloptions clears the alloptions-stale
+        // view; setting the per-option key alone does not (#1209 P2-1).
         if ('options' === $group) {
             if ('alloptions' === $key) {
                 $GLOBALS['mcpwp_test_option_cache_stale'] = array();
-            } else {
+            } elseif (! mcpwp_test_option_served_from_alloptions((string) $key)) {
                 unset($GLOBALS['mcpwp_test_option_cache_stale'][ (string) $key ]);
             }
         }

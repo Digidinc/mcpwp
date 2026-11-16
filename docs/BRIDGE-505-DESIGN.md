@@ -7,9 +7,11 @@ automation still requires architect + mumcp-warden review before shipping.**
 how to move the active-plugin record from `site-pilot-ai/site-pilot-ai.php` to
 `mcpwp/mcpwp.php` without deactivating the plugin and killing REST/MCP on customer sites.
 
-The data migration (`Mcpwp_Migrate`) and dual-key auth (`find_legacy_spai_key`) are already
-implemented and tested.  The slug handover is the remaining piece.  It is deliberately NOT
-implemented here; this note surfaces the options for review.
+The data migration (`Mcpwp_Migrate`) and one-time credential adoption
+(`Mcpwp_Activator::adopt_spai_credentials()`, #1098 / #1120) are already implemented and
+tested — request auth no longer reads `spai_api_key` / `spai_api_keys` directly.  The slug
+handover is the remaining piece.  It is deliberately NOT implemented here; this note
+surfaces the options for review.
 
 ---
 

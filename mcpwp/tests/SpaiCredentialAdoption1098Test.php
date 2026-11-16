@@ -1,13 +1,13 @@
 <?php
 /**
- * #1098 — every 2.8 spai credential ends up in the revocable scoped store,
- * written through Mcpwp_Key_Store::mutate() (#1166), and the spai originals
- * are deleted.
+ * #1098 / #1120 — every 2.8 spai credential ends up in the revocable scoped
+ * store, written through Mcpwp_Key_Store::mutate() (#1166), and the spai
+ * originals are deleted. Auth never reads the old options (#1120): refused
+ * before adoption, accepted from the scoped store after.
  *
- * Before: on the normal upgrade path the activator minted mcpwp_api_key before
- * Mcpwp_Migrate::run(), so a single spai_api_key was never copied. It then
- * authenticated as admin through find_legacy_spai_key() for good, and nothing
- * could revoke it.
+ * Before adoption: on the normal upgrade path the activator minted
+ * mcpwp_api_key before Mcpwp_Migrate::run(), so a single spai_api_key was
+ * never copied. Adoption is the last-chance path that makes it revocable.
  *
  * @package MCPWP
  */
@@ -24,11 +24,6 @@ class Mcpwp_Spai_Adoption_Test_Auth {
 
 	public function auth_only( $request ) {
 		return $this->verify_api_key_auth_only( $request );
-	}
-
-	/** The record the 2.8 bridge grants for a key, or null. */
-	public function bridge_record( $key ) {
-		return $this->find_legacy_spai_key( $key );
 	}
 
 	/** The record the scoped store grants for a key, or null. */
@@ -128,9 +123,10 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		return $made;
 	}
 
-	/** A later page load: the failed-attempt back-off has expired. */
+	/** A later page load: the failed-attempt back-off / busy cool-down has expired. */
 	private function later_load(): bool {
 		delete_transient( Mcpwp_Activator::SPAI_ADOPTION_BACKOFF );
+		delete_transient( Mcpwp_Activator::SPAI_ADOPTION_BUSY_COOLDOWN );
 		return Mcpwp_Activator::adopt_spai_credentials();
 	}
 
@@ -146,7 +142,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$key  = $this->key( 'a1' );
 		$hash = wp_hash_password( $key );
 		update_option( 'spai_api_key', $hash );
-		$this->assertTrue( $this->works( $key ), 'Before adoption the bridge honours it (and nothing can revoke it).' );
+		$this->assertFalse( $this->works( $key ), 'Before adoption the old options are not an auth source.' );
 
 		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 
@@ -155,7 +151,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->assertCount( 1, $records );
 		$this->assertSame( Mcpwp_Activator::SPAI_ADOPTED_LABEL, $records[0]['label'] );
 		$this->assertSame( 'spai', $records[0]['migrated_from'] );
-		$this->assertSame( array( 'read', 'write', 'admin' ), $records[0]['scopes'], 'Admin, as the bridge granted it.' );
+		$this->assertSame( array( 'read', 'write', 'admin' ), $records[0]['scopes'], 'Admin, as adoption synthesises for the single key.' );
 		$this->assertNull( $records[0]['revoked_at'] );
 		$this->assertTrue( $this->works( $key ), 'Still works, now as a scoped record.' );
 		$listed = array_values( array_filter( $auth->list_scoped_api_keys( false ), static function ( $k ) {
@@ -236,32 +232,45 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->assertTrue( $this->gone( 'spai_api_key' ) );
 	}
 
-	// ── what an adopted record may do: never more than the bridge gave ────
+	// ── what an adopted record may do: never more than the 2.8 record carried ─
 
-	public function test_spai_api_keys_records_keep_exactly_what_the_bridge_granted(): void {
+	public function test_spai_api_keys_records_keep_exactly_what_the_source_carried(): void {
 		$this->seed_store_key();
 		$auth = new Mcpwp_Spai_Adoption_Test_Auth();
 		$k1   = $this->key( 'd1' );
 		$k2   = $this->key( 'd2' );
 		$k3   = $this->key( 'd3' );
-		update_option( 'spai_api_keys', array(
+		$source = array(
 			array( 'id' => 'ed', 'label' => 'Editor', 'hash' => wp_hash_password( $k1 ), 'scopes' => array( 'read', 'write' ), 'role' => 'editor', 'revoked_at' => null ),
 			array( 'id' => 'cu', 'label' => 'Custom', 'hash' => wp_hash_password( $k2 ), 'scopes' => array( 'read' ), 'role' => 'custom', 'tool_categories' => array( 'seo' ), 'rate_limits' => array( 'per_minute' => 5 ), 'allow_destructive' => true, 'revoked_at' => null ),
 			array( 'id' => 'ro', 'label' => 'Roleless', 'hash' => wp_hash_password( $k3 ), 'revoked_at' => null ),
-		) );
-		$before = array();
+		);
+		update_option( 'spai_api_keys', $source );
 		foreach ( array( $k1, $k2, $k3 ) as $k ) {
-			$before[ $k ] = $auth->bridge_record( $k );
-			$this->assertNotNull( $before[ $k ] );
+			$this->assertFalse( $this->works( $k ), 'Refused before adoption.' );
 		}
 
 		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 
-		foreach ( $before as $k => $granted ) {
+		$by_id = array();
+		foreach ( $source as $row ) {
+			$by_id[ $row['id'] ] = $row;
+		}
+		foreach ( array( $k1 => 'ed', $k2 => 'cu', $k3 => 'ro' ) as $k => $id ) {
 			$after = $auth->store_record( $k );
-			$this->assertNotNull( $after, 'Still authenticates.' );
-			foreach ( array( 'id', 'scopes', 'role', 'tool_categories', 'rate_limits', 'allow_destructive' ) as $field ) {
-				$this->assertSame( $granted[ $field ], $after[ $field ], "Adoption must not change $field." );
+			$this->assertNotNull( $after, 'Authenticates after adoption.' );
+			$granted = $by_id[ $id ];
+			$this->assertSame( $granted['id'], $after['id'] );
+			foreach ( array( 'scopes', 'role', 'tool_categories', 'rate_limits', 'allow_destructive' ) as $field ) {
+				if ( array_key_exists( $field, $granted ) ) {
+					$this->assertSame( $granted[ $field ], $after[ $field ], "Adoption must not change $field." );
+				}
+			}
+			if ( 'ro' === $id ) {
+				// Source omitted role/scopes/tool_categories: normalize to admin defaults.
+				$this->assertSame( 'admin', $after['role'] );
+				$this->assertSame( array( 'read', 'write', 'admin' ), $after['scopes'] );
+				$this->assertSame( array(), $after['tool_categories'] );
 			}
 		}
 	}
@@ -465,7 +474,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->assertFalse( $this->works( $key ), '...and the revocation outlives them.' );
 		// Even if the original reappears (a restored backup, a copied option row).
 		update_option( 'spai_api_key', $hash );
-		$this->assertFalse( $this->works( $key ), 'The placeholder keeps the bridge refusing it.' );
+		$this->assertFalse( $this->works( $key ), 'The placeholder keeps the key refused.' );
 	}
 
 	public function test_a_failed_delete_of_the_store_option_never_resurrects_the_twin(): void {
@@ -508,7 +517,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$store[] = array( 'id' => 'rv', 'label' => 'x', 'hash' => wp_hash_password( $plain ), 'scopes' => array( 'read' ), 'revoked_at' => '2026-02-02 00:00:00' );
 		update_option( 'mcpwp_api_keys', $store );
 		update_option( 'spai_api_key', $plain ); // pre-1.0.14: plaintext.
-		$this->assertFalse( $this->works( $plain ), 'Precondition: the bridge refuses it.' );
+		$this->assertFalse( $this->works( $plain ), 'Precondition: refused before adoption.' );
 
 		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 
@@ -520,7 +529,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->seed_store_key();
 		$plain = $this->key( 'h3' );
 		update_option( 'spai_api_key', $plain );
-		$this->assertTrue( $this->works( $plain ) );
+		$this->assertFalse( $this->works( $plain ), 'Refused before adoption.' );
 
 		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 
@@ -531,15 +540,15 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 
 	// ── P1-b: identity — the approvals self-approval check compares ids ──
 
-	public function test_the_single_key_keeps_its_bridge_identity(): void {
+	public function test_the_single_key_keeps_its_adoption_identity(): void {
 		$this->seed_store_key();
 		$key = $this->key( 'i1' );
 		update_option( 'spai_api_key', wp_hash_password( $key ) );
-		$this->assertSame( 'spai_legacy_single', $this->principal_id( $key ), 'The id the bridge gives it today.' );
+		$this->assertFalse( $this->works( $key ), 'Refused before adoption.' );
 
 		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 
-		$this->assertSame( 'spai_legacy_single', $this->principal_id( $key ), 'Unchanged, so a request it filed before cannot be approved by it now.' );
+		$this->assertSame( 'spai_legacy_single', $this->principal_id( $key ), 'Stable id so a request it filed before cannot be approved by it now.' );
 	}
 
 	public function test_a_spai_records_id_is_kept_even_when_the_store_has_the_same_id(): void {
@@ -547,11 +556,11 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$taken = $this->store()[0]['id'];
 		$key   = $this->key( 'i2' );
 		update_option( 'spai_api_keys', array( array( 'id' => $taken, 'label' => 'dup', 'hash' => wp_hash_password( $key ), 'scopes' => array( 'read' ), 'role' => 'author', 'revoked_at' => null ) ) );
-		$this->assertSame( $taken, $this->principal_id( $key ) );
+		$this->assertFalse( $this->works( $key ), 'Refused before adoption.' );
 
 		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 
-		$this->assertSame( $taken, $this->principal_id( $key ), 'Identity unchanged: same as the bridge gave it.' );
+		$this->assertSame( $taken, $this->principal_id( $key ), 'Identity unchanged: same id the 2.8 record carried.' );
 		$this->assertTrue( $this->works( $made['key'] ) );
 	}
 
@@ -635,8 +644,8 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$multi  = $this->key( 'm2' );
 		update_option( 'spai_api_key', wp_hash_password( $single ) );
 		update_option( 'spai_api_keys', array( array( 'id' => 'm1', 'hash' => wp_hash_password( $multi ), 'revoked_at' => null ) ) );
-		$this->assertTrue( $this->works( $single ) );
-		$this->assertTrue( $this->works( $multi ) );
+		$this->assertFalse( $this->works( $single ), 'Leftover options do not authenticate before regenerate.' );
+		$this->assertFalse( $this->works( $multi ) );
 
 		$new = $auth->regenerate_api_key();
 
@@ -689,7 +698,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		$this->assertSame( '', $auth->regenerate_api_key(), 'Busy: nothing rotated.' );
 
 		$this->assertFalse( $this->gone( 'spai_api_key' ), 'The spai key is deleted only after the new key exists.' );
-		$this->assertTrue( $this->works( $single ) );
+		$this->assertFalse( $this->works( $single ), 'Still not an auth source; options remain for a later adoption.' );
 	}
 
 	public function test_ending_the_spai_credentials_revokes_an_adopted_record_that_slipped_in_after_the_rotation(): void {
@@ -718,6 +727,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 	public function test_the_uninstaller_names_the_flag_exactly_and_adds_no_lock(): void {
 		$all = array_merge( Mcpwp_Uninstaller::LEGACY_OPTIONS, Mcpwp_Uninstaller::APPROVALS_OPTIONS );
 		$this->assertContains( 'mcpwp_spai_credentials_adopted', $all );
+		$this->assertContains( 'mcpwp_spai_adoption_failure', $all );
 		$this->assertNotContains( 'mcpwp_key_store_lock', $all, 'This work adds no lock of its own.' );
 		foreach ( $all as $name ) {
 			$this->assertStringNotContainsString( '%', $name, 'Exact names, no wildcards (#1159).' );

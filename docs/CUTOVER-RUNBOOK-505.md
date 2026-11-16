@@ -62,7 +62,7 @@ Activate `mcpwp/` **alongside** the still-active `site-pilot-ai/`. The migration
 
 ### 7. Clean up channel state (so future updates work)
 - [ ] Ensure no stale override blocks v3 updates: `wp option get mcpwp_update_info` should be empty; `wp option update mcpwp_version_url https://mumega.com/mcp-updates/version.json`.
-- [ ] Leave the legacy `spai_*` options and `site-pilot-ai/` folder in place for the rollback window (see §9). Do **not** run an option-cleanup script while any customer key still depends on the legacy store (dual-key reads it; the bridge also appended keys into `mcpwp_api_keys`, but keep the source until the window closes).
+- [ ] Leave the legacy `spai_*` options and `site-pilot-ai/` folder in place for the rollback window (see §9). Do **not** run an option-cleanup script while adoption may still need those options as its source (`adopt_spai_credentials()` copies them into `mcpwp_api_keys` and then deletes them; keep the source until the window closes and `mcpwp_spai_credentials_adopted` is set).
 
 ### 8. Post-cutover monitoring
 - [ ] Watch the site for 24h: error log, customer's AI connection, webhook deliveries firing again.

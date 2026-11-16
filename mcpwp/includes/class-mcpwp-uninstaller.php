@@ -267,6 +267,7 @@ class Mcpwp_Uninstaller {
 		'mcpwp_api_keys_last_used',
 		'mcpwp_api_keys_lock',
 		'mcpwp_spai_credentials_adopted', // #1098: exact name, no wildcard (#1159).
+		'mcpwp_spai_adoption_failure', // #1120: last adoption failure reason (not autoloaded).
 		// The key hygiene sweep's flag, position, revoked list, pending list and lock.
 		'mcpwp_key_hygiene_swept',
 		'mcpwp_key_hygiene_state',
@@ -294,10 +295,11 @@ class Mcpwp_Uninstaller {
 		'mcpwp_trial_started',
 		'spai_pro_license',
 		'spai_trial_started',
-		// The 2.8.x API key stores. find_legacy_spai_key() still authenticates
-		// against these, so leaving them lets a key revoked in mcpwp_api_keys
-		// come back to life after uninstall + reinstall (#995 review). Exact
-		// names only — never a spai_% pattern.
+		// The 2.8.x API key stores. Auth no longer reads these (#1120), but
+		// adopt_spai_credentials() still imports them on upgrade while the
+		// adoption flag is unset — leaving them after uninstall + reinstall
+		// would re-import a key that was revoked in mcpwp_api_keys (#995).
+		// Exact names only — never a spai_% pattern.
 		'spai_api_keys',
 		'spai_api_key',
 		// NOT 'mcpwp_migrated_from_spai': it is kept on purpose. Mcpwp_Migrate::run()
@@ -305,7 +307,7 @@ class Mcpwp_Uninstaller {
 		// would copy the leftover spai_* options and tables (webhooks with
 		// their secrets, provider keys, site memory) back in — resurrecting
 		// data the owner deleted. With the key and licence stores above gone,
-		// keeping the flag leaves both bridges closed.
+		// keeping the flag leaves migration and licence bridges closed.
 	);
 
 	/** @var array<string> Transients cleared with the older data (#995). */

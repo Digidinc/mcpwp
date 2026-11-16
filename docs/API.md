@@ -155,9 +155,13 @@ All API requests require authentication via API key.
 
 #### Key hygiene on upgrade
 
-After an upgrade, MCPWP checks every active API key once against the credential values stored in the database (`mcpwp_api_key`, `spai_api_key`, the `spai_api_keys` hashes, and the hashes of the other keys). Keys whose secret matches a stored value are revoked. Normal keys are not affected. The check runs in small bounded steps and continues on the next admin page load until it is finished. It changes nothing while the key store cannot be read.
+After an upgrade, MCPWP checks every active API key once against the credential values stored in the database (`mcpwp_api_key`, leftover `spai_api_key` / `spai_api_keys` hashes when those options still exist, and the hashes of the other keys). Keys whose secret matches a stored value are revoked. Normal keys are not affected. The check runs in small bounded steps and continues on the next admin page load until it is finished. It changes nothing while the key store cannot be read.
 
 Revoked keys are listed by id and label, never by hash, in an admin notice and under **Tools → Site Health**. Create a new key under **MCPWP → Setup** for any client that used one of them. A 2.8 single key (`spai_api_key`) stored in MD5 form is adopted as revoked when other keys exist, so create a new key for any client that still uses it.
+
+#### 2.8 credential adoption on upgrade
+
+Sites upgrading from 2.8 may still hold `spai_api_key` / `spai_api_keys`. On upgrade (and while the one-time flag `mcpwp_spai_credentials_adopted` is unset), MCPWP copies those credentials into the revocable scoped store and deletes the old options. Requests never authenticate against those options directly — only against the scoped store (and, while that store is empty, the legacy `mcpwp_api_key` option).
 
 ### Authentication Methods
 

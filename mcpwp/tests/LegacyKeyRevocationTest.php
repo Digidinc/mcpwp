@@ -19,6 +19,7 @@
 use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__ ) . '/includes/core/class-mcpwp-key-state.php';
+require_once dirname( __DIR__ ) . '/includes/class-mcpwp-activator.php';
 
 class Mcpwp_Legacy_Key_Test_Auth {
 	use Mcpwp_Api_Auth;
@@ -124,10 +125,12 @@ final class LegacyKeyRevocationTest extends TestCase {
 		$this->assertSame( 0, $this->active_count( $auth ) );
 	}
 
-	// ── spai_ bridge (2.8 copies the migration never deleted) ─────────────
+	// ── leftover 2.8 spai copies (#1097 / #1120) ──────────────────────────
 	// The migration copies spai records/hashes VERBATIM into the mcpwp store
 	// (Mcpwp_Migrate R5, and the spai_api_key → mcpwp_api_key map), so these
 	// fixtures use ONE hash for both copies, exactly as a migrated site has.
+	// Auth never reads the spai options; a leftover copy cannot revive a
+	// revoked scoped record, and an uncopied key works only after adoption.
 
 	private function migrated_pair( string $plain, $mcpwp_revoked_at ): void {
 		$hash = wp_hash_password( $plain );
@@ -136,12 +139,17 @@ final class LegacyKeyRevocationTest extends TestCase {
 	}
 
 	public function test_a_key_revoked_in_the_mcpwp_store_is_not_revived_by_its_spai_copy(): void {
-		// Opus round-2 probe, as a test: store non-empty, key revoked, spai
-		// copy still present → must be refused on both auth paths.
+		// Store non-empty, key revoked, spai copy still present → refused on
+		// both auth paths (the leftover option is not an auth source).
 		$auth = new Mcpwp_Legacy_Key_Test_Auth();
 		$key  = 'mcpwp_' . str_repeat( '5b', 24 );
 		$this->migrated_pair( $key, '2026-10-18 07:00:00' );
 
+		$this->assertInstanceOf( WP_Error::class, $auth->verify_api_key( $this->request( $key ) ) );
+		$this->assertInstanceOf( WP_Error::class, $auth->auth_only( $this->request( $key ) ) );
+
+		// Adoption must not revive a hash already revoked in the scoped store.
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 		$this->assertInstanceOf( WP_Error::class, $auth->verify_api_key( $this->request( $key ) ) );
 		$this->assertInstanceOf( WP_Error::class, $auth->auth_only( $this->request( $key ) ) );
 	}
@@ -163,17 +171,23 @@ final class LegacyKeyRevocationTest extends TestCase {
 
 		$this->assertInstanceOf( WP_Error::class, $auth->verify_api_key( $this->request( $key ) ) );
 		$this->assertInstanceOf( WP_Error::class, $auth->auth_only( $this->request( $key ) ) );
+
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$this->assertInstanceOf( WP_Error::class, $auth->verify_api_key( $this->request( $key ) ) );
+		$this->assertInstanceOf( WP_Error::class, $auth->auth_only( $this->request( $key ) ) );
 	}
 
-	public function test_a_spai_key_with_no_mcpwp_copy_keeps_working(): void {
-		// Compatibility (BridgeAuthTest pins it too): a single spai_api_key the
-		// migration skipped — the activator had already minted mcpwp_api_key —
-		// lives only behind the bridge and must not be locked out.
+	public function test_a_spai_key_with_no_mcpwp_copy_is_refused_before_adoption_and_accepted_after(): void {
+		// A single spai_api_key the migration skipped — the activator had
+		// already minted mcpwp_api_key — is refused until adoption moves it.
 		$auth = new Mcpwp_Legacy_Key_Test_Auth();
 		$auth->create_scoped_api_key( 'some integration', array( 'read' ), 'author' );
 		$key = 'spai_' . str_repeat( '8d', 24 );
 		update_option( 'spai_api_key', wp_hash_password( $key ) );
 
+		$this->assertInstanceOf( WP_Error::class, $auth->verify_api_key( $this->request( $key ) ) );
+
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 		$this->assertTrue( $auth->verify_api_key( $this->request( $key ) ) );
 	}
 

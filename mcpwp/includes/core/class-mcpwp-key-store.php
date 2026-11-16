@@ -153,14 +153,34 @@ class Mcpwp_Key_Store {
 	/**
 	 * The stored bytes of the store row, straight from the database.
 	 *
+	 * Bypasses get_option() and the object cache (including alloptions).
+	 * Autoloaded options are served from alloptions on a real site, so a
+	 * peer's write is invisible to get_option() until that request's
+	 * alloptions is refreshed — callers that must see a concurrent write
+	 * (busy-adoption auth retry) use this instead of cache invalidation.
+	 *
 	 * @return string|null Null when the row does not exist.
 	 */
-	private static function read_row() {
+	public static function read_row() {
 		global $wpdb;
 		$value = $wpdb->get_var(
 			$wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::OPTION )
 		);
 		return is_string( $value ) ? $value : null;
+	}
+
+	/**
+	 * Key records from a fresh database read (not get_option / alloptions).
+	 *
+	 * @return array Empty when the row is missing or not a serialised list.
+	 */
+	public static function read_keys() {
+		$raw = self::read_row();
+		if ( null === $raw || ! self::is_readable_store( $raw ) ) {
+			return array();
+		}
+		$keys = maybe_unserialize( $raw );
+		return is_array( $keys ) ? $keys : array();
 	}
 
 	/**
