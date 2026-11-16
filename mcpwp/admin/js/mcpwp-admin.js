@@ -302,9 +302,16 @@
 			});
 		}
 
+		var allowedTabs = {};
+		tabs.forEach(function(t) {
+			var id = t.getAttribute('data-tab');
+			if (id) {
+				allowedTabs[id] = true;
+			}
+		});
 		var params = new URLSearchParams(window.location.search);
 		var setupTab = params.get('setup_tab');
-		if (setupTab) {
+		if (setupTab && allowedTabs[setupTab]) {
 			activateConnectTab(setupTab);
 		}
 

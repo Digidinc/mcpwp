@@ -128,9 +128,13 @@ if ( is_array( $new_scoped_key ?? null ) && ! empty( $new_scoped_key['key'] ) ) 
 
 $connect_tab          = isset( $_GET['setup_tab'] ) ? sanitize_key( wp_unslash( $_GET['setup_tab'] ) ) : 'claude-code'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- display-only tab selection.
 $connect_tabs_allowed = array( 'claude-code', 'claude-desktop', 'cursor', 'windsurf' );
-if ( ! in_array( $connect_tab, $connect_tabs_allowed, true ) ) {
+$tab_override         = Mcpwp_Admin::get_setup_connect_tab_override();
+if ( is_string( $tab_override ) && in_array( $tab_override, $connect_tabs_allowed, true ) ) {
+	$connect_tab = $tab_override;
+} elseif ( ! in_array( $connect_tab, $connect_tabs_allowed, true ) ) {
 	$connect_tab = 'claude-code';
 }
+$scoped_form_uid = wp_generate_password( 16, false );
 $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 ?>
 
@@ -479,6 +483,7 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 
 			<form method="post" class="mcpwp-regenerate-form">
 				<?php wp_nonce_field( 'mcpwp_manage_scoped_keys', 'mcpwp_scoped_keys_nonce' ); ?>
+				<input type="hidden" name="mcpwp_scoped_form_uid" value="<?php echo esc_attr( $scoped_form_uid ); ?>" />
 				<p>
 					<label for="mcpwp_scoped_key_label"><strong><?php esc_html_e( 'Label', 'mcpwp' ); ?></strong></label><br />
 					<input type="text" id="mcpwp_scoped_key_label" name="mcpwp_scoped_key_label" class="regular-text" placeholder="<?php esc_attr_e( 'Example: Content Writer Bot', 'mcpwp' ); ?>" />
@@ -736,6 +741,7 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 					</p>
 					<form method="post" class="mcpwp-regenerate-form" style="margin-top:12px;">
 						<?php wp_nonce_field( 'mcpwp_manage_scoped_keys', 'mcpwp_scoped_keys_nonce' ); ?>
+						<input type="hidden" name="mcpwp_scoped_form_uid" value="<?php echo esc_attr( wp_generate_password( 16, false ) ); ?>" />
 						<input type="hidden" name="mcpwp_scoped_key_label" value="<?php echo esc_attr( $claude_desktop_key_label ); ?>" />
 						<input type="hidden" name="mcpwp_scoped_key_role" value="editor" />
 						<input type="hidden" name="mcpwp_scoped_key_scopes[]" value="read" />

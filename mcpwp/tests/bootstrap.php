@@ -3880,7 +3880,7 @@ if (! isset($GLOBALS['wpdb'])) {
                 return null;
             }
             $hex_tail = substr($query, $and_at + strlen($and_hex));
-            if (! preg_match('/^([0-9A-Fa-f]+)\'$/s', $hex_tail, $hex_m)) {
+            if (! preg_match('/^([0-9A-Fa-f]*)\'$/s', $hex_tail, $hex_m)) {
                 return null;
             }
             $name_open_needle = " WHERE option_name = '";
@@ -3904,7 +3904,7 @@ if (! isset($GLOBALS['wpdb'])) {
                 return null;
             }
             $unescape = static function ($sql) {
-                return str_replace(array("\\'", '\\\\'), array("'", '\\'), $sql);
+                return str_replace("\\'", "'", $sql);
             };
             return array(
                 'table'        => $table_m[1],

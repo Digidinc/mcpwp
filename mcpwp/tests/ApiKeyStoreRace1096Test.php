@@ -735,6 +735,17 @@ final class ApiKeyStoreRace1096Test extends TestCase {
 		$this->assertSame( 'revoked', $auth->revoke_scoped_api_key_outcome( $a['id'] ), 'The existing key can still be revoked.' );
 	}
 
+	public function test_a_label_with_backslashes_round_trips_through_mutate(): void {
+		$auth  = new Mcpwp_Keystore_Race_Test_Auth();
+		$label = 'C:\\path\\to\\client';
+		$made  = $auth->create_scoped_api_key( $label, array( 'read' ), 'editor' );
+
+		$this->assertArrayHasKey( 'key', $made, 'Backslash labels must be writable through the test WPDB CAS parser.' );
+		$listed = $auth->list_scoped_api_keys( false );
+		$this->assertCount( 1, $listed );
+		$this->assertSame( $label, $listed[0]['label'] );
+	}
+
 	public function test_what_the_column_can_hold_is_accepted(): void {
 		$auth = new Mcpwp_Keystore_Race_Test_Auth();
 		$GLOBALS['mcpwp_test_wpdb_col_charset'] = 'latin1';

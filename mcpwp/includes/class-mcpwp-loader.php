@@ -70,6 +70,7 @@ class Mcpwp_Loader {
 
 		// Admin menu
 		$this->add_action( 'admin_menu', $admin, 'add_admin_menu' );
+		$this->add_action( 'load-toplevel_page_' . Mcpwp_Admin::PAGE_SLUG, $admin, 'handle_setup_page_load' );
 
 		// Network admin menu (multisite only).
 		if ( function_exists( 'is_multisite' ) && is_multisite() ) {

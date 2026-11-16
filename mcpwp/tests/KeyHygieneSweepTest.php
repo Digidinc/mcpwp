@@ -895,7 +895,7 @@ final class KeyHygieneSweepTest extends TestCase {
 			Mcpwp_Key_Hygiene::CRON_TIME_BUDGET,
 			'A cron pass must finish well inside the sweep lock lifetime.'
 		);
-		$this->assertSame( 10, Mcpwp_OAuth_Clients::LOCK_TTL );
+		$this->assertSame( Mcpwp_OAuth_Clients::LOCK_TTL, Mcpwp_Key_Hygiene::SWEEP_LOCK_LIFETIME );
 	}
 
 	public function test_cron_does_not_reschedule_when_store_is_unreadable(): void {

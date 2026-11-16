@@ -58,6 +58,9 @@ class Mcpwp_Admin {
 	 */
 	const SETTINGS_PAGE_SLUG = 'mcpwp-settings';
 
+	/** Max seconds the first-activation plaintext key may live in a transient. */
+	const NEW_PRIMARY_KEY_TRANSIENT_TTL = 60;
+
 	/**
 	 * Add admin menu - top-level with icon.
 	 */
@@ -358,6 +361,8 @@ class Mcpwp_Admin {
 		}
 
 		delete_option( 'mcpwp_first_activation' );
+		delete_transient( self::new_primary_key_transient_name() );
+		delete_transient( self::new_primary_key_transient_name( 0 ) );
 		delete_transient( 'mcpwp_new_api_key' );
 		wp_send_json_success();
 	}

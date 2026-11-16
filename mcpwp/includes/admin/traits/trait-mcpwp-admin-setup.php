@@ -13,6 +13,179 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 trait Mcpwp_Admin_Setup_Trait {
 
+	/** @var array|null New scoped key payload for this request only (never persisted). */
+	private static $setup_new_scoped_key = null;
+
+	/** @var string|null Connect tab to open on this request. */
+	private static $setup_connect_tab = null;
+
+	/** @var bool Scoped-key create POST already handled on load-toplevel_page_mcpwp. */
+	private static $setup_scoped_post_handled = false;
+
+	/**
+	 * Transient name for the first-activation plaintext key (per user).
+	 *
+	 * @param int $user_id WordPress user id (0: site-wide mint before login).
+	 * @return string
+	 */
+	public static function new_primary_key_transient_name( $user_id = 0 ) {
+		$user_id = (int) $user_id;
+		if ( $user_id <= 0 ) {
+			$user_id = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
+		}
+		return 'mcpwp_new_api_key_' . $user_id;
+	}
+
+	/**
+	 * Read the new primary key transient for the current user (legacy global fallback).
+	 *
+	 * @return string|null
+	 */
+	public static function pull_new_primary_api_key_transient() {
+		$key = get_transient( self::new_primary_key_transient_name() );
+		if ( is_string( $key ) && '' !== $key ) {
+			return $key;
+		}
+		$legacy = get_transient( 'mcpwp_new_api_key' );
+		if ( is_string( $legacy ) && '' !== $legacy ) {
+			delete_transient( 'mcpwp_new_api_key' );
+			set_transient( self::new_primary_key_transient_name(), $legacy, self::NEW_PRIMARY_KEY_TRANSIENT_TTL );
+			return $legacy;
+		}
+		return null;
+	}
+
+	/**
+	 * Connect tab override set by a successful scoped-key create this request.
+	 *
+	 * @return string|null
+	 */
+	public static function get_setup_connect_tab_override() {
+		$tab = self::$setup_connect_tab;
+		return is_string( $tab ) && '' !== $tab ? $tab : null;
+	}
+
+	/**
+	 * Reset per-request Setup state (tests).
+	 *
+	 * @return void
+	 */
+	public static function reset_setup_page_request_state() {
+		self::$setup_new_scoped_key       = null;
+		self::$setup_connect_tab          = null;
+		self::$setup_scoped_post_handled  = false;
+	}
+
+	/**
+	 * Handle Setup POST actions before admin-header.php (headers-safe).
+	 *
+	 * @return void
+	 */
+	public function handle_setup_page_load() {
+		if ( ! current_user_can( 'activate_plugins' ) ) {
+			return;
+		}
+		if ( isset( $_POST['mcpwp_create_scoped_key'] ) ) {
+			$this->handle_setup_scoped_key_create_post();
+		}
+	}
+
+	/**
+	 * Create a scoped key from POST; store result for render only (no plaintext persistence).
+	 *
+	 * @return void
+	 */
+	private function handle_setup_scoped_key_create_post() {
+		self::$setup_scoped_post_handled = true;
+
+		check_admin_referer( 'mcpwp_manage_scoped_keys', 'mcpwp_scoped_keys_nonce' );
+
+		$allowed_return_tabs = array( 'claude-code', 'claude-desktop', 'cursor', 'windsurf' );
+		$return_tab          = isset( $_POST['mcpwp_setup_return_tab'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_setup_return_tab'] ) ) : '';
+		if ( '' !== $return_tab && ! in_array( $return_tab, $allowed_return_tabs, true ) ) {
+			$return_tab = '';
+		}
+
+		$form_uid = isset( $_POST['mcpwp_scoped_form_uid'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_scoped_form_uid'] ) ) : '';
+		$user_id  = get_current_user_id();
+		if ( '' !== $form_uid ) {
+			$spent_name = 'mcpwp_scoped_form_spent_' . $user_id . '_' . $form_uid;
+			if ( get_transient( $spent_name ) ) {
+				add_settings_error(
+					'mcpwp_messages',
+					'mcpwp_scoped_key_duplicate_submit',
+					__( 'That key was already created. Copy it from the message above or create a new key with a fresh form.', 'mcpwp' ),
+					'error'
+				);
+				$this->redirect_setup_scoped_key_form_error( $return_tab );
+			}
+		}
+
+		$label  = isset( $_POST['mcpwp_scoped_key_label'] ) ? sanitize_text_field( wp_unslash( $_POST['mcpwp_scoped_key_label'] ) ) : '';
+		$scopes = isset( $_POST['mcpwp_scoped_key_scopes'] ) ? array_map( 'sanitize_key', (array) wp_unslash( $_POST['mcpwp_scoped_key_scopes'] ) ) : array();
+		if ( empty( $scopes ) ) {
+			$scopes = array( 'read' );
+		}
+
+		$role            = isset( $_POST['mcpwp_scoped_key_role'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_scoped_key_role'] ) ) : '';
+		$tool_categories = isset( $_POST['mcpwp_scoped_key_categories'] ) ? array_map( 'sanitize_key', (array) wp_unslash( $_POST['mcpwp_scoped_key_categories'] ) ) : array();
+
+		$new_scoped_key = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories );
+
+		if ( is_array( $new_scoped_key ) && isset( $new_scoped_key['error'] ) ) {
+			add_settings_error(
+				'mcpwp_messages',
+				'mcpwp_scoped_key_error',
+				$new_scoped_key['message'],
+				'error'
+			);
+			$this->redirect_setup_scoped_key_form_error( $return_tab );
+		}
+
+		$actual_role = isset( $new_scoped_key['role'] ) ? $new_scoped_key['role'] : $role;
+		$roles       = self::get_role_definitions();
+		$role_label  = isset( $roles[ $actual_role ] ) ? $roles[ $actual_role ]['label'] : $actual_role;
+		add_settings_error(
+			'mcpwp_messages',
+			'mcpwp_scoped_key_created',
+			sprintf(
+				/* translators: %s: role label */
+				__( 'API key created (role: %s). Copy it now — it will not be shown again.', 'mcpwp' ),
+				$role_label
+			),
+			'updated'
+		);
+
+		if ( '' !== $form_uid ) {
+			set_transient( 'mcpwp_scoped_form_spent_' . $user_id . '_' . $form_uid, '1', self::NEW_PRIMARY_KEY_TRANSIENT_TTL );
+		}
+
+		self::$setup_new_scoped_key = $new_scoped_key;
+		if ( '' !== $return_tab ) {
+			self::$setup_connect_tab = $return_tab;
+		}
+	}
+
+	/**
+	 * PRG redirect after a scoped-key form error (never carries plaintext keys).
+	 *
+	 * @param string $return_tab Optional connect tab to reopen.
+	 * @return void
+	 */
+	private function redirect_setup_scoped_key_form_error( $return_tab ) {
+		$allowed_return_tabs = array( 'claude-code', 'claude-desktop', 'cursor', 'windsurf' );
+		$url                 = admin_url( 'admin.php?page=' . self::PAGE_SLUG );
+		if ( '' !== $return_tab && in_array( $return_tab, $allowed_return_tabs, true ) ) {
+			$url = add_query_arg( 'setup_tab', $return_tab, $url );
+		}
+		$url .= '#mcpwp-connect-tabs';
+
+		set_transient( 'settings_errors', get_settings_errors(), 30 );
+
+		wp_safe_redirect( $url );
+		exit;
+	}
+
 	/**
 	 * Render the Setup page (default landing page).
 	 */
@@ -44,73 +217,7 @@ trait Mcpwp_Admin_Setup_Trait {
 			}
 		}
 
-		$new_scoped_key = null;
-		if ( isset( $_POST['mcpwp_create_scoped_key'] ) ) {
-			check_admin_referer( 'mcpwp_manage_scoped_keys', 'mcpwp_scoped_keys_nonce' );
-
-			$label  = isset( $_POST['mcpwp_scoped_key_label'] ) ? sanitize_text_field( wp_unslash( $_POST['mcpwp_scoped_key_label'] ) ) : '';
-			$scopes = isset( $_POST['mcpwp_scoped_key_scopes'] ) ? array_map( 'sanitize_key', (array) wp_unslash( $_POST['mcpwp_scoped_key_scopes'] ) ) : array();
-			if ( empty( $scopes ) ) {
-				$scopes = array( 'read' ); // Least privilege — unchecking all scopes = read-only.
-			}
-
-			// #1041 WARN-B: '' (not 'admin') when the field is missing — lets
-			// create_scoped_api_key() apply its own default (custom, when
-			// tool_categories was supplied; admin otherwise) rather than this
-			// call site pre-empting it. The real form always submits the
-			// select's value, so this only matters for a raw/crafted POST.
-			$role            = isset( $_POST['mcpwp_scoped_key_role'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_scoped_key_role'] ) ) : '';
-			$tool_categories = isset( $_POST['mcpwp_scoped_key_categories'] ) ? array_map( 'sanitize_key', (array) wp_unslash( $_POST['mcpwp_scoped_key_categories'] ) ) : array();
-
-			$new_scoped_key = $this->create_scoped_api_key( $label, $scopes, $role, $tool_categories );
-
-			// #1041: the key editor must not be able to save a custom role with
-			// no categories — create_scoped_api_key() now refuses that and
-			// returns an error shape instead of a key record. Surface it as a
-			// form error rather than the "created" success message, and don't
-			// treat the error shape as a key (no 'key' field to display).
-			if ( is_array( $new_scoped_key ) && isset( $new_scoped_key['error'] ) ) {
-				add_settings_error(
-					'mcpwp_messages',
-					'mcpwp_scoped_key_error',
-					$new_scoped_key['message'],
-					'error'
-				);
-				$new_scoped_key = null;
-			} else {
-				// The role actually stored, not the pre-call $role variable —
-				// #1041 WARN-B means an omitted/empty $role here may have
-				// resolved to 'custom' or 'admin' inside create_scoped_api_key(),
-				// and the message must reflect what was actually minted.
-				$actual_role = isset( $new_scoped_key['role'] ) ? $new_scoped_key['role'] : $role;
-				$roles       = self::get_role_definitions();
-				$role_label  = isset( $roles[ $actual_role ] ) ? $roles[ $actual_role ]['label'] : $actual_role;
-				add_settings_error(
-					'mcpwp_messages',
-					'mcpwp_scoped_key_created',
-					sprintf(
-						/* translators: %s: role label */
-						__( 'API key created (role: %s). Copy it now — it will not be shown again.', 'mcpwp' ),
-						$role_label
-					),
-					'updated'
-				);
-
-				$return_tab = isset( $_POST['mcpwp_setup_return_tab'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_setup_return_tab'] ) ) : '';
-				$allowed_return_tabs = array( 'claude-code', 'claude-desktop', 'cursor', 'windsurf' );
-				if ( '' !== $return_tab && in_array( $return_tab, $allowed_return_tabs, true ) ) {
-					set_transient( 'mcpwp_new_scoped_key', $new_scoped_key, HOUR_IN_SECONDS );
-					wp_safe_redirect(
-						add_query_arg(
-							'setup_tab',
-							$return_tab,
-							admin_url( 'admin.php?page=mcpwp#mcpwp-connect-tabs' )
-						)
-					);
-					exit;
-				}
-			}
-		}
+		$new_scoped_key = self::$setup_new_scoped_key;
 
 		if ( isset( $_POST['mcpwp_revoke_scoped_key'] ) ) {
 			check_admin_referer( 'mcpwp_manage_scoped_keys', 'mcpwp_scoped_keys_nonce' );
@@ -145,19 +252,11 @@ trait Mcpwp_Admin_Setup_Trait {
 			}
 		}
 
-		// Check for first-activation key.
+		// Check for first-activation key (per-user transient, short TTL).
 		if ( ! $new_key ) {
-			$first_key = get_transient( 'mcpwp_new_api_key' );
+			$first_key = self::pull_new_primary_api_key_transient();
 			if ( $first_key ) {
 				$new_key = $first_key;
-			}
-		}
-
-		if ( ! $new_scoped_key ) {
-			$scope_transient = get_transient( 'mcpwp_new_scoped_key' );
-			if ( is_array( $scope_transient ) ) {
-				$new_scoped_key = $scope_transient;
-				delete_transient( 'mcpwp_new_scoped_key' );
 			}
 		}
 

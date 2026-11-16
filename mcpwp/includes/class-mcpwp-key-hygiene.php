@@ -57,6 +57,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+if ( ! class_exists( 'Mcpwp_OAuth_Clients', false ) ) {
+	require_once __DIR__ . '/core/class-mcpwp-oauth-clients.php';
+}
+
 class Mcpwp_Key_Hygiene {
 
 	/** Autoloaded flag: the sweep finished on this site. */
@@ -109,17 +113,20 @@ class Mcpwp_Key_Hygiene {
 
 	/**
 	 * Sweep lock lifetime (seconds) — same row as {@see Mcpwp_OAuth_Clients::LOCK_TTL}.
-	 * A cron pass holds this lock for the whole budget plus bcrypt and a patient mutate().
+	 * A cron pass must finish hash checks and bcrypt revoke re-checks inside this TTL.
 	 */
-	const SWEEP_LOCK_LIFETIME = 10;
+	const SWEEP_LOCK_LIFETIME = Mcpwp_OAuth_Clients::LOCK_TTL;
 
 	/**
-	 * Minimum seconds the cron budget must stay below {@see self::SWEEP_LOCK_LIFETIME}.
-	 * A larger budget risks overlapping cron workers after lock TTL expiry.
+	 * Minimum seconds the cron hash-check budget must stay below {@see self::SWEEP_LOCK_LIFETIME}.
+	 * Revoke re-checks also consume wall time; see {@see self::CRON_REVOKE_TIME_HEADROOM}.
 	 */
 	const CRON_LOCK_HEADROOM = 3.0;
 
-	/** Cron pass budget (seconds) — must stay below SWEEP_LOCK_LIFETIME - CRON_LOCK_HEADROOM. */
+	/** Seconds reserved for revoke bcrypt re-checks and mutate() after hash checks. */
+	const CRON_REVOKE_TIME_HEADROOM = 2.0;
+
+	/** Cron pass budget (seconds) for hash checks — must stay below SWEEP_LOCK_LIFETIME - CRON_LOCK_HEADROOM. */
 	const CRON_TIME_BUDGET = 5.0;
 
 	/** Cron pass check cap. */
@@ -182,7 +189,12 @@ class Mcpwp_Key_Hygiene {
 			return;
 		}
 		$outcome = self::run_safely( self::CRON_TIME_BUDGET, self::CRON_MAX_CHECKS, 'all' );
-		if ( is_array( $outcome ) && 'unreadable' === $outcome['status'] ) {
+		if ( null === $outcome ) {
+			// run() threw: reschedule like unreadable, but the store may still be healthy.
+			self::schedule_cron( true );
+			return;
+		}
+		if ( 'unreadable' === $outcome['status'] ) {
 			// Store health already reports an unreadable store; do not re-queue every minute.
 			self::clear_cron();
 			return;
@@ -412,9 +424,13 @@ class Mcpwp_Key_Hygiene {
 
 			$complete = ! $out_of && self::all_targets_done( $targets, $all, $done, $matched );
 			if ( ! empty( $matched ) || $complete ) {
-				$now   = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
-				$write = Mcpwp_Key_Store::mutate(
-					self::revoke_mutator( $store_sig, $external, $internal, $done, $matched, $complete, $now ),
+				$now             = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
+				$revoke_deadline = null;
+				if ( $time_budget >= ( self::CRON_TIME_BUDGET - 0.01 ) ) {
+					$revoke_deadline = $started + max( 0.5, $time_budget - self::CRON_REVOKE_TIME_HEADROOM );
+				}
+				$write           = Mcpwp_Key_Store::mutate(
+					self::revoke_mutator( $store_sig, $external, $internal, $done, $matched, $complete, $now, $revoke_deadline ),
 					true
 				);
 				if ( ! $write['written'] ) {
@@ -532,16 +548,24 @@ class Mcpwp_Key_Hygiene {
 	 * @param string $now       Revocation time.
 	 * @return callable
 	 */
-	private static function revoke_mutator( $store_sig, array $external, array $internal, array $done, array $matched, $complete, $now ) {
-		return static function ( array $keys ) use ( $store_sig, $external, $internal, $done, $matched, $complete, $now ) {
+	private static function revoke_mutator( $store_sig, array $external, array $internal, array $done, array $matched, $complete, $now, $revoke_deadline = null ) {
+		return static function ( array $keys ) use ( $store_sig, $external, $internal, $done, $matched, $complete, $now, $revoke_deadline ) {
 			if ( self::store_signature( $keys ) !== $store_sig ) {
 				return array( null, null );
 			}
 			$matcher  = new Mcpwp_Key_Hygiene_Matcher();
-			$revoked  = array();
-			$left     = array();
-			$resolved = array();
+			$revoked   = array();
+			$left      = array();
+			$resolved  = array();
+			$timed_out = false;
 			foreach ( $matched as $target => $info ) {
+				if ( ! $timed_out && null !== $revoke_deadline && microtime( true ) >= $revoke_deadline ) {
+					$timed_out = true;
+				}
+				if ( $timed_out ) {
+					$left[ $target ] = $info;
+					continue;
+				}
 				$fp        = isset( $info['candidate_fp'] ) ? (string) $info['candidate_fp'] : '';
 				$id        = isset( $info['id'] ) ? (string) $info['id'] : '';
 				$candidate = '' !== $fp ? self::resolve_candidate( $fp, $external, $internal ) : '';
