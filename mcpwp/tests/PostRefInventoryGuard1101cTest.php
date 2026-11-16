@@ -132,7 +132,12 @@ final class PostRefInventoryGuard1101cTest extends TestCase {
 		'POST /pages'                                        => array( 'template' => 'a page template FILE name (_wp_page_template), not a post id' ),
 		'GET /media'                                         => array( 'page' => 'pagination (1-based page number)' ),
 		'GET /elementor/(?P<id>\\d+)'                         => array( 'element_id' => 'an Elementor element id inside the page named by {id}, not a post' ),
-		'POST /elementor/(?P<id>\\d+)'                        => array( 'repair_ids' => 'a boolean flag (rewrite non-conforming Elementor element ids)' ),
+		'POST /elementor/(?P<id>\\d+)'                        => array(
+			'repair_ids' => 'a boolean flag (rewrite non-conforming Elementor element ids)',
+			'template'   => 'a page template slug (_wp_page_template), not a post id',
+		),
+		'POST /elementor/page'                               => array( 'template' => 'a page template slug (_wp_page_template), not a post id' ),
+		'POST /elementor/build-page'                         => array( 'template' => 'a page template slug (_wp_page_template), not a post id' ),
 		'POST /elementor/(?P<id>\\d+)/edit-section'           => array( 'element_id' => 'an Elementor element id inside the page named by {id}, not a post' ),
 		'POST /elementor/(?P<id>\\d+)/remove-section'         => array( 'element_id' => 'an Elementor element id inside the page named by {id}, not a post' ),
 		'POST /elementor/(?P<id>\\d+)/replace-section'        => array( 'element_id' => 'an Elementor element id inside the page named by {id}, not a post' ),

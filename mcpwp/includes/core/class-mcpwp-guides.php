@@ -347,6 +347,15 @@ class Mcpwp_Guides {
 						. "- Color: `title_color`, `text_color`, `color` (varies by widget)",
 				),
 				array(
+					'heading' => 'Page templates',
+					'content' => "**Updates preserve the current template.** `wp_set_elementor` does not change `_wp_page_template` unless you pass an explicit `template` argument (or use `wp_update_page_template`). Unset or `default` stays as the theme default — match Elementor's editor.\n\n"
+						. "**When you need a different frame:**\n"
+						. "- `elementor_canvas` — content only, no theme header/footer\n"
+						. "- `elementor_header_footer` — full-width Elementor content with the theme header/footer\n"
+						. "- Or pass `template` on `wp_create_page` / `wp_build_page` at creation time\n\n"
+						. "Responses from Elementor save/create tools include `template: {before, after, requested}` so you can see whether the template changed.",
+				),
+				array(
 					'heading' => 'Relevant Tools',
 					'content' => "- `wp_get_elementor(id)` — Get Elementor data for a page\n"
 						. "- `wp_get_elementor_summary(id)` — Get a compact summary of the page structure\n"
@@ -1133,7 +1142,7 @@ class Mcpwp_Guides {
 						. "2. **Missing element IDs** — Every element needs a unique `id`. The plugin auto-generates but check the warnings in the response.\n"
 						. "3. **Invalid widget type** — Check the `warnings` array in the response. Use `wp_get_elementor_widgets()` to see valid types.\n"
 						. "4. **CSS cache** — Run `wp_regenerate_elementor_css()` after making changes.\n"
-						. "5. **Page template** — Elementor pages need the right template. Use `wp_update_page_template(id, template=\"elementor_header_footer\")`.",
+						. "5. **Page template** — `wp_set_elementor` keeps the existing template unless you pass `template`. For canvas/full-width framing, use `wp_update_page_template(id, template=\"elementor_canvas\")` or `elementor_header_footer`, or pass `template` on the save/create call.",
 				),
 				array(
 					'heading' => 'API Key Issues',

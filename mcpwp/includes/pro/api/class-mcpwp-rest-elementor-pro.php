@@ -510,6 +510,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'enum'        => array( 'draft', 'private', 'publish' ),
 				'description' => __( 'Post status for the built page.', 'mcpwp' ),
 			),
+			'template' => array(
+				'type'        => 'string',
+				'description' => __( 'Optional page template slug (default, elementor_header_footer, elementor_canvas, or a theme template). When omitted, the page stays on the theme default like Elementor\'s editor.', 'mcpwp' ),
+			),
 		);
 	}
 
@@ -3315,10 +3319,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$title    = $request->get_param( 'title' );
 		$sections = $request->get_param( 'sections' );
 		$status   = $request->get_param( 'status' ) ?: 'draft';
+		$template = $request->get_param( 'template' );
 
 		$builder = new Mcpwp_Page_Builder();
 		$builder->set_template_ref_gate( $this->template_ref_gate() );
-		$result = $builder->build( $title, $sections, $status );
+		$result = $builder->build( $title, $sections, $status, $template );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;

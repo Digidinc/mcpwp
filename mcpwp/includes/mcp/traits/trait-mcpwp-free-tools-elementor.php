@@ -408,6 +408,10 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 					'description' => 'Set true to convert a page that has existing non-Elementor content. Without it the write is refused rather than destroying that content (#788).',
 					'default'     => false,
 				),
+				'template'   => array(
+					'type'        => 'string',
+					'description' => 'Optional page template slug. When omitted, the page keeps its current template (unset or default). Use elementor_canvas or elementor_header_footer only when you intend to change framing.',
+				),
 			),
 			null,
 			array(

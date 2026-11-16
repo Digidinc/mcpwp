@@ -71,15 +71,26 @@ class Mcpwp_Page_Builder {
 	 * @param string $title    Page title.
 	 * @param array  $sections Array of section definitions.
 	 * @param string $status   Post status (default: draft).
+	 * @param string $template Optional page template slug (validated).
 	 * @return array|WP_Error Created page with Elementor data.
 	 */
-	public function build( $title, $sections, $status = 'draft' ) {
+	public function build( $title, $sections, $status = 'draft', $template = null ) {
 		if ( empty( $title ) ) {
 			return new WP_Error( 'missing_title', __( 'Page title is required.', 'mcpwp' ) );
 		}
 
 		if ( empty( $sections ) || ! is_array( $sections ) ) {
 			return new WP_Error( 'missing_sections', __( 'At least one section is required.', 'mcpwp' ) );
+		}
+
+		if ( null !== $template && '' !== $template ) {
+			$validated_template = Mcpwp_Page_Template::validate_requested( $template );
+			if ( is_wp_error( $validated_template ) ) {
+				return $validated_template;
+			}
+			$template = $validated_template;
+		} else {
+			$template = null;
 		}
 
 		// Detect layout mode.
@@ -152,7 +163,13 @@ class Mcpwp_Page_Builder {
 		// Initialize Elementor document meta so the editor recognizes the page.
 		update_post_meta( $page_id, '_elementor_edit_mode', 'builder' );
 		update_post_meta( $page_id, '_elementor_template_type', 'wp-page' );
-		update_post_meta( $page_id, '_wp_page_template', 'elementor_header_footer' );
+
+		$template_data = null === $template ? array() : array( 'template' => $template );
+		$template_report = Mcpwp_Page_Template::apply_on_create( $page_id, $template_data );
+		if ( is_wp_error( $template_report ) ) {
+			wp_delete_post( $page_id, true );
+			return $template_report;
+		}
 
 		if ( defined( 'ELEMENTOR_VERSION' ) ) {
 			update_post_meta( $page_id, '_elementor_version', ELEMENTOR_VERSION );
@@ -216,6 +233,7 @@ class Mcpwp_Page_Builder {
 			'meta_verified'   => $meta_verified,
 			'sections_saved'  => $final_count,
 			'render_verified' => isset( $save_result['render_verified'] ) ? (bool) $save_result['render_verified'] : true,
+			'template'        => isset( $save_result['template'] ) ? $save_result['template'] : $template_report,
 			'warnings'        => array_merge( $warnings, isset( $save_result['warnings'] ) ? (array) $save_result['warnings'] : array() ),
 			'debug'           => isset( $save_result['debug'] ) ? $save_result['debug'] : array(),
 		);

@@ -568,6 +568,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'description' => 'Page status: draft (default), publish, private',
 					'default'     => 'draft',
 				),
+				'template' => array(
+					'type'        => 'string',
+					'description' => 'Optional page template slug. Omit to leave the theme default; set elementor_header_footer or elementor_canvas for full-width Elementor framing.',
+				),
 			),
 			null,
 			array(

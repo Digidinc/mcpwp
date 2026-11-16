@@ -153,9 +153,9 @@ class Mcpwp_Pages {
 			$page_data['menu_order'] = absint( $data['menu_order'] );
 		}
 
-		// Page template
-		if ( ! empty( $data['template'] ) ) {
-			$page_data['page_template'] = sanitize_text_field( $data['template'] );
+		$template_payload_ok = Mcpwp_Page_Template::validate_create_payload( $data );
+		if ( is_wp_error( $template_payload_ok ) ) {
+			return $template_payload_ok;
 		}
 
 		// #1108: judged before the page exists, against the page about to be
@@ -197,9 +197,10 @@ class Mcpwp_Pages {
 			return $page_id;
 		}
 
-		// Set page template if provided
-		if ( ! empty( $data['template'] ) ) {
-			update_post_meta( $page_id, '_wp_page_template', sanitize_text_field( $data['template'] ) );
+		$template_report = Mcpwp_Page_Template::apply_on_create( $page_id, $data );
+		if ( is_wp_error( $template_report ) ) {
+			wp_delete_post( $page_id, true );
+			return $template_report;
 		}
 
 		if ( null !== $featured_resolution ) {
@@ -219,6 +220,7 @@ class Mcpwp_Pages {
 
 		$created = $this->get_page( $page_id );
 		if ( is_array( $created ) ) {
+			$created['template_change'] = $template_report;
 			if ( ! empty( $terms_applied ) ) {
 				$created['terms'] = $terms_applied;
 			}

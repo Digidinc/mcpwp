@@ -326,7 +326,7 @@ trait Mcpwp_Free_Tools_Content_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_create_page',
-			'Create a new WordPress page. Defaults to draft — confirm before publishing. For Elementor pages, create first then set layout via wp_set_elementor. To use a full-width Elementor layout, set template to "elementor_header_footer" (no header/footer) or "elementor_canvas" (completely blank).',
+			'Create a new WordPress page. Defaults to draft — confirm before publishing. For Elementor pages, create first then set layout via wp_set_elementor (existing theme templates are preserved on update). To change framing, pass template on create or use wp_update_page_template — elementor_canvas (content only) or elementor_header_footer (Elementor full-width with theme header/footer).',
 			array(
 				'title'      => array(
 					'type'        => 'string',

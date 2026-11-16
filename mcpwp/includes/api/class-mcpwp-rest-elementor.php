@@ -160,6 +160,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 							'type'        => 'boolean',
 							'default'     => false,
 						),
+						'template' => array(
+							'description' => __( 'Optional page template slug. When omitted, the page keeps its current template (unset/default included).', 'mcpwp' ),
+							'type'        => 'string',
+						),
 					),
 				),
 			)
@@ -419,6 +423,10 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 						'elementor_data' => array(
 							'description' => __( 'Initial Elementor data.', 'mcpwp' ),
 							'type'        => array( 'string', 'array' ),
+						),
+						'template'       => array(
+							'description' => __( 'Optional page template slug when creating the page.', 'mcpwp' ),
+							'type'        => 'string',
 						),
 					),
 				),

@@ -1661,6 +1661,13 @@ trait Mcpwp_Elementor_Writer_Trait {
 			}
 		}
 
+		if ( array_key_exists( 'template', $data ) ) {
+			$template_valid = Mcpwp_Page_Template::validate_requested( $data['template'] );
+			if ( is_wp_error( $template_valid ) ) {
+				return $template_valid;
+			}
+		}
+
 		// --- Dry-run mode: validate only, no DB writes ---
 		if ( $dry_run ) {
 			$dry_json   = $elementor_json; // work on a copy
@@ -1708,6 +1715,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 				$result['id_repair'] = $validation['id_repair'];
 			}
 
+			$result['template'] = Mcpwp_Page_Template::apply_on_existing( $page_id, $data, true );
+
 			return $result;
 		}
 
@@ -1734,16 +1743,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 		$sections_before   = is_array( $existing_decoded ) ? count( $existing_decoded ) : 0;
 		$widgets_before    = is_array( $existing_decoded ) ? $this->count_elementor_widgets( $existing_decoded ) : 0;
 
-		$save_debug    = array();
-		$elementor_ok  = class_exists( '\Elementor\Plugin' );
+		$save_debug   = array();
+		$elementor_ok = class_exists( '\Elementor\Plugin' );
 
 		// --- 1. Set ALL required Elementor meta keys ---
-
-		// Page template.
-		$current_template = get_post_meta( $page_id, '_wp_page_template', true );
-		if ( ! $current_template || 'default' === $current_template ) {
-			update_post_meta( $page_id, '_wp_page_template', 'elementor_header_footer' );
-		}
 
 		// Edit mode must be 'builder', and the result has to be recorded.
 		//
@@ -1809,6 +1812,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 		if ( isset( $validation['id_repair'] ) ) {
 			$save_debug['id_repair'] = $validation['id_repair'];
+		}
+
+		$page_template_report = Mcpwp_Page_Template::apply_on_existing( $page_id, $data, false );
+		if ( is_wp_error( $page_template_report ) ) {
+			return $page_template_report;
 		}
 
 		// Safety check: ensure validation did not corrupt or truncate the data.
@@ -2276,6 +2284,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		$result = $this->decorate_render_status( $result, $save_debug );
 
+		$result['template'] = $page_template_report;
+
 		return $result;
 	}
 
@@ -2308,6 +2318,18 @@ trait Mcpwp_Elementor_Writer_Trait {
 			return $page_id;
 		}
 
+		$template_payload_ok = Mcpwp_Page_Template::validate_create_payload( $data );
+		if ( is_wp_error( $template_payload_ok ) ) {
+			wp_delete_post( $page_id, true );
+			return $template_payload_ok;
+		}
+
+		$template_report = Mcpwp_Page_Template::apply_on_create( $page_id, $data );
+		if ( is_wp_error( $template_report ) ) {
+			wp_delete_post( $page_id, true );
+			return $template_report;
+		}
+
 		// Enable Elementor with all required meta keys (#88).
 		//
 		// Through the helper so a host that vetoes the meta write is visible
@@ -2315,7 +2337,6 @@ trait Mcpwp_Elementor_Writer_Trait {
 		// created is a page the caller will write content into next.
 		$builder_flag_debug = array();
 		$built_with_elementor = $this->mark_built_with_elementor( $page_id, $builder_flag_debug );
-		update_post_meta( $page_id, '_wp_page_template', 'elementor_header_footer' );
 		update_post_meta( $page_id, '_elementor_template_type', 'wp-page' );
 		if ( defined( 'ELEMENTOR_VERSION' ) ) {
 			update_post_meta( $page_id, '_elementor_version', ELEMENTOR_VERSION );
@@ -2350,6 +2371,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			// A created page that Elementor will not render is not a usable
 			// page, and the caller is about to write content into it.
 			'renders_via_elementor' => $built_with_elementor,
+			'template'              => $template_report,
 		);
 
 		if ( ! $built_with_elementor ) {
