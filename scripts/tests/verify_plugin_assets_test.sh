@@ -45,9 +45,38 @@ PHP
 for f in assets/icon-128x128.png assets/Logo.PNG includes/img/x.svg assets/y.webp assets/z.gif; do
 	: > "$src/mcpwp/$f"
 done
+cp "$ROOT_DIR/mcpwp/assets/mcpwp-mark-ochre.svg" "$src/mcpwp/assets/"
+cp "$ROOT_DIR/mcpwp/assets/mcpwp-mark-ochre-256.png" "$src/mcpwp/assets/"
 (cd "$src" && zip -qr "$WORK/full.zip" mcpwp)
 
 expect pass "all referenced assets shipped" bash "$VERIFY" "$WORK/full.zip"
+
+cp "$WORK/full.zip" "$WORK/mark-missing-svg.zip"
+zip -qd "$WORK/mark-missing-svg.zip" "mcpwp/assets/mcpwp-mark-ochre.svg"
+expect fail "required brand mark svg missing" bash "$VERIFY" "$WORK/mark-missing-svg.zip"
+
+cp "$WORK/full.zip" "$WORK/mark-missing-png.zip"
+zip -qd "$WORK/mark-missing-png.zip" "mcpwp/assets/mcpwp-mark-ochre-256.png"
+expect fail "required brand mark png missing" bash "$VERIFY" "$WORK/mark-missing-png.zip"
+
+patch_mark_in_zip() {
+	local zip_out="$1" mark_rel="$2" payload="$3"
+	local stage="$WORK/patch-$$"
+	rm -rf "$stage"
+	mkdir -p "$stage/mcpwp/$(dirname "$mark_rel")"
+	cp "$WORK/full.zip" "$stage/pkg.zip"
+	printf '%s' "$payload" > "$stage/mcpwp/$mark_rel"
+	(
+		cd "$stage"
+		zip -q pkg.zip "mcpwp/$mark_rel"
+	)
+	mv "$stage/pkg.zip" "$zip_out"
+	rm -rf "$stage"
+}
+patch_mark_in_zip "$WORK/mark-bad-svg.zip" "assets/mcpwp-mark-ochre.svg" "not-the-approved-svg"
+expect fail "required brand mark svg wrong sha256" bash "$VERIFY" "$WORK/mark-bad-svg.zip"
+patch_mark_in_zip "$WORK/mark-bad-png.zip" "assets/mcpwp-mark-ochre-256.png" "not-the-approved-png"
+expect fail "required brand mark png wrong sha256" bash "$VERIFY" "$WORK/mark-bad-png.zip"
 
 for f in assets/icon-128x128.png assets/Logo.PNG includes/img/x.svg assets/y.webp assets/z.gif; do
 	cp "$WORK/full.zip" "$WORK/missing.zip"
