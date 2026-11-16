@@ -41,7 +41,7 @@ final class ActionLogAttemptTest extends TestCase {
 		return $GLOBALS['mcpwp_test_wpdb_rows']['wp_mcpwp_action_log'] ?? array();
 	}
 
-	private function call( string $name, array $arguments, array $scopes = array( 'admin' ), array $meta = array() ): array {
+	private function call( string $name, array $arguments, array $scopes = array( 'read', 'write', 'admin' ), array $meta = array() ): array {
 		$controller = new Mcpwp_REST_MCP();
 		$caps = new ReflectionProperty( Mcpwp_REST_MCP::class, 'active_capabilities' );
 		$caps->setAccessible( true );
@@ -122,7 +122,7 @@ final class ActionLogAttemptTest extends TestCase {
 	/** @dataProvider refusal_provider */
 	public function test_refusals_are_logged_without_snapshots( string $mode ): void {
 		$args = array( 'id' => 41, 'name' => 'Changed' );
-		$scopes = array( 'admin' );
+		$scopes = array( 'read', 'write', 'admin' );
 		if ( 'missing' === $mode ) { $args = array(); }
 		if ( 'read' === $mode ) { $scopes = array( 'read' ); }
 		if ( 'disabled' === $mode ) { update_option( 'mcpwp_disabled_tool_categories', array( 'woocommerce' ) ); }
@@ -185,7 +185,7 @@ final class ActionLogAttemptTest extends TestCase {
 
 	public function test_a_scope_refusal_precedes_an_idempotent_replay(): void {
 		$params = array( 'name' => 'wp_create_page', 'arguments' => array( 'title' => 'Test' ), '_meta' => array( 'request_id' => 'scope-before-replay' ) );
-		list( $first, $controller, $request ) = $this->raw_call( $params, array( 'admin' ) );
+		list( $first, $controller, $request ) = $this->raw_call( $params, array( 'read', 'write', 'admin' ) );
 		$pages = count( $GLOBALS['_mcpwp_test_posts'] ?? array() );
 		// The same principal, now holding read scope only (as after a scope change).
 		$controller = new Mcpwp_REST_MCP();
@@ -208,7 +208,7 @@ final class ActionLogAttemptTest extends TestCase {
 	public function test_a_replay_gets_a_receipt_without_a_second_mutation(): void {
 		// Same principal must be reused for the request_id cache.
 		$controller = new Mcpwp_REST_MCP();
-		$key = $controller->create_scoped_api_key( 'replay', array( 'admin' ) );
+		$key = $controller->create_scoped_api_key( 'replay', array( 'read', 'write', 'admin' ) );
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => $key['key'] ), array(
 			'jsonrpc' => '2.0', 'id' => 1, 'method' => 'tools/call', 'params' => array( 'name' => 'wp_create_page', 'arguments' => array( 'title' => 'Test' ), '_meta' => array( 'request_id' => 'audit-replay' ) ),
 		) );
@@ -305,7 +305,7 @@ final class ActionLogAttemptTest extends TestCase {
 
 	public function test_invalid_after_valid_does_not_inherit_an_audit_principal(): void {
 		$controller = new Mcpwp_REST_MCP();
-		$key = $controller->create_scoped_api_key( 'verified', array( 'admin' ) );
+		$key = $controller->create_scoped_api_key( 'verified', array( 'read', 'write', 'admin' ) );
 		$valid = new WP_REST_Request( 'GET', '/mcpwp/v1/site-info', array(), array( 'X-API-Key' => $key['key'] ) );
 		$this->assertTrue( $controller->verify_api_key( $valid ) );
 		$this->assertSame( $key['id'], $controller->get_audit_key_id() );

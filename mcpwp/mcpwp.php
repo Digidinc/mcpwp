@@ -232,6 +232,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-state.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-key-store.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-key-store-health.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-key-scope-health.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-key-hygiene.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-proxy-trust.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/class-mcpwp-oauth-transport.php';
@@ -905,6 +906,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 
 	// An unreadable API key store refuses every key; say so to an admin (#1096).
 	Mcpwp_Key_Store_Health::init();
+
+	// Stored admin-without-write scopes are demoted at read time; list labels (#1210).
+	Mcpwp_Key_Scope_Health::init();
 
 	// Keys whose secret matched a stored value: finish the one-time sweep,
 	// and tell an admin which keys were revoked.

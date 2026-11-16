@@ -579,7 +579,7 @@ final class McpNextStepHintsTest extends TestCase {
 		}
 
 		$controller = new Mcpwp_REST_MCP();
-		$key        = $controller->create_scoped_api_key( 'hint replay test', array( 'admin' ) );
+		$key        = $controller->create_scoped_api_key( 'hint replay test', array( 'read', 'write', 'admin' ) );
 
 		$make_request = function () use ( $key ) {
 			return new WP_REST_Request(

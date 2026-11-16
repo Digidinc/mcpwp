@@ -502,23 +502,29 @@ if ( is_array( $new_scoped_key ?? null ) && ! empty( $new_scoped_key['key'] ) ) 
 				<div style="margin-bottom:12px;">
 					<strong><?php esc_html_e( 'Permissions', 'mcpwp' ); ?></strong><br />
 					<p class="description" style="margin-bottom:6px;">
-						<?php esc_html_e( 'Uncheck Write to create a read-only key (safe for reporting/inspection bots).', 'mcpwp' ); ?>
+						<?php esc_html_e( 'Admin ops requires Write. Uncheck Write (Admin ops clears too) for a read-only key, or use the Read-only preset — safe for reporting/inspection bots.', 'mcpwp' ); ?>
 					</p>
-					<div style="display:flex;flex-wrap:wrap;gap:8px 16px;max-width:100%;">
+					<div style="display:flex;flex-wrap:wrap;gap:8px 16px;max-width:100%;align-items:center;">
 						<label style="display:inline-block;">
 							<input type="checkbox" name="mcpwp_scoped_key_scopes[]" value="read" checked="checked" disabled="disabled" />
 							<input type="hidden" name="mcpwp_scoped_key_scopes[]" value="read" />
 							<?php esc_html_e( 'Read', 'mcpwp' ); ?>
 						</label>
 						<label style="display:inline-block;">
-							<input type="checkbox" name="mcpwp_scoped_key_scopes[]" value="write" checked="checked" />
+							<input type="checkbox" id="mcpwp_scoped_key_scope_write" name="mcpwp_scoped_key_scopes[]" value="write" checked="checked" />
 							<?php esc_html_e( 'Write', 'mcpwp' ); ?>
 						</label>
 						<label style="display:inline-block;">
-							<input type="checkbox" name="mcpwp_scoped_key_scopes[]" value="admin" checked="checked" />
+							<input type="checkbox" id="mcpwp_scoped_key_scope_admin" name="mcpwp_scoped_key_scopes[]" value="admin" checked="checked" />
 							<?php esc_html_e( 'Admin ops', 'mcpwp' ); ?>
 						</label>
+						<button type="button" id="mcpwp-readonly-key-preset" class="button button-secondary">
+							<?php esc_html_e( 'Read-only', 'mcpwp' ); ?>
+						</button>
 					</div>
+					<p class="description" style="margin-top:6px;">
+						<?php esc_html_e( 'Without JavaScript, use “Create read-only key” below — it ignores Write/Admin ops checkboxes.', 'mcpwp' ); ?>
+					</p>
 				</div>
 				<div id="mcpwp-role-preview" style="margin-bottom:12px;padding:8px 12px;background:#f0f0f1;border-radius:4px;display:none;">
 					<strong><?php esc_html_e( 'Access:', 'mcpwp' ); ?></strong>
@@ -526,6 +532,9 @@ if ( is_array( $new_scoped_key ?? null ) && ! empty( $new_scoped_key['key'] ) ) 
 				</div>
 				<button type="submit" name="mcpwp_create_scoped_key" class="button button-primary">
 					<?php esc_html_e( 'Create API Key', 'mcpwp' ); ?>
+				</button>
+				<button type="submit" name="mcpwp_create_readonly_scoped_key" class="button button-secondary" value="1">
+					<?php esc_html_e( 'Create read-only key', 'mcpwp' ); ?>
 				</button>
 			</form>
 

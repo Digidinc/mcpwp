@@ -42,7 +42,7 @@ final class McpGetMethodNotAllowed1092Test extends TestCase {
 		$this->controller->register_routes();
 		// Discovery challenge on 401 (same filter production registers in init()).
 		add_filter( 'rest_post_dispatch', array( 'Mcpwp_OAuth_Well_Known', 'add_www_authenticate_header' ), 10, 3 );
-		$this->key = $this->controller->create_scoped_api_key( 'get-405', array( 'admin' ) );
+		$this->key = $this->controller->create_scoped_api_key( 'get-405', array( 'read', 'write', 'admin' ) );
 
 		Mcpwp_Rate_Limiter::get_instance()->update_settings(
 			array(

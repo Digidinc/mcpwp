@@ -29,7 +29,7 @@ final class CustomCodeReviewRoundTwoTest extends TestCase {
 		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
 		$record = new ReflectionProperty( Mcpwp_REST_Elementor_Pro::class, 'current_api_key_record' );
 		$record->setAccessible( true );
-		$record->setValue( $controller, array( 'scopes' => array( 'admin' ), 'role' => 'admin' ) );
+		$record->setValue( $controller, array( 'scopes' => array( 'read', 'write', 'admin' ), 'role' => 'admin' ) );
 		return $controller;
 	}
 

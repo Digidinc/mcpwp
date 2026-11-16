@@ -149,7 +149,7 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 		// can_manage_api_keys() reads the CONTROLLER's own current_api_key_record,
 		// so authenticate an admin-scoped key on this instance first (same
 		// technique as ApiKeyAdminRouteCapabilityTest).
-		$admin_key = $controller->create_scoped_api_key( 'owner', array( 'admin' ), 'admin' );
+		$admin_key = $controller->create_scoped_api_key( 'owner', array( 'read', 'write', 'admin' ), 'admin' );
 		$auth_request = new WP_REST_Request( 'GET', '/mcpwp/v1/api-keys', array(), array( 'X-API-Key' => $admin_key['key'] ) );
 		$this->assertTrue( $controller->verify_api_key( $auth_request ), 'premise: the admin key must authenticate' );
 
@@ -202,7 +202,7 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 
 	public function test_rest_create_api_key_refuses_an_unrecognised_role(): void {
 		$controller   = new Mcpwp_REST_Site_Updates();
-		$admin_key    = $controller->create_scoped_api_key( 'owner', array( 'admin' ), 'admin' );
+		$admin_key    = $controller->create_scoped_api_key( 'owner', array( 'read', 'write', 'admin' ), 'admin' );
 		$auth_request = new WP_REST_Request( 'GET', '/mcpwp/v1/api-keys', array(), array( 'X-API-Key' => $admin_key['key'] ) );
 		$this->assertTrue( $controller->verify_api_key( $auth_request ) );
 
@@ -279,7 +279,7 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 
 	public function test_rest_create_api_key_defaults_to_custom_when_only_categories_are_posted(): void {
 		$controller   = new Mcpwp_REST_Site_Updates();
-		$admin_key    = $controller->create_scoped_api_key( 'owner', array( 'admin' ), 'admin' );
+		$admin_key    = $controller->create_scoped_api_key( 'owner', array( 'read', 'write', 'admin' ), 'admin' );
 		$auth_request = new WP_REST_Request( 'GET', '/mcpwp/v1/api-keys', array(), array( 'X-API-Key' => $admin_key['key'] ) );
 		$this->assertTrue( $controller->verify_api_key( $auth_request ) );
 
@@ -303,7 +303,7 @@ final class Regression1041EmptyCategoryKeyTest extends TestCase {
 
 	public function test_rest_create_api_key_refuses_categories_paired_with_a_non_custom_role(): void {
 		$controller   = new Mcpwp_REST_Site_Updates();
-		$admin_key    = $controller->create_scoped_api_key( 'owner', array( 'admin' ), 'admin' );
+		$admin_key    = $controller->create_scoped_api_key( 'owner', array( 'read', 'write', 'admin' ), 'admin' );
 		$auth_request = new WP_REST_Request( 'GET', '/mcpwp/v1/api-keys', array(), array( 'X-API-Key' => $admin_key['key'] ) );
 		$this->assertTrue( $controller->verify_api_key( $auth_request ) );
 

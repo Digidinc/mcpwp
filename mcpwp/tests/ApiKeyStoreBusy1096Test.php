@@ -131,7 +131,7 @@ final class ApiKeyStoreBusy1096Test extends TestCase {
 
 	private function rest_admin(): array {
 		$controller = new Mcpwp_REST_Site_Updates();
-		$admin      = $controller->create_scoped_api_key( 'owner', array( 'admin' ) );
+		$admin      = $controller->create_scoped_api_key( 'owner', array( 'read', 'write', 'admin' ) );
 		$other      = $controller->create_scoped_api_key( 'victim', array( 'read' ) );
 		return array( new Mcpwp_REST_Site_Updates(), $admin['key'], $other['id'] );
 	}

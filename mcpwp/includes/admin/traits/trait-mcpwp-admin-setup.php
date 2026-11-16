@@ -45,12 +45,16 @@ trait Mcpwp_Admin_Setup_Trait {
 		}
 
 		$new_scoped_key = null;
-		if ( isset( $_POST['mcpwp_create_scoped_key'] ) ) {
+		// #1210: mcpwp_create_readonly_scoped_key is the JS-free Read-only
+		// one-click — same form, scopes forced to read only (ignores checkboxes).
+		if ( isset( $_POST['mcpwp_create_scoped_key'] ) || isset( $_POST['mcpwp_create_readonly_scoped_key'] ) ) {
 			check_admin_referer( 'mcpwp_manage_scoped_keys', 'mcpwp_scoped_keys_nonce' );
 
 			$label  = isset( $_POST['mcpwp_scoped_key_label'] ) ? sanitize_text_field( wp_unslash( $_POST['mcpwp_scoped_key_label'] ) ) : '';
 			$scopes = isset( $_POST['mcpwp_scoped_key_scopes'] ) ? array_map( 'sanitize_key', (array) wp_unslash( $_POST['mcpwp_scoped_key_scopes'] ) ) : array();
-			if ( empty( $scopes ) ) {
+			if ( isset( $_POST['mcpwp_create_readonly_scoped_key'] ) ) {
+				$scopes = array( 'read' );
+			} elseif ( empty( $scopes ) ) {
 				$scopes = array( 'read' ); // Least privilege — unchecking all scopes = read-only.
 			}
 

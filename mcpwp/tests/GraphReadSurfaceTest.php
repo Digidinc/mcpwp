@@ -1068,13 +1068,13 @@ final class GraphReadSurfaceTest extends TestCase
     {
         update_option(Mcpwp_Graph_Builder::BACKFILL_STATUS_OPTION, 'running', false);
         update_option(Mcpwp_Graph_Builder::BACKFILL_CURSOR_OPTION, 1234, false);
-        $resp = $this->controller(array('admin'))->rebuild(new WP_REST_Request('POST', '/mcpwp/v1/graph/rebuild'));
+        $resp = $this->controller(array('read', 'write', 'admin'))->rebuild(new WP_REST_Request('POST', '/mcpwp/v1/graph/rebuild'));
         $this->assertSame(202, $resp->get_status());
         $this->assertTrue($resp->get_data()['already_running']);
         $this->assertSame(1234, (int) get_option(Mcpwp_Graph_Builder::BACKFILL_CURSOR_OPTION));
 
         update_option(Mcpwp_Graph_Builder::BACKFILL_STATUS_OPTION, 'done', false);
-        $resp = $this->controller(array('admin'))->rebuild(new WP_REST_Request('POST', '/mcpwp/v1/graph/rebuild'));
+        $resp = $this->controller(array('read', 'write', 'admin'))->rebuild(new WP_REST_Request('POST', '/mcpwp/v1/graph/rebuild'));
         $this->assertSame(200, $resp->get_status());
         $this->assertSame(0, (int) get_option(Mcpwp_Graph_Builder::BACKFILL_CURSOR_OPTION));
     }

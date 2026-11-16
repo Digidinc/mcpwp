@@ -147,7 +147,7 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 
 	public function test_batch_sub_request_is_blocked_on_disabled_category_route(): void {
 		$auth    = $this->harness();
-		$created = $auth->create_scoped_api_key( 'batch gate key', array( 'admin' ) );
+		$created = $auth->create_scoped_api_key( 'batch gate key', array( 'read', 'write', 'admin' ) );
 
 		update_option( 'mcpwp_disabled_tool_categories', array( 'media' ) );
 
@@ -162,7 +162,7 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 
 	public function test_batch_sub_request_allowed_on_route_of_a_different_category(): void {
 		$auth    = $this->harness();
-		$created = $auth->create_scoped_api_key( 'batch gate key', array( 'admin' ) );
+		$created = $auth->create_scoped_api_key( 'batch gate key', array( 'read', 'write', 'admin' ) );
 
 		update_option( 'mcpwp_disabled_tool_categories', array( 'seo' ) );
 
@@ -185,7 +185,7 @@ final class AuthPlaneCategoryGateTest extends TestCase {
 
 	public function test_plain_api_key_path_is_still_blocked_on_disabled_category(): void {
 		$auth    = $this->harness();
-		$created = $auth->create_scoped_api_key( 'plain key', array( 'admin' ) );
+		$created = $auth->create_scoped_api_key( 'plain key', array( 'read', 'write', 'admin' ) );
 
 		update_option( 'mcpwp_disabled_tool_categories', array( 'media' ) );
 

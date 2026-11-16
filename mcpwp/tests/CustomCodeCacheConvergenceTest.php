@@ -25,7 +25,7 @@ final class CustomCodeCacheConvergenceTest extends TestCase {
 		$controller = new Mcpwp_REST_Elementor_Pro( new stdClass() );
 		$property = new ReflectionProperty( Mcpwp_REST_Elementor_Pro::class, 'current_api_key_record' );
 		$property->setAccessible( true );
-		$property->setValue( $controller, array( 'role' => 'admin', 'scopes' => array( 'admin' ) ) );
+		$property->setValue( $controller, array( 'role' => 'admin', 'scopes' => array( 'read', 'write', 'admin' ) ) );
 		return $controller->create_custom_code( new WP_REST_Request( 'POST', '/', array(
 			'title' => 'Convergent', 'code' => '<div>Convergent</div>', 'status' => 'publish',
 			'conditions' => array( array( 'type' => 'include', 'name' => 'general' ) ),

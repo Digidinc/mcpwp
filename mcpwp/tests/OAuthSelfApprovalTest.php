@@ -131,7 +131,7 @@ final class OAuthSelfApprovalTest extends TestCase {
 		$this->seed_approval( 'appr_1', 'oauth-user:7' );
 
 		$result = $this->check_self_approval(
-			array( 'id' => 'oauth-user:7', 'scopes' => array( 'admin' ) ),
+			array( 'id' => 'oauth-user:7', 'scopes' => array( 'read', 'write', 'admin' ) ),
 			'appr_1'
 		);
 
@@ -143,7 +143,7 @@ final class OAuthSelfApprovalTest extends TestCase {
 		$this->seed_approval( 'appr_1', 'oauth-user:7' );
 
 		$result = $this->check_self_approval(
-			array( 'id' => 'oauth-user:9', 'scopes' => array( 'admin' ) ),
+			array( 'id' => 'oauth-user:9', 'scopes' => array( 'read', 'write', 'admin' ) ),
 			'appr_1'
 		);
 
@@ -157,7 +157,7 @@ final class OAuthSelfApprovalTest extends TestCase {
 		$this->seed_approval( 'appr_1', 'oauth:deadbeefdeadbeef' );
 
 		$result = $this->check_self_approval(
-			array( 'id' => 'oauth:deadbeefdeadbeef', 'scopes' => array( 'admin' ) ),
+			array( 'id' => 'oauth:deadbeefdeadbeef', 'scopes' => array( 'read', 'write', 'admin' ) ),
 			'appr_1'
 		);
 
@@ -212,7 +212,7 @@ final class OAuthSelfApprovalTest extends TestCase {
 		// floor keeps forcing it through approval (it must NOT inherit the
 		// admin-API-key bypass just because it now carries a record).
 		$this->assertTrue(
-			$this->requester_is_oauth( array( 'id' => 'oauth-user:7', 'type' => 'oauth', 'scopes' => array( 'admin' ) ) )
+			$this->requester_is_oauth( array( 'id' => 'oauth-user:7', 'type' => 'oauth', 'scopes' => array( 'read', 'write', 'admin' ) ) )
 		);
 	}
 
@@ -220,7 +220,7 @@ final class OAuthSelfApprovalTest extends TestCase {
 		// A provisioned admin API key is NOT OAuth, so it retains its ability to
 		// bypass the approval floor.
 		$this->assertFalse(
-			$this->requester_is_oauth( array( 'id' => 'key-123', 'scopes' => array( 'admin' ) ) )
+			$this->requester_is_oauth( array( 'id' => 'key-123', 'scopes' => array( 'read', 'write', 'admin' ) ) )
 		);
 	}
 
@@ -228,7 +228,7 @@ final class OAuthSelfApprovalTest extends TestCase {
 		$controller = new Mcpwp_REST_Approvals();
 		$prop       = new ReflectionProperty( Mcpwp_REST_Approvals::class, 'current_api_key_record' );
 		$prop->setAccessible( true );
-		$prop->setValue( $controller, array( 'id' => 'oauth-user:7', 'scopes' => array( 'admin' ) ) );
+		$prop->setValue( $controller, array( 'id' => 'oauth-user:7', 'scopes' => array( 'read', 'write', 'admin' ) ) );
 
 		$method = new ReflectionMethod( Mcpwp_REST_Approvals::class, 'guard_stable_identity_for_approvals' );
 		$method->setAccessible( true );
