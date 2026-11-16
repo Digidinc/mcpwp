@@ -45,7 +45,8 @@ final class ElementorTemplateCreateStatusTest extends TestCase {
 	}
 
 	private function admin_key( Mcpwp_REST_Elementor_Pro $controller ): string {
-		return $controller->create_scoped_api_key( 'admin key', array( 'admin' ), 'admin' )['key'];
+		// #1210: admin scope requires write; bare admin is refused at create.
+		return $controller->create_scoped_api_key( 'admin key', array( 'read', 'write', 'admin' ), 'admin' )['key'];
 	}
 
 	/**

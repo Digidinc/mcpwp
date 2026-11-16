@@ -805,7 +805,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$GLOBALS['mcpwp_test_current_user'] = 2;
 		Mcpwp_REST_MCP::reset_verdict_memo();
 		$this->dispatch_template_args( 'REST', array( 'dry_run' => true ) );
-		$key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'preview replay', array( 'admin' ) );
+		$key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'preview replay', array( 'read', 'write', 'admin' ) );
 		$call = function ( array $query, int $id ) use ( $key ) {
 			$controller = new Mcpwp_REST_MCP();
 			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'Content-Type' => 'application/json', 'X-API-Key' => $key['key'] ), array(
@@ -1155,7 +1155,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$GLOBALS['mcpwp_test_current_user'] = 2;
 		Mcpwp_REST_MCP::reset_verdict_memo();
 		$this->dispatch_template_args( 'REST', array( 'dry_run' => true ) );
-		$key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'wire repeat replay', array( 'admin' ) );
+		$key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'wire repeat replay', array( 'read', 'write', 'admin' ) );
 		$call = function ( bool $duplicate, int $id ) use ( $key ) {
 			$request = new WP_REST_Request( 'POST', '/mcpwp/v1/mcp', array(), array( 'Content-Type' => 'application/json', 'X-API-Key' => $key['key'] ) );
 			$arguments = '{"title":"Pinned wire","type":"single",' . ( $duplicate ? '"dry_run":true,' : '' ) . '"dry_run":false}';

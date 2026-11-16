@@ -37,7 +37,7 @@ final class ToolOperationWeightTest extends TestCase {
 		$GLOBALS['mcpwp_test_dispatched_routes'] = array();
 		Mcpwp_REST_MCP::reset_verdict_memo();
 
-		$this->key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'weights', array( 'admin' ) );
+		$this->key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'weights', array( 'read', 'write', 'admin' ) );
 
 		Mcpwp_Rate_Limiter::get_instance()->update_settings(
 			array(

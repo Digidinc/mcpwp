@@ -353,7 +353,7 @@ final class StagingSelfApprovalTest extends TestCase {
 
 	public function test_auth_only_path_populates_current_key_record(): void {
 		$controller = new Mcpwp_REST_Approvals_Testable();
-		$created    = $controller->create_scoped_api_key( 'admin key', array( 'admin' ) );
+		$created    = $controller->create_scoped_api_key( 'admin key', array( 'read', 'write', 'admin' ) );
 
 		$request = new WP_REST_Request(
 			'POST',
@@ -381,7 +381,7 @@ final class StagingSelfApprovalTest extends TestCase {
 
 	public function test_self_approval_blocked_through_auth_only_path(): void {
 		$controller = new Mcpwp_REST_Approvals_Testable();
-		$created    = $controller->create_scoped_api_key( 'admin key', array( 'admin' ) );
+		$created    = $controller->create_scoped_api_key( 'admin key', array( 'read', 'write', 'admin' ) );
 		$apr_id     = $this->insert_staging_approval( $created['id'] );
 
 		$request = new WP_REST_Request(

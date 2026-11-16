@@ -56,7 +56,7 @@ final class ApiKeyStoreUnreadable1096Test extends TestCase {
 		$legacy  = 'mcpwp_' . str_repeat( 'a', 48 );
 		$revoked = 'spai_' . str_repeat( 'b', 48 );
 		update_option( 'mcpwp_api_key', wp_hash_password( $legacy ) );
-		update_option( 'spai_api_keys', array( array( 'id' => 's1', 'label' => 'old', 'hash' => wp_hash_password( $revoked ), 'scopes' => array( 'admin' ), 'revoked_at' => null ) ) );
+		update_option( 'spai_api_keys', array( array( 'id' => 's1', 'label' => 'old', 'hash' => wp_hash_password( $revoked ), 'scopes' => array( 'read', 'write', 'admin' ), 'revoked_at' => null ) ) );
 		update_option( 'mcpwp_api_keys', self::CORRUPT );
 		return array( 'legacy' => $legacy, 'revoked' => $revoked );
 	}
@@ -144,7 +144,7 @@ final class ApiKeyStoreUnreadable1096Test extends TestCase {
 	public function test_rest_revoke_on_an_unreadable_store_is_a_500_with_the_recovery_text_and_no_retry_after(): void {
 		$GLOBALS['mcpwp_test_current_user'] = 2;
 		$controller = new Mcpwp_REST_Site_Updates();
-		$admin      = $controller->create_scoped_api_key( 'owner', array( 'admin' ) );
+		$admin      = $controller->create_scoped_api_key( 'owner', array( 'read', 'write', 'admin' ) );
 		$request    = new WP_REST_Request( 'DELETE', '/mcpwp/v1/api-keys/x', array( 'id' => 'x' ) );
 		$request->set_header( 'X-API-Key', $admin['key'] );
 		$this->assertTrue( ( new Mcpwp_REST_Site_Updates() )->verify_api_key( $request ) );
@@ -286,7 +286,7 @@ final class ApiKeyStoreUnreadable1096Test extends TestCase {
 		$revoked = 'spai_' . str_repeat( 'r', 48 );
 		$legacy  = 'mcpwp_' . str_repeat( 'g', 48 );
 		$records = array(
-			array( 'id' => 's0', 'label' => 'live', 'hash' => wp_hash_password( $live ), 'scopes' => array( 'admin' ), 'role' => 'admin', 'created_at' => '2026-01-01 00:00:00', 'revoked_at' => null ),
+			array( 'id' => 's0', 'label' => 'live', 'hash' => wp_hash_password( $live ), 'scopes' => array( 'read', 'write', 'admin' ), 'role' => 'admin', 'created_at' => '2026-01-01 00:00:00', 'revoked_at' => null ),
 			array( 'id' => 's1', 'label' => 'revoked', 'hash' => wp_hash_password( $revoked ), 'scopes' => array( 'read' ), 'role' => 'admin', 'created_at' => '2026-01-01 00:00:00', 'revoked_at' => '2026-02-02 00:00:00' ),
 			array( 'id' => 's2', 'label' => 'other', 'hash' => wp_hash_password( 'x' ), 'scopes' => array( 'read' ), 'role' => 'admin', 'created_at' => '2026-01-01 00:00:00', 'revoked_at' => null ),
 		);
@@ -405,10 +405,10 @@ final class ApiKeyStoreUnreadable1096Test extends TestCase {
 		// Revoking everything leaves revoked RECORDS, not an empty list.
 		$auth    = new Mcpwp_Unreadable_Test_Auth();
 		$revoked = 'spai_' . str_repeat( 'z', 48 );
-		$a       = $auth->create_scoped_api_key( 'only', array( 'admin' ), 'admin' );
+		$a       = $auth->create_scoped_api_key( 'only', array( 'read', 'write', 'admin' ), 'admin' );
 		$auth->revoke_scoped_api_key( $a['id'] );
 		$records = get_option( 'mcpwp_api_keys' );
-		update_option( 'spai_api_keys', array( array( 'id' => 'sp', 'label' => 'copy', 'hash' => $records[0]['hash'], 'scopes' => array( 'admin' ), 'revoked_at' => null ) ) );
+		update_option( 'spai_api_keys', array( array( 'id' => 'sp', 'label' => 'copy', 'hash' => $records[0]['hash'], 'scopes' => array( 'read', 'write', 'admin' ), 'revoked_at' => null ) ) );
 
 		$this->assertFalse( Mcpwp_Key_State::store_is_unreadable() );
 		$this->assertInstanceOf( WP_Error::class, $auth->verify_api_key( $this->request( $a['key'] ) ), 'The revoked key stays refused, through the spai_ copy too.' );

@@ -42,7 +42,7 @@ final class WooCommerceActionLogTest extends TestCase {
 		$capabilities = new ReflectionProperty( Mcpwp_REST_MCP::class, 'active_capabilities' );
 		$capabilities->setAccessible( true );
 		$capabilities->setValue( $controller, array( 'woocommerce' => true ) );
-		$key        = $controller->create_scoped_api_key( 'audit test', array( 'admin' ) );
+		$key        = $controller->create_scoped_api_key( 'audit test', array( 'read', 'write', 'admin' ) );
 		$request    = new WP_REST_Request(
 			'POST', '/mcpwp/v1/mcp', array(), array( 'X-API-Key' => $key['key'] ),
 			array(

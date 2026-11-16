@@ -46,7 +46,7 @@ final class RateLimitDiagnosticsTest extends TestCase {
 		$GLOBALS['mcpwp_test_filters']      = array();
 		Mcpwp_REST_MCP::reset_verdict_memo();
 
-		$created      = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'bulk job', array( 'admin' ) );
+		$created      = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'bulk job', array( 'read', 'write', 'admin' ) );
 		$this->key    = $created['key'];
 		$this->key_id = $created['id'];
 
@@ -361,7 +361,7 @@ final class RateLimitDiagnosticsTest extends TestCase {
 			)
 		);
 		$controller = new Mcpwp_REST_MCP();
-		$token      = $controller->issue_oauth_access_token( array( 'admin' ), 3600 )['access_token'];
+		$token      = $controller->issue_oauth_access_token( array( 'read', 'write', 'admin' ), 3600 )['access_token'];
 		$bucket     = 'oauth:' . substr( hash( 'sha256', $token ), 0, 16 );
 		$this->exhaust( $bucket );
 
@@ -473,7 +473,7 @@ final class RateLimitDiagnosticsTest extends TestCase {
 	}
 
 	public function test_a_key_throttled_below_the_diagnostic_allowance_keeps_its_own_ceiling(): void {
-		$tight = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'tight', array( 'admin' ) );
+		$tight = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'tight', array( 'read', 'write', 'admin' ) );
 		$keys  = get_option( 'mcpwp_api_keys', array() );
 		foreach ( $keys as &$record ) {
 			if ( $record['id'] === $tight['id'] ) {

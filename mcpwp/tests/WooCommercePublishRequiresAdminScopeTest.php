@@ -59,7 +59,7 @@ final class WooCommercePublishRequiresAdminScopeTest extends TestCase {
 	}
 
 	private function admin_key( $controller ): string {
-		return $controller->create_scoped_api_key( 'admin key', array( 'admin' ), 'admin' )['key'];
+		return $controller->create_scoped_api_key( 'admin key', array( 'read', 'write', 'admin' ), 'admin' )['key'];
 	}
 
 	public function test_write_key_cannot_create_a_published_product_explicitly(): void {

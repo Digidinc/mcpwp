@@ -45,7 +45,7 @@ final class DestructiveGateTest extends TestCase {
 		$prop->setAccessible( true );
 		$prop->setValue( null );
 
-		$this->key = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'agent', array( 'admin' ) );
+		$this->key = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'agent', array( 'read', 'write', 'admin' ) );
 	}
 
 	protected function tearDown(): void {
@@ -192,7 +192,7 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertArrayHasKey( 12, $GLOBALS['_mcpwp_test_posts'] );
 
 		// Revocation is the incident-response lever and is not gated.
-		$victim  = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'victim', array( 'admin' ) );
+		$victim  = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'victim', array( 'read', 'write', 'admin' ) );
 		$request = new WP_REST_Request( 'DELETE', '/mcpwp/v1/api-keys/' . $victim['id'], array( 'id' => $victim['id'] ) );
 		$this->assertSame( 200, $this->authed( new Mcpwp_REST_Site_Updates(), $request )->revoke_api_key( $request )->get_status() );
 	}
@@ -215,7 +215,7 @@ final class DestructiveGateTest extends TestCase {
 	// ---------------------------------------------------------------
 
 	public function test_an_api_principal_cannot_mint_an_exempt_key(): void {
-		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/api-keys', array( 'label' => 'escape', 'scopes' => array( 'admin' ), 'role' => 'admin', 'allow_destructive' => true ) );
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/api-keys', array( 'label' => 'escape', 'scopes' => array( 'read', 'write', 'admin' ), 'role' => 'admin', 'allow_destructive' => true ) );
 		$created = $this->authed( new Mcpwp_REST_Site_Updates(), $request )->create_api_key( $request )->get_data();
 
 		$this->assertArrayHasKey( 'ignored', $created['api_key'], 'The flag is reported as ignored, not silently dropped.' );
@@ -229,7 +229,7 @@ final class DestructiveGateTest extends TestCase {
 		// an absent record alone no longer means administrator (round 2).
 		$GLOBALS['mcpwp_test_is_admin'] = true;
 		$controller = new Mcpwp_REST_Site_Updates();
-		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/api-keys', array( 'label' => 'job', 'scopes' => array( 'admin' ), 'role' => 'admin', 'allow_destructive' => true ) );
+		$request    = new WP_REST_Request( 'POST', '/mcpwp/v1/api-keys', array( 'label' => 'job', 'scopes' => array( 'read', 'write', 'admin' ), 'role' => 'admin', 'allow_destructive' => true ) );
 		$created    = $controller->create_api_key( $request )->get_data();
 
 		$this->assertArrayNotHasKey( 'ignored', $created['api_key'] );
@@ -274,7 +274,7 @@ final class DestructiveGateTest extends TestCase {
 		$self = Mcpwp_Approvals::approve_request( $approval_id, 'ok', array( 'actor' => $this->key['id'] ) );
 		$this->assertSame( 'self_approval_forbidden', $self->get_error_code(), 'Whichever door: the requester cannot approve its own request.' );
 
-		$reviewer = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+		$reviewer = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'read', 'write', 'admin' ) );
 		$this->assertSame( 'approved', Mcpwp_Approvals::approve_request( $approval_id, 'ok', array( 'actor' => $reviewer['id'] ) )['status'] );
 
 		$self_apply = Mcpwp_Approvals::apply_request( $approval_id, array( 'api_key' => $this->key['key'], 'actor' => $this->key['id'] ) );
@@ -284,7 +284,7 @@ final class DestructiveGateTest extends TestCase {
 	public function test_a_reviewer_key_applies_and_the_replay_runs_as_the_reviewer(): void {
 		$this->seed( 10 );
 		$approval_id = $this->delete_page( 10, true )->get_data()['approval_id'];
-		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'read', 'write', 'admin' ) );
 		Mcpwp_Approvals::approve_request( $approval_id, 'ok', array( 'actor' => $reviewer['id'] ) );
 
 		$GLOBALS['mcpwp_test_dispatched_requests'] = array();
@@ -324,7 +324,7 @@ final class DestructiveGateTest extends TestCase {
 	public function test_a_destructive_request_has_no_rollback(): void {
 		$this->seed( 10 );
 		$approval_id = $this->delete_page( 10, true )->get_data()['approval_id'];
-		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'read', 'write', 'admin' ) );
 		Mcpwp_Approvals::approve_request( $approval_id, 'ok', array( 'actor' => $reviewer['id'] ) );
 		Mcpwp_Approvals::apply_request( $approval_id, array( 'api_key' => $reviewer['key'], 'actor' => $reviewer['id'] ) );
 
@@ -351,7 +351,7 @@ final class DestructiveGateTest extends TestCase {
 	public function test_a_target_that_changed_after_review_is_not_applied(): void {
 		$this->seed( 10 );
 		$approval_id = $this->delete_page( 10, true )->get_data()['approval_id'];
-		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'read', 'write', 'admin' ) );
 		Mcpwp_Approvals::approve_request( $approval_id, 'ok', array( 'actor' => $reviewer['id'] ) );
 
 		// Between review and apply, the throwaway page became the homepage.
@@ -489,7 +489,7 @@ final class DestructiveGateTest extends TestCase {
 		// record without an id; only proven admin context is not.
 		$GLOBALS['mcpwp_test_is_admin'] = false;
 		$this->assertTrue( Mcpwp_Destructive_Gate::is_api_principal( null ) );
-		$this->assertTrue( Mcpwp_Destructive_Gate::is_api_principal( array( 'id' => '', 'scopes' => array( 'admin' ) ) ) );
+		$this->assertTrue( Mcpwp_Destructive_Gate::is_api_principal( array( 'id' => '', 'scopes' => array( 'read', 'write', 'admin' ) ) ) );
 		$this->assertTrue( Mcpwp_Destructive_Gate::is_api_principal( array( 'id' => 'k1' ) ) );
 
 		$GLOBALS['mcpwp_test_is_admin'] = true;
@@ -525,7 +525,7 @@ final class DestructiveGateTest extends TestCase {
 		$this->assertStringNotContainsString( 'Secret launch plan', wp_json_encode( Mcpwp_Approvals::redact_source_for_unprivileged( $record ) ) );
 
 		// drift() still has the full fingerprint (private record).
-		$reviewer = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+		$reviewer = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'read', 'write', 'admin' ) );
 		Mcpwp_Approvals::approve_request( $record['id'], '', array( 'actor' => $reviewer['id'] ) );
 		$GLOBALS['_mcpwp_test_posts'][10]->post_title = 'Renamed';
 		$this->assertSame( 'target_changed', Mcpwp_Approvals::apply_request( $record['id'], array( 'api_key' => $reviewer['key'], 'actor' => $reviewer['id'] ) )->get_error_code() );
@@ -641,7 +641,7 @@ final class DestructiveGateTest extends TestCase {
 		// could now be the homepage).
 		$this->seed( 10, 'page', 'draft' );
 		$approval_id = $this->delete_page( 10, true )->get_data()['approval_id'];
-		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'read', 'write', 'admin' ) );
 		Mcpwp_Approvals::approve_request( $approval_id, 'ok', array( 'actor' => $reviewer['id'] ) );
 
 		$GLOBALS['_mcpwp_test_posts'][10]->post_status = 'publish';
@@ -663,7 +663,7 @@ final class DestructiveGateTest extends TestCase {
 		$record     = Mcpwp_Approvals::get_request( $approval['approval_id'] );
 		$this->assertSame( 3, $record['payload']['target']['count'] );
 
-		$reviewer = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+		$reviewer = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'read', 'write', 'admin' ) );
 		Mcpwp_Approvals::approve_request( $approval['approval_id'], '', array( 'actor' => $reviewer['id'] ) );
 		$this->seed( 24, 'post', 'draft' );
 
@@ -706,7 +706,7 @@ final class DestructiveGateTest extends TestCase {
 	public function test_only_an_approved_request_is_applied(): void {
 		$this->seed( 10 );
 		$approval_id = $this->delete_page( 10, true )->get_data()['approval_id'];
-		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'admin' ) );
+		$reviewer    = ( new Mcpwp_REST_Pages() )->create_scoped_api_key( 'reviewer', array( 'read', 'write', 'admin' ) );
 
 		$pending = Mcpwp_Approvals::apply_request( $approval_id, array( 'api_key' => $reviewer['key'], 'actor' => $reviewer['id'] ) );
 		$this->assertSame( 'approval_not_ready', $pending->get_error_code() );

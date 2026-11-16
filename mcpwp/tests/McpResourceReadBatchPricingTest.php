@@ -40,7 +40,7 @@ final class McpResourceReadBatchPricingTest extends TestCase {
 		);
 		Mcpwp_REST_MCP::reset_verdict_memo();
 
-		$this->key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'batch-pricing', array( 'admin' ) );
+		$this->key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'batch-pricing', array( 'read', 'write', 'admin' ) );
 	}
 
 	protected function tearDown(): void {

@@ -48,7 +48,7 @@ final class IdempotentToolCallTest extends TestCase {
 		$GLOBALS['mcpwp_test_wpdb_insert_fails'] = false;
 		Mcpwp_REST_MCP::reset_verdict_memo();
 
-		$this->key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'lane a', array( 'admin' ) );
+		$this->key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'lane a', array( 'read', 'write', 'admin' ) );
 	}
 
 	protected function tearDown(): void {
@@ -501,7 +501,7 @@ final class IdempotentToolCallTest extends TestCase {
 	// ---------------------------------------------------------------
 
 	public function test_ids_are_scoped_to_the_principal(): void {
-		$b = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'lane b', array( 'admin' ) );
+		$b = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'lane b', array( 'read', 'write', 'admin' ) );
 
 		$this->call( 'wp_create_page', array( 'title' => 'A' ), 'r1' );
 		Mcpwp_REST_MCP::reset_verdict_memo();
@@ -768,7 +768,7 @@ final class IdempotentToolCallTest extends TestCase {
 
 		// A category-restricted key: an uncategorised tool is denied — on
 		// the first call and on the retry, and nothing dispatches.
-		$restricted = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'restricted', array( 'admin' ), 'custom', array( 'site' ) );
+		$restricted = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'restricted', array( 'read', 'write', 'admin' ), 'custom', array( 'site' ) );
 		$first  = $this->call( 'zz_write_thing', array( 'title' => 'x' ), 'r1', 7, $restricted['key'] );
 		Mcpwp_REST_MCP::reset_verdict_memo();
 		$second = $this->call( 'zz_write_thing', array( 'title' => 'x' ), 'r1', 7, $restricted['key'] );

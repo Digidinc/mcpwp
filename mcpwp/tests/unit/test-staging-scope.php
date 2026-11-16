@@ -103,7 +103,7 @@ final class StagingScopeTest extends TestCase {
 	 * the user-context step also passes.
 	 */
 	public function test_admin_scoped_key_on_staging_push_route_passes_scope_check(): void {
-		$created = $this->auth->create_scoped_api_key( 'admin key', array( 'admin' ) );
+		$created = $this->auth->create_scoped_api_key( 'admin key', array( 'read', 'write', 'admin' ) );
 
 		$request = new WP_REST_Request(
 			'POST',

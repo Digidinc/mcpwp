@@ -32,7 +32,7 @@ final class BatchBudgetTest extends TestCase {
 		$GLOBALS['mcpwp_test_filters']           = array();
 		$GLOBALS['mcpwp_test_dispatched_routes'] = array();
 
-		$this->key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'bulk', array( 'admin' ) );
+		$this->key = ( new Mcpwp_REST_MCP() )->create_scoped_api_key( 'bulk', array( 'read', 'write', 'admin' ) );
 
 		Mcpwp_Rate_Limiter::get_instance()->update_settings(
 			array(
