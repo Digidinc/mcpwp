@@ -262,11 +262,21 @@ final class AdminScopeRequiresWrite1210Test extends TestCase {
 		$this->assertNotFalse( $source );
 		$this->assertStringContainsString( 'mcpwp-readonly-key-preset', $source );
 		$this->assertStringContainsString( 'function syncAdminWithWrite()', $source );
-		$this->assertStringContainsString( 'if (!writeCb.checked) {', $source );
-		$this->assertStringContainsString( 'adminCb.checked = false;', $source );
-		$this->assertStringContainsString( 'adminCb.disabled = true;', $source );
-		$this->assertStringContainsString( 'adminCb.disabled = false;', $source );
 		$this->assertStringContainsString( "writeCb.addEventListener('change', syncAdminWithWrite);", $source );
+
+		// Pin the syncAdminWithWrite body itself — adminCb.disabled = true also
+		// appears in applyReadOnlyPreset, so a whole-file substring would still
+		// pass if syncAdminWithWrite dropped that line.
+		$sync_start = strpos( $source, 'function syncAdminWithWrite()' );
+		$preset_start = strpos( $source, 'function applyReadOnlyPreset()', $sync_start === false ? 0 : $sync_start );
+		$this->assertNotFalse( $sync_start );
+		$this->assertNotFalse( $preset_start );
+		$this->assertGreaterThan( $sync_start, $preset_start );
+		$sync_body = substr( $source, $sync_start, $preset_start - $sync_start );
+		$this->assertStringContainsString( 'if (!writeCb.checked) {', $sync_body );
+		$this->assertStringContainsString( 'adminCb.checked = false;', $sync_body );
+		$this->assertStringContainsString( 'adminCb.disabled = true;', $sync_body );
+		$this->assertStringContainsString( 'adminCb.disabled = false;', $sync_body );
 	}
 
 	public function test_wp_create_api_key_scopes_description_says_admin_requires_write(): void {
