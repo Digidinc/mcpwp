@@ -137,6 +137,9 @@ class Mcpwp_Events {
 		if ( is_array( $created ) && ! empty( $sanitized_content['removed'] ) ) {
 			$created['sanitized'] = $sanitized_content['removed'];
 		}
+		if ( is_array( $created ) && isset( $data['content'] ) ) {
+			$this->attach_content_modified_report( $created, $data['content'], (int) $post_id );
+		}
 
 		return $created;
 	}
@@ -189,6 +192,9 @@ class Mcpwp_Events {
 		$updated = $this->get_event( $id );
 		if ( is_array( $updated ) && ! empty( $sanitized_content['removed'] ) ) {
 			$updated['sanitized'] = $sanitized_content['removed'];
+		}
+		if ( is_array( $updated ) && isset( $data['content'] ) ) {
+			$this->attach_content_modified_report( $updated, $data['content'], (int) $id );
 		}
 
 		return $updated;

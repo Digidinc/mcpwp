@@ -151,7 +151,11 @@ class Mcpwp_LearnPress {
 			$this->set_course_categories( $post_id, $data['categories'] );
 		}
 
-		return $this->get_course( $post_id );
+		$created = $this->get_course( $post_id );
+		if ( is_array( $created ) ) {
+			$this->attach_learnpress_content_modified( $created, $data, (int) $post_id );
+		}
+		return $created;
 	}
 
 	/**
@@ -202,7 +206,11 @@ class Mcpwp_LearnPress {
 			$this->set_course_categories( $id, $data['categories'] );
 		}
 
-		return $this->get_course( $id );
+		$updated = $this->get_course( $id );
+		if ( is_array( $updated ) ) {
+			$this->attach_learnpress_content_modified( $updated, $data, (int) $id );
+		}
+		return $updated;
 	}
 
 	/**
@@ -450,7 +458,11 @@ class Mcpwp_LearnPress {
 			update_post_meta( $post_id, '_lp_preview', $data['preview'] ? 'yes' : 'no' );
 		}
 
-		return $this->format_lesson( get_post( $post_id ) );
+		$created = $this->format_lesson( get_post( $post_id ) );
+		if ( is_array( $created ) && isset( $data['content'] ) ) {
+			$this->attach_content_modified_report( $created, $data['content'], (int) $post_id );
+		}
+		return $created;
 	}
 
 	/**
@@ -499,7 +511,11 @@ class Mcpwp_LearnPress {
 			update_post_meta( $id, '_lp_preview', $data['preview'] ? 'yes' : 'no' );
 		}
 
-		return $this->format_lesson( get_post( $id ) );
+		$updated = $this->format_lesson( get_post( $id ) );
+		if ( is_array( $updated ) && isset( $data['content'] ) ) {
+			$this->attach_content_modified_report( $updated, $data['content'], (int) $id );
+		}
+		return $updated;
 	}
 
 	// =========================================================================
@@ -594,7 +610,11 @@ class Mcpwp_LearnPress {
 
 		$this->set_quiz_meta( $post_id, $data );
 
-		return $this->format_quiz( get_post( $post_id ) );
+		$created = $this->format_quiz( get_post( $post_id ) );
+		if ( is_array( $created ) && isset( $data['content'] ) ) {
+			$this->attach_content_modified_report( $created, $data['content'], (int) $post_id );
+		}
+		return $created;
 	}
 
 	/**
@@ -636,7 +656,11 @@ class Mcpwp_LearnPress {
 
 		$this->set_quiz_meta( $id, $data );
 
-		return $this->format_quiz( get_post( $id ) );
+		$updated = $this->format_quiz( get_post( $id ) );
+		if ( is_array( $updated ) && isset( $data['content'] ) ) {
+			$this->attach_content_modified_report( $updated, $data['content'], (int) $id );
+		}
+		return $updated;
 	}
 
 	/**
@@ -977,6 +1001,45 @@ class Mcpwp_LearnPress {
 		if ( isset( $data['featured_review'] ) ) {
 			update_post_meta( $post_id, '_lp_featured_review', sanitize_textarea_field( $data['featured_review'] ) );
 		}
+	}
+
+	/**
+	 * Attach content_modified for course body and/or FAQ answers (#1212).
+	 *
+	 * Reporting only — does not change what was saved.
+	 *
+	 * @param array $result  Course response (by ref).
+	 * @param array $data    Caller input.
+	 * @param int   $post_id Course post ID.
+	 * @return void
+	 */
+	private function attach_learnpress_content_modified( array &$result, array $data, $post_id ) {
+		if ( isset( $data['content'] ) ) {
+			$this->attach_content_modified_report( $result, $data['content'], (int) $post_id );
+		}
+
+		if ( empty( $data['faqs'] ) || ! is_array( $data['faqs'] ) ) {
+			return;
+		}
+
+		$submitted = '';
+		foreach ( $data['faqs'] as $faq ) {
+			if ( is_array( $faq ) && isset( $faq[1] ) ) {
+				$submitted .= (string) $faq[1];
+			}
+		}
+
+		$saved_faqs = get_post_meta( (int) $post_id, '_lp_faqs', true );
+		$saved      = '';
+		if ( is_array( $saved_faqs ) ) {
+			foreach ( $saved_faqs as $faq ) {
+				if ( is_array( $faq ) && isset( $faq[1] ) ) {
+					$saved .= (string) $faq[1];
+				}
+			}
+		}
+
+		$this->attach_content_modified_from_strings( $result, $submitted, $saved );
 	}
 
 	/**

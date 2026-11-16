@@ -1327,6 +1327,13 @@ class Mcpwp_Approvals {
 		// The payload ran completely; only its own bookkeeping write failed
 		// (e.g. bulk publish's applied_ids). Record that at finalise.
 		$finalise_extra = array();
+		$content_modified_report = null;
+		if ( is_array( $result ) && ! is_wp_error( $result ) ) {
+			if ( isset( $result['content_modified'] ) && is_array( $result['content_modified'] ) ) {
+				$content_modified_report = $result['content_modified'];
+			}
+			$result = true;
+		}
 		if ( is_wp_error( $result ) && 'apply_result_unrecorded' === $result->get_error_code() ) {
 			$data           = $result->get_error_data();
 			$finalise_extra = is_array( $data ) && isset( $data['metadata'] ) && is_array( $data['metadata'] ) ? array( 'metadata' => $data['metadata'] ) : array();
@@ -1369,6 +1376,9 @@ class Mcpwp_Approvals {
 		}
 
 		$public = self::public_record( $final );
+		if ( null !== $content_modified_report ) {
+			$public['content_modified'] = $content_modified_report;
+		}
 		if ( 'payload' === $field ) {
 			self::emit_event( 'approval.applied', $public, 'applied', 'medium', __( 'Monitor applied change and keep rollback available.', 'mcpwp' ) );
 		} else {
@@ -1753,7 +1763,20 @@ class Mcpwp_Approvals {
 			return $result;
 		}
 
-		return true;
+		// #1212: set_blocks / patch_block_section land here when approval is
+		// forced — attach content_modified to the apply result (reporting only).
+		$apply_result = array();
+		if ( 'rollback' !== $field && class_exists( 'Mcpwp_Content_Modified_Report', false ) ) {
+			$report = Mcpwp_Content_Modified_Report::describe_modifications(
+				$content,
+				Mcpwp_Content_Modified_Report::saved_post_content( $post_id )
+			);
+			if ( ! empty( $report['removed'] ) || ! empty( $report['content_comparison_skipped'] ) ) {
+				$apply_result['content_modified'] = $report;
+			}
+		}
+
+		return empty( $apply_result ) ? true : $apply_result;
 	}
 
 	/**
