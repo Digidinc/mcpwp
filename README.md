@@ -65,22 +65,16 @@ graph LR
     end
 ```
 
-## Why MCPWP?
+## What MCPWP covers
 
-| | MCPWP | AI Engine (Meow) | WordPress MCP Adapter | InstaWP mcp-wp |
-|---|---|---|---|---|
-| **Tools** | **190+ free / 300+ Pro** | ~30 | ~15 | ~10 |
-| **Elementor** | Full (build + edit + templates + theme) | No | No | No |
-| **Agency proxy** | Multi-site (N clients, 1 token) | No | No | No |
-| **Audit log + rollback** | Yes | No | No | No |
-| **Site blueprints** | Yes (5 starters + custom) | No | No | No |
-| **White-label** | Yes (agency branding) | No | No | No |
-| **Site memory** | Persistent across sessions | No | No | No |
-| **Proactive signals** | WordPress → AI alerts | No | No | No |
-| **Approval workflow** | Request → approve → apply → rollback | No | No | No |
-| **Role-scoped keys** | Yes | No | No | No |
-| **OpenClaw skill** | Yes | Yes | No | No |
-| **WooCommerce** | Yes | Yes | No | No |
+MCPWP is a WordPress plugin that exposes a site to AI clients over MCP. Scope that exists in this repository today:
+
+- **Content and builders:** posts, pages, media, menus, Gutenberg blocks and Elementor pages (build, edit, templates, theme parts), with render verification after Elementor saves.
+- **Safety:** role-scoped API keys, an approval workflow (request, approve, apply, rollback), and an action log.
+- **Site knowledge:** persistent site memory, site health signals, a site graph, and SEO audit and flag tools.
+- **Distribution:** self-hosted and agency builds, an updater served from `updates.mcpwp.net`, and a stdio proxy (`mcp-server/`) for clients that need it.
+
+For the full, current tool list, call `wp_introspect` on a connected site or see the [documentation](https://docs.mcpwp.net). This section describes MCPWP only and makes no comparison with other plugins.
 
 ## Install
 
@@ -150,7 +144,7 @@ Add as a custom MCP server — same URL and key in your MCP settings.
 
 ### ChatGPT (Custom GPT)
 
-Search **MCPWP** in the GPT Store for a pre-built WordPress Agent GPT. Enter your site URL and API key when prompted.
+Follow the [Connect ChatGPT to WordPress guide](https://mcpwp.net/connect-chatgpt-to-wordpress/).
 
 Or build your own using the [OpenAPI schema](integrations/chatgpt/openapi.yaml).
 
@@ -299,7 +293,7 @@ Create keys via **WP Admin → MCPWP → Setup**, or `wp_create_api_key(label, r
 
 ## Roadmap
 
-**Current release: v3.11.1** (2026-09-10). Full history in [`mcpwp/CHANGELOG.md`](mcpwp/CHANGELOG.md).
+**Current release:** see [GitHub Releases](https://github.com/Digidinc/mcpwp/releases). Full history in [`mcpwp/CHANGELOG.md`](mcpwp/CHANGELOG.md).
 
 **3.11 "Truth & Reliability"** — the plugin must never report a change that did not happen:
 - **3.11.0:** batch-weighted rate limits, idempotent tool calls (`_meta.request_id`), option-access policy with secret-preserving writes, terms and meta on post writes, approval by default for deletes with no undo.
