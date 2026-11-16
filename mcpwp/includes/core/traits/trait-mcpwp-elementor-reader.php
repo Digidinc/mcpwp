@@ -929,7 +929,7 @@ trait Mcpwp_Elementor_Reader_Trait {
 		$stats = $this->compute_element_stats( $elementor_data_raw );
 
 		// Preview URL.
-		$preview_url = get_preview_post_link( $post_id );
+		$preview_url = Mcpwp_Elementor_Preview_Url::for_post( $post_id );
 
 		// Use Elementor's frontend to render the content.
 		$frontend = \Elementor\Plugin::$instance->frontend;

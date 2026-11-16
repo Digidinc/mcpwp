@@ -1507,8 +1507,8 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				// Elementor content only, not the surrounding theme header/footer.
 				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset, '', $post );
 			} else {
-				// Draft/pending — use Elementor preview URL or plain preview.
-				$url = add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) );
+				// Draft/pending — WordPress preview link (not editor iframe param).
+				$url = Mcpwp_Elementor_Preview_Url::for_post( $post );
 			}
 		}
 
@@ -1950,7 +1950,7 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 		$window = $this->window_html_response( $html, $offset, $max_bytes );
 
 		$result = array(
-			'url'            => add_query_arg( 'elementor-preview', $post_id, get_permalink( $post_id ) ),
+			'url'            => Mcpwp_Elementor_Preview_Url::for_post( $post_id ),
 			'status_code'    => 200,
 			'html'           => $window['html'],
 			'length'         => $window['length'],

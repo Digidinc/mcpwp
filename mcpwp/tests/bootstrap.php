@@ -6042,6 +6042,7 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-destructive-gate.php
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-registry.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-keys.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-element-ids.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-preview-url.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-template-refs.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-stored-tree.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-elementor-meta-write.php';

@@ -2259,7 +2259,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 				'widgets_after'   => $widgets_after,
 				'was_empty'       => 0 === $sections_before,
 			),
-			'preview_url'        => add_query_arg( 'elementor-preview', $page_id, get_permalink( $page_id ) ),
+			'preview_url'        => Mcpwp_Elementor_Preview_Url::for_post( $page_id ),
 			'css_regenerated'    => ! empty( $save_debug['css_regenerated'] ),
 			'debug'              => $save_debug,
 			'edit_url'           => admin_url( "post.php?post={$page_id}&action=elementor" ),
