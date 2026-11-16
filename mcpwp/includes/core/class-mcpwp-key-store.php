@@ -387,6 +387,20 @@ class Mcpwp_Key_Store {
 	}
 
 	/**
+	 * Drop a stale options-cache view of the key store so the next get_option()
+	 * re-reads (used after a busy adoption while a peer may have written).
+	 *
+	 * @return void
+	 */
+	public static function invalidate_option_cache() {
+		if ( function_exists( 'wp_cache_delete' ) ) {
+			wp_cache_delete( self::OPTION, 'options' );
+			wp_cache_delete( 'alloptions', 'options' );
+			wp_cache_delete( 'notoptions', 'options' );
+		}
+	}
+
+	/**
 	 * Put the new value in the object cache the way core's update_option() does.
 	 *
 	 * Not a bare delete: a request that read `alloptions` from the database

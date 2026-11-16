@@ -265,6 +265,12 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 					$this->assertSame( $granted[ $field ], $after[ $field ], "Adoption must not change $field." );
 				}
 			}
+			if ( 'ro' === $id ) {
+				// Source omitted role/scopes/tool_categories: normalize to admin defaults.
+				$this->assertSame( 'admin', $after['role'] );
+				$this->assertSame( array( 'read', 'write', 'admin' ), $after['scopes'] );
+				$this->assertSame( array(), $after['tool_categories'] );
+			}
 		}
 	}
 
@@ -720,6 +726,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 	public function test_the_uninstaller_names_the_flag_exactly_and_adds_no_lock(): void {
 		$all = array_merge( Mcpwp_Uninstaller::LEGACY_OPTIONS, Mcpwp_Uninstaller::APPROVALS_OPTIONS );
 		$this->assertContains( 'mcpwp_spai_credentials_adopted', $all );
+		$this->assertContains( 'mcpwp_spai_adoption_failure', $all );
 		$this->assertNotContains( 'mcpwp_key_store_lock', $all, 'This work adds no lock of its own.' );
 		foreach ( $all as $name ) {
 			$this->assertStringNotContainsString( '%', $name, 'Exact names, no wildcards (#1159).' );

@@ -180,6 +180,9 @@ final class StagedStatusValueAuditTest extends TestCase {
 			'own outcome field (done/partial/unreadable/busy) and the Site Health result\'s status; update_option() ' .
 			'stores the sweep flag, its resume position and the list of revoked key records. Nothing here stages a ' .
 			'post/product visibility status, and the file never writes a post.',
+		'class-mcpwp-activator.php' => 'false positive: the matched \'status\' literals are Site Health result fields ' .
+			'(good/critical) for stuck 2.8 key adoption; update_option() stores the adoption flag and a failure ' .
+			'reason code only. Nothing here stages a post/product visibility status.',
 		// #957: the file's update_option() calls (mcpwp_content_guardrails
 		// settings, mcpwp_content_guardrails_publish_log) never store a
 		// 'status' key at all — the 'status' => ... literal the regex

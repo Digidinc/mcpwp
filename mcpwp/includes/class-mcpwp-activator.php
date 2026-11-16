@@ -1157,18 +1157,246 @@ class Mcpwp_Activator {
 	const SPAI_ADOPTION_BACKOFF     = 'mcpwp_spai_adoption_backoff';
 	const SPAI_ADOPTION_BACKOFF_TTL = 60;
 
+	/**
+	 * Last adoption failure reason code (not autoloaded). Shape:
+	 * array{ reason: string, at: int }. Never holds a key or hash.
+	 */
+	const SPAI_ADOPTION_FAILURE = 'mcpwp_spai_adoption_failure';
+
 	/** Label of an adopted record; the Setup page explains what it can do. */
 	const SPAI_ADOPTED_LABEL = 'Migrated 2.8 key';
 
 	/** The id adoption gives the single spai_api_key; kept, because approvals compare key ids. */
 	const SPAI_SINGLE_KEY_ID = 'spai_legacy_single';
 
+	/** @var bool Whether this request's adoption attempt returned busy (peer holds the store lock). */
+	private static $spai_adoption_busy_this_request = false;
+
+	/**
+	 * Register admin notice + Site Health for a stuck 2.8 key adoption.
+	 *
+	 * @return void
+	 */
+	public static function init_spai_adoption_health() {
+		add_filter( 'site_status_tests', array( __CLASS__, 'register_spai_adoption_site_status_test' ) );
+		add_action( 'admin_notices', array( __CLASS__, 'render_spai_adoption_notice' ) );
+	}
+
+	/**
+	 * Whether adoption should wait ~1.5 s for the store lock (admin, WP-CLI,
+	 * REST/MCP). Other front-end loads stay impatient.
+	 *
+	 * @return bool
+	 */
+	public static function adoption_should_wait() {
+		if ( defined( 'WP_CLI' ) && WP_CLI ) {
+			return true;
+		}
+		if ( function_exists( 'is_admin' ) && is_admin() ) {
+			return true;
+		}
+		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+			return true;
+		}
+		$uri = isset( $_SERVER['REQUEST_URI'] ) ? (string) $_SERVER['REQUEST_URI'] : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- path check only.
+		if ( false !== strpos( $uri, '/wp-json/' ) || false !== strpos( $uri, 'rest_route=' ) ) {
+			return true;
+		}
+		if ( isset( $_GET['rest_route'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- presence check only.
+			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Reason code from the last recorded adoption failure, or ''.
+	 *
+	 * @return string
+	 */
+	public static function adoption_failure_reason() {
+		$failure = get_option( self::SPAI_ADOPTION_FAILURE, false );
+		if ( ! is_array( $failure ) || empty( $failure['reason'] ) ) {
+			return '';
+		}
+		return sanitize_key( (string) $failure['reason'] );
+	}
+
+	/**
+	 * Whether this request saw a busy store lock during adoption.
+	 *
+	 * @return bool
+	 */
+	public static function adoption_busy_this_request() {
+		return self::$spai_adoption_busy_this_request;
+	}
+
+	/**
+	 * Clear per-request adoption markers (tests).
+	 *
+	 * @return void
+	 */
+	public static function clear_spai_adoption_request_state() {
+		self::$spai_adoption_busy_this_request = false;
+	}
+
+	/**
+	 * Re-arm the busy marker for a concurrent-first-request simulation (tests).
+	 *
+	 * @return void
+	 */
+	public static function mark_spai_adoption_busy_for_tests() {
+		self::$spai_adoption_busy_this_request = true;
+	}
+
+	/**
+	 * Record a failure reason for the admin notice / Site Health (no secrets).
+	 *
+	 * @param string $reason Reason code from Mcpwp_Key_Store::mutate() or delete_failed.
+	 * @return void
+	 */
+	private static function record_spai_adoption_failure( $reason ) {
+		$reason = sanitize_key( (string) $reason );
+		if ( '' === $reason ) {
+			$reason = 'busy';
+		}
+		if ( 'busy' === $reason ) {
+			self::$spai_adoption_busy_this_request = true;
+		}
+		update_option(
+			self::SPAI_ADOPTION_FAILURE,
+			array(
+				'reason' => $reason,
+				'at'     => time(),
+			),
+			false
+		);
+	}
+
+	/**
+	 * Clear the recorded failure after a successful adoption.
+	 *
+	 * @return void
+	 */
+	private static function clear_spai_adoption_failure() {
+		delete_option( self::SPAI_ADOPTION_FAILURE );
+	}
+
+	/**
+	 * Whether leftover spai options still exist.
+	 *
+	 * @return bool
+	 */
+	private static function spai_credential_options_present() {
+		return false !== get_option( 'spai_api_keys', false ) || false !== get_option( 'spai_api_key', false );
+	}
+
+	/**
+	 * Whether the stuck-adoption notice / Site Health item should fire.
+	 *
+	 * @return bool
+	 */
+	public static function spai_adoption_needs_admin_attention() {
+		if ( get_option( self::SPAI_ADOPTION_FLAG ) ) {
+			return false;
+		}
+		if ( ! self::spai_credential_options_present() ) {
+			return false;
+		}
+		return '' !== self::adoption_failure_reason()
+			|| false !== get_transient( self::SPAI_ADOPTION_BACKOFF );
+	}
+
+	/**
+	 * Add the stuck-adoption test to Site Health.
+	 *
+	 * @param array $tests Registered tests.
+	 * @return array
+	 */
+	public static function register_spai_adoption_site_status_test( $tests ) {
+		if ( ! is_array( $tests ) ) {
+			return $tests;
+		}
+		$tests['direct']['mcpwp_spai_adoption'] = array(
+			'label' => __( 'MCPWP 2.8 API key adoption', 'mcpwp' ),
+			'test'  => array( __CLASS__, 'run_spai_adoption_site_status_test' ),
+		);
+		return $tests;
+	}
+
+	/**
+	 * Site Health result for stuck 2.8 credential adoption.
+	 *
+	 * @return array
+	 */
+	public static function run_spai_adoption_site_status_test() {
+		$result = array(
+			'label'       => __( 'MCPWP 2.8 API key adoption', 'mcpwp' ),
+			'status'      => 'good',
+			'badge'       => array(
+				'label' => __( 'Security', 'mcpwp' ),
+				'color' => 'blue',
+			),
+			'description' => '<p>' . esc_html__( 'Legacy 2.8 API key adoption has completed, or no leftover keys remain.', 'mcpwp' ) . '</p>',
+			'actions'     => '',
+			'test'        => 'mcpwp_spai_adoption',
+		);
+
+		if ( ! self::spai_adoption_needs_admin_attention() ) {
+			return $result;
+		}
+
+		$reason = self::adoption_failure_reason();
+		if ( '' === $reason ) {
+			$reason = 'backoff';
+		}
+		$result['status']         = 'critical';
+		$result['badge']['color'] = 'red';
+		$result['label']          = __( 'MCPWP could not finish adopting 2.8 API keys', 'mcpwp' );
+		$result['description']    = '<p>' . esc_html(
+			sprintf(
+				/* translators: %s: short machine reason code (busy, delete_failed, …). */
+				__( 'Adoption could not complete (reason: %s). Old 2.8 API keys will not work until adoption completes. Reload WP Admin or run WP-CLI; contact support if this persists.', 'mcpwp' ),
+				$reason
+			)
+		) . '</p>';
+		return $result;
+	}
+
+	/**
+	 * Admin notice while 2.8 key adoption is stuck after a recorded failure.
+	 *
+	 * @return void
+	 */
+	public static function render_spai_adoption_notice() {
+		if ( ! current_user_can( 'manage_options' ) ) {
+			return;
+		}
+		if ( ! self::spai_adoption_needs_admin_attention() ) {
+			return;
+		}
+		$reason = self::adoption_failure_reason();
+		if ( '' === $reason ) {
+			$reason = 'backoff';
+		}
+		printf(
+			'<div class="notice notice-error is-dismissible"><p><strong>%s</strong> %s</p></div>',
+			esc_html__( 'MCPWP could not finish adopting 2.8 API keys.', 'mcpwp' ),
+			esc_html(
+				sprintf(
+					/* translators: %s: short machine reason code (busy, delete_failed, …). */
+					__( 'Adoption could not complete (reason: %s). Old 2.8 API keys will not work until adoption completes.', 'mcpwp' ),
+					$reason
+				)
+			)
+		);
+	}
+
 	/**
 	 * One-time adoption of the 2.8 spai credentials into the revocable store
 	 * (#1098 / #1120), then deletion of the originals.
 	 *
 	 * Last-chance upgrade path: a site that jumps straight from 2.8 to a
-	 * release without the request-time spai auth bridge still keeps its keys,
+	 * release without the old request-time spai auth path still keeps its keys,
 	 * because this runs on plugins_loaded (while the flag is unset) and on
 	 * activation — never as part of authenticating a request. Auth reads only
 	 * the scoped store (and the empty-store mcpwp_api_key fallback).
@@ -1195,6 +1423,12 @@ class Mcpwp_Activator {
 	 *    only while the store stays empty, so it moves into the store in the
 	 *    same write.
 	 *
+	 * On admin, WP-CLI and REST/MCP the lock waits ~1.5 s (patient) so
+	 * concurrent first requests after upgrade adopt or re-read instead of
+	 * failing closed immediately. A busy result does not start the back-off
+	 * (a peer may finish immediately); other failures do, and record a reason
+	 * code for the admin notice / Site Health item.
+	 *
 	 * Fails closed: an unreadable store, or a refused write (unreadable,
 	 * unsupported_characters, unwritable, busy), changes nothing and leaves the
 	 * flag unset. Nothing is built on a store that merely READS as empty.
@@ -1206,9 +1440,11 @@ class Mcpwp_Activator {
 	 * revoked placeholders keep those hashes refused after a later successful
 	 * adoption. Nothing here logs or prints a key or a hash.
 	 *
+	 * @param bool|null $patient True/false forces lock patience; null detects
+	 *                           admin / WP-CLI / REST.
 	 * @return bool True when adoption is complete (flag set).
 	 */
-	public static function adopt_spai_credentials() {
+	public static function adopt_spai_credentials( $patient = null ) {
 		if ( get_option( self::SPAI_ADOPTION_FLAG ) ) {
 			return true;
 		}
@@ -1225,25 +1461,35 @@ class Mcpwp_Activator {
 		if ( $has_options ) {
 			// A refused or half-finished attempt is not repeated on every load:
 			// it would hash a plaintext key and verify against every stored hash
-			// each time (#1178 review).
+			// each time (#1178 review). Busy does not set this back-off.
 			if ( false !== get_transient( self::SPAI_ADOPTION_BACKOFF ) ) {
 				return false;
 			}
 			if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
 				require_once __DIR__ . '/core/class-mcpwp-key-store.php';
 			}
+			if ( null === $patient ) {
+				$patient = self::adoption_should_wait();
+			}
 			$stored = Mcpwp_Key_Store::mutate(
 				self::spai_credential_mutator( $spai_keys, $spai_single, false ),
-				false
+				(bool) $patient
 			);
 			if ( ! $stored['written'] || ! self::delete_spai_options() ) {
-				set_transient( self::SPAI_ADOPTION_BACKOFF, 1, self::SPAI_ADOPTION_BACKOFF_TTL );
+				$reason = $stored['written'] ? 'delete_failed' : ( isset( $stored['reason'] ) && '' !== (string) $stored['reason'] ? (string) $stored['reason'] : 'busy' );
+				self::record_spai_adoption_failure( $reason );
+				// Busy: a peer holds the lock and may finish; do not punish the next request.
+				if ( 'busy' !== $reason ) {
+					set_transient( self::SPAI_ADOPTION_BACKOFF, 1, self::SPAI_ADOPTION_BACKOFF_TTL );
+				}
 				return false;
 			}
 			delete_transient( self::SPAI_ADOPTION_BACKOFF );
+			self::clear_spai_adoption_failure();
 		}
 
 		update_option( self::SPAI_ADOPTION_FLAG, 1, true );
+		self::clear_spai_adoption_failure();
 		return true;
 	}
 
@@ -1348,8 +1594,9 @@ class Mcpwp_Activator {
 			$adds = array();
 
 			// 1. Revoked placeholders — every revoked spai record (all of them
-			// when ending), whatever its hash looks like: the bridge compares
-			// hashes exactly to refuse a revoked twin.
+			// when ending), whatever its hash looks like: a revoked twin must
+			// stay refuseable after the spai options are deleted, so the same
+			// hash is kept as a revoked scoped record.
 			foreach ( $spai_keys as $key ) {
 				if ( ! is_array( $key ) || ( ! $revoke && empty( $key['revoked_at'] ) ) ) {
 					continue;
@@ -1434,18 +1681,18 @@ class Mcpwp_Activator {
 					}
 				}
 				// An MD5 single cannot be verified against any other stored hash
-				// without the key itself, so it cannot be shown NOT to be a revoked
-				// (or still-live, revocable) copy of one — the bridge proves that
-				// on presentation, adoption cannot. It is adopted live only when it
-				// is the site's sole credential; otherwise it is adopted revoked
-				// (fail closed: a revoked key must not come back).
+				// without the key itself (#1187), so adoption cannot prove it is
+				// not a revoked (or still-live, revocable) copy of one. It is
+				// adopted live only when it is the site's sole credential;
+				// otherwise it is adopted revoked (fail closed: a revoked key
+				// must not come back).
 				$single_unprovable = $single_is_md5 && ( ! empty( $present ) || $legacy_in_play );
 				if ( ! $dup ) {
 					$adds[] = array(
 						'id'            => self::SPAI_SINGLE_KEY_ID,
 						'label'         => self::SPAI_ADOPTED_LABEL,
 						'hash'          => $single_hash,
-						// As the bridge synthesised it: admin.
+						// The 2.8 single key was full-access admin.
 						'scopes'        => array( 'read', 'write', 'admin' ),
 						'role'          => 'admin',
 						'created_at'    => $now,

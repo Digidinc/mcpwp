@@ -906,6 +906,9 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	// An unreadable API key store refuses every key; say so to an admin (#1096).
 	Mcpwp_Key_Store_Health::init();
 
+	// Stuck 2.8 spai credential adoption: admin notice + Site Health (#1120).
+	Mcpwp_Activator::init_spai_adoption_health();
+
 	// Keys whose secret matched a stored value: finish the one-time sweep,
 	// and tell an admin which keys were revoked.
 	Mcpwp_Key_Hygiene::init();

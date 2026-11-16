@@ -1354,7 +1354,10 @@ trait Mcpwp_Api_Auth {
 		}
 
 		$matched_key = $this->find_scoped_api_key( $api_key );
-		$legacy_key  = get_option( 'mcpwp_api_key' );
+		if ( ! $matched_key ) {
+			$matched_key = $this->find_scoped_api_key_after_spai_adoption( $api_key );
+		}
+		$legacy_key = get_option( 'mcpwp_api_key' );
 
 		if ( ! $matched_key && ! empty( $legacy_key ) && $this->legacy_api_key_option_is_honoured() && $this->is_api_key_match( $api_key, $legacy_key ) ) {
 			// Auto-migrate a plaintext or MD5-era value to a hash of the key just verified.
@@ -4237,7 +4240,10 @@ trait Mcpwp_Api_Auth {
 		}
 
 		$matched_key = $this->find_scoped_api_key( $api_key );
-		$legacy_key  = get_option( 'mcpwp_api_key' );
+		if ( ! $matched_key ) {
+			$matched_key = $this->find_scoped_api_key_after_spai_adoption( $api_key );
+		}
+		$legacy_key = get_option( 'mcpwp_api_key' );
 
 		if ( ! $matched_key && ! empty( $legacy_key ) && $this->legacy_api_key_option_is_honoured() && $this->is_api_key_match( $api_key, $legacy_key ) ) {
 			// Same migration as compute_api_key_verdict(): a plaintext or
@@ -5210,6 +5216,32 @@ trait Mcpwp_Api_Auth {
 		}
 
 		return null;
+	}
+
+	/**
+	 * After a miss, one store re-read when this request's adoption was busy.
+	 *
+	 * Concurrent first requests after upgrade: request A may hold the store
+	 * lock while B's adoption returns busy. A then writes the adopted
+	 * records; B must invalidate a stale options cache and look again once,
+	 * or the old key 401s with no admin signal (#1120 / #1209 review).
+	 * Adoption itself still runs on plugins_loaded / activation — this is
+	 * only the re-read after a busy peer.
+	 *
+	 * @param string $api_key Incoming plaintext API key.
+	 * @return array|null Matching key record or null.
+	 */
+	protected function find_scoped_api_key_after_spai_adoption( $api_key ) {
+		if ( ! class_exists( 'Mcpwp_Activator' ) || ! Mcpwp_Activator::adoption_busy_this_request() ) {
+			return null;
+		}
+
+		if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
+			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-store.php';
+		}
+		Mcpwp_Key_Store::invalidate_option_cache();
+
+		return $this->find_scoped_api_key( $api_key );
 	}
 
 	/**
