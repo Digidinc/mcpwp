@@ -5,6 +5,14 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.18](https://github.com/Digidinc/mcpwp/compare/v3.14.17...v3.14.18) (2026-11-16)
+
+
+### Bug Fixes
+
+* **elementor:** collision-only part id remap on apply ([#826](https://github.com/Digidinc/mcpwp/issues/826)) ([#1204](https://github.com/Digidinc/mcpwp/issues/1204)) ([2c79a35](https://github.com/Digidinc/mcpwp/commit/2c79a356a33ddc2a357f28a00dd054d671627089))
+* **setup:** do not embed the admin key in a copyable connector URL and correct the connector key wording ([#1203](https://github.com/Digidinc/mcpwp/issues/1203)) ([1cdc706](https://github.com/Digidinc/mcpwp/commit/1cdc706340ce8353280c7bb081a1b28ce3ba3369))
+
 ## [3.14.17](https://github.com/Digidinc/mcpwp/compare/v3.14.16...v3.14.17) (2026-11-15)
 
 

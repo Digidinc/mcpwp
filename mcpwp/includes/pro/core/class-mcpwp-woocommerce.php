@@ -246,7 +246,11 @@ class Mcpwp_WooCommerce {
 			$this->set_product_tags( $product_id, $data['tags'] );
 		}
 
-		return $this->get_product( $product_id );
+		$created = $this->get_product( $product_id );
+		if ( is_array( $created ) ) {
+			$this->attach_product_content_modified( $created, $data, (int) $product_id );
+		}
+		return $created;
 	}
 
 	/**
@@ -283,7 +287,29 @@ class Mcpwp_WooCommerce {
 			$this->set_product_tags( $id, $data['tags'] );
 		}
 
-		return $this->get_product( $id );
+		$updated = $this->get_product( $id );
+		if ( is_array( $updated ) ) {
+			$this->attach_product_content_modified( $updated, $data, (int) $id );
+		}
+		return $updated;
+	}
+
+	/**
+	 * Attach content_modified for product description / short_description (#1212).
+	 *
+	 * @param array $result     Product response (by ref).
+	 * @param array $data       Caller input.
+	 * @param int   $product_id Product post ID.
+	 * @return void
+	 */
+	private function attach_product_content_modified( array &$result, array $data, $product_id ) {
+		if ( isset( $data['description'] ) ) {
+			$this->attach_content_modified_report( $result, $data['description'], (int) $product_id );
+		}
+		if ( isset( $data['short_description'] ) ) {
+			$saved_short = isset( $result['short_description'] ) ? $result['short_description'] : '';
+			$this->attach_content_modified_from_strings( $result, $data['short_description'], $saved_short );
+		}
 	}
 
 	/**

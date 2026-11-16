@@ -133,10 +133,21 @@ class Mcpwp_Theme_Builder {
 			return array();
 		}
 
+		if ( ! class_exists( 'Mcpwp_Elementor_Pro', false ) ) {
+			require_once dirname( __FILE__ ) . '/class-mcpwp-elementor-pro.php';
+		}
+
+		$read_only = true;
+		if ( array_key_exists( 'caller_read_only', $args ) ) {
+			$read_only = (bool) $args['caller_read_only'];
+		}
+		$status_filter = isset( $args['status'] ) ? $args['status'] : null;
+		unset( $args['caller_read_only'], $args['status'], $args['post_status'] );
+
 		$query_args = array(
 			'post_type'      => 'elementor_library',
 			'posts_per_page' => isset( $args['per_page'] ) ? absint( $args['per_page'] ) : 50,
-			'post_status'    => 'publish',
+			'post_status'    => Mcpwp_Elementor_Pro::resolve_library_list_post_statuses( $status_filter, $read_only ),
 			'meta_query'     => array(
 				array(
 					'key'     => '_elementor_template_type',
@@ -1134,6 +1145,15 @@ class Mcpwp_Theme_Builder {
 		$type    = ! empty( $data['type'] ) ? sanitize_text_field( $data['type'] ) : '';
 		$scope   = ! empty( $data['scope'] ) ? sanitize_text_field( $data['scope'] ) : 'entire_site';
 
+		if ( ! class_exists( 'Mcpwp_Elementor_Pro', false ) ) {
+			require_once dirname( __FILE__ ) . '/class-mcpwp-elementor-pro.php';
+		}
+
+		$target_status = Mcpwp_Elementor_Pro::resolve_library_create_status( $data );
+		if ( is_wp_error( $target_status ) ) {
+			return $target_status;
+		}
+
 		if ( empty( $title ) ) {
 			return new WP_Error( 'missing_title', __( 'Template title is required.', 'mcpwp' ) );
 		}
@@ -1161,9 +1181,9 @@ class Mcpwp_Theme_Builder {
 				'would_create'  => array(
 					'post_title'  => $title,
 					'post_type'   => 'elementor_library',
-					'post_status' => 'publish',
+					'post_status' => $target_status,
 				),
-				'message'       => __( 'Would create and publish the template, then attempt assignment to the requested display scope. No template, metadata or conditions were saved.', 'mcpwp' ),
+				'message'       => __( 'Would create the template with the requested status, then attempt assignment to the requested display scope. No template, metadata or conditions were saved.', 'mcpwp' ),
 			);
 			if ( ! empty( $data['elementor_data'] ) ) {
 				$elements = $data['elementor_data'];
@@ -1340,37 +1360,27 @@ class Mcpwp_Theme_Builder {
 				}
 			}
 
-			// Publish now — after the Elementor data has been written (or there
-			// was none to write) but BEFORE display conditions are assigned.
-			// This is the one status transition in this method; every path
-			// above either reaches here or throws into the catch block below.
+			// Publish now — only when the caller asked for a live template —
+			// after the Elementor data has been written (or there was none to
+			// write) but BEFORE display conditions are assigned. Draft/private
+			// creates stay drafts through assignment (#1211).
 			//
-			// Conditions MUST be assigned AFTER this, not before (RC review
-			// BLOCK, 2026-09-25): assign_to_location() -> set_template_conditions()
-			// calls ElementorPro\Modules\ThemeBuilder\...\Conditions_Manager::
-			// save_conditions() then ->get_cache()->regenerate(). regenerate()
-			// runs a WP_Query with no post_status, which under a REST request
-			// (not is_admin()) only matches PUBLIC statuses — a draft is
-			// invisible to it. Elementor Pro also does not regenerate that
-			// cache on transition_post_status/save_post (only on
-			// wp_trash_post/untrashed_post/section save_settings), so
-			// publishing AFTER assigning conditions never corrects a cache
-			// entry that regenerate() built without this template in it. The
-			// result was a template that reported `assigned:true` and was
-			// genuinely published, bound and present in
-			// elementor_pro_theme_builder_conditions, yet never rendered
-			// anywhere — regenerate()'s own WP_Query silently dropped it, and
-			// nothing after ever re-ran it. Publishing first means the query
-			// that populates the cache can see this post at all.
-			$published = wp_update_post(
-				array(
-					'ID'          => $template_id,
-					'post_status' => 'publish',
-				),
-				true
-			);
-			if ( is_wp_error( $published ) ) {
-				throw new RuntimeException( 'publish_failed: ' . $published->get_error_message() );
+			// Conditions meta and the per-document cache entry are written in
+			// set_template_conditions() regardless of status (#1211). Publish
+			// only controls whether the template renders on the frontend.
+			// Draft templates with a scope carry conditions meta but are not
+			// live until published (see live/next_step below).
+			if ( 'publish' === $target_status ) {
+				$published = wp_update_post(
+					array(
+						'ID'          => $template_id,
+						'post_status' => 'publish',
+					),
+					true
+				);
+				if ( is_wp_error( $published ) ) {
+					throw new RuntimeException( 'publish_failed: ' . $published->get_error_message() );
+				}
 			}
 
 			// Build options for assign_to_location.
@@ -1394,6 +1404,19 @@ class Mcpwp_Theme_Builder {
 			$assign_result = $this->assign_to_location( $template_id, $type, $scope, $assign_options );
 			if ( is_wp_error( $assign_result ) ) {
 				$conditions_error = $assign_result->get_error_message();
+			}
+
+			if ( 'private' === $target_status ) {
+				$privatized = wp_update_post(
+					array(
+						'ID'          => $template_id,
+						'post_status' => 'private',
+					),
+					true
+				);
+				if ( is_wp_error( $privatized ) ) {
+					throw new RuntimeException( 'private_status_failed: ' . $privatized->get_error_message() );
+				}
 			}
 		} catch ( \Throwable $e ) {
 			// Reaches here for: a WP_Error from clearing post_content or from
@@ -1430,10 +1453,47 @@ class Mcpwp_Theme_Builder {
 
 		if ( null !== $conditions_error ) {
 			$template['conditions_error'] = $conditions_error;
-			return $template;
+			$template['status']             = (string) get_post_status( $template_id );
+			return $this->annotate_theme_template_status_response( $template, $data );
 		}
 
 		$template['assigned'] = true;
+		$template['status']   = (string) get_post_status( $template_id );
+
+		return $this->annotate_theme_template_status_response( $template, $data );
+	}
+
+	/**
+	 * Attach live/next_step for Theme Builder creates (#1211).
+	 *
+	 * @param array $template Create response.
+	 * @param array $data     Original request payload.
+	 * @return array
+	 */
+	private function annotate_theme_template_status_response( array $template, array $data ) {
+		$stored = isset( $template['status'] ) ? (string) $template['status'] : 'draft';
+		$template['live'] = ( 'publish' === $stored );
+		if ( ! $template['live'] ) {
+			$template['next_step'] = __( 'Theme template is saved but not rendered until published. Set status to publish via wp_update_elementor_template (admin scope).', 'mcpwp' );
+		}
+
+		if ( isset( $data['status'] ) && '' !== $data['status'] ) {
+			$requested = sanitize_key( (string) $data['status'] );
+			if ( '' !== $requested && $stored !== $requested ) {
+				$template['warnings']        = isset( $template['warnings'] ) && is_array( $template['warnings'] ) ? $template['warnings'] : array();
+				$template['warnings'][]      = sprintf(
+					/* translators: 1: requested status, 2: stored status */
+					__( 'status_mismatch: requested %1$s but stored %2$s.', 'mcpwp' ),
+					$requested,
+					$stored
+				);
+				$template['status_mismatch'] = array(
+					'requested' => $requested,
+					'stored'    => $stored,
+				);
+			}
+		}
+
 		return $template;
 	}
 

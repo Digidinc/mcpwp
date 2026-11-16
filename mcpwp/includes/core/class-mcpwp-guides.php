@@ -408,7 +408,7 @@ class Mcpwp_Guides {
 				array(
 					'heading' => 'Parts Workflow',
 					'content' => "Use these tools together when building from reusable parts:\n"
-						. "- `wp_list_elementor_parts()` — inspect the current parts library\n"
+						. "- `wp_list_elementor_parts()` — inspect the current parts library (includes drafts for write keys)\n"
 						. "- `wp_get_elementor_part(id)` — inspect a saved part and its metadata\n"
 						. "- `wp_get_elementor_summary(id)` — inspect source pages and find section IDs\n"
 						. "- `wp_create_elementor_part_from_section(page_id, element_id, title, part_kind, part_style, part_tags)` — extract a reusable part from a live page\n"

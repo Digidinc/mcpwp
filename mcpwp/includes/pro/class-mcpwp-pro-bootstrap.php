@@ -34,7 +34,9 @@ class Mcpwp_Pro_Bootstrap {
 		// request). init() itself runs on plugins_loaded, which fires on
 		// every request, so the hook has to go here instead.
 		require_once MCPWP_PLUGIN_DIR . 'includes/pro/core/class-mcpwp-theme-builder.php';
+		require_once MCPWP_PLUGIN_DIR . 'includes/pro/core/class-mcpwp-elementor-pro.php';
 		add_action( 'before_delete_post', array( new Mcpwp_Theme_Builder(), 'handle_before_delete_post' ), 10, 2 );
+		add_action( 'transition_post_status', array( 'Mcpwp_Elementor_Pro', 'on_library_template_status_transition' ), 10, 3 );
 	}
 
 	/**

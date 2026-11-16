@@ -27,6 +27,14 @@ class Mcpwp_Custom_Code_Cache_Entry {
 
 	/** @return true|WP_Error */
 	public static function sync( $post_id, $location, array $conditions ) {
+		$short_circuit = apply_filters( 'mcpwp_custom_code_cache_entry_sync', null, $post_id, $location, $conditions );
+		if ( null !== $short_circuit ) {
+			if ( is_wp_error( $short_circuit ) ) {
+				return $short_circuit;
+			}
+			return true === $short_circuit ? true : new WP_Error( 'custom_code_cache_sync_refused', __( 'The conditions cache could not be synchronized.', 'mcpwp' ) );
+		}
+
 		$post_id = (int) $post_id;
 		$entry   = self::entry_payload( $post_id, $location, $conditions );
 		if ( is_wp_error( $entry ) ) {

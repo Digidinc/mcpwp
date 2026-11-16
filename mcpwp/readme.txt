@@ -6,7 +6,7 @@ Requires at least: 6.1
 Tested up to: 7.0
 Requires PHP: 7.4
 <!-- x-release-please-start-version -->
-Stable tag: 3.14.17
+Stable tag: 3.14.18
 <!-- x-release-please-end -->
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
@@ -156,6 +156,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 4. Integrations and Chat — connected services plus safety-first agent workflow
 
 == Changelog ==
+
+= 3.14.18 =
+* fix: **elementor:** collision-only part id remap on apply ([#826](https://github.com/Digidinc/mcpwp/issues/826)) ([#1204](https://github.com/Digidinc/mcpwp/issues/1204))
+* fix: **setup:** do not embed the admin key in a copyable connector URL and correct the connector key wording ([#1203](https://github.com/Digidinc/mcpwp/issues/1203))
 
 = 3.14.17 =
 * fix: **docs:** one generated source for tool counts and consistent public metadata ([#1200](https://github.com/Digidinc/mcpwp/issues/1200))

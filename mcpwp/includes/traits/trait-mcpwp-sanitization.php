@@ -156,6 +156,69 @@ trait Mcpwp_Sanitization {
 	}
 
 	/**
+	 * After a content write, compare the caller's input to the saved row and
+	 * return a content_modified report (kinds + counts only — never the raw
+	 * stripped payload). Empty array when nothing security-relevant changed.
+	 *
+	 * @param mixed $submitted Content the caller sent.
+	 * @param int   $post_id   Post that was just written.
+	 * @return array{
+	 *     removed?: array<int, array{kind:string, count:int}>,
+	 *     message?: string,
+	 *     content_comparison_skipped?: bool
+	 * }
+	 */
+	protected function content_modified_from_saved( $submitted, $post_id ) {
+		if ( ! class_exists( 'Mcpwp_Content_Modified_Report', false ) ) {
+			return array();
+		}
+		$saved = Mcpwp_Content_Modified_Report::saved_post_content( (int) $post_id );
+		return Mcpwp_Content_Modified_Report::describe_modifications( $submitted, $saved );
+	}
+
+	/**
+	 * Attach content_modified to a write response when the saved body differs
+	 * from what the caller sent in a security-relevant way (#1212). Does not
+	 * change what was saved. Never claims the content was made safe.
+	 *
+	 * @param array $result    Write response (by ref).
+	 * @param mixed $submitted Original content string the caller sent.
+	 * @param int   $post_id   Saved post id.
+	 * @return void
+	 */
+	protected function attach_content_modified_report( array &$result, $submitted, $post_id ) {
+		if ( ! is_string( $submitted ) && ! is_scalar( $submitted ) ) {
+			return;
+		}
+		if ( ! class_exists( 'Mcpwp_Content_Modified_Report', false ) ) {
+			return;
+		}
+		Mcpwp_Content_Modified_Report::attach_to_result(
+			$result,
+			$this->content_modified_from_saved( $submitted, $post_id )
+		);
+	}
+
+	/**
+	 * Attach content_modified by comparing two strings directly (meta fields,
+	 * short descriptions, FAQ answers — anything not post_content).
+	 *
+	 * @param array $result    Write response (by ref).
+	 * @param mixed $submitted Original content the caller sent.
+	 * @param mixed $saved     Content stored after the write.
+	 * @return void
+	 */
+	protected function attach_content_modified_from_strings( array &$result, $submitted, $saved ) {
+		if ( ! class_exists( 'Mcpwp_Content_Modified_Report', false ) ) {
+			return;
+		}
+		Mcpwp_Content_Modified_Report::attach_to_result(
+			$result,
+			Mcpwp_Content_Modified_Report::describe_modifications( $submitted, $saved )
+		);
+	}
+
+	/**
 	 * Remove `<script>`/`<style>` elements — opening tag, body, and closing
 	 * tag together — from one pass over $content.
 	 *
