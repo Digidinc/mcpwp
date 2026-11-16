@@ -301,6 +301,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-keys.php';
 	// The single definition of a valid Elementor element id (#842).
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-element-ids.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-elementor-preview-url.php';
 	// The single definition of which settings embed a Template Library
 	// (elementor_library) post id (#1032) — loaded before the validator
 	// trait and every write path that calls it.
