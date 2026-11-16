@@ -2,10 +2,9 @@
 /**
  * #1210 — admin scope requires write scope.
  *
- * Creating or updating a key with admin but without write must refuse
- * (invalid_scopes). Stored admin-without-write records must not keep admin
- * at read time. The Setup form documents the rule and offers a Read-only
- * preset (JS and JS-free).
+ * Creating a key with admin but without write must refuse (invalid_scopes).
+ * Stored admin-without-write records must not keep admin at read time. The
+ * Setup form documents the rule and offers a Read-only preset (JS and JS-free).
  *
  * @package MCPWP
  */
@@ -13,6 +12,7 @@
 use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__ ) . '/includes/class-mcpwp-key-scope-health.php';
+require_once dirname( __DIR__ ) . '/includes/admin/traits/trait-mcpwp-admin-setup.php';
 
 /** Harness for scope create / normalize / key_has_scope. */
 class Mcpwp_Admin_Requires_Write_1210_Harness {
@@ -32,6 +32,14 @@ class Mcpwp_Admin_Requires_Write_1210_Harness {
 	public function has_scope( $record, string $required ): bool {
 		return $this->key_has_scope( $record, $required );
 	}
+}
+
+/**
+ * Admin Setup create-key POST surface (#1210), without the full page render.
+ */
+class Mcpwp_Admin_Requires_Write_1210_Setup_Harness {
+	use Mcpwp_Api_Auth;
+	use Mcpwp_Admin_Setup_Trait;
 }
 
 final class AdminScopeRequiresWrite1210Test extends TestCase {
@@ -56,6 +64,9 @@ final class AdminScopeRequiresWrite1210Test extends TestCase {
 		$this->assertArrayNotHasKey( 'key', $created );
 		$this->assertStringContainsString( 'admin', strtolower( (string) ( $created['message'] ?? '' ) ) );
 		$this->assertStringContainsString( 'write', strtolower( (string) ( $created['message'] ?? '' ) ) );
+		$this->assertStringContainsString( 'together', strtolower( (string) ( $created['message'] ?? '' ) ) );
+		$this->assertStringNotContainsString( 'omit scopes', strtolower( (string) ( $created['message'] ?? '' ) ) );
+		$this->assertStringNotContainsString( 'role ceiling', strtolower( (string) ( $created['message'] ?? '' ) ) );
 	}
 
 	public function test_create_refuses_bare_admin_without_write(): void {
@@ -250,8 +261,29 @@ final class AdminScopeRequiresWrite1210Test extends TestCase {
 
 		$this->assertNotFalse( $source );
 		$this->assertStringContainsString( 'mcpwp-readonly-key-preset', $source );
-		$this->assertMatchesRegularExpression( '/write.*(admin|Admin)|admin.*write/i', $source );
-		$this->assertStringContainsString( 'disabled', $source );
+		$this->assertStringContainsString( 'function syncAdminWithWrite()', $source );
+		$this->assertStringContainsString( 'if (!writeCb.checked) {', $source );
+		$this->assertStringContainsString( 'adminCb.checked = false;', $source );
+		$this->assertStringContainsString( 'adminCb.disabled = true;', $source );
+		$this->assertStringContainsString( 'adminCb.disabled = false;', $source );
+		$this->assertStringContainsString( "writeCb.addEventListener('change', syncAdminWithWrite);", $source );
+	}
+
+	public function test_wp_create_api_key_scopes_description_says_admin_requires_write(): void {
+		$tool = null;
+		foreach ( ( new Mcpwp_MCP_Free_Tools() )->get_tools() as $candidate ) {
+			if ( 'wp_create_api_key' === $candidate['name'] ) {
+				$tool = $candidate;
+				break;
+			}
+		}
+		$this->assertNotNull( $tool );
+		$desc = $tool['inputSchema']['properties']['scopes']['description'] ?? '';
+		$this->assertStringContainsString( 'Admin requires write', $desc );
+		$this->assertLessThanOrEqual(
+			Mcpwp_MCP_Tool_List_Diet::PROPERTY_DESCRIPTION_MAX_CHARS,
+			mb_strlen( $desc )
+		);
 	}
 
 	/**
@@ -275,5 +307,144 @@ final class AdminScopeRequiresWrite1210Test extends TestCase {
 		$this->assertStringContainsString( esc_html( 'Read-only' ), $html );
 		$this->assertStringContainsString( 'Admin ops requires Write', $html );
 		$this->assertStringContainsString( 'mcpwp_create_readonly_scoped_key', $html );
+	}
+
+	// ── Admin POST handler + notice rendering (#1210 P2) ─────────────────────
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_admin_readonly_button_forces_read_even_when_post_carries_other_scopes(): void {
+		$this->install_admin_post_stubs();
+
+		$_POST = array(
+			'mcpwp_create_readonly_scoped_key' => '1',
+			'mcpwp_scoped_keys_nonce'          => 'test-nonce',
+			'mcpwp_scoped_key_label'           => 'Forced Read',
+			'mcpwp_scoped_key_role'            => 'admin',
+			'mcpwp_scoped_key_scopes'          => array( 'read', 'write', 'admin' ),
+		);
+
+		$created = ( new Mcpwp_Admin_Requires_Write_1210_Setup_Harness() )->process_create_scoped_key_post();
+
+		$this->assertIsArray( $created );
+		$this->assertArrayNotHasKey( 'error', $created );
+		$this->assertSame( array( 'read' ), $created['scopes'] );
+		$this->assertSame( 'mcpwp_scoped_key_created', $GLOBALS['mcpwp_test_settings_errors'][0]['code'] ?? null );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_admin_post_surfaces_invalid_scopes_when_write_cleared_admin_checked(): void {
+		$this->install_admin_post_stubs();
+
+		$_POST = array(
+			'mcpwp_create_scoped_key' => '1',
+			'mcpwp_scoped_keys_nonce' => 'test-nonce',
+			'mcpwp_scoped_key_label'  => 'Bad Combo',
+			'mcpwp_scoped_key_role'   => 'custom',
+			'mcpwp_scoped_key_scopes' => array( 'read', 'admin' ),
+			'mcpwp_scoped_key_categories' => array( 'content' ),
+		);
+
+		$created = ( new Mcpwp_Admin_Requires_Write_1210_Setup_Harness() )->process_create_scoped_key_post();
+
+		$this->assertNull( $created );
+		$this->assertSame( 'mcpwp_scoped_key_error', $GLOBALS['mcpwp_test_settings_errors'][0]['code'] ?? null );
+		$this->assertSame( 'error', $GLOBALS['mcpwp_test_settings_errors'][0]['type'] ?? null );
+		$this->assertStringContainsString( 'write', strtolower( (string) ( $GLOBALS['mcpwp_test_settings_errors'][0]['message'] ?? '' ) ) );
+		$this->assertSame( array(), get_option( 'mcpwp_api_keys', array() ) );
+	}
+
+	public function test_render_notice_hidden_from_non_manage_options_users(): void {
+		update_option(
+			'mcpwp_api_keys',
+			array(
+				array(
+					'id'         => 'bad',
+					'label'      => 'Legacy Admin',
+					'hash'       => 'h',
+					'role'       => 'admin',
+					'scopes'     => array( 'read', 'admin' ),
+					'revoked_at' => null,
+				),
+			)
+		);
+
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		ob_start();
+		Mcpwp_Key_Scope_Health::render_notice();
+		$this->assertSame( '', ob_get_clean() );
+	}
+
+	public function test_render_notice_escapes_hostile_label_and_skips_revoked(): void {
+		update_option(
+			'mcpwp_api_keys',
+			array(
+				array(
+					'id'         => 'xss',
+					'label'      => 'Evil <script>alert(1)</script> & "quoted"',
+					'hash'       => 'h1',
+					'role'       => 'admin',
+					'scopes'     => array( 'read', 'admin' ),
+					'revoked_at' => null,
+				),
+				array(
+					'id'         => 'revoked-bad',
+					'label'      => 'Revoked Bad',
+					'hash'       => 'h2',
+					'role'       => 'admin',
+					'scopes'     => array( 'read', 'admin' ),
+					'revoked_at' => '2026-01-01 00:00:00',
+				),
+			)
+		);
+
+		$GLOBALS['mcpwp_test_current_user'] = 1;
+		ob_start();
+		Mcpwp_Key_Scope_Health::render_notice();
+		$html = (string) ob_get_clean();
+
+		$this->assertStringContainsString( 'notice-warning', $html );
+		$this->assertStringNotContainsString( '<script>', $html );
+		$this->assertStringNotContainsString( 'Revoked Bad', $html );
+		$this->assertStringContainsString( '&amp;', $html );
+		$this->assertStringContainsString( '&quot;quoted&quot;', $html );
+	}
+
+	/**
+	 * Stubs for Setup create-key POST tests (separate process only).
+	 *
+	 * @return void
+	 */
+	private function install_admin_post_stubs(): void {
+		$GLOBALS['mcpwp_test_settings_errors'] = array();
+		$GLOBALS['mcpwp_test_options']         = array();
+		$GLOBALS['mcpwp_test_transients']      = array();
+		$GLOBALS['mcpwp_test_current_user']    = 1;
+
+		if ( ! function_exists( 'check_admin_referer' ) ) {
+			function check_admin_referer( $action = -1, $query_arg = '_wpnonce' ) {
+				return true;
+			}
+		}
+		if ( ! function_exists( 'add_settings_error' ) ) {
+			function add_settings_error( $setting, $code, $message, $type = 'error' ) {
+				$GLOBALS['mcpwp_test_settings_errors'][] = array(
+					'setting' => $setting,
+					'code'    => $code,
+					'message' => $message,
+					'type'    => $type,
+				);
+			}
+		}
+		if ( ! function_exists( 'wp_die' ) ) {
+			function wp_die( $message = '', $title = '', $args = array() ) {
+				throw new RuntimeException( is_string( $message ) ? $message : 'wp_die' );
+			}
+		}
 	}
 }

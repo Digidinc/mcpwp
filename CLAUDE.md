@@ -657,11 +657,13 @@ apply (or when forced via settings). See `mcpwp/includes/core/class-mcpwp-indexn
 | `/api-keys/{id}` | GET/PUT/DELETE | Key CRUD |
 
 **Admin scope requires write (#1210).** `create_scoped_api_key` / `POST /api-keys` refuse
-`admin` without `write` (`400 invalid_scopes`) — they never silently add write. Omit `scopes`
-to get the role ceiling (admin role → read+write+admin). At read time, a legacy stored record
-with admin but no write drops admin (keeps read/…; never gains write); an admin notice lists
-those keys by label only. The Setup form disables Admin ops when Write is cleared, offers a
-Read-only preset, and a JS-free “Create read-only key” submit.
+`admin` without `write` (`400 invalid_scopes`) — they never silently add write. For REST/MCP,
+include `write` together with `admin` (omitting `scopes` defaults to `read` on
+`POST /api-keys` / `wp_create_api_key`). Direct PHP `create_scoped_api_key()` with empty
+scopes still uses the role ceiling (admin role → read+write+admin). At read time, a legacy
+stored record with admin but no write drops admin (keeps read/…; never gains write); an admin
+notice lists those keys by label only. The Setup form disables Admin ops when Write is
+cleared, offers a Read-only preset, and a JS-free “Create read-only key” submit.
 
 ### Guides & Playbooks
 | Endpoint | Method | Purpose |

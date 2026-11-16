@@ -2,7 +2,7 @@
 /**
  * Surface stored API keys that carried admin without write (#1210).
  *
- * Create/update refuse that shape. A legacy or hand-seeded record that still
+ * Create refuses that shape. A legacy or hand-seeded record that still
  * holds it is normalised at read time (admin dropped, write never added). An
  * administrator sees the labels so they can revoke or recreate the key —
  * never hashes or secrets.

@@ -6909,8 +6909,10 @@ trait Mcpwp_Api_Auth {
 	 *                 array{error:'empty_custom_categories', message:string,
 	 *                 invalid_categories:array}
 	 *               - admin without write (#1210): array{error:'invalid_scopes',
-	 *                 message:string}; nothing was written. Admin requires write;
-	 *                 omit scopes to use the role ceiling instead.
+	 *                 message:string}; nothing was written. Admin requires write —
+	 *                 include write together with admin. Empty scopes here still
+	 *                 use the role ceiling; REST/MCP `scopes` default to read
+	 *                 when omitted, so those callers must pass write with admin.
 	 *               - key store busy (#1096): array{error:'keystore_busy',
 	 *                 message:string, retry_after:int}; nothing was written.
 	 *
@@ -6936,7 +6938,8 @@ trait Mcpwp_Api_Auth {
 		// without write is refused (invalid_scopes) rather than silently
 		// adding write — that silent expand was how clearing Write on the
 		// Setup form while leaving Admin ops checked still minted a write
-		// key. Pass write with admin, or omit scopes to get the role ceiling.
+		// key. Include write together with admin. Empty scopes still take the
+		// role ceiling here; REST/MCP default omitted scopes to read.
 		$scope_refusal = self::refusal_for_admin_without_write( $requested_scopes );
 		if ( null !== $scope_refusal ) {
 			return $scope_refusal;
@@ -7576,7 +7579,7 @@ trait Mcpwp_Api_Auth {
 		if ( in_array( 'admin', $requested_scopes, true ) && ! in_array( 'write', $requested_scopes, true ) ) {
 			return array(
 				'error'   => 'invalid_scopes',
-				'message' => __( 'Admin scope requires write scope. Include "write" when requesting "admin", clear Admin ops for a read-only key, or omit scopes to use the role ceiling.', 'mcpwp' ),
+				'message' => __( 'Admin scope requires write scope. Include "write" together with "admin", or clear Admin ops for a read-only key.', 'mcpwp' ),
 			);
 		}
 		return null;
@@ -7603,7 +7606,7 @@ trait Mcpwp_Api_Auth {
 		// #1210: admin requires write. A well-formed grant is read+write+admin.
 		// Legacy / hand-seeded records that stored admin without write must NOT
 		// keep admin and must NOT gain write — drop admin, keep the rest.
-		// Create/update refuse that shape instead (refusal_for_admin_without_write).
+		// Create refuses that shape instead (refusal_for_admin_without_write).
 		if ( in_array( 'admin', $scopes, true ) && ! in_array( 'write', $scopes, true ) ) {
 			$scopes = array_values( array_diff( $scopes, array( 'admin' ) ) );
 			if ( empty( $scopes ) ) {
