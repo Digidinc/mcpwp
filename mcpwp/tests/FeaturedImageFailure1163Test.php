@@ -141,6 +141,7 @@ final class FeaturedImageFailure1163Test extends TestCase {
 		$GLOBALS['mcpwp_test_options']           = array();
 		$GLOBALS['_mcpwp_test_posts']            = array();
 		$GLOBALS['_mcpwp_test_meta']             = array();
+		$GLOBALS['_mcpwp_test_postmeta_rows']    = array();
 		$GLOBALS['_mcpwp_test_thumbnail_ids']    = array();
 		$GLOBALS['mcpwp_test_current_user']      = 2;
 		$GLOBALS['mcpwp_test_public_post_types'] = array( 'post', 'page' );
@@ -383,6 +384,28 @@ final class FeaturedImageFailure1163Test extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $error );
 		$this->assertSame( 'invalid_post_ref', $error->get_error_code() );
 		$this->assert_thumbnail_unchanged( self::POST_ID, self::IMAGE_ID );
+	}
+
+	public function test_apply_featured_image_restore_picks_oldest_duplicate_thumbnail_row(): void {
+		$oldest = self::IMAGE_ID;
+		$newer  = self::IMAGE_ID + 1;
+		$this->seed_attachment( $newer, 'image/jpeg' );
+		$GLOBALS['_mcpwp_test_meta'][ self::POST_ID ]['_thumbnail_id'] = $oldest;
+		$GLOBALS['_mcpwp_test_postmeta_rows'][ self::POST_ID ]['_thumbnail_id'] = array(
+			array( 'meta_id' => 5, 'meta_value' => (string) $oldest ),
+			array( 'meta_id' => 99, 'meta_value' => (string) $newer ),
+		);
+		$GLOBALS['_mcpwp_test_thumbnail_ids'][ self::POST_ID ] = $oldest;
+
+		$fail_id = self::IMAGE_ID + 55;
+		$this->seed_attachment( $fail_id, 'image/jpeg' );
+		$GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ self::POST_ID ] = self::MISSING_ID;
+		$error = Mcpwp_Posts::apply_featured_image( self::POST_ID, $fail_id );
+		unset( $GLOBALS['mcpwp_test_thumbnail_readback_for_post'][ self::POST_ID ] );
+
+		$this->assertInstanceOf( WP_Error::class, $error );
+		$this->assertSame( $oldest, (int) ( $GLOBALS['_mcpwp_test_meta'][ self::POST_ID ]['_thumbnail_id'] ?? 0 ) );
+		$this->assertSame( $oldest, (int) get_post_thumbnail_id( self::POST_ID ) );
 	}
 
 	public function test_apply_featured_image_restores_previous_thumbnail_when_read_back_fails(): void {

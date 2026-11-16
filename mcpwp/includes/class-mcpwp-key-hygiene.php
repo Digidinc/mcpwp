@@ -107,7 +107,19 @@ class Mcpwp_Key_Hygiene {
 	/** Admin fallback internal-slice check cap. */
 	const ADMIN_FALLBACK_MAX_CHECKS = 5;
 
-	/** Cron pass budget (seconds). */
+	/**
+	 * Sweep lock lifetime (seconds) — same row as {@see Mcpwp_OAuth_Clients::LOCK_TTL}.
+	 * A cron pass holds this lock for the whole budget plus bcrypt and a patient mutate().
+	 */
+	const SWEEP_LOCK_LIFETIME = 10;
+
+	/**
+	 * Minimum seconds the cron budget must stay below {@see self::SWEEP_LOCK_LIFETIME}.
+	 * A larger budget risks overlapping cron workers after lock TTL expiry.
+	 */
+	const CRON_LOCK_HEADROOM = 3.0;
+
+	/** Cron pass budget (seconds) — must stay below SWEEP_LOCK_LIFETIME - CRON_LOCK_HEADROOM. */
 	const CRON_TIME_BUDGET = 5.0;
 
 	/** Cron pass check cap. */
@@ -169,7 +181,12 @@ class Mcpwp_Key_Hygiene {
 			self::clear_cron();
 			return;
 		}
-		self::run_safely( self::CRON_TIME_BUDGET, self::CRON_MAX_CHECKS, 'all' );
+		$outcome = self::run_safely( self::CRON_TIME_BUDGET, self::CRON_MAX_CHECKS, 'all' );
+		if ( is_array( $outcome ) && 'unreadable' === $outcome['status'] ) {
+			// Store health already reports an unreadable store; do not re-queue every minute.
+			self::clear_cron();
+			return;
+		}
 		if ( self::is_done() ) {
 			self::clear_cron();
 			return;

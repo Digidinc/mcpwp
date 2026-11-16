@@ -889,6 +889,26 @@ final class KeyHygieneSweepTest extends TestCase {
 		}
 	}
 
+	public function test_cron_time_budget_stays_below_sweep_lock_lifetime(): void {
+		$this->assertLessThan(
+			Mcpwp_Key_Hygiene::SWEEP_LOCK_LIFETIME - Mcpwp_Key_Hygiene::CRON_LOCK_HEADROOM,
+			Mcpwp_Key_Hygiene::CRON_TIME_BUDGET,
+			'A cron pass must finish well inside the sweep lock lifetime.'
+		);
+		$this->assertSame( 10, Mcpwp_OAuth_Clients::LOCK_TTL );
+	}
+
+	public function test_cron_does_not_reschedule_when_store_is_unreadable(): void {
+		update_option( Mcpwp_Key_Store::OPTION, self::CORRUPT );
+		wp_schedule_single_event( time() + 5, Mcpwp_Key_Hygiene::CRON_HOOK );
+		$this->assertNotFalse( wp_next_scheduled( Mcpwp_Key_Hygiene::CRON_HOOK ) );
+
+		Mcpwp_Key_Hygiene::maybe_run_for_cron();
+
+		$this->assertFalse( wp_next_scheduled( Mcpwp_Key_Hygiene::CRON_HOOK ) );
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
+	}
+
 	public function test_cron_path_completes_record_vs_record_work(): void {
 		$other = wp_hash_password( 'other-secret-cron' );
 		update_option(

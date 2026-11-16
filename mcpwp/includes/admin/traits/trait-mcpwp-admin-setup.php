@@ -95,6 +95,20 @@ trait Mcpwp_Admin_Setup_Trait {
 					),
 					'updated'
 				);
+
+				$return_tab = isset( $_POST['mcpwp_setup_return_tab'] ) ? sanitize_key( wp_unslash( $_POST['mcpwp_setup_return_tab'] ) ) : '';
+				$allowed_return_tabs = array( 'claude-code', 'claude-desktop', 'cursor', 'windsurf' );
+				if ( '' !== $return_tab && in_array( $return_tab, $allowed_return_tabs, true ) ) {
+					set_transient( 'mcpwp_new_scoped_key', $new_scoped_key, HOUR_IN_SECONDS );
+					wp_safe_redirect(
+						add_query_arg(
+							'setup_tab',
+							$return_tab,
+							admin_url( 'admin.php?page=mcpwp#mcpwp-connect-tabs' )
+						)
+					);
+					exit;
+				}
 			}
 		}
 
@@ -136,6 +150,14 @@ trait Mcpwp_Admin_Setup_Trait {
 			$first_key = get_transient( 'mcpwp_new_api_key' );
 			if ( $first_key ) {
 				$new_key = $first_key;
+			}
+		}
+
+		if ( ! $new_scoped_key ) {
+			$scope_transient = get_transient( 'mcpwp_new_scoped_key' );
+			if ( is_array( $scope_transient ) ) {
+				$new_scoped_key = $scope_transient;
+				delete_transient( 'mcpwp_new_scoped_key' );
 			}
 		}
 

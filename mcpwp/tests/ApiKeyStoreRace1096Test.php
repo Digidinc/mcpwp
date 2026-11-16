@@ -832,4 +832,38 @@ final class ApiKeyStoreRace1096Test extends TestCase {
 		$this->corrupt_store();
 		$this->assertFalse( $method->invoke( $auth ), 'A corrupt store reads as empty but must not.' );
 	}
+
+	public function test_compare_and_swap_handles_a_large_scoped_key_store(): void {
+		$records = array();
+		for ( $i = 0; $i < 50; $i++ ) {
+			$plain   = 'mcpwp_' . str_repeat( chr( 97 + ( $i % 26 ) ), 48 ) . sprintf( '%02d', $i );
+			$records[] = array(
+				'id'           => sprintf( 'large-%02d', $i ),
+				'label'        => 'Large store label ' . str_repeat( 'x', 120 ) . $i,
+				'hash'         => wp_hash_password( $plain ),
+				'scopes'       => array( 'read', 'write' ),
+				'role'         => 'editor',
+				'created_at'   => '2026-01-01 00:00:00',
+				'last_used_at' => null,
+				'revoked_at'   => null,
+			);
+		}
+		update_option( Mcpwp_Key_Store::OPTION, $records );
+		$serialized = (string) maybe_serialize( get_option( Mcpwp_Key_Store::OPTION ) );
+		$this->assertGreaterThan( 8192, strlen( $serialized ), 'Fixture must exceed the old stub backtrack ceiling.' );
+
+		$result = Mcpwp_Key_Store::mutate(
+			static function ( array $keys ) {
+				foreach ( $keys as $i => $record ) {
+					if ( isset( $record['id'] ) && 'large-00' === $record['id'] ) {
+						$keys[ $i ]['label'] = 'Updated large store row';
+					}
+				}
+				return array( $keys, true );
+			}
+		);
+
+		$this->assertTrue( $result['written'], 'Compare-and-swap must succeed on a large serialized store.' );
+		$this->assertSame( 'Updated large store row', get_option( Mcpwp_Key_Store::OPTION )[0]['label'] );
+	}
 }

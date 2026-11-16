@@ -125,6 +125,13 @@ if ( is_array( $new_scoped_key ?? null ) && ! empty( $new_scoped_key['key'] ) ) 
 		$claude_desktop_url_ready = true;
 	}
 }
+
+$connect_tab          = isset( $_GET['setup_tab'] ) ? sanitize_key( wp_unslash( $_GET['setup_tab'] ) ) : 'claude-code'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- display-only tab selection.
+$connect_tabs_allowed = array( 'claude-code', 'claude-desktop', 'cursor', 'windsurf' );
+if ( ! in_array( $connect_tab, $connect_tabs_allowed, true ) ) {
+	$connect_tab = 'claude-code';
+}
+$claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 ?>
 
 <div class="wrap mcpwp-admin">
@@ -633,14 +640,14 @@ if ( is_array( $new_scoped_key ?? null ) && ! empty( $new_scoped_key['key'] ) ) 
 			</p>
 
 			<nav class="nav-tab-wrapper mcpwp-tabs mcpwp-tabs--inner" id="mcpwp-connect-tabs">
-				<a href="#" class="nav-tab nav-tab-active mcpwp-inner-tab" data-tab="claude-code"><?php esc_html_e( 'Claude Code', 'mcpwp' ); ?></a>
-				<a href="#" class="nav-tab mcpwp-inner-tab" data-tab="claude-desktop"><?php esc_html_e( 'Claude Desktop', 'mcpwp' ); ?></a>
-				<a href="#" class="nav-tab mcpwp-inner-tab" data-tab="cursor"><?php esc_html_e( 'Cursor', 'mcpwp' ); ?></a>
-				<a href="#" class="nav-tab mcpwp-inner-tab" data-tab="windsurf"><?php esc_html_e( 'Windsurf', 'mcpwp' ); ?></a>
+				<a href="#mcpwp-tab-claude-code" class="nav-tab mcpwp-inner-tab<?php echo 'claude-code' === $connect_tab ? ' nav-tab-active' : ''; ?>" data-tab="claude-code"><?php esc_html_e( 'Claude Code', 'mcpwp' ); ?></a>
+				<a href="#mcpwp-tab-claude-desktop" class="nav-tab mcpwp-inner-tab<?php echo 'claude-desktop' === $connect_tab ? ' nav-tab-active' : ''; ?>" data-tab="claude-desktop"><?php esc_html_e( 'Claude Desktop', 'mcpwp' ); ?></a>
+				<a href="#mcpwp-tab-cursor" class="nav-tab mcpwp-inner-tab<?php echo 'cursor' === $connect_tab ? ' nav-tab-active' : ''; ?>" data-tab="cursor"><?php esc_html_e( 'Cursor', 'mcpwp' ); ?></a>
+				<a href="#mcpwp-tab-windsurf" class="nav-tab mcpwp-inner-tab<?php echo 'windsurf' === $connect_tab ? ' nav-tab-active' : ''; ?>" data-tab="windsurf"><?php esc_html_e( 'Windsurf', 'mcpwp' ); ?></a>
 			</nav>
 
 			<!-- Claude Code -->
-			<div class="mcpwp-inner-tab-content" id="mcpwp-tab-claude-code">
+			<div class="mcpwp-inner-tab-content" id="mcpwp-tab-claude-code"<?php echo 'claude-code' !== $connect_tab ? ' style="display:none;"' : ''; ?>>
 				<p><?php esc_html_e( 'Add to .mcp.json in your project root or ~/.claude.json for global access:', 'mcpwp' ); ?></p>
 				<div class="mcpwp-code-wrapper">
 					<pre class="mcpwp-code-block" id="mcpwp-claude-code-cfg">{
@@ -662,7 +669,7 @@ if ( is_array( $new_scoped_key ?? null ) && ! empty( $new_scoped_key['key'] ) ) 
 			</div>
 
 			<!-- Claude Desktop -->
-			<div class="mcpwp-inner-tab-content" id="mcpwp-tab-claude-desktop" style="display:none;">
+			<div class="mcpwp-inner-tab-content" id="mcpwp-tab-claude-desktop"<?php echo 'claude-desktop' !== $connect_tab ? ' style="display:none;"' : ''; ?>>
 
 				<?php if ( ! empty( $local_oauth_enabled ) ) : ?>
 				<!-- Preferred when local OAuth is on: key-less MCP URL (readme.txt / CONNECT-MATRIX) -->
@@ -719,18 +726,25 @@ if ( is_array( $new_scoped_key ?? null ) && ! empty( $new_scoped_key['key'] ) ) 
 						</button>
 					</div>
 					<p class="description">
-						<?php esc_html_e( 'Create a Claude Desktop key below (Editor role, Admin ops off), then paste the filled URL. Prefer WordPress sign-in above when it is available.', 'mcpwp' ); ?>
+						<?php
+						if ( ! empty( $local_oauth_enabled ) ) {
+							esc_html_e( 'Create a Claude Desktop key below (Editor role, Admin ops off), then paste the filled URL. Prefer WordPress sign-in above when it is available.', 'mcpwp' );
+						} else {
+							esc_html_e( 'Create a Claude Desktop key below (Editor role, read + write, Elementor template access — Admin ops off), then paste the filled URL.', 'mcpwp' );
+						}
+						?>
 					</p>
 					<form method="post" class="mcpwp-regenerate-form" style="margin-top:12px;">
 						<?php wp_nonce_field( 'mcpwp_manage_scoped_keys', 'mcpwp_scoped_keys_nonce' ); ?>
-						<input type="hidden" name="mcpwp_scoped_key_label" value="<?php echo esc_attr( 'Claude Desktop' ); ?>" />
+						<input type="hidden" name="mcpwp_scoped_key_label" value="<?php echo esc_attr( $claude_desktop_key_label ); ?>" />
 						<input type="hidden" name="mcpwp_scoped_key_role" value="editor" />
 						<input type="hidden" name="mcpwp_scoped_key_scopes[]" value="read" />
 						<input type="hidden" name="mcpwp_scoped_key_scopes[]" value="write" />
+						<input type="hidden" name="mcpwp_setup_return_tab" value="claude-desktop" />
 						<button type="submit" name="mcpwp_create_scoped_key" class="button button-primary">
 							<?php esc_html_e( 'Create a Claude Desktop key', 'mcpwp' ); ?>
 						</button>
-						<span class="description"><?php esc_html_e( 'Editor role, read + write — Admin ops left off on purpose.', 'mcpwp' ); ?></span>
+						<span class="description"><?php esc_html_e( 'Editor role: read + write, including Elementor templates and theme builder — Admin ops left off on purpose.', 'mcpwp' ); ?></span>
 					</form>
 					<?php endif; ?>
 					<p class="mcpwp-connect-method__hint">
@@ -808,7 +822,7 @@ if ( is_array( $new_scoped_key ?? null ) && ! empty( $new_scoped_key['key'] ) ) 
 			</div>
 
 			<!-- Cursor -->
-			<div class="mcpwp-inner-tab-content" id="mcpwp-tab-cursor" style="display:none;">
+			<div class="mcpwp-inner-tab-content" id="mcpwp-tab-cursor"<?php echo 'cursor' !== $connect_tab ? ' style="display:none;"' : ''; ?>>
 				<p><?php esc_html_e( 'In Cursor go to Settings → MCP and add a new server:', 'mcpwp' ); ?></p>
 				<div class="mcpwp-code-wrapper">
 					<pre class="mcpwp-code-block" id="mcpwp-cursor-cfg">{
@@ -829,7 +843,7 @@ if ( is_array( $new_scoped_key ?? null ) && ! empty( $new_scoped_key['key'] ) ) 
 			</div>
 
 			<!-- Windsurf -->
-			<div class="mcpwp-inner-tab-content" id="mcpwp-tab-windsurf" style="display:none;">
+			<div class="mcpwp-inner-tab-content" id="mcpwp-tab-windsurf"<?php echo 'windsurf' !== $connect_tab ? ' style="display:none;"' : ''; ?>>
 				<p><?php esc_html_e( 'Add to your Windsurf MCP config (~/.codeium/windsurf/mcp_config.json):', 'mcpwp' ); ?></p>
 				<div class="mcpwp-code-wrapper">
 					<pre class="mcpwp-code-block" id="mcpwp-windsurf-cfg">{
