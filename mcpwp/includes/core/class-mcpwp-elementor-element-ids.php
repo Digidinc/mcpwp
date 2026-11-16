@@ -810,4 +810,338 @@ class Mcpwp_Elementor_Element_Ids {
 		}
 		return gettype( $id );
 	}
+
+	/**
+	 * Clone part root(s) with collision-only id remapping (#826).
+	 *
+	 * First apply on a page keeps the part's original ids. Only ids that
+	 * already exist on the target page (including a prior copy) are regenerated.
+	 * References and in-tree custom CSS are repointed inside the copied subtree;
+	 * unrewritable external mentions are reported in possible_references.
+	 *
+	 * @param array  $roots          Top-level section/container elements.
+	 * @param string $seed           Per-apply seed (page + part + apply index).
+	 * @param array  $reserved_ids   id => true for ids already on the target page.
+	 * @return array{roots:array,id_map:object,references_repointed:array,possible_references:array}
+	 */
+	public static function remap_part_roots_for_insert( array $roots, $seed, array $reserved_ids = array() ) {
+		$decoded = json_decode( wp_json_encode( array_values( $roots ) ), true );
+		if ( ! is_array( $decoded ) ) {
+			return array(
+				'roots'                  => array(),
+				'id_map'                 => (object) array(),
+				'references_repointed'   => array(),
+				'possible_references'    => array(),
+			);
+		}
+
+		$tree          = $decoded;
+		$taken         = $reserved_ids;
+		$mapping       = array();
+		$per_path_map  = array();
+		$id_occurrence = array();
+
+		self::walk(
+			$tree,
+			'',
+			function ( array &$el ) use ( &$id_occurrence ) {
+				if ( ! array_key_exists( 'id', $el ) || ( ! is_string( $el['id'] ) && ! is_int( $el['id'] ) ) ) {
+					return;
+				}
+				$old = (string) $el['id'];
+				if ( '' === $old ) {
+					return;
+				}
+				if ( ! isset( $id_occurrence[ $old ] ) ) {
+					$id_occurrence[ $old ] = 0;
+				}
+				++$id_occurrence[ $old ];
+			}
+		);
+
+		$seen_in_walk = array();
+
+		self::walk(
+			$tree,
+			'',
+			function ( array &$el, $path ) use ( $seed, &$taken, &$mapping, &$per_path_map, $id_occurrence, &$seen_in_walk ) {
+				if ( ! array_key_exists( 'id', $el ) || ( ! is_string( $el['id'] ) && ! is_int( $el['id'] ) ) ) {
+					return;
+				}
+
+				$old = (string) $el['id'];
+				if ( '' === $old ) {
+					return;
+				}
+
+				$duplicate_in_part = isset( $id_occurrence[ $old ] ) && $id_occurrence[ $old ] > 1 && isset( $seen_in_walk[ $old ] );
+				$collision         = isset( $taken[ $old ] );
+				$must_remap        = $collision || $duplicate_in_part;
+
+				if ( $must_remap ) {
+					$new                  = self::derive( (string) $seed, 'part|' . $path . '|' . $old, $taken );
+					$taken[ $new ]        = true;
+					$el['id']             = $new;
+					$per_path_map[ $path ] = array(
+						'from' => $old,
+						'to'   => $new,
+					);
+					if ( ! isset( $mapping[ $old ] ) ) {
+						$mapping[ $old ] = $new;
+					}
+				} else {
+					$taken[ $old ] = true;
+				}
+
+				if ( ! isset( $seen_in_walk[ $old ] ) ) {
+					$seen_in_walk[ $old ] = true;
+				}
+			}
+		);
+
+		$repointed = array();
+		$possible  = array();
+
+		if ( ! empty( $per_path_map ) ) {
+			$lookup = self::mention_lookup( array_keys( $mapping ) );
+
+			self::walk(
+				$tree,
+				'',
+				function ( array &$el, $path ) use ( $mapping, $per_path_map, $lookup, &$repointed, &$possible ) {
+					if ( empty( $el['settings'] ) || ! is_array( $el['settings'] ) ) {
+						return;
+					}
+
+					$local_map  = self::remap_mapping_for_element_path( $path, $per_path_map );
+					$global_map = self::remap_mapping_from_paths( $per_path_map );
+
+					foreach ( $el['settings'] as $key => &$value ) {
+						$key = (string) $key;
+
+						if ( isset( self::REFERENCE_KEYS[ $key ] ) && is_string( $value ) && isset( $global_map[ $value ] ) ) {
+							$repointed[] = array(
+								'path' => $path,
+								'key'  => $key,
+								'from' => $value,
+								'to'   => $global_map[ $value ],
+							);
+							$value       = $global_map[ $value ];
+							continue;
+						}
+
+						if ( self::is_css_scoped_setting_key( $key ) ) {
+							$value = self::repoint_encoded( $value, $key, $path, $global_map, $repointed );
+							if ( is_string( $value ) ) {
+								$value = self::rewrite_id_mentions_in_css( $value, $local_map );
+							}
+						} else {
+							$value = self::repoint_encoded( $value, $key, $path, $global_map, $repointed );
+						}
+
+						self::collect_mentions( $value, $key, $path, $lookup, $possible );
+					}
+					unset( $value );
+				}
+			);
+		}
+
+		$id_map = self::remap_mapping_from_paths( $per_path_map );
+
+		return array(
+			'roots'                  => $tree,
+			'id_map'                 => (object) $id_map,
+			'references_repointed'   => $repointed,
+			'possible_references'    => $possible,
+		);
+	}
+
+	/**
+	 * @param array  $element       One top-level section/container element.
+	 * @param string $seed          Per-apply seed (page + part + apply index).
+	 * @param array  $reserved_ids  id => true for ids already on the target page.
+	 * @return array{elements:array,id_map:object,references_repointed:array,possible_references:array}
+	 */
+	public static function remap_tree_for_insert( array $element, $seed, array $reserved_ids = array() ) {
+		$result = self::remap_part_roots_for_insert( array( $element ), $seed, $reserved_ids );
+		return array(
+			'elements'                => $result['roots'][0] ?? array(),
+			'id_map'                  => $result['id_map'],
+			'references_repointed'    => $result['references_repointed'],
+			'possible_references'     => $result['possible_references'],
+		);
+	}
+
+	/**
+	 * Whether a setting key may carry CSS or selectors that name element ids.
+	 *
+	 * @param string $key Setting key.
+	 * @return bool
+	 */
+	private static function is_css_scoped_setting_key( $key ) {
+		$key = (string) $key;
+		if ( 'custom_css' === $key || '_element_custom_css' === $key || 'css' === $key ) {
+			return true;
+		}
+		if ( '_css' === substr( $key, -4 ) ) {
+			return true;
+		}
+		return (bool) preg_match( '/(?:^|_)css$/', $key );
+	}
+
+	/**
+	 * @param string $path           Element path being rewritten.
+	 * @param array  $per_path_map   path => array{from:string,to:string}.
+	 * @return array<string,string>
+	 */
+	private static function remap_mapping_for_element_path( $path, array $per_path_map ) {
+		$local  = array();
+		$prefix = '' === $path ? '' : $path . '.';
+
+		foreach ( $per_path_map as $remap_path => $row ) {
+			if ( $remap_path === $path || ( '' !== $path && 0 === strpos( (string) $remap_path, $prefix ) ) ) {
+				$local[ (string) $row['from'] ] = $row['to'];
+			}
+		}
+
+		return $local;
+	}
+
+	/**
+	 * @param array $per_path_map path => array{from:string,to:string}.
+	 * @return array<string,string>
+	 */
+	private static function remap_mapping_from_paths( array $per_path_map ) {
+		$map = array();
+		foreach ( $per_path_map as $row ) {
+			$map[ (string) $row['from'] ] = $row['to'];
+		}
+		return $map;
+	}
+
+	/**
+	 * @param string $css     CSS or selector-bearing text.
+	 * @param array  $mapping Old id => new id.
+	 * @return string
+	 */
+	private static function rewrite_id_mentions_in_css( $css, array $mapping ) {
+		foreach ( $mapping as $old => $new ) {
+			$old = (string) $old;
+			$new = (string) $new;
+			if ( '' === $old || $old === $new ) {
+				continue;
+			}
+
+			$quoted = preg_quote( $old, '/' );
+			$rules  = array(
+				'/\.elementor-element-' . $quoted . '(?![A-Za-z0-9])/' => '.elementor-element-' . $new,
+				'/#elementor-element-' . $quoted . '(?![A-Za-z0-9])/'  => '#elementor-element-' . $new,
+				'/\[data-id=(["\'])' . $quoted . '\1\]/'               => '[data-id=$1' . $new . '$1]',
+				'/#' . $quoted . '(?![A-Za-z0-9])/'                    => '#' . $new,
+			);
+
+			foreach ( $rules as $pattern => $replacement ) {
+				$replaced = preg_replace( $pattern, $replacement, $css );
+				if ( is_string( $replaced ) ) {
+					$css = $replaced;
+				}
+			}
+		}
+
+		return $css;
+	}
+
+	/**
+	 * Count stamped part markers in a page tree (#826 allow_duplicate).
+	 *
+	 * @param array $elements  Element tree.
+	 * @param int   $part_id   Part template ID.
+	 * @return int
+	 */
+	public static function count_part_markers_in_tree( array $elements, $part_id ) {
+		$part_id = (int) $part_id;
+		$count   = 0;
+
+		self::walk(
+			$elements,
+			'',
+			function ( array &$el ) use ( $part_id, &$count ) {
+				if ( empty( $el['settings'] ) || ! is_array( $el['settings'] ) ) {
+					return;
+				}
+				if ( empty( $el['settings']['_mcpwp_applied_part_id'] ) ) {
+					return;
+				}
+				if ( (int) $el['settings']['_mcpwp_applied_part_id'] === $part_id ) {
+					++$count;
+				}
+			}
+		);
+
+		return $count;
+	}
+
+	/**
+	 * Element ids referenced from custom CSS using # selectors (#826).
+	 *
+	 * @param array $element  Element subtree (one section).
+	 * @param array $part_ids Original ids from the part before remap.
+	 * @return string[] Distinct ids found in custom_css fields.
+	 */
+	public static function css_scoped_to_ids( array $element, array $part_ids ) {
+		if ( empty( $part_ids ) ) {
+			return array();
+		}
+
+		$part_ids = array_map( 'strval', $part_ids );
+		$scoped   = array();
+		$tree     = array( $element );
+
+		self::walk(
+			$tree,
+			'',
+			function ( array &$el ) use ( &$scoped, $part_ids ) {
+				if ( empty( $el['settings']['custom_css'] ) || ! is_string( $el['settings']['custom_css'] ) ) {
+					return;
+				}
+
+				$scoped = array_merge( $scoped, self::find_ids_in_css( $el['settings']['custom_css'], $part_ids ) );
+			}
+		);
+
+		return array_values( array_unique( $scoped ) );
+	}
+
+	/**
+	 * @param string $css  Stylesheet fragment.
+	 * @param array  $ids  Candidate element ids.
+	 * @return string[]
+	 */
+	public static function find_ids_in_css( $css, array $ids ) {
+		if ( ! is_string( $css ) || '' === $css || empty( $ids ) ) {
+			return array();
+		}
+
+		$found = array();
+		foreach ( $ids as $id ) {
+			$id = (string) $id;
+			if ( '' === $id ) {
+				continue;
+			}
+
+			$patterns = array(
+				'/\.elementor-element-' . preg_quote( $id, '/' ) . '(?![A-Za-z0-9])/',
+				'/\[data-id=(["\'])' . preg_quote( $id, '/' ) . '\1\]/',
+				'/#(?:elementor-element-)?' . preg_quote( $id, '/' ) . '(?![A-Za-z0-9])/',
+			);
+			foreach ( $patterns as $pattern ) {
+				if ( preg_match( $pattern, $css ) ) {
+					$found[] = $id;
+					break;
+				}
+			}
+		}
+
+		return $found;
+	}
 }

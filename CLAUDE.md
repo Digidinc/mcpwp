@@ -787,6 +787,8 @@ container → container(s) → widget(s)  # Flexbox layout (check elementor_layo
 3. **Sections need `_column_size`** on columns (must sum to 100)
 4. **Multi-column sections** need `"structure": "20"` (2-col), `"30"` (3-col), `"40"` (4-col)
 
+**`wp_apply_elementor_part` (#826):** The first insert on a page keeps the part's element ids. A later insert remaps only ids that collide with elements already on the page (including an earlier copy), rewrites id-scoped custom CSS inside the copied subtree, and returns `id_map` plus `references_repointed` / `possible_references` when applicable. `allow_duplicate=false` refuses when `_mcpwp_applied_part_id` is already stamped on the tree (not when history meta alone says so). `wp_set_elementor` `dry_run` remains validate-only — it does not exercise the live save pipeline (#828 needs a throwaway clone post, not snapshot/restore).
+
 ### Minimal Page Example
 ```json
 [{
