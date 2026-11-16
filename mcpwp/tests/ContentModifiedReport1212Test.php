@@ -127,6 +127,8 @@ final class ContentModifiedReport1212Test extends TestCase {
 		$this->assertArrayHasKey( 'svg_elements', $kinds );
 		$message = (string) $created['content_modified']['message'];
 		$this->assertStringContainsString( 'SVG elements were removed when saving', $message );
+		$this->assertStringContainsString( 'convert the graphic to PNG or WebP, upload that as media and reference it with an image block', $message );
+		$this->assertStringNotContainsString( 'add the image as a media file', $message );
 		$this->assertStringContainsString( 'script, embed and form markup is not stored by this tool', $message );
 		$this->assertStringNotContainsString( 'unfiltered_html', $message );
 		$this->assertSame( $created['content'], get_post_field( 'post_content', $created['id'] ) );
@@ -173,7 +175,10 @@ final class ContentModifiedReport1212Test extends TestCase {
 		$this->assertArrayHasKey( 'on_attributes', $kinds );
 		$this->assertStringNotContainsString( 'onclick', $updated['content'] );
 		$this->assertStringNotContainsString( 'alert(1)', wp_json_encode( $updated['content_modified'] ) );
-		$this->assertStringNotContainsString( 'unfiltered_html', (string) $updated['content_modified']['message'] );
+		$message = (string) $updated['content_modified']['message'];
+		$this->assertStringContainsString( 'event-handler attributes (onclick, onload ...) are not stored', $message );
+		$this->assertStringNotContainsString( 'script, embed and form markup is not stored by this tool', $message );
+		$this->assertStringNotContainsString( 'unfiltered_html', $message );
 	}
 
 	public function test_reports_unsafe_url_and_style_kinds(): void {
@@ -209,6 +214,11 @@ final class ContentModifiedReport1212Test extends TestCase {
 		$this->assertArrayHasKey( 'button', $kinds );
 		$this->assertArrayHasKey( 'textarea', $kinds );
 		$this->assertArrayHasKey( 'select', $kinds );
+		$message = (string) $report['message'];
+		$this->assertStringContainsString( 'script, embed and form markup is not stored by this tool', $message );
+		$this->assertStringContainsString( 'MathML markup is not stored by this tool', $message );
+		$this->assertStringContainsString( 'form-control markup (input, button, textarea, select) is not stored by this tool', $message );
+		$this->assertStringNotContainsString( 'event-handler attributes', $message );
 	}
 
 	public function test_no_false_positive_when_only_entity_or_whitespace_normalises(): void {

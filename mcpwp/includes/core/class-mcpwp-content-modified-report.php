@@ -243,26 +243,42 @@ class Mcpwp_Content_Modified_Report {
 		$parts = array();
 
 		if ( isset( $set['svg_elements'] ) ) {
-			$parts[] = 'SVG elements were removed when saving; add the image as a media file and reference it with an image block.';
+			$parts[] = 'SVG elements were removed when saving; convert the graphic to PNG or WebP, upload that as media and reference it with an image block.';
 		}
 
+		// script / iframe / object / embed / form / foreignObject share one sentence.
 		$markup_kinds = array(
 			'script',
 			'iframe',
 			'object',
 			'embed',
 			'form',
-			'on_attributes',
 			'foreignobject',
-			'math',
+		);
+		foreach ( $markup_kinds as $kind ) {
+			if ( isset( $set[ $kind ] ) ) {
+				$parts[] = 'script, embed and form markup is not stored by this tool.';
+				break;
+			}
+		}
+
+		if ( isset( $set['on_attributes'] ) ) {
+			$parts[] = 'event-handler attributes (onclick, onload ...) are not stored';
+		}
+
+		if ( isset( $set['math'] ) ) {
+			$parts[] = 'MathML markup is not stored by this tool.';
+		}
+
+		$form_control_kinds = array(
 			'input',
 			'button',
 			'textarea',
 			'select',
 		);
-		foreach ( $markup_kinds as $kind ) {
+		foreach ( $form_control_kinds as $kind ) {
 			if ( isset( $set[ $kind ] ) ) {
-				$parts[] = 'script, embed and form markup is not stored by this tool.';
+				$parts[] = 'form-control markup (input, button, textarea, select) is not stored by this tool.';
 				break;
 			}
 		}

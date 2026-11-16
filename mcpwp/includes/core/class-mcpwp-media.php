@@ -178,7 +178,7 @@ class Mcpwp_Media {
 				__( 'SVG uploads are blocked (SVGs can contain <script> tags — stored XSS risk). Use PNG or WebP instead. To allow SVGs, install an SVG sanitizer plugin (e.g. "Safe SVG") and upload via the WordPress media library directly.', 'mcpwp' ),
 				array(
 					'status'       => 400,
-					'hint'         => 'Convert the SVG to PNG/WebP for API upload. Inline SVG code can be embedded directly in HTML widgets without uploading.',
+					'hint'         => 'Convert the graphic to PNG or WebP, upload that as media and reference it with an image block.',
 					'alternatives' => array( 'png', 'webp', 'jpg' ),
 				)
 			);
@@ -325,7 +325,7 @@ class Mcpwp_Media {
 				__( 'SVG uploads are blocked (SVGs can contain <script> tags — stored XSS risk). Use PNG or WebP instead. To allow SVGs, install an SVG sanitizer plugin (e.g. "Safe SVG") and upload via the WordPress media library directly.', 'mcpwp' ),
 				array(
 					'status'      => 400,
-					'hint'        => 'Convert the SVG to PNG/WebP for API upload. Inline SVG code can be embedded directly in HTML widgets without uploading.',
+					'hint'         => 'Convert the graphic to PNG or WebP, upload that as media and reference it with an image block.',
 					'alternatives' => array( 'png', 'webp', 'jpg' ),
 				)
 			);
