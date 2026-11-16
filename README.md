@@ -74,7 +74,7 @@ MCPWP is a WordPress plugin that exposes a site to AI clients over MCP. Scope th
 - **Site knowledge:** persistent site memory, site health signals, a site graph, and SEO audit and flag tools.
 - **Distribution:** self-hosted and agency builds, an updater served from `updates.mcpwp.net`, and a stdio proxy (`mcp-server/`) for clients that need it.
 
-For the full, current tool list, call `wp_introspect` on a connected site or see the [documentation](https://docs.mcpwp.net). This section describes MCPWP only and makes no comparison with other plugins.
+For the full, current tool list, call `wp_introspect` on a connected site or see the [documentation](https://mcpwp.net/docs/). If you are comparing options, see the [WordPress MCP alternatives guide](https://mcpwp.net/wordpress-mcp-alternatives/). This section describes MCPWP only and makes no comparison with other plugins.
 
 ## Install
 
