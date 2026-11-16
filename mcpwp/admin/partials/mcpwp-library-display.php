@@ -45,7 +45,7 @@ $unlinked_archetype_count = count(
 		<span class="mcpwp-logo">
 			<?php
 			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Markup is escaped in helper.
-			echo Mcpwp_Admin_Brand::get_header_logo_img_markup();
+			echo Mcpwp_Admin_Brand::get_header_badge_markup();
 			?>
 		</span>
 		<?php esc_html_e( 'Library', 'mcpwp' ); ?>

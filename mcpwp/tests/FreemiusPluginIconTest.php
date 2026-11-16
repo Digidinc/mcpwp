@@ -52,9 +52,9 @@ final class FreemiusPluginIconTest extends TestCase {
 		unlink( $lifted );
 	}
 
-	public function test_the_bootstrap_references_the_freemius_sdk_plugin_icon_path() {
+	public function test_the_bootstrap_references_the_admin_brand_png_path() {
 		$refs = self::referenced_icon_paths();
-		$this->assertSame( array( 'freemius/assets/img/plugin-icon.png' ), $refs );
+		$this->assertSame( array( 'assets/mcpwp-mark-ochre-256.png' ), $refs );
 	}
 
 	/**
@@ -94,6 +94,15 @@ final class FreemiusPluginIconTest extends TestCase {
 		}
 	}
 
+	public function test_freemius_sdk_default_plugin_icon_is_untouched() {
+		$path = self::plugin_dir() . 'freemius/assets/img/plugin-icon.png';
+		$this->assertFileExists( $path );
+		$this->assertSame(
+			Mcpwp_Admin_Brand::FREEMIUS_SDK_DEFAULT_ICON_SHA256,
+			hash_file( 'sha256', $path )
+		);
+	}
+
 	/**
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
@@ -101,7 +110,7 @@ final class FreemiusPluginIconTest extends TestCase {
 	public function test_the_filter_returns_the_shipped_icon_when_present() {
 		self::lift_icon_filter( self::plugin_dir() );
 		$this->assertSame(
-			self::plugin_dir() . 'freemius/assets/img/plugin-icon.png',
+			self::plugin_dir() . 'assets/mcpwp-mark-ochre-256.png',
 			mcpwp_fs_custom_icon( false )
 		);
 	}

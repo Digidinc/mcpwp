@@ -143,7 +143,7 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 		<span class="mcpwp-logo">
 			<?php
 			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Markup is escaped in helper.
-			echo Mcpwp_Admin_Brand::get_header_logo_img_markup();
+			echo Mcpwp_Admin_Brand::get_header_badge_markup();
 			?>
 		</span>
 		<?php esc_html_e( 'MCPWP', 'mcpwp' ); ?>

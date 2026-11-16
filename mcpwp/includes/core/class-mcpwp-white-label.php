@@ -142,7 +142,9 @@ class Mcpwp_White_Label {
 		}
 
 		if ( $logo ) {
-			echo '.mcpwp-logo { content: url("' . $logo . '"); max-height: 32px; }'; // phpcs:ignore
+			echo '.mcpwp-logo { align-items: center; background: none; border: none; border-radius: 0; box-shadow: none; display: inline-flex; height: auto; justify-content: center; padding: 0; vertical-align: middle; width: auto; }'; // phpcs:ignore
+			echo '.mcpwp-logo .mcpwp-logo-mark { display: none !important; }'; // phpcs:ignore
+			echo '.mcpwp-logo::before { content: ""; display: inline-block; width: 44px; height: 34px; max-height: 32px; background: url("' . $logo . '") center / contain no-repeat; vertical-align: middle; }'; // phpcs:ignore
 		}
 
 		echo '</style>';

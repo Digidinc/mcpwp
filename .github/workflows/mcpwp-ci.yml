@@ -94,7 +94,7 @@ jobs:
       # Lint and unit tests read the tree; a distribution build is the tree
       # minus whatever its script and .distignore strip. Every build stripped
       # assets/icon-*.png while the Freemius build shipped freemius-init.php
-      # pointing the SDK at assets/icon-128x128.png, so every premium opt-in
+      # pointing the SDK at assets/mcpwp-mark-ochre-256.png, so every premium opt-in
       # screen showed a broken image. Build each zip and check that what it
       # ships references only files it contains. Nothing is uploaded.
       - name: Distribution Asset Check

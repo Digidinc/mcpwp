@@ -30,7 +30,7 @@ $model_label = $model_labels[ $chat_model ] ?? 'Workers AI';
 		<span class="mcpwp-logo">
 			<?php
 			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Markup is escaped in helper.
-			echo Mcpwp_Admin_Brand::get_header_logo_img_markup();
+			echo Mcpwp_Admin_Brand::get_header_badge_markup();
 			?>
 		</span>
 		<?php esc_html_e( 'MCPWP Chat', 'mcpwp' ); ?>
@@ -55,7 +55,7 @@ $model_label = $model_labels[ $chat_model ] ?? 'Workers AI';
 	<div id="mcpwp-chat-container" class="mcpwp-chat-panel">
 		<div class="mcpwp-chat-toolbar">
 			<div class="mcpwp-chat-safety">
-				<span class="dashicons dashicons-lock"></span>
+				<span class="dashicons dashicons-shield"></span>
 				<?php esc_html_e( 'Safety mode: review agent work in Control Room before applying high-impact changes.', 'mcpwp' ); ?>
 			</div>
 			<button type="button" id="mcpwp-chat-clear" class="button button-link mcpwp-chat-clear-btn">
