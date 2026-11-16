@@ -98,6 +98,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'object',
 					'description' => 'Elementor document settings to store with the template: template (canvas/header-footer), hide_title, background_*, padding, custom_css. A full-page template without these carries the layout and loses the frame (#638). Unrecognised keys are reported in page_settings_result.skipped rather than dropped silently.',
 				),
+				'status'        => array(
+					'type'        => 'string',
+					'description' => 'Post status: draft (default), private, or publish.',
+				),
 			)
 		);
 
@@ -268,6 +272,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'object',
 					'description' => 'Elementor document settings to store with the template: template (canvas/header-footer), hide_title, background_*, padding, custom_css. A full-page template without these carries the layout and loses the frame (#638). Unrecognised keys are reported in page_settings_result.skipped rather than dropped silently.',
 				),
+				'status'        => array(
+					'type'        => 'string',
+					'description' => 'Post status: draft (default), private, or publish.',
+				),
 			)
 		);
 
@@ -400,6 +408,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'description' => 'Optional list of part tags',
 					'items'       => array( 'type' => 'string' ),
 				),
+				'status'         => array(
+					'type'        => 'string',
+					'description' => 'Post status: draft (default), private, or publish.',
+				),
 			)
 		);
 
@@ -433,6 +445,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Optional list of part tags',
 					'items'       => array( 'type' => 'string' ),
+				),
+				'status'     => array(
+					'type'        => 'string',
+					'description' => 'Post status: draft (default), private, or publish.',
 				),
 			)
 		);
@@ -628,6 +644,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'title'      => array(
 					'type'        => 'string',
 					'description' => 'Title for the saved template. Defaults to "Section from Page {id}"',
+				),
+				'status'     => array(
+					'type'        => 'string',
+					'description' => 'Post status: draft (default), private, or publish.',
 				),
 			)
 		);
@@ -1054,6 +1074,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'boolean',
 					'description' => 'Validate without creating or publishing the template (#828: previously ignored here, so a dry run still created and published the template).',
 					'default'     => false,
+				),
+				'status' => array(
+					'type'        => 'string',
+					'description' => 'Post status: draft (default), private, or publish.',
 				),
 			),
 			null,

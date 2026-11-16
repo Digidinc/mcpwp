@@ -100,6 +100,13 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_theme_template' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'status' => array(
+							'type'        => 'string',
+							'enum'        => array( 'draft', 'private', 'publish' ),
+							'description' => __( 'Post status for the new Theme Builder template. Defaults to draft.', 'mcpwp' ),
+						),
+					),
 				),
 			)
 		);

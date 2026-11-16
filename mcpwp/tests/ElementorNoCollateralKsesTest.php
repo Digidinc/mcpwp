@@ -665,7 +665,8 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 
 		$this->assert_ok( $result, 'saved section' );
 		$this->assertSame( 'draft', $status_during_write );
-		$this->assertSame( 'publish', get_post_status( (int) $result['template_id'] ) );
+		$this->assertSame( 'draft', get_post_status( (int) $result['template_id'] ) );
+		$this->assertSame( 'draft', $result['status'] );
 	}
 
 	/**

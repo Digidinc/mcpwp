@@ -5829,6 +5829,14 @@ trait Mcpwp_Api_Auth {
 			'/mcpwp/v1/elementor/landing-page',
 			'/mcpwp/v1/elementor/clone',
 			'/mcpwp/v1/elementor/page',
+			// #1211: library template creators used to always publish after
+			// save. These routes now accept an optional status defaulting to
+			// draft; publish still requires admin scope here.
+			'/mcpwp/v1/elementor/templates',
+			'/mcpwp/v1/elementor/archetypes',
+			'/mcpwp/v1/elementor/parts',
+			'/mcpwp/v1/elementor/save-section-as-template',
+			'/mcpwp/v1/theme-builder/templates',
 		);
 		if ( $is_write ) {
 			foreach ( $publish_gated_routes as $publish_gated_route ) {

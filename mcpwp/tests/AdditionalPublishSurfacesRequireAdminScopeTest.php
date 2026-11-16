@@ -256,6 +256,45 @@ final class AdditionalPublishSurfacesRequireAdminScopeTest extends TestCase {
 		$this->assertTrue( $controller->verify_api_key( $request ) );
 	}
 
+	// ── Elementor library template creators (#1211) ───────────────────────────
+
+	public function test_write_key_cannot_create_a_published_elementor_template(): void {
+		$controller = new Mcpwp_REST_Elementor_Pro( null );
+		$key        = $this->write_key( $controller );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/templates',
+			array(
+				'title'  => 'Header',
+				'type'   => 'page',
+				'status' => 'publish',
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$result = $controller->verify_api_key( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'insufficient_scope', $result->get_error_code() );
+	}
+
+	public function test_write_key_can_create_a_draft_elementor_template(): void {
+		$controller = new Mcpwp_REST_Elementor_Pro( null );
+		$key        = $this->write_key( $controller );
+
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/elementor/templates',
+			array(
+				'title' => 'Header',
+				'type'  => 'page',
+			),
+			array( 'X-API-Key' => $key )
+		);
+
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+	}
+
 	// ── create_elementor_page (/elementor/page, no MCP tool maps to it) ────
 
 	public function test_write_key_cannot_create_a_published_page_via_elementor_page_route(): void {

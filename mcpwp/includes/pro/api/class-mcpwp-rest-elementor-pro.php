@@ -96,6 +96,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_template' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_library_template_status_write_args(),
 				),
 			)
 		);
@@ -147,6 +148,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_archetype' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_library_template_status_write_args(),
 				),
 			)
 		);
@@ -192,6 +194,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_part' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_library_template_status_write_args(),
 				),
 			)
 		);
@@ -230,6 +233,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'create_part_from_section' ),
 				'permission_callback' => array( $this, 'check_permission' ),
+				'args'                => $this->get_library_template_status_write_args(),
 			)
 		);
 
@@ -401,7 +405,23 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'save_section_as_template' ),
 				'permission_callback' => array( $this, 'check_permission' ),
+				'args'                => $this->get_library_template_status_write_args(),
 			)
+		);
+	}
+
+	/**
+	 * REST args for elementor_library create routes (#1211).
+	 *
+	 * @return array
+	 */
+	private function get_library_template_status_write_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'enum'        => array( 'draft', 'private', 'publish' ),
+				'description' => __( 'Post status for the new library template. Defaults to draft.', 'mcpwp' ),
+			),
 		);
 	}
 
@@ -2130,6 +2150,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'title'          => $request->get_param( 'title' ),
 			'type'           => $request->get_param( 'type' ),
 			'elementor_data' => $this->get_elementor_payload_from_request( $request ),
+			'status'         => $request->get_param( 'status' ),
 		);
 
 		$template = $this->elementor_pro->create_template( $data );
@@ -2316,6 +2337,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'archetype_scope' => $request->get_param( 'archetype_scope' ),
 			'archetype_class' => $request->get_param( 'archetype_class' ),
 			'archetype_style' => $request->get_param( 'archetype_style' ),
+			'status'          => $request->get_param( 'status' ),
 		);
 
 		$archetype = $this->elementor_pro->create_archetype( $data );
@@ -2486,6 +2508,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'part_kind'      => $request->get_param( 'part_kind' ),
 			'part_style'     => $request->get_param( 'part_style' ),
 			'part_tags'      => $request->get_param( 'part_tags' ),
+			'status'         => $request->get_param( 'status' ),
 		);
 
 		$part = $this->elementor_pro->create_part( $data );
@@ -2559,6 +2582,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'part_kind'  => $request->get_param( 'part_kind' ),
 			'part_style' => $request->get_param( 'part_style' ),
 			'part_tags'  => $request->get_param( 'part_tags' ),
+			'status'     => $request->get_param( 'status' ),
 		);
 
 		$part = $this->elementor_pro->create_part_from_section( $page_id, $element_id, $data );
@@ -3332,7 +3356,12 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
 		}
 
-		$result = $this->elementor_pro->save_section_as_template( $page_id, $element_id, $title );
+		$options = array();
+		if ( $request->has_param( 'status' ) ) {
+			$options['status'] = $request->get_param( 'status' );
+		}
+
+		$result = $this->elementor_pro->save_section_as_template( $page_id, $element_id, $title, $options );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;

@@ -739,6 +739,7 @@ class Mcpwp_Elementor_Pro {
 			'id'         => $template->ID,
 			'title'      => $template->post_title,
 			'slug'       => $template->post_name,
+			'status'     => (string) get_post_status( $template ),
 			'type'       => get_post_meta( $template->ID, '_elementor_template_type', true ),
 			'created'    => $template->post_date,
 			'modified'   => $template->post_modified,
@@ -788,6 +789,81 @@ class Mcpwp_Elementor_Pro {
 	}
 
 	/**
+	 * Allowed post statuses for new elementor_library creates (#1211).
+	 *
+	 * @return string[]
+	 */
+	public static function allowed_library_create_statuses() {
+		return array( 'draft', 'private', 'publish' );
+	}
+
+	/**
+	 * Resolve the target post_status for a new library template create.
+	 *
+	 * @param array $data Request/tool payload.
+	 * @return string|WP_Error 'draft', 'private', or 'publish'.
+	 */
+	public static function resolve_library_create_status( $data ) {
+		if ( ! isset( $data['status'] ) || '' === $data['status'] ) {
+			return 'draft';
+		}
+
+		$status = sanitize_key( (string) $data['status'] );
+		if ( ! in_array( $status, self::allowed_library_create_statuses(), true ) ) {
+			return new WP_Error(
+				'invalid_status',
+				sprintf(
+					/* translators: %s: comma-separated list of allowed statuses */
+					__( 'Invalid status "%1$s". Must be one of: %2$s.', 'mcpwp' ),
+					$status,
+					implode( ', ', self::allowed_library_create_statuses() )
+				),
+				array(
+					'status'            => 400,
+					'allowed_statuses'  => self::allowed_library_create_statuses(),
+				)
+			);
+		}
+
+		return $status;
+	}
+
+	/**
+	 * Transition a library template to its finalized post_status after data is stored.
+	 *
+	 * @param int    $template_id    Template post ID.
+	 * @param string $target_status  Requested terminal status (default draft).
+	 * @return true|WP_Error
+	 */
+	private function finalize_library_template_status( $template_id, $target_status ) {
+		if ( 'draft' === $target_status ) {
+			return true;
+		}
+
+		$updated = wp_update_post(
+			array(
+				'ID'          => $template_id,
+				'post_status' => $target_status,
+			),
+			true
+		);
+
+		if ( is_wp_error( $updated ) || ! $updated ) {
+			wp_delete_post( $template_id, true );
+
+			return is_wp_error( $updated )
+				? $updated
+				: new WP_Error(
+					'elementor_template_status_failed',
+					__( 'The completed template could not be saved with the requested status.', 'mcpwp' ),
+					array( 'status' => 500 )
+				);
+		}
+
+		return true;
+	}
+
+	/**
 	 * Create a new template.
 	 *
 	 * @param array $data Template data.
@@ -821,6 +897,11 @@ class Mcpwp_Elementor_Pro {
 				__( 'Elementor\'s template type registry could not be read, so the requested type could not be validated. Nothing was created.', 'mcpwp' ),
 				array( 'status' => 500 )
 			);
+		}
+
+		$target_status = self::resolve_library_create_status( $data );
+		if ( is_wp_error( $target_status ) ) {
+			return $target_status;
 		}
 
 		if ( $type_given && ! in_array( $type, $valid_types, true ) ) {
@@ -881,10 +962,10 @@ class Mcpwp_Elementor_Pro {
 
 		$this->save_part_metadata( $template_id, $data );
 		$this->save_archetype_metadata( $template_id, $data );
-		$published = wp_update_post( array( 'ID' => $template_id, 'post_status' => 'publish' ), true );
-		if ( is_wp_error( $published ) || ! $published ) {
-			wp_delete_post( $template_id, true );
-			return is_wp_error( $published ) ? $published : new WP_Error( 'elementor_template_publish_failed', __( 'The completed template could not be published.', 'mcpwp' ), array( 'status' => 500 ) );
+
+		$finalized = $this->finalize_library_template_status( $template_id, $target_status );
+		if ( is_wp_error( $finalized ) ) {
+			return $finalized;
 		}
 
 		$created = $this->get_template( $template_id );
@@ -1078,7 +1159,7 @@ class Mcpwp_Elementor_Pro {
 	 */
 	public function create_part_from_section( $page_id, $element_id, $data = array() ) {
 		$title = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : '';
-		$result = $this->save_section_as_template( $page_id, $element_id, $title );
+		$result = $this->save_section_as_template( $page_id, $element_id, $title, $data );
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
@@ -2024,9 +2105,10 @@ class Mcpwp_Elementor_Pro {
 	 * @param int    $page_id    Page containing the section.
 	 * @param string $element_id Element ID to extract.
 	 * @param string $title      Template title (optional).
+	 * @param array  $options    Optional create options (e.g. status).
 	 * @return array|WP_Error Template info or error.
 	 */
-	public function save_section_as_template( $page_id, $element_id, $title = '' ) {
+	public function save_section_as_template( $page_id, $element_id, $title = '', $options = array() ) {
 		$post = get_post( $page_id );
 		// #1024/#1030 round-2 review, BLOCK-B: this core method has no type
 		// check of its own — a WooCommerce product's Elementor content
@@ -2038,6 +2120,11 @@ class Mcpwp_Elementor_Pro {
 		// method for /elementor/parts/from-section.
 		if ( ! $post || ! in_array( $post->post_type, array( 'page', 'post', 'elementor_library', 'elementor_snippet' ), true ) ) {
 			return new WP_Error( 'invalid_page', 'Page not found.', array( 'status' => 404 ) );
+		}
+
+		$target_status = self::resolve_library_create_status( is_array( $options ) ? $options : array() );
+		if ( is_wp_error( $target_status ) ) {
+			return $target_status;
 		}
 
 		// In whatever form it is stored (#845). Data that cannot be read is
@@ -2096,15 +2183,16 @@ class Mcpwp_Elementor_Pro {
 
 		// Set taxonomy term for Elementor library type.
 		wp_set_object_terms( $template_id, $template_type, 'elementor_library_type' );
-		$published = wp_update_post( array( 'ID' => $template_id, 'post_status' => 'publish' ), true );
-		if ( is_wp_error( $published ) || ! $published ) {
-			wp_delete_post( $template_id, true );
-			return is_wp_error( $published ) ? $published : new WP_Error( 'elementor_template_publish_failed', __( 'The saved section could not be published.', 'mcpwp' ), array( 'status' => 500 ) );
+
+		$finalized = $this->finalize_library_template_status( $template_id, $target_status );
+		if ( is_wp_error( $finalized ) ) {
+			return $finalized;
 		}
 
 		return array(
 			'template_id'   => $template_id,
 			'title'         => $title,
+			'status'        => (string) get_post_status( $template_id ),
 			'template_type' => $template_type,
 			'source_page'   => $page_id,
 			'element_id'    => $element_id,
