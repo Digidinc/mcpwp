@@ -5200,8 +5200,20 @@ trait Mcpwp_Api_Auth {
 	 * @return array|null Matching key record or null.
 	 */
 	protected function find_scoped_api_key( $api_key ) {
-		$keys = $this->get_scoped_api_keys_raw();
+		return $this->find_scoped_api_key_in_records( $api_key, $this->get_scoped_api_keys_raw() );
+	}
 
+	/**
+	 * Match a plaintext key against a list of scoped records (revoked skipped).
+	 *
+	 * Shared by the normal get_option() path and the busy-adoption fresh DB
+	 * retry so revoked/verifier rules stay identical (#1209 P2-1).
+	 *
+	 * @param string $api_key Incoming plaintext API key.
+	 * @param array  $keys    Raw key records.
+	 * @return array|null Matching key record or null.
+	 */
+	protected function find_scoped_api_key_in_records( $api_key, array $keys ) {
 		foreach ( $keys as $key ) {
 			if ( ! empty( $key['revoked_at'] ) || empty( $key['hash'] ) ) {
 				continue;
@@ -5223,10 +5235,13 @@ trait Mcpwp_Api_Auth {
 	 *
 	 * Concurrent first requests after upgrade: request A may hold the store
 	 * lock while B's adoption returns busy. A then writes the adopted
-	 * records; B must invalidate a stale options cache and look again once,
-	 * or the old key 401s with no admin signal (#1120 / #1209 review).
-	 * Adoption itself still runs on plugins_loaded / activation — this is
-	 * only the re-read after a busy peer.
+	 * records. B must NOT rely on get_option() or a per-option cache delete —
+	 * mcpwp_api_keys is autoloaded, so core serves it from alloptions, and
+	 * deleting only the separate options-group entry leaves B's boot-time
+	 * alloptions stale (#1209 P2-1). Read the row fresh from the database
+	 * (Mcpwp_Key_Store::read_keys()) and run the same find logic on that
+	 * array. Adoption itself still runs on plugins_loaded / activation —
+	 * this is only the re-read after a busy peer.
 	 *
 	 * @param string $api_key Incoming plaintext API key.
 	 * @return array|null Matching key record or null.
@@ -5239,9 +5254,8 @@ trait Mcpwp_Api_Auth {
 		if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
 			require_once dirname( __DIR__ ) . '/core/class-mcpwp-key-store.php';
 		}
-		Mcpwp_Key_Store::invalidate_option_cache();
 
-		return $this->find_scoped_api_key( $api_key );
+		return $this->find_scoped_api_key_in_records( $api_key, Mcpwp_Key_Store::read_keys() );
 	}
 
 	/**

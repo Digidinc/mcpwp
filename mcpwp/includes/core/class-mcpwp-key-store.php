@@ -49,18 +49,6 @@ class Mcpwp_Key_Store {
 	/** Read-mutate-swap tries inside one lock hold. */
 	const SWAP_ATTEMPTS = 3;
 
-	/** @var bool Whether invalidate_option_cache() already ran this request. */
-	private static $option_cache_invalidated_this_request = false;
-
-	/**
-	 * Clear per-request cache-invalidation markers (tests / new request).
-	 *
-	 * @return void
-	 */
-	public static function clear_request_state() {
-		self::$option_cache_invalidated_this_request = false;
-	}
-
 	/**
 	 * Read-modify-write the key store without losing a concurrent write.
 	 *
@@ -165,14 +153,34 @@ class Mcpwp_Key_Store {
 	/**
 	 * The stored bytes of the store row, straight from the database.
 	 *
+	 * Bypasses get_option() and the object cache (including alloptions).
+	 * Autoloaded options are served from alloptions on a real site, so a
+	 * peer's write is invisible to get_option() until that request's
+	 * alloptions is refreshed — callers that must see a concurrent write
+	 * (busy-adoption auth retry) use this instead of cache invalidation.
+	 *
 	 * @return string|null Null when the row does not exist.
 	 */
-	private static function read_row() {
+	public static function read_row() {
 		global $wpdb;
 		$value = $wpdb->get_var(
 			$wpdb->prepare( "SELECT option_value FROM {$wpdb->options} WHERE option_name = %s", self::OPTION )
 		);
 		return is_string( $value ) ? $value : null;
+	}
+
+	/**
+	 * Key records from a fresh database read (not get_option / alloptions).
+	 *
+	 * @return array Empty when the row is missing or not a serialised list.
+	 */
+	public static function read_keys() {
+		$raw = self::read_row();
+		if ( null === $raw || ! self::is_readable_store( $raw ) ) {
+			return array();
+		}
+		$keys = maybe_unserialize( $raw );
+		return is_array( $keys ) ? $keys : array();
 	}
 
 	/**
@@ -396,26 +404,6 @@ class Mcpwp_Key_Store {
 			$wpdb->suppress_errors( $suppressed );
 		}
 		return 1 === (int) $rows;
-	}
-
-	/**
-	 * Drop a stale options-cache view of the key store so the next get_option()
-	 * re-reads (used after a busy adoption while a peer may have written).
-	 *
-	 * Only the mcpwp_api_keys entry — not alloptions/notoptions — so a Redis
-	 * or Memcached site is not forced into a site-wide options reload on every
-	 * concurrent first request. At most once per request.
-	 *
-	 * @return void
-	 */
-	public static function invalidate_option_cache() {
-		if ( self::$option_cache_invalidated_this_request ) {
-			return;
-		}
-		self::$option_cache_invalidated_this_request = true;
-		if ( function_exists( 'wp_cache_delete' ) ) {
-			wp_cache_delete( self::OPTION, 'options' );
-		}
 	}
 
 	/**

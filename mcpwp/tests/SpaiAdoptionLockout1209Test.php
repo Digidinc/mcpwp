@@ -29,19 +29,22 @@ class Mcpwp_Spai_Lockout_Test_Auth {
 final class SpaiAdoptionLockout1209Test extends TestCase {
 
 	protected function setUp(): void {
-		$GLOBALS['mcpwp_test_options']            = array();
-		$GLOBALS['mcpwp_test_options_autoload']   = array();
-		$GLOBALS['mcpwp_test_transients']         = array();
-		$GLOBALS['mcpwp_test_wpdb_options']       = array();
-		$GLOBALS['mcpwp_test_delete_option_fail'] = array();
-		$GLOBALS['mcpwp_test_current_user']       = 0;
-		$GLOBALS['mcpwp_test_user_caps']          = array();
-		$GLOBALS['mcpwp_test_is_admin']           = false;
-		$GLOBALS['mcpwp_test_object_cache']       = array();
-		$GLOBALS['mcpwp_test_option_cache_stale'] = array();
-		$GLOBALS['mcpwp_test_wpdb_before_insert'] = null;
-		$GLOBALS['mcpwp_test_cache_deletes']      = array();
+		$GLOBALS['mcpwp_test_options']                   = array();
+		$GLOBALS['mcpwp_test_options_autoload']          = array();
+		$GLOBALS['mcpwp_test_transients']                = array();
+		$GLOBALS['mcpwp_test_wpdb_options']              = array();
+		$GLOBALS['mcpwp_test_delete_option_fail']        = array();
+		$GLOBALS['mcpwp_test_current_user']              = 0;
+		$GLOBALS['mcpwp_test_user_caps']                 = array();
+		$GLOBALS['mcpwp_test_is_admin']                  = false;
+		$GLOBALS['mcpwp_test_object_cache']              = array();
+		$GLOBALS['mcpwp_test_option_cache_stale']        = array();
+		$GLOBALS['mcpwp_test_wpdb_before_insert']        = null;
+		$GLOBALS['mcpwp_test_cache_deletes']             = array();
+		$GLOBALS['mcpwp_test_wp_hash_password_calls']    = 0;
+		$GLOBALS['mcpwp_test_wp_check_password_calls']   = 0;
 		unset( $_SERVER['REQUEST_URI'], $_SERVER['HTTP_X_API_KEY'], $_SERVER['HTTP_AUTHORIZATION'], $_GET['api_key'], $_GET['rest_route'], $_POST['api_key'], $_REQUEST['api_key'] );
+		unset( $_COOKIE['wordpress_logged_in_testhash'], $_COOKIE['wordpress_' . str_repeat( 'a', 32 )] );
 		unset( $GLOBALS['mcpwp_test_filters']['mcpwp_spai_credential_mutator_prepare'] );
 		unset( $GLOBALS['mcpwp_test_actions']['mcpwp_spai_adoption_mutator_run'] );
 		if ( method_exists( 'Mcpwp_Activator', 'clear_spai_adoption_request_state' ) ) {
@@ -61,6 +64,7 @@ final class SpaiAdoptionLockout1209Test extends TestCase {
 		$GLOBALS['mcpwp_test_user_caps']          = array();
 		$GLOBALS['mcpwp_test_cache_deletes']      = array();
 		unset( $_SERVER['REQUEST_URI'], $_SERVER['HTTP_X_API_KEY'], $_SERVER['HTTP_AUTHORIZATION'], $_GET['api_key'], $_GET['rest_route'], $_POST['api_key'], $_REQUEST['api_key'] );
+		unset( $_COOKIE['wordpress_logged_in_testhash'], $_COOKIE['wordpress_' . str_repeat( 'a', 32 )] );
 		unset( $GLOBALS['mcpwp_test_filters']['mcpwp_spai_credential_mutator_prepare'] );
 		unset( $GLOBALS['mcpwp_test_actions']['mcpwp_spai_adoption_mutator_run'] );
 		if ( method_exists( 'Mcpwp_Activator', 'clear_spai_adoption_request_state' ) ) {
@@ -96,7 +100,7 @@ final class SpaiAdoptionLockout1209Test extends TestCase {
 
 	// ── P1-1 (a)/(P2-1): patient lock + re-read after busy ────────────────
 
-	public function test_adoption_waits_on_credential_logged_in_admin_and_wp_cli_not_path_alone(): void {
+	public function test_adoption_waits_on_credential_auth_cookie_and_wp_cli_not_path_alone(): void {
 		$this->assertFalse( Mcpwp_Activator::adoption_should_wait(), 'Front-end default: impatient.' );
 
 		// Bare is_admin() (unauthenticated admin-ajax) must NOT wait (#1209 P2-A).
@@ -124,16 +128,42 @@ final class SpaiAdoptionLockout1209Test extends TestCase {
 		$this->assertTrue( Mcpwp_Activator::adoption_should_wait(), 'api_key param: patient.' );
 		unset( $_GET['api_key'] );
 
+		// #1209 P2-3: presence of an auth cookie only — never resolve the user
+		// at plugins_loaded (get_current_user_id would cache a premature id).
 		$GLOBALS['mcpwp_test_current_user'] = 1;
 		$GLOBALS['mcpwp_test_user_caps'][1] = array( 'manage_options' => true );
-		$this->assertTrue( Mcpwp_Activator::adoption_should_wait(), 'Logged-in manage_options: patient.' );
+		$this->assertFalse(
+			Mcpwp_Activator::adoption_should_wait(),
+			'A resolved current user alone must not wait (no cookie).'
+		);
+		$_COOKIE['wordpress_logged_in_testhash'] = 'admin|expiration|token';
+		$this->assertTrue( Mcpwp_Activator::adoption_should_wait(), 'Auth cookie present: patient.' );
+		unset( $_COOKIE['wordpress_logged_in_testhash'] );
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 
-		// WP_CLI cannot be toggled once defined; pin the branch in source instead.
 		$src = file_get_contents( dirname( __DIR__ ) . '/includes/class-mcpwp-activator.php' );
+		$this->assertSame(
+			1,
+			preg_match(
+				'/function adoption_should_wait\s*\(\s*\)\s*\{(?P<body>.*?)\n\tpublic static function /s',
+				$src,
+				$m
+			),
+			'Locate adoption_should_wait body.'
+		);
+		$wait_body = $m['body'];
+		$this->assertStringNotContainsString(
+			'get_current_user_id',
+			$wait_body,
+			'adoption_should_wait must not resolve the user at plugins_loaded.'
+		);
+		$this->assertStringNotContainsString( 'current_user_can', $wait_body );
+		$this->assertStringContainsString( 'request_presents_auth_cookie', $wait_body );
+
+		// WP_CLI cannot be toggled once defined; pin the branch in source instead.
 		$this->assertMatchesRegularExpression(
 			"/defined\\(\\s*'WP_CLI'\\s*\\)\\s*&&\\s*WP_CLI/",
-			$src,
+			$wait_body,
 			'WP-CLI uses the patient lock.'
 		);
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
@@ -180,11 +210,13 @@ final class SpaiAdoptionLockout1209Test extends TestCase {
 		$this->assertTrue( $this->works( $this->key( 'p1' ) ) );
 	}
 
-	public function test_busy_adoption_then_peer_write_authenticates_after_reread(): void {
+	public function test_busy_adoption_then_peer_write_authenticates_after_fresh_db_read(): void {
 		$this->seed_store_key();
 		$key  = $this->key( 'c1' );
 		$hash = wp_hash_password( $key );
 		update_option( 'spai_api_key', $hash );
+		// Autoloaded (core default): served from alloptions, not a per-option entry.
+		$GLOBALS['mcpwp_test_options_autoload']['mcpwp_api_keys'] = 'yes';
 		$stale_store = get_option( 'mcpwp_api_keys' );
 
 		// Request B: store lock held → busy (as on concurrent first requests).
@@ -202,19 +234,62 @@ final class SpaiAdoptionLockout1209Test extends TestCase {
 		delete_transient( Mcpwp_Activator::SPAI_ADOPTION_BUSY_COOLDOWN );
 		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials( true ) );
 		$this->assertNotEmpty( get_option( Mcpwp_Activator::SPAI_ADOPTION_FLAG ) );
+		$fresh_store = get_option( 'mcpwp_api_keys' );
+		$this->assertNotEquals( $stale_store, $fresh_store, 'Peer A wrote adopted records.' );
 
 		// Re-arm B's busy marker for this request (plugins_loaded already did).
 		Mcpwp_Activator::mark_spai_adoption_busy_for_tests();
 
-		// B still sees the pre-adoption store (stale options cache).
+		// B's boot-time alloptions still holds the pre-adoption store.
+		$GLOBALS['mcpwp_test_options_autoload']['mcpwp_api_keys']  = 'yes';
 		$GLOBALS['mcpwp_test_option_cache_stale']['mcpwp_api_keys'] = $stale_store;
+		$this->assertSame(
+			$stale_store,
+			get_option( 'mcpwp_api_keys' ),
+			'get_option serves stale alloptions for an autoloaded option.'
+		);
 		$this->assertNull(
 			( new Mcpwp_Spai_Lockout_Test_Auth() )->find_scoped_api_key_public( $key ),
-			'Stale cache hides the adopted record.'
+			'Stale alloptions hides the adopted record from get_option().'
 		);
 
-		// Auth retries once after busy: invalidate + re-read.
-		$this->assertTrue( $this->works( $key ), 'After busy, one re-read sees A\'s write.' );
+		// Mutant proof (#1209 P2-1): deleting only the per-option cache entry
+		// (the old invalidate_option_cache() behaviour) must NOT clear
+		// alloptions — a retry that called get_option() again would still 401.
+		wp_cache_delete( 'mcpwp_api_keys', 'options' );
+		$this->assertSame(
+			$stale_store,
+			get_option( 'mcpwp_api_keys' ),
+			'Per-option cache delete must not refresh alloptions for autoloaded keys.'
+		);
+		$this->assertNull(
+			( new Mcpwp_Spai_Lockout_Test_Auth() )->find_scoped_api_key_public( $key ),
+			'Mutant that re-reads get_option() after per-option delete still misses.'
+		);
+
+		// Auth retries once after busy via a fresh DB row read (not get_option).
+		$this->assertNotEmpty( Mcpwp_Key_Store::read_keys(), 'DB row holds the adopted store.' );
+		$this->assertTrue( $this->works( $key ), 'After busy, a fresh DB read sees A\'s write.' );
+
+		$auth_src = file_get_contents( dirname( __DIR__ ) . '/includes/traits/trait-mcpwp-api-auth.php' );
+		$this->assertSame(
+			1,
+			preg_match(
+				'/function find_scoped_api_key_after_spai_adoption\s*\([^)]*\)\s*\{(?P<body>.*?)\n\tprotected function /s',
+				$auth_src,
+				$fm
+			),
+			'Locate find_scoped_api_key_after_spai_adoption body.'
+		);
+		$retry_body = $fm['body'];
+		$this->assertStringContainsString(
+			'Mcpwp_Key_Store::read_keys()',
+			$retry_body,
+			'Busy retry must call Mcpwp_Key_Store::read_keys(), not get_option().'
+		);
+		$this->assertStringNotContainsString( 'invalidate_option_cache', $retry_body );
+		$this->assertStringNotContainsString( 'get_scoped_api_keys_raw', $retry_body );
+		$this->assertStringNotContainsString( 'get_option', $retry_body );
 	}
 
 	// ── #1209 P2-A/B amplification follow-ups ─────────────────────────────
@@ -264,9 +339,23 @@ final class SpaiAdoptionLockout1209Test extends TestCase {
 			}
 		);
 
+		// Reset after setup hashes (seed_store_key / any prior bcrypt).
+		$GLOBALS['mcpwp_test_wp_hash_password_calls']  = 0;
+		$GLOBALS['mcpwp_test_wp_check_password_calls'] = 0;
+
 		$this->assertFalse( Mcpwp_Activator::adopt_spai_credentials( false ) );
 		$this->assertSame( 0, $prep, 'Prep/hash runs only under the lock.' );
 		$this->assertSame( 0, $runs, 'Mutator callback never runs when busy.' );
+		$this->assertSame(
+			0,
+			(int) $GLOBALS['mcpwp_test_wp_hash_password_calls'],
+			'wp_hash_password must not run before the lock is held.'
+		);
+		$this->assertSame(
+			0,
+			(int) $GLOBALS['mcpwp_test_wp_check_password_calls'],
+			'wp_check_password must not run before the lock is held.'
+		);
 		$this->assertTrue( Mcpwp_Activator::adoption_busy_this_request() );
 	}
 
@@ -289,20 +378,25 @@ final class SpaiAdoptionLockout1209Test extends TestCase {
 		$this->assertTrue( Mcpwp_Activator::spai_adoption_needs_admin_attention() );
 	}
 
-	public function test_invalidate_option_cache_only_drops_api_keys_once(): void {
-		$GLOBALS['mcpwp_test_cache_deletes'] = array();
-		Mcpwp_Key_Store::clear_request_state();
+	public function test_alloptions_stale_survives_per_option_cache_delete(): void {
+		$live = array( array( 'id' => 'live', 'hash' => 'x', 'revoked_at' => null ) );
+		$stale = array( array( 'id' => 'stale', 'hash' => 'y', 'revoked_at' => null ) );
+		update_option( 'mcpwp_api_keys', $live, 'yes' );
+		$GLOBALS['mcpwp_test_option_cache_stale']['mcpwp_api_keys'] = $stale;
 
-		Mcpwp_Key_Store::invalidate_option_cache();
-		Mcpwp_Key_Store::invalidate_option_cache();
-
-		$options_keys = array();
-		foreach ( $GLOBALS['mcpwp_test_cache_deletes'] as $row ) {
-			if ( 'options' === $row[0] ) {
-				$options_keys[] = $row[1];
-			}
-		}
-		$this->assertSame( array( 'mcpwp_api_keys' ), $options_keys, 'Only mcpwp_api_keys, once; never alloptions/notoptions.' );
+		$this->assertSame( $stale, get_option( 'mcpwp_api_keys' ) );
+		wp_cache_delete( 'mcpwp_api_keys', 'options' );
+		$this->assertSame(
+			$stale,
+			get_option( 'mcpwp_api_keys' ),
+			'Autoloaded: per-option delete leaves alloptions stale.'
+		);
+		wp_cache_delete( 'alloptions', 'options' );
+		$this->assertSame(
+			$live,
+			get_option( 'mcpwp_api_keys' ),
+			'Deleting alloptions drops the stale view.'
+		);
 	}
 
 	// ── P1-1 (b)/(c): failure option, notice, Site Health ─────────────────

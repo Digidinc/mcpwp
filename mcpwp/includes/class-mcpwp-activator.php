@@ -1204,10 +1204,15 @@ class Mcpwp_Activator {
 	 * Whether adoption should wait ~1.5 s for the store lock.
 	 *
 	 * Patient only when the request presents a credential (so auth can see the
-	 * adopted record), for a logged-in manage_options admin, or WP-CLI.
-	 * Path alone (REST_REQUEST, /wp-json/, rest_route=, bare is_admin() for
-	 * unauthenticated admin-ajax/admin-post) must not wait — those were the
-	 * amplification surface (#1209 P2-A).
+	 * adopted record), when an auth cookie is present (admin browser session —
+	 * presence only, no user resolve), or WP-CLI. Path alone (REST_REQUEST,
+	 * /wp-json/, rest_route=, bare is_admin() for unauthenticated
+	 * admin-ajax/admin-post) must not wait — those were the amplification
+	 * surface (#1209 P2-A). Do not call get_current_user_id()/current_user_can()
+	 * here: adoption runs on plugins_loaded before other plugins'
+	 * determine_current_user filters, and resolving the user would cache a
+	 * premature identity (#1209 P2-3). Logged-in admins without a cookie yet
+	 * still get the patient path via activation / WP-CLI.
 	 *
 	 * @return bool
 	 */
@@ -1218,11 +1223,53 @@ class Mcpwp_Activator {
 		if ( self::request_presents_credential() ) {
 			return true;
 		}
-		// Logged-in admin — not is_admin(), which is true for unauthenticated
-		// admin-ajax / admin-post and would re-open the wait amplification.
-		if ( function_exists( 'get_current_user_id' ) && (int) get_current_user_id() > 0
-			&& function_exists( 'current_user_can' ) && current_user_can( 'manage_options' ) ) {
+		if ( self::request_presents_auth_cookie() ) {
 			return true;
+		}
+		return false;
+	}
+
+	/**
+	 * Whether this request carries a WordPress auth / logged-in cookie.
+	 *
+	 * Presence only — the value is never logged, parsed, or used to resolve
+	 * a user. Safe at plugins_loaded before determine_current_user (#1209 P2-3).
+	 *
+	 * @return bool
+	 */
+	public static function request_presents_auth_cookie() {
+		if ( empty( $_COOKIE ) || ! is_array( $_COOKIE ) ) { // phpcs:ignore WordPressVIPMinimum.Variables.RestrictedVariables.cache_constraints___COOKIE -- presence check only.
+			return false;
+		}
+		$names = array();
+		if ( defined( 'LOGGED_IN_COOKIE' ) ) {
+			$names[] = LOGGED_IN_COOKIE;
+		}
+		if ( defined( 'AUTH_COOKIE' ) ) {
+			$names[] = AUTH_COOKIE;
+		}
+		if ( defined( 'SECURE_AUTH_COOKIE' ) ) {
+			$names[] = SECURE_AUTH_COOKIE;
+		}
+		foreach ( $names as $name ) {
+			if ( ! empty( $_COOKIE[ $name ] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized,WordPressVIPMinimum.Variables.RestrictedVariables.cache_constraints___COOKIE -- presence check only.
+				return true;
+			}
+		}
+		// Constants may be undefined this early; match the cookie name prefixes
+		// core uses (wordpress_logged_in_*, wordpress_sec_*, wordpress_<hash>).
+		foreach ( array_keys( $_COOKIE ) as $name ) { // phpcs:ignore WordPressVIPMinimum.Variables.RestrictedVariables.cache_constraints___COOKIE -- presence check only.
+			$name = (string) $name;
+			if ( '' === $name || empty( $_COOKIE[ $name ] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized,WordPressVIPMinimum.Variables.RestrictedVariables.cache_constraints___COOKIE -- presence check only.
+				continue;
+			}
+			if ( 0 === strpos( $name, 'wordpress_logged_in_' ) || 0 === strpos( $name, 'wordpress_sec_' ) ) {
+				return true;
+			}
+			// AUTH_COOKIE is wordpress_ + COOKIEHASH (32 hex), not wordpress_test_*.
+			if ( preg_match( '/^wordpress_[a-f0-9]{32}$/', $name ) ) {
+				return true;
+			}
 		}
 		return false;
 	}
@@ -1299,9 +1346,6 @@ class Mcpwp_Activator {
 	 */
 	public static function clear_spai_adoption_request_state() {
 		self::$spai_adoption_busy_this_request = false;
-		if ( class_exists( 'Mcpwp_Key_Store' ) && method_exists( 'Mcpwp_Key_Store', 'clear_request_state' ) ) {
-			Mcpwp_Key_Store::clear_request_state();
-		}
 	}
 
 	/**
