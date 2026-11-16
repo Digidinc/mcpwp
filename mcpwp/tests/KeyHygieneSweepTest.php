@@ -1000,4 +1000,44 @@ final class KeyHygieneSweepTest extends TestCase {
 		$auth = new Mcpwp_Key_Hygiene_Test_Auth();
 		$this->assertNull( $auth->scoped_lookup( $legacy ) );
 	}
+
+	public function test_cron_sized_budget_still_revokes_a_proven_match(): void {
+		$legacy = md5( 'legacy-cron-revoke-headroom' );
+		update_option( 'mcpwp_api_key', $legacy );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array( $this->record( 'k_match', 'Match', md5( $legacy ) ) )
+		);
+
+		add_action(
+			'mcpwp_key_hygiene_between_checks',
+			static function () {
+				usleep( 3_500_000 );
+			}
+		);
+
+		$outcome = Mcpwp_Key_Hygiene::run( Mcpwp_Key_Hygiene::CRON_TIME_BUDGET, Mcpwp_Key_Hygiene::CRON_MAX_CHECKS );
+		unset( $GLOBALS['mcpwp_test_actions']['mcpwp_key_hygiene_between_checks'] );
+
+		$this->assertNotEmpty( $this->by_id( 'k_match' )['revoked_at'], 'Cron revoke headroom must not strand a proven match.' );
+		$this->assertContains( $outcome['status'], array( 'partial', 'done' ) );
+	}
+
+	public function test_cron_null_outcome_schedules_with_exponential_backoff(): void {
+		delete_option( Mcpwp_Key_Hygiene::CRON_FAIL_OPTION );
+		update_option( Mcpwp_Key_Store::OPTION, array( $this->record( 'k1', 'One', md5( 'one' ) ) ) );
+		wp_schedule_single_event( time(), Mcpwp_Key_Hygiene::CRON_HOOK );
+
+		$GLOBALS['mcpwp_test_key_hygiene_run_throw'] = true;
+		Mcpwp_Key_Hygiene::maybe_run_for_cron();
+		unset( $GLOBALS['mcpwp_test_key_hygiene_run_throw'] );
+
+		$next = wp_next_scheduled( Mcpwp_Key_Hygiene::CRON_HOOK );
+		$this->assertIsInt( $next );
+		$this->assertGreaterThanOrEqual( time() + ( Mcpwp_Key_Hygiene::CRON_SPACING * 2 ), $next );
+		$this->assertSame( 1, (int) get_option( Mcpwp_Key_Hygiene::CRON_FAIL_OPTION ) );
+
+		delete_option( Mcpwp_Key_Hygiene::CRON_FAIL_OPTION );
+		wp_clear_scheduled_hook( Mcpwp_Key_Hygiene::CRON_HOOK );
+	}
 }

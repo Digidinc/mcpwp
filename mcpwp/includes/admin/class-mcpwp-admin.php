@@ -61,6 +61,12 @@ class Mcpwp_Admin {
 	/** Max seconds the first-activation plaintext key may live in a transient. */
 	const NEW_PRIMARY_KEY_TRANSIENT_TTL = 60;
 
+	/** Seconds a scoped-key form_uid spent marker blocks duplicate submits (PRG). */
+	const SCOPED_FORM_SPENT_TTL = 180;
+
+	/** TTL for setup-page notice transients after a PRG redirect. */
+	const SETUP_NOTICE_TTL = 180;
+
 	/**
 	 * Add admin menu - top-level with icon.
 	 */

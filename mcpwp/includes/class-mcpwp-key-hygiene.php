@@ -93,6 +93,9 @@ class Mcpwp_Key_Hygiene {
 	/** Seconds between cron passes. */
 	const CRON_SPACING = 60;
 
+	/** Failed cron passes (run_safely threw); drives exponential reschedule backoff. */
+	const CRON_FAIL_OPTION = 'mcpwp_key_hygiene_cron_fail_count';
+
 	/** Default seconds of hash checks per run (activation / full pass). */
 	const TIME_BUDGET = 1.0;
 
@@ -190,10 +193,11 @@ class Mcpwp_Key_Hygiene {
 		}
 		$outcome = self::run_safely( self::CRON_TIME_BUDGET, self::CRON_MAX_CHECKS, 'all' );
 		if ( null === $outcome ) {
-			// run() threw: reschedule like unreadable, but the store may still be healthy.
-			self::schedule_cron( true );
+			// run() threw: backoff — do not hammer the same 60s spacing forever.
+			self::schedule_cron( true, true );
 			return;
 		}
+		delete_option( self::CRON_FAIL_OPTION );
 		if ( 'unreadable' === $outcome['status'] ) {
 			// Store health already reports an unreadable store; do not re-queue every minute.
 			self::clear_cron();
@@ -325,6 +329,9 @@ class Mcpwp_Key_Hygiene {
 	 *         Mcpwp_Key_Store::mutate() reason that refused the write.
 	 */
 	public static function run( $time_budget = null, $max_checks = null, $phases = null ) {
+		if ( ! empty( $GLOBALS['mcpwp_test_key_hygiene_run_throw'] ) ) {
+			throw new \RuntimeException( 'mcpwp_test_key_hygiene_run_throw' );
+		}
 		$time_budget = null === $time_budget ? self::TIME_BUDGET : (float) $time_budget;
 		$max_checks  = null === $max_checks ? self::MAX_CHECKS : max( 1, (int) $max_checks );
 		$phases      = self::normalize_phases( $phases );
@@ -379,6 +386,12 @@ class Mcpwp_Key_Hygiene {
 			$checks       = 0;
 			$started      = microtime( true );
 			$out_of       = false;
+			$check_budget = $time_budget;
+			$revoke_deadline = null;
+			if ( $time_budget >= ( self::CRON_TIME_BUDGET - 0.01 ) ) {
+				$check_budget    = max( 0.5, $time_budget - self::CRON_REVOKE_TIME_HEADROOM );
+				$revoke_deadline = $started + $time_budget;
+			}
 
 			$phase_list = array();
 			if ( in_array( 'external', $phases, true ) ) {
@@ -399,7 +412,7 @@ class Mcpwp_Key_Hygiene {
 						if ( isset( $done[ $target ][ $cfp ] ) ) {
 							continue;
 						}
-						if ( $checks > 0 && ( $checks >= $max_checks || ( microtime( true ) - $started ) >= $time_budget ) ) {
+						if ( $checks > 0 && ( $checks >= $max_checks || ( microtime( true ) - $started ) >= $check_budget ) ) {
 							$out_of = true;
 							break 3;
 						}
@@ -424,12 +437,8 @@ class Mcpwp_Key_Hygiene {
 
 			$complete = ! $out_of && self::all_targets_done( $targets, $all, $done, $matched );
 			if ( ! empty( $matched ) || $complete ) {
-				$now             = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
-				$revoke_deadline = null;
-				if ( $time_budget >= ( self::CRON_TIME_BUDGET - 0.01 ) ) {
-					$revoke_deadline = $started + max( 0.5, $time_budget - self::CRON_REVOKE_TIME_HEADROOM );
-				}
-				$write           = Mcpwp_Key_Store::mutate(
+				$now   = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
+				$write = Mcpwp_Key_Store::mutate(
 					self::revoke_mutator( $store_sig, $external, $internal, $done, $matched, $complete, $now, $revoke_deadline ),
 					true
 				);
@@ -498,10 +507,11 @@ class Mcpwp_Key_Hygiene {
 	/**
 	 * Schedule a spaced cron pass when the sweep is unfinished.
 	 *
-	 * @param bool $force Replace an existing schedule.
+	 * @param bool $force        Replace an existing schedule.
+	 * @param bool $cron_threw   Last cron pass failed inside run_safely (exponential backoff).
 	 * @return void
 	 */
-	public static function schedule_cron( $force = false ) {
+	public static function schedule_cron( $force = false, $cron_threw = false ) {
 		if ( self::is_done() ) {
 			self::clear_cron();
 			return;
@@ -516,7 +526,13 @@ class Mcpwp_Key_Hygiene {
 		if ( $next && $force && function_exists( 'wp_unschedule_event' ) ) {
 			wp_unschedule_event( $next, self::CRON_HOOK );
 		}
-		wp_schedule_single_event( time() + self::CRON_SPACING, self::CRON_HOOK );
+		$delay = self::CRON_SPACING;
+		if ( $cron_threw ) {
+			$fails = (int) get_option( self::CRON_FAIL_OPTION, 0 ) + 1;
+			update_option( self::CRON_FAIL_OPTION, $fails, false );
+			$delay = min( 3600, (int) ( self::CRON_SPACING * ( 2 ** min( $fails, 6 ) ) ) );
+		}
+		wp_schedule_single_event( time() + $delay, self::CRON_HOOK );
 	}
 
 	/**

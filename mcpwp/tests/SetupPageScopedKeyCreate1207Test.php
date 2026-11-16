@@ -20,6 +20,18 @@ if ( ! function_exists( 'get_settings_errors' ) ) {
 	}
 }
 
+if ( ! function_exists( 'settings_errors' ) ) {
+	function settings_errors( $setting = '', $sanitize = false, $hide_on_update = false ) {
+		$errors = get_settings_errors( $setting );
+		foreach ( $errors as $error ) {
+			if ( empty( $error['message'] ) ) {
+				continue;
+			}
+			echo '<div class="notice">' . esc_html( (string) $error['message'] ) . '</div>';
+		}
+	}
+}
+
 if ( ! function_exists( 'check_admin_referer' ) ) {
 	function check_admin_referer( $action = -1, $query_arg = '_wpnonce' ) {
 		$valid = ! empty( $GLOBALS['mcpwp_test_valid_admin_referer'][ $action ] );
@@ -57,11 +69,33 @@ final class SetupPageScopedKeyCreate1207Test extends TestCase {
 		unset( $GLOBALS['mcpwp_test_wpdb_col_charset'] );
 
 		$mcpwp_dir = dirname( __DIR__ );
+		if ( ! defined( 'MCPWP_PLUGIN_DIR' ) ) {
+			define( 'MCPWP_PLUGIN_DIR', $mcpwp_dir . '/' );
+		}
+		if ( ! defined( 'MCPWP_VERSION' ) ) {
+			define( 'MCPWP_VERSION', '3.14.0-test' );
+		}
 		require_once $mcpwp_dir . '/includes/core/class-mcpwp-key-state.php';
 		foreach ( array( 'setup', 'control-room', 'chat', 'library', 'settings', 'activity', 'mupot' ) as $trait ) {
 			require_once $mcpwp_dir . '/includes/admin/traits/trait-mcpwp-admin-' . $trait . '.php';
 		}
 		require_once $mcpwp_dir . '/includes/admin/class-mcpwp-admin.php';
+		foreach (
+			array(
+				'class-mcpwp-chatgpt-connector',
+				'class-mcpwp-oauth-well-known',
+				'class-mcpwp-broker-auth',
+			) as $dep
+		) {
+			$path = $mcpwp_dir . '/includes/admin/' . $dep . '.php';
+			if ( is_readable( $path ) ) {
+				require_once $path;
+			}
+		}
+		$connector_path = $mcpwp_dir . '/includes/admin/class-mcpwp-chatgpt-connector.php';
+		if ( ! class_exists( 'Mcpwp_ChatGPT_Connector' ) && is_readable( $connector_path ) ) {
+			require_once $connector_path;
+		}
 
 		Mcpwp_Admin::reset_setup_page_request_state();
 	}
@@ -169,10 +203,72 @@ final class SetupPageScopedKeyCreate1207Test extends TestCase {
 			$this->fail( 'Expected redirect on duplicate form submit.' );
 		} catch ( Mcpwp_Test_Redirect_Signal $e ) {
 			$this->assertStringContainsString( 'page=mcpwp', $e->getMessage() );
+			$this->assertStringContainsString( 'mcpwp_setup_notice=1', $e->getMessage() );
 		}
 
 		$after = ( new Mcpwp_Admin() )->list_scoped_api_keys( false );
 		$this->assertCount( 1, $after );
+	}
+
+	public function test_duplicate_scoped_key_submit_replays_notice_after_prg_redirect(): void {
+		$_POST = $this->claude_desktop_post();
+		( new Mcpwp_Admin() )->handle_setup_page_load();
+
+		$_POST = $this->claude_desktop_post();
+		try {
+			( new Mcpwp_Admin() )->handle_setup_page_load();
+			$this->fail( 'Expected redirect on duplicate form submit.' );
+		} catch ( Mcpwp_Test_Redirect_Signal $e ) {
+			$pending = get_transient( Mcpwp_Admin::setup_pending_errors_transient_name( 1 ) );
+			$this->assertIsArray( $pending );
+			$this->assertNotEmpty( $pending );
+		}
+
+		Mcpwp_Admin::reset_setup_page_request_state();
+		$_POST                                 = array();
+		$_GET                                  = array( 'page' => 'mcpwp', 'mcpwp_setup_notice' => '1' );
+		$GLOBALS['mcpwp_test_settings_errors'] = array();
+		$admin                                 = new Mcpwp_Admin();
+		$restore                               = new ReflectionMethod( Mcpwp_Admin::class, 'maybe_restore_setup_page_notices' );
+		$restore->setAccessible( true );
+		$restore->invoke( $admin );
+
+		$dup = array_filter(
+			$GLOBALS['mcpwp_test_settings_errors'] ?? array(),
+			static function ( $err ) {
+				return is_array( $err ) && 'mcpwp_scoped_key_duplicate_submit' === ( $err['code'] ?? '' );
+			}
+		);
+		$this->assertNotEmpty( $dup );
+		$this->assertFalse( get_transient( Mcpwp_Admin::setup_pending_errors_transient_name( 1 ) ) );
+		$this->assertGreaterThan( Mcpwp_Admin::NEW_PRIMARY_KEY_TRANSIENT_TTL, Mcpwp_Admin::SCOPED_FORM_SPENT_TTL );
+	}
+
+	public function test_fresh_activation_transient_in_bucket_zero_shows_once_on_setup(): void {
+		require_once dirname( __DIR__ ) . '/includes/class-mcpwp-activator.php';
+		Mcpwp_Activator::ensure_api_keys();
+
+		$plain = get_transient( Mcpwp_Admin::new_primary_key_transient_name( 0 ) );
+		$this->assertIsString( $plain );
+		$this->assertStringStartsWith( 'mcpwp_', $plain );
+
+		$pulled = Mcpwp_Admin::pull_new_primary_api_key_transient();
+		$this->assertSame( $plain, $pulled );
+
+		delete_transient( Mcpwp_Admin::new_primary_key_transient_name() );
+		delete_transient( Mcpwp_Admin::new_primary_key_transient_name( 0 ) );
+		delete_transient( 'mcpwp_new_api_key' );
+
+		$this->assertFalse( get_transient( Mcpwp_Admin::new_primary_key_transient_name( 0 ) ) );
+		require_once dirname( __DIR__ ) . '/tests/fixtures/setup-display-stubs-1098.php';
+		$GLOBALS['mcpwp_test_options']['date_format'] = 'Y-m-d';
+		$GLOBALS['mcpwp_test_options']['time_format'] = 'H:i';
+		$GLOBALS['mcpwp_test_options']['mcpwp_api_key'] = wp_hash_password( $plain );
+		ob_start();
+		mcpwp_1098_render_setup_partial( array(), $plain );
+		$html = (string) ob_get_clean();
+		$this->assertStringContainsString( $plain, $html );
+		$this->assertNull( Mcpwp_Admin::pull_new_primary_api_key_transient() );
 	}
 
 	private function claude_desktop_url_block( string $html ): string {

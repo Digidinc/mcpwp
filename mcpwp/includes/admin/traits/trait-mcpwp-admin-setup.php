@@ -28,12 +28,55 @@ trait Mcpwp_Admin_Setup_Trait {
 	 * @param int $user_id WordPress user id (0: site-wide mint before login).
 	 * @return string
 	 */
-	public static function new_primary_key_transient_name( $user_id = 0 ) {
-		$user_id = (int) $user_id;
-		if ( $user_id <= 0 ) {
+	public static function new_primary_key_transient_name( $user_id = null ) {
+		if ( null === $user_id ) {
 			$user_id = function_exists( 'get_current_user_id' ) ? (int) get_current_user_id() : 0;
+		} else {
+			$user_id = (int) $user_id;
 		}
 		return 'mcpwp_new_api_key_' . $user_id;
+	}
+
+	/**
+	 * Transient that holds admin notices after a PRG redirect to Setup.
+	 *
+	 * @param int $user_id User id.
+	 * @return string
+	 */
+	public static function setup_pending_errors_transient_name( $user_id ) {
+		return 'mcpwp_setup_pending_errors_' . (int) $user_id;
+	}
+
+	/**
+	 * Replay pending Setup notices after redirect (no settings-updated query arg).
+	 *
+	 * @return void
+	 */
+	private function maybe_restore_setup_page_notices() {
+		if ( ! isset( $_GET['mcpwp_setup_notice'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+			return;
+		}
+		$flag = sanitize_key( wp_unslash( $_GET['mcpwp_setup_notice'] ) ); // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		if ( '1' !== $flag ) {
+			return;
+		}
+		$user_id = get_current_user_id();
+		$pending = get_transient( self::setup_pending_errors_transient_name( $user_id ) );
+		if ( ! is_array( $pending ) ) {
+			return;
+		}
+		foreach ( $pending as $error ) {
+			if ( ! is_array( $error ) ) {
+				continue;
+			}
+			add_settings_error(
+				isset( $error['setting'] ) ? (string) $error['setting'] : 'mcpwp_messages',
+				isset( $error['code'] ) ? (string) $error['code'] : 'mcpwp_setup_notice',
+				isset( $error['message'] ) ? (string) $error['message'] : '',
+				isset( $error['type'] ) ? (string) $error['type'] : 'error'
+			);
+		}
+		delete_transient( self::setup_pending_errors_transient_name( $user_id ) );
 	}
 
 	/**
@@ -45,6 +88,10 @@ trait Mcpwp_Admin_Setup_Trait {
 		$key = get_transient( self::new_primary_key_transient_name() );
 		if ( is_string( $key ) && '' !== $key ) {
 			return $key;
+		}
+		$activation = get_transient( self::new_primary_key_transient_name( 0 ) );
+		if ( is_string( $activation ) && '' !== $activation ) {
+			return $activation;
 		}
 		$legacy = get_transient( 'mcpwp_new_api_key' );
 		if ( is_string( $legacy ) && '' !== $legacy ) {
@@ -157,7 +204,7 @@ trait Mcpwp_Admin_Setup_Trait {
 		);
 
 		if ( '' !== $form_uid ) {
-			set_transient( 'mcpwp_scoped_form_spent_' . $user_id . '_' . $form_uid, '1', self::NEW_PRIMARY_KEY_TRANSIENT_TTL );
+			set_transient( 'mcpwp_scoped_form_spent_' . $user_id . '_' . $form_uid, '1', self::SCOPED_FORM_SPENT_TTL );
 		}
 
 		self::$setup_new_scoped_key = $new_scoped_key;
@@ -180,7 +227,9 @@ trait Mcpwp_Admin_Setup_Trait {
 		}
 		$url .= '#mcpwp-connect-tabs';
 
-		set_transient( 'settings_errors', get_settings_errors(), 30 );
+		$user_id = get_current_user_id();
+		set_transient( self::setup_pending_errors_transient_name( $user_id ), get_settings_errors(), self::SETUP_NOTICE_TTL );
+		$url = add_query_arg( 'mcpwp_setup_notice', '1', $url );
 
 		wp_safe_redirect( $url );
 		exit;
@@ -193,6 +242,8 @@ trait Mcpwp_Admin_Setup_Trait {
 		if ( ! current_user_can( 'activate_plugins' ) ) {
 			wp_die( esc_html__( 'You do not have permission to access this page.', 'mcpwp' ) );
 		}
+
+		$this->maybe_restore_setup_page_notices();
 
 		// Handle API key actions.
 		$new_key = null;
@@ -257,6 +308,9 @@ trait Mcpwp_Admin_Setup_Trait {
 			$first_key = self::pull_new_primary_api_key_transient();
 			if ( $first_key ) {
 				$new_key = $first_key;
+				delete_transient( self::new_primary_key_transient_name() );
+				delete_transient( self::new_primary_key_transient_name( 0 ) );
+				delete_transient( 'mcpwp_new_api_key' );
 			}
 		}
 
