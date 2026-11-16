@@ -776,12 +776,15 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 
 		$this->log_activity( 'patch_block_section', $request, array( 'post_id' => $post_id ) );
 
-		$payload = array(
+		// block_count must reflect the saved row (kses may change the body),
+		// same as set_blocks — not the pre-save patched_content string.
+		$saved_content = get_post_field( 'post_content', $post_id );
+		$payload       = array(
 			'success'     => true,
 			'post_id'     => (int) $post_id,
 			'selector'    => $selector,
 			'path'        => $path,
-			'block_count' => count( $this->clean_blocks( parse_blocks( $patched_content ) ) ),
+			'block_count' => count( $this->clean_blocks( parse_blocks( $saved_content ) ) ),
 			'safety'      => $safety_report,
 		);
 		// #1212: report only — sanitising path unchanged from main.

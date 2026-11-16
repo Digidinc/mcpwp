@@ -588,6 +588,9 @@ class Mcpwp_Media {
 		if ( is_array( $updated ) && ! empty( $sanitized_content['removed'] ) ) {
 			$updated['sanitized'] = $sanitized_content['removed'];
 		}
+		if ( is_array( $updated ) && isset( $args['description'] ) ) {
+			$this->attach_content_modified_report( $updated, $args['description'], (int) $attachment_id );
+		}
 
 		return $updated;
 	}

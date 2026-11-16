@@ -280,17 +280,23 @@ class Mcpwp_REST_Multilang extends Mcpwp_REST_API {
 		// generically (#957 adversarial review: "multilang callers must
 		// surface the guardrails result, not just ['status']"). 'id' is the
 		// key that mechanism looks for.
-		return $this->success_response( array(
-			'success'           => true,
-			'id'                => $result,
-			'original_post_id'  => $post_id,
-			'translation_id'    => $result,
-			'language'          => $language,
-			'title'             => $new_post->post_title,
-			'status'            => $new_post->post_status,
-			'permalink'         => get_permalink( $result ),
-			'edit_link'         => get_edit_post_link( $result, 'raw' ),
-		) );
+		$payload = array(
+			'success'          => true,
+			'id'               => $result,
+			'original_post_id' => $post_id,
+			'translation_id'   => $result,
+			'language'         => $language,
+			'title'            => $new_post->post_title,
+			'status'           => $new_post->post_status,
+			'permalink'        => get_permalink( $result ),
+			'edit_link'        => get_edit_post_link( $result, 'raw' ),
+		);
+		// #1212: report only — multilang create also runs sanitize_content_body.
+		if ( isset( $data['content'] ) && null !== $data['content'] && '' !== $data['content'] ) {
+			$this->attach_content_modified_report( $payload, $data['content'], (int) $result );
+		}
+
+		return $this->success_response( $payload );
 	}
 
 	/**

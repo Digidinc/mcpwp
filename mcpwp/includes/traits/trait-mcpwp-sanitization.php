@@ -190,10 +190,32 @@ trait Mcpwp_Sanitization {
 		if ( ! is_string( $submitted ) && ! is_scalar( $submitted ) ) {
 			return;
 		}
-		$report = $this->content_modified_from_saved( $submitted, $post_id );
-		if ( ! empty( $report['removed'] ) || ! empty( $report['content_comparison_skipped'] ) ) {
-			$result['content_modified'] = $report;
+		if ( ! class_exists( 'Mcpwp_Content_Modified_Report', false ) ) {
+			return;
 		}
+		Mcpwp_Content_Modified_Report::attach_to_result(
+			$result,
+			$this->content_modified_from_saved( $submitted, $post_id )
+		);
+	}
+
+	/**
+	 * Attach content_modified by comparing two strings directly (meta fields,
+	 * short descriptions, FAQ answers — anything not post_content).
+	 *
+	 * @param array $result    Write response (by ref).
+	 * @param mixed $submitted Original content the caller sent.
+	 * @param mixed $saved     Content stored after the write.
+	 * @return void
+	 */
+	protected function attach_content_modified_from_strings( array &$result, $submitted, $saved ) {
+		if ( ! class_exists( 'Mcpwp_Content_Modified_Report', false ) ) {
+			return;
+		}
+		Mcpwp_Content_Modified_Report::attach_to_result(
+			$result,
+			Mcpwp_Content_Modified_Report::describe_modifications( $submitted, $saved )
+		);
 	}
 
 	/**

@@ -618,12 +618,13 @@ if (! function_exists('wp_kses_post')) {
         // script/style keep the block rule above, which KsesRawTextStripTest
         // pins; a tag name must be followed by whitespace, '/' or '>', and
         // the attribute scan stops at the next '<', so it stays linear.
-        $text = preg_replace('#</?(svg|path|g|circle|rect|line|polyline|polygon|ellipse|defs|lineargradient|radialgradient|stop|use|iframe|object|embed|math|base|meta|link|input|button|textarea|select|option|form)(?=[\s/>])[^<>]*>#i', '', $text);
+        $text = preg_replace('#</?(svg|path|g|circle|rect|line|polyline|polygon|ellipse|defs|lineargradient|radialgradient|stop|use|foreignobject|iframe|object|embed|math|base|meta|link|input|button|textarea|select|option|form)(?=[\s/>])[^<>]*>#i', '', $text);
         $text = preg_replace_callback(
             '#<([a-zA-Z][a-zA-Z0-9:-]*)(\s[^<>]*)(/?)>#',
             static function ($m) {
                 $tag = strtolower($m[1]);
                 $attrs = preg_replace('#\s+on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]*)#i', '', $m[2]);
+                $attrs = preg_replace('#\s+style\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]*)#i', '', $attrs);
                 $attrs = preg_replace('#(=\s*["\']?)\s*(javascript|vbscript|data)\s*:[^"\'\s>]*#i', '$1', $attrs);
                 return '<' . $tag . $attrs . $m[3] . '>';
             },
@@ -805,6 +806,14 @@ function wp_unslash($value)
 function wp_set_current_user($user_id)
 {
     $GLOBALS['mcpwp_test_current_user'] = (int) $user_id;
+    // Like core kses_init() on set_current_user: decide once whether
+    // content_save_pre kses is installed, from current_user_can() at THIS
+    // moment — not again at every wp_insert_post (#1212 P2-4). Cap maps
+    // mutated after set_current_user without re-calling it do not flip the
+    // flag (same as core until the next set_current_user).
+    $GLOBALS['mcpwp_test_kses_post_content'] = ! (
+        function_exists('current_user_can') && current_user_can('unfiltered_html')
+    );
     // Like core: the user is set first, then set_current_user fires (#989).
     do_action('set_current_user');
 }
@@ -3864,6 +3873,7 @@ if (! class_exists('WP_Post')) {
         public $menu_order        = 0;
         public $post_author       = 0;
         public $post_password     = '';
+        public $post_mime_type    = '';
 
         public function __construct($data = array())
         {
@@ -4613,17 +4623,25 @@ function mcpwp_test_apply_page_template($post_id, $postarr, $wp_error)
 }
 
 
+if (! isset($GLOBALS['mcpwp_test_kses_post_content'])) {
+    // Default: kses on (no user yet). wp_set_current_user() refreshes this.
+    $GLOBALS['mcpwp_test_kses_post_content'] = true;
+}
+
 if (! function_exists('mcpwp_test_maybe_kses_post_content')) {
     /**
-     * Mirror core content_save_pre → wp_filter_post_kses for principals
-     * without unfiltered_html (#1212 reporting tests need a core-like save).
+     * Mirror core content_save_pre → wp_filter_post_kses.
+     *
+     * Core installs the filter when the user is set (kses_init), not by
+     * re-checking current_user_can() on every write. This stub reads the
+     * flag set in wp_set_current_user() for the same timing (#1212 P2-4).
      */
     function mcpwp_test_maybe_kses_post_content($content)
     {
         if (! is_string($content)) {
             return $content;
         }
-        if (function_exists('current_user_can') && current_user_can('unfiltered_html')) {
+        if (empty($GLOBALS['mcpwp_test_kses_post_content'])) {
             return $content;
         }
         return wp_kses_post($content);
@@ -5764,16 +5782,23 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-search-performance.p
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-flags.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-woocommerce-seo.php';
 
+// Guard with class_exists(..., false) so a real WordPress / polyfill class
+// wins. This stub is ONLY for PHPUnit without core's HTML API loaded.
+// Limitations vs core WP_HTML_Tag_Processor: no set_attribute/bookmarks/
+// class List, no namespace handling, naive attribute parsing — enough for
+// Mcpwp_Content_Modified_Report inventories (tag + attr name/value reads)
+// and must not change production-test semantics when the real class exists.
 if (! class_exists('WP_HTML_Tag_Processor', false)) {
     /**
      * Minimal WP_HTML_Tag_Processor stand-in for inventory reporting tests (#1212).
-     * Walks open tags and exposes attribute names; does not mutate HTML.
+     * Walks open tags and exposes attribute names/values; does not mutate HTML.
      */
     class WP_HTML_Tag_Processor {
         private $html;
         private $offset = 0;
         private $tag = null;
         private $attr_names = array();
+        private $attrs = array();
 
         public function __construct($html)
         {
@@ -5815,13 +5840,29 @@ if (! class_exists('WP_HTML_Tag_Processor', false)) {
                 $attr_blob = substr($html, $after_name, $gt - $after_name);
                 $this->tag = strtoupper($tag);
                 $this->attr_names = array();
-                if (preg_match_all('/([^\s=\/>]+)(\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]*))?/', $attr_blob, $am)) {
-                    foreach ($am[1] as $name) {
-                        $name = trim($name);
+                $this->attrs = array();
+                if (preg_match_all('/([^\s=\/>]+)(\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]*))?/', $attr_blob, $am, PREG_SET_ORDER)) {
+                    foreach ($am as $match) {
+                        $name = trim($match[1]);
                         if ('' === $name || '/' === $name) {
                             continue;
                         }
                         $this->attr_names[] = $name;
+                        $key = strtolower($name);
+                        if (! isset($match[2]) || '' === $match[2]) {
+                            $this->attrs[ $key ] = true;
+                            continue;
+                        }
+                        $raw = trim($match[2]);
+                        $raw = ltrim(substr($raw, strpos($raw, '=') + 1));
+                        if ('' !== $raw && ('"' === $raw[0] || "'" === $raw[0])) {
+                            $quote = $raw[0];
+                            $raw   = substr($raw, 1);
+                            if (substr($raw, -1) === $quote) {
+                                $raw = substr($raw, 0, -1);
+                            }
+                        }
+                        $this->attrs[ $key ] = $raw;
                     }
                 }
                 $this->offset = $gt + 1;
@@ -5842,6 +5883,12 @@ if (! class_exists('WP_HTML_Tag_Processor', false)) {
         public function get_tag()
         {
             return $this->tag;
+        }
+
+        public function get_attribute($name)
+        {
+            $key = strtolower((string) $name);
+            return array_key_exists($key, $this->attrs) ? $this->attrs[ $key ] : null;
         }
 
         public function get_attribute_names_with_prefix($prefix)

@@ -29,10 +29,27 @@ class Mcpwp_Content_Modified_Report {
 	const MAX_COMPARE_BYTES = 1048576; // 1 MiB
 
 	/**
-	 * Neutral explanation when WordPress (or MCPWP's pre-save strip) dropped
-	 * constructs the caller cannot persist.
+	 * Inventory kind keys compared for removal deltas.
+	 *
+	 * @var array<int, string>
 	 */
-	const REMOVAL_MESSAGE = 'WordPress removed content your user cannot save; SVG can be added as media or by a user with unfiltered_html.';
+	private static $inventory_kinds = array(
+		'script',
+		'iframe',
+		'object',
+		'embed',
+		'form',
+		'svg_elements',
+		'on_attributes',
+		'unsafe_url_attributes',
+		'style',
+		'foreignobject',
+		'math',
+		'input',
+		'button',
+		'textarea',
+		'select',
+	);
 
 	/**
 	 * SVG-family element local names counted under kind `svg_elements`.
@@ -55,6 +72,13 @@ class Mcpwp_Content_Modified_Report {
 		'stop'           => true,
 		'use'            => true,
 	);
+
+	/**
+	 * URL-bearing attributes checked for javascript:/data:/vbscript: schemes.
+	 *
+	 * @var array<int, string>
+	 */
+	private static $url_attributes = array( 'href', 'src' );
 
 	/**
 	 * Read post_content from the stored row (raw / unfiltered when possible).
@@ -119,7 +143,7 @@ class Mcpwp_Content_Modified_Report {
 		$after  = self::inventory( $saved );
 
 		$kinds = array();
-		foreach ( array( 'script', 'iframe', 'object', 'embed', 'form', 'svg_elements', 'on_attributes' ) as $kind ) {
+		foreach ( self::$inventory_kinds as $kind ) {
 			$delta = (int) $before[ $kind ] - (int) $after[ $kind ];
 			if ( $delta > 0 ) {
 				$kinds[] = array(
@@ -137,8 +161,121 @@ class Mcpwp_Content_Modified_Report {
 
 		return array(
 			'removed' => $kinds,
-			'message' => self::REMOVAL_MESSAGE,
+			'message' => self::message_for_kinds( $kinds ),
 		);
+	}
+
+	/**
+	 * Attach a non-empty report onto a write result, merging kind counts when
+	 * a report is already present (e.g. description + short_description).
+	 *
+	 * @param array $result Write response (by ref).
+	 * @param array $report Report from {@see describe_modifications()}.
+	 * @return void
+	 */
+	public static function attach_to_result( array &$result, array $report ) {
+		if ( empty( $report['removed'] ) && empty( $report['content_comparison_skipped'] ) ) {
+			return;
+		}
+
+		if ( empty( $result['content_modified'] ) || ! is_array( $result['content_modified'] ) ) {
+			$result['content_modified'] = $report;
+			return;
+		}
+
+		$existing = $result['content_modified'];
+		if ( ! empty( $report['content_comparison_skipped'] ) || ! empty( $existing['content_comparison_skipped'] ) ) {
+			$result['content_modified'] = array(
+				'content_comparison_skipped' => true,
+			);
+			return;
+		}
+
+		$counts = array();
+		foreach ( array( $existing, $report ) as $piece ) {
+			if ( empty( $piece['removed'] ) || ! is_array( $piece['removed'] ) ) {
+				continue;
+			}
+			foreach ( $piece['removed'] as $row ) {
+				if ( ! is_array( $row ) || empty( $row['kind'] ) ) {
+					continue;
+				}
+				$kind = (string) $row['kind'];
+				$counts[ $kind ] = ( isset( $counts[ $kind ] ) ? (int) $counts[ $kind ] : 0 ) + (int) ( $row['count'] ?? 0 );
+			}
+		}
+
+		$merged = array();
+		foreach ( self::$inventory_kinds as $kind ) {
+			if ( ! empty( $counts[ $kind ] ) ) {
+				$merged[] = array(
+					'kind'  => $kind,
+					'count' => (int) $counts[ $kind ],
+				);
+			}
+		}
+
+		if ( empty( $merged ) ) {
+			return;
+		}
+
+		$result['content_modified'] = array(
+			'removed' => $merged,
+			'message' => self::message_for_kinds( $merged ),
+		);
+	}
+
+	/**
+	 * Neutral per-kind guidance. Never names a capability (MCPWP kses is
+	 * unconditional; unfiltered_html does not restore stripped markup).
+	 *
+	 * @param array<int, array{kind:string, count:int}> $kinds Removal rows.
+	 * @return string
+	 */
+	private static function message_for_kinds( array $kinds ) {
+		$set = array();
+		foreach ( $kinds as $row ) {
+			if ( is_array( $row ) && isset( $row['kind'] ) ) {
+				$set[ (string) $row['kind'] ] = true;
+			}
+		}
+
+		$parts = array();
+
+		if ( isset( $set['svg_elements'] ) ) {
+			$parts[] = 'SVG elements were removed when saving; add the image as a media file and reference it with an image block.';
+		}
+
+		$markup_kinds = array(
+			'script',
+			'iframe',
+			'object',
+			'embed',
+			'form',
+			'on_attributes',
+			'foreignobject',
+			'math',
+			'input',
+			'button',
+			'textarea',
+			'select',
+		);
+		foreach ( $markup_kinds as $kind ) {
+			if ( isset( $set[ $kind ] ) ) {
+				$parts[] = 'script, embed and form markup is not stored by this tool.';
+				break;
+			}
+		}
+
+		if ( isset( $set['style'] ) ) {
+			$parts[] = 'Inline and embedded style markup is not stored by this tool.';
+		}
+
+		if ( isset( $set['unsafe_url_attributes'] ) ) {
+			$parts[] = 'Unsafe URL attributes were removed when saving.';
+		}
+
+		return implode( ' ', $parts );
 	}
 
 	/**
@@ -147,26 +284,13 @@ class Mcpwp_Content_Modified_Report {
 	 * Counts only — never stores attribute values.
 	 *
 	 * @param string $html HTML document fragment.
-	 * @return array{
-	 *     script:int,
-	 *     iframe:int,
-	 *     object:int,
-	 *     embed:int,
-	 *     form:int,
-	 *     svg_elements:int,
-	 *     on_attributes:int
-	 * }
+	 * @return array<string, int>
 	 */
 	private static function inventory( $html ) {
-		$counts = array(
-			'script'        => 0,
-			'iframe'        => 0,
-			'object'        => 0,
-			'embed'         => 0,
-			'form'          => 0,
-			'svg_elements'  => 0,
-			'on_attributes' => 0,
-		);
+		$counts = array();
+		foreach ( self::$inventory_kinds as $kind ) {
+			$counts[ $kind ] = 0;
+		}
 
 		if ( '' === $html ) {
 			return $counts;
@@ -195,8 +319,36 @@ class Mcpwp_Content_Modified_Report {
 					}
 				}
 			}
+
+			if ( null !== $processor->get_attribute( 'style' ) ) {
+				++$counts['style'];
+			}
+
+			foreach ( self::$url_attributes as $attr ) {
+				$value = $processor->get_attribute( $attr );
+				if ( is_string( $value ) && self::is_unsafe_url( $value ) ) {
+					++$counts['unsafe_url_attributes'];
+				}
+			}
 		}
 
 		return $counts;
+	}
+
+	/**
+	 * True when a URL attribute uses a non-http(s) active scheme.
+	 *
+	 * Counts only — the raw value is never stored or echoed.
+	 *
+	 * @param string $value Attribute value.
+	 * @return bool
+	 */
+	private static function is_unsafe_url( $value ) {
+		$value = html_entity_decode( trim( $value ), ENT_QUOTES | ENT_HTML5, 'UTF-8' );
+		$value = preg_replace( '/[\x00-\x1f\x7f\s]+/', '', $value );
+		if ( ! is_string( $value ) || '' === $value ) {
+			return false;
+		}
+		return (bool) preg_match( '/^(javascript|vbscript|data)\s*:/i', $value );
 	}
 }
