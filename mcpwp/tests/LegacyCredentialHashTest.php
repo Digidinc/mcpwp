@@ -40,10 +40,6 @@ class Mcpwp_Legacy_Credential_Hash_Test_Auth {
 		return $this->is_api_key_hash_match( $api_key, $stored );
 	}
 
-	public function spai_lookup( $api_key ) {
-		return $this->find_legacy_spai_key( $api_key );
-	}
-
 	public function scoped_lookup( $api_key ) {
 		return $this->find_scoped_api_key( $api_key );
 	}
@@ -301,10 +297,41 @@ final class LegacyCredentialHashTest extends TestCase {
 				foreach ( array( 'direct', 'sub' ) as $plane ) {
 					$this->setUp();
 					$this->plant( $store, $stored );
+					if ( 'spai_single' === $store || 'spai_record' === $store ) {
+						// Leftover 2.8 options are not an auth source (#1120).
+						$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials(), "$store adopt" );
+					}
 					$auth = new Mcpwp_Legacy_Credential_Hash_Test_Auth();
 					$this->assertTrue( $this->verify( $auth, $plane, $this->request( self::KEY, $carrier ) ), "$store/$carrier/$plane" );
 				}
 			}
+		}
+	}
+
+	/**
+	 * @dataProvider verifiable_shapes
+	 */
+	public function test_a_spai_leftover_is_refused_before_adoption( string $stored ): void {
+		foreach ( array( 'spai_single', 'spai_record' ) as $store ) {
+			$this->setUp();
+			$this->plant( $store, $stored );
+			// Seed a mcpwp key so the refusal is invalid_api_key, not api_not_configured.
+			update_option(
+				'mcpwp_api_keys',
+				array(
+					array(
+						'id'         => 'sentinel',
+						'label'      => 'Sentinel',
+						'hash'       => wp_hash_password( 'mcpwp_sentinel_key_for_refusal_checks_only' ),
+						'scopes'     => array( 'read' ),
+						'role'       => 'author',
+						'created_at' => '2026-01-01 00:00:00',
+						'revoked_at' => null,
+					),
+				)
+			);
+			$auth = new Mcpwp_Legacy_Credential_Hash_Test_Auth();
+			$this->assert_refused( $auth->verify_api_key( $this->request( self::KEY, 'header' ) ), "$store before adoption" );
 		}
 	}
 
@@ -341,13 +368,14 @@ final class LegacyCredentialHashTest extends TestCase {
 		}
 	}
 
-	public function test_the_spai_bridge_refuses_its_stored_values_directly(): void {
+	public function test_spai_leftovers_refuse_their_stored_verifier_values(): void {
 		foreach ( self::stored_shapes() as $name => $row ) {
 			foreach ( array( 'spai_single', 'spai_record' ) as $store ) {
 				$this->setUp();
 				$this->plant( $store, $row[0] );
 				$auth = new Mcpwp_Legacy_Credential_Hash_Test_Auth();
-				$this->assertNull( $auth->spai_lookup( $row[0] ), "$name/$store" );
+				$this->assert_refused( $auth->verify_api_key( $this->request( $row[0], 'header' ) ), "$name/$store" );
+				$this->assertNull( $auth->scoped_lookup( $row[0] ), "$name/$store scoped" );
 			}
 		}
 	}
@@ -465,6 +493,9 @@ final class LegacyCredentialHashTest extends TestCase {
 			foreach ( array( 'direct', 'sub' ) as $plane ) {
 				$this->setUp();
 				$this->plant( $store, self::PHPASS_VECTOR );
+				if ( 'spai_single' === $store || 'spai_record' === $store ) {
+					$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials(), "$store/$plane adopt" );
+				}
 				$auth = new Mcpwp_Legacy_Credential_Hash_Test_Auth();
 				$this->assertTrue( $this->verify( $auth, $plane, $this->request( self::PHPASS_VECTOR_KEY, 'header' ) ), "$store/$plane" );
 				Mcpwp_REST_MCP::reset_verdict_memo();
@@ -502,8 +533,8 @@ final class LegacyCredentialHashTest extends TestCase {
 			$this->plant_revoked_spai_record_and_md5_single( $md5 );
 			$auth = new Mcpwp_Legacy_Credential_Hash_Test_Auth();
 
-			$this->assertNull( $auth->spai_lookup( self::KEY ), $case . ': pre-adoption, the bridge refuses the revoked key.' );
-			$this->assert_refused( $auth->auth_only( $this->request( self::KEY, 'header' ) ), $case . ' pre' );
+			$this->assert_refused( $auth->auth_only( $this->request( self::KEY, 'header' ) ), $case . ' pre-adoption' );
+			$this->assert_refused( $auth->verify_api_key( $this->request( self::KEY, 'header' ) ), $case . ' pre (direct)' );
 
 			$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials(), $case );
 			Mcpwp_REST_MCP::reset_verdict_memo();
@@ -589,6 +620,9 @@ final class LegacyCredentialHashTest extends TestCase {
 		);
 		update_option( 'spai_api_key', strtoupper( md5( self::KEY ) ) );
 		$auth = new Mcpwp_Legacy_Credential_Hash_Test_Auth();
-		$this->assertNull( $auth->spai_lookup( self::KEY ), 'Hex case must not hide a revoked copy.' );
+		$this->assert_refused( $auth->verify_api_key( $this->request( self::KEY, 'header' ) ), 'pre-adoption' );
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$this->assertNull( $auth->scoped_lookup( self::KEY ), 'Hex case must not hide a revoked copy through adoption.' );
+		$this->assert_refused( $auth->verify_api_key( $this->request( self::KEY, 'header' ) ), 'post-adoption' );
 	}
 }

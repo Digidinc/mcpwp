@@ -12,8 +12,10 @@ existing 2.8.56 `site-pilot-ai` installs, a small, deliberate set of `spai_*` re
 - `class-mcpwp-migrate.php` — reads the old `spai_*` options (the `OPTION_MAP` source side).
 - `class-mcpwp-license.php` — reads the **un-forgeable** `spai_pro_license` / `spai_trial_started`
   originals (entitlement source of truth — see [[feedback-entitlement-unforgeable-source]]).
-- `trait-mcpwp-api-auth.php` — recognizes the legacy `spai_at_` OAuth token prefix +
-  `find_legacy_spai_key()`.
+- `trait-mcpwp-api-auth.php` — recognizes the legacy `spai_at_` OAuth token prefix
+  (API keys from `spai_api_key` / `spai_api_keys` are adopted into the scoped store
+  on upgrade by `Mcpwp_Activator::adopt_spai_credentials()` — not authenticated
+  from those options at request time; #1120).
 
 These are the ONLY allowed `spai_` references in live code. Outside them, a `spai_`/`site-pilot-ai`
 in live plugin code is still a bug — fix it. Wire contracts `X-SPAI-*` headers and the `x_spai`

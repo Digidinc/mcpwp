@@ -1,22 +1,19 @@
 <?php
 
 /**
- * Tests for dual-prefix API key auth (issue #505 bridge).
+ * Tests for 2.8 → scoped-store credential adoption (#505 / #1098 / #1120).
+ *
+ * Auth no longer reads spai_api_keys / spai_api_key at request time. A leftover
+ * 2.8 credential is refused until adopt_spai_credentials() writes it into the
+ * scoped store; after adoption the same plaintext key is accepted there.
  *
  * Covers:
  *   - A current mcpwp_ key stored in mcpwp_api_keys is accepted.
- *   - A legacy spai_ key stored in spai_api_keys is accepted.
- *   - A legacy single key stored in spai_api_key is accepted.
+ *   - A leftover spai_ key is refused before adoption and accepted after.
  *   - A bad / unknown key is rejected with 401.
- *   - A revoked spai_ key is rejected.
+ *   - A revoked spai_ record is adopted revoked (still refused).
  *   - Both stores empty → 500 (no keys configured).
- *   - Legacy spai_ key gets the correct default scopes (admin = read+write+admin).
- *
- * Run command (in wp-test docker):
- *   docker exec wp-test-wordpress-1 bash -c \
- *     "cd /var/www/html/wp-content/plugins/mcpwp && \
- *      php vendor/bin/phpunit --configuration tests/phpunit.xml \
- *      --filter BridgeAuthTest"
+ *   - Adopted scoped keys keep their role / scopes for write gates.
  *
  * @package MCPWP
  */
@@ -48,6 +45,22 @@ final class BridgeAuthTest extends TestCase {
 		);
 	}
 
+	private function plant_spai_scoped( string $plain_key, array $extra = array() ): void {
+		$record = array_merge(
+			array(
+				'id'         => 'spai-key-1',
+				'label'      => 'Legacy scoped key',
+				'hash'       => wp_hash_password( $plain_key ),
+				'scopes'     => array( 'read', 'write', 'admin' ),
+				'role'       => 'admin',
+				'created_at' => '2026-01-01 00:00:00',
+				'revoked_at' => null,
+			),
+			$extra
+		);
+		update_option( 'spai_api_keys', array( $record ) );
+	}
+
 	// -----------------------------------------------------------------------
 	// Current mcpwp_ keys must still work
 	// -----------------------------------------------------------------------
@@ -62,76 +75,77 @@ final class BridgeAuthTest extends TestCase {
 	}
 
 	// -----------------------------------------------------------------------
-	// Legacy spai_ multi-key store (spai_api_keys)
+	// Leftover spai_ multi-key store (spai_api_keys): refuse → adopt → accept
 	// -----------------------------------------------------------------------
 
-	public function test_legacy_spai_scoped_key_is_accepted(): void {
+	public function test_legacy_spai_scoped_key_is_refused_before_adoption_and_accepted_after(): void {
 		$auth      = $this->make_auth();
 		$plain_key = 'spai_abc123legacy_scoped_key';
-		$hash      = wp_hash_password( $plain_key );
+		$this->plant_spai_scoped( $plain_key );
+		// Seed a mcpwp_ key so has_configured_api_keys() is true (401, not 500).
+		$auth->create_scoped_api_key( 'mcpwp sentinel', array( 'read' ) );
 
-		update_option( 'spai_api_keys', array(
-			array(
-				'id'         => 'spai-key-1',
-				'label'      => 'Legacy scoped key',
-				'hash'       => $hash,
-				'scopes'     => array( 'read', 'write', 'admin' ),
-				'role'       => 'admin',
-				'created_at' => '2026-01-01 00:00:00',
-				'revoked_at' => null,
-			),
-		) );
+		$before = $auth->verify_api_key( $this->get_request( $plain_key ) );
+		$this->assertInstanceOf( WP_Error::class, $before, 'Before adoption the old options are not an auth source' );
+		$this->assertSame( 'invalid_api_key', $before->get_error_code() );
+
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		if ( method_exists( 'Mcpwp_REST_MCP', 'reset_verdict_memo' ) ) {
+			Mcpwp_REST_MCP::reset_verdict_memo();
+		}
 
 		$result = $auth->verify_api_key( $this->get_request( $plain_key ) );
-
-		$this->assertTrue( $result, 'A valid key from spai_api_keys must be accepted' );
+		$this->assertTrue( $result, 'After adoption the same key authenticates from the scoped store' );
 	}
 
-	public function test_legacy_spai_scoped_key_sets_user_context(): void {
+	public function test_legacy_spai_scoped_key_sets_user_context_after_adoption(): void {
 		$auth      = $this->make_auth();
 		$plain_key = 'spai_userset_test_key_value12';
-		$hash      = wp_hash_password( $plain_key );
+		$this->plant_spai_scoped( $plain_key, array( 'id' => 'spai-key-ctx', 'label' => 'Context key' ) );
+		$auth->create_scoped_api_key( 'mcpwp sentinel', array( 'read' ) );
 
-		update_option( 'spai_api_keys', array(
-			array(
-				'id'         => 'spai-key-ctx',
-				'label'      => 'Context key',
-				'hash'       => $hash,
-				'scopes'     => array( 'read', 'write', 'admin' ),
-				'role'       => 'admin',
-				'created_at' => '2026-01-01 00:00:00',
-				'revoked_at' => null,
-			),
-		) );
-
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 		$auth->verify_api_key( $this->get_request( $plain_key ) );
 
 		$this->assertNotSame( 0, $GLOBALS['mcpwp_test_current_user'],
-			'verify_api_key must set the API user context even for legacy spai_ key' );
+			'verify_api_key must set the API user context for an adopted key' );
 	}
 
 	// -----------------------------------------------------------------------
-	// Legacy spai_ single key (spai_api_key)
+	// Leftover spai_ single key (spai_api_key)
 	// -----------------------------------------------------------------------
 
-	public function test_legacy_spai_single_key_is_accepted(): void {
+	public function test_legacy_spai_single_key_is_refused_before_adoption_and_accepted_after(): void {
 		$auth      = $this->make_auth();
 		$plain_key = 'spai_singlekeylegacy_test1234';
 		$hash      = wp_hash_password( $plain_key );
 
 		update_option( 'spai_api_key', $hash );
+		$auth->create_scoped_api_key( 'mcpwp sentinel', array( 'read' ) );
+
+		$before = $auth->verify_api_key( $this->get_request( $plain_key ) );
+		$this->assertInstanceOf( WP_Error::class, $before );
+		$this->assertSame( 'invalid_api_key', $before->get_error_code() );
+
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		if ( method_exists( 'Mcpwp_REST_MCP', 'reset_verdict_memo' ) ) {
+			Mcpwp_REST_MCP::reset_verdict_memo();
+		}
 
 		$result = $auth->verify_api_key( $this->get_request( $plain_key ) );
-
-		$this->assertTrue( $result, 'A valid key from spai_api_key (single-key option) must be accepted' );
+		$this->assertTrue( $result, 'After adoption a former spai_api_key authenticates from the scoped store' );
 	}
 
-	public function test_legacy_spai_single_key_gets_admin_scope_on_write(): void {
+	public function test_legacy_spai_single_key_gets_admin_scope_on_write_after_adoption(): void {
 		$auth      = $this->make_auth();
 		$plain_key = 'spai_singlewrite_test_key1234';
 		$hash      = wp_hash_password( $plain_key );
 
 		update_option( 'spai_api_key', $hash );
+		$auth->create_scoped_api_key( 'mcpwp sentinel', array( 'read' ) );
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 
 		$request = new WP_REST_Request(
 			'POST',
@@ -142,8 +156,8 @@ final class BridgeAuthTest extends TestCase {
 
 		$result = $auth->verify_api_key( $request );
 
-		// Single spai_ key is synthesised with default admin scopes → write is allowed.
-		$this->assertTrue( $result, 'Legacy spai_api_key single key must have write scope' );
+		// Adopted single key keeps admin scopes → write is allowed.
+		$this->assertTrue( $result, 'Adopted spai_api_key single key must have write scope' );
 	}
 
 	// -----------------------------------------------------------------------
@@ -182,8 +196,17 @@ final class BridgeAuthTest extends TestCase {
 		// Seed a mcpwp_ key so we don't hit "no keys configured".
 		$auth->create_scoped_api_key( 'other key', array( 'read' ) );
 
-		$result = $auth->verify_api_key( $this->get_request( $plain_key ) );
+		$before = $auth->verify_api_key( $this->get_request( $plain_key ) );
+		$this->assertInstanceOf( WP_Error::class, $before );
+		$this->assertSame( 'invalid_api_key', $before->get_error_code() );
 
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		if ( method_exists( 'Mcpwp_REST_MCP', 'reset_verdict_memo' ) ) {
+			Mcpwp_REST_MCP::reset_verdict_memo();
+		}
+
+		$result = $auth->verify_api_key( $this->get_request( $plain_key ) );
 		$this->assertInstanceOf( WP_Error::class, $result );
 		$this->assertSame( 'invalid_api_key', $result->get_error_code() );
 	}
@@ -191,7 +214,6 @@ final class BridgeAuthTest extends TestCase {
 	public function test_bad_key_against_spai_store_is_rejected(): void {
 		$auth = $this->make_auth();
 
-		// Seed the spai_ store with one valid key.
 		update_option( 'spai_api_keys', array(
 			array(
 				'id'         => 'spai-good',
@@ -204,18 +226,23 @@ final class BridgeAuthTest extends TestCase {
 			),
 		) );
 
-		// Also seed one mcpwp_ key so has_configured_api_keys() returns true,
-		// ensuring the "invalid_api_key" (401) path fires rather than the
-		// "api_not_configured" (500) path.  has_configured_api_keys() intentionally
-		// checks only the mcpwp_ stores because the spai_ bridge store is a
-		// fallback, not the configured state.
+		// Also seed one mcpwp_ key so has_configured_api_keys() returns true.
 		$auth->create_scoped_api_key( 'mcpwp sentinel', array( 'read' ) );
 
-		// Correct key → accepted.
+		// Before adoption even the correct key is refused.
+		$pre = $auth->verify_api_key( $this->get_request( 'spai_goodkey_12345678901234' ) );
+		$this->assertInstanceOf( WP_Error::class, $pre );
+
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		if ( method_exists( 'Mcpwp_REST_MCP', 'reset_verdict_memo' ) ) {
+			Mcpwp_REST_MCP::reset_verdict_memo();
+		}
+
+		// Correct key → accepted after adoption.
 		$good = $auth->verify_api_key( $this->get_request( 'spai_goodkey_12345678901234' ) );
 		$this->assertTrue( $good );
 
-		// Reset user context.
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 
 		// Wrong key → rejected with 401 invalid_api_key.
@@ -238,15 +265,14 @@ final class BridgeAuthTest extends TestCase {
 	}
 
 	// -----------------------------------------------------------------------
-	// Priority: mcpwp_ store wins over spai_ store
+	// Priority: mcpwp_ store works; spai leftovers need adoption
 	// -----------------------------------------------------------------------
 
-	public function test_mcpwp_key_wins_when_both_stores_have_a_valid_key(): void {
+	public function test_mcpwp_key_works_while_spai_leftover_needs_adoption(): void {
 		$auth         = $this->make_auth();
 		$v3_plain     = 'mcpwp_v3keyvalue_test12345678';
 		$spai_plain   = 'spai_v28keyvalue_test12345678';
 
-		// Create a v3 key.
 		update_option( 'mcpwp_api_keys', array(
 			array(
 				'id'         => 'v3-key-1',
@@ -259,7 +285,6 @@ final class BridgeAuthTest extends TestCase {
 			),
 		) );
 
-		// Also seed a spai_ key.
 		update_option( 'spai_api_keys', array(
 			array(
 				'id'         => 'spai-key-1',
@@ -272,30 +297,33 @@ final class BridgeAuthTest extends TestCase {
 			),
 		) );
 
-		// Both keys must work independently.
 		$r1 = $auth->verify_api_key( $this->get_request( $v3_plain ) );
 		$this->assertTrue( $r1, 'v3 mcpwp_ key must be accepted' );
 
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 
 		$r2 = $auth->verify_api_key( $this->get_request( $spai_plain ) );
-		$this->assertTrue( $r2, 'legacy spai_ key must also be accepted' );
+		$this->assertInstanceOf( WP_Error::class, $r2, 'Leftover spai key is refused before adoption' );
+
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		if ( method_exists( 'Mcpwp_REST_MCP', 'reset_verdict_memo' ) ) {
+			Mcpwp_REST_MCP::reset_verdict_memo();
+		}
+
+		$r3 = $auth->verify_api_key( $this->get_request( $spai_plain ) );
+		$this->assertTrue( $r3, 'After adoption the former spai key is accepted from the scoped store' );
 	}
 
 	// -----------------------------------------------------------------------
-	// Escalation regression: restricted spai_ scope must be enforced (R7 / Warden)
-	//
-	// A spai_ key with role=author / scopes=[read] must get 403 on a POST to a
-	// write route.  The find_legacy_spai_key() path preserves the role + scopes
-	// from the stored record, so the scope check must fire correctly.
+	// Restricted scope survives adoption
 	// -----------------------------------------------------------------------
 
-	public function test_restricted_scope_spai_key_is_rejected_on_write_route(): void {
+	public function test_restricted_scope_spai_key_is_rejected_on_write_route_after_adoption(): void {
 		$auth      = $this->make_auth();
 		$plain_key = 'spai_restricted_author_key12345';
 		$hash      = wp_hash_password( $plain_key );
 
-		// A spai_ key scoped to read-only (author role).
 		update_option( 'spai_api_keys', array(
 			array(
 				'id'         => 'spai-author-key',
@@ -307,8 +335,9 @@ final class BridgeAuthTest extends TestCase {
 				'revoked_at' => null,
 			),
 		) );
+		$auth->create_scoped_api_key( 'mcpwp sentinel', array( 'read' ) );
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 
-		// Attempt a POST (write operation) — must be 403.
 		$write_request = new WP_REST_Request(
 			'POST',
 			'/mcpwp/v1/posts',
@@ -319,14 +348,14 @@ final class BridgeAuthTest extends TestCase {
 		$result = $auth->verify_api_key( $write_request );
 
 		$this->assertInstanceOf( WP_Error::class, $result,
-			'Restricted-scope spai key must not pass on a write route' );
+			'Restricted-scope adopted key must not pass on a write route' );
 		$this->assertSame( 'insufficient_scope', $result->get_error_code(),
 			'Error code must be insufficient_scope, not a generic auth failure' );
 		$this->assertSame( 403, $result->get_error_data()['status'],
 			'HTTP status must be 403' );
 	}
 
-	public function test_restricted_scope_spai_key_is_accepted_on_read_route(): void {
+	public function test_restricted_scope_spai_key_is_accepted_on_read_route_after_adoption(): void {
 		$auth      = $this->make_auth();
 		$plain_key = 'spai_restricted_read_only_12345';
 		$hash      = wp_hash_password( $plain_key );
@@ -342,8 +371,9 @@ final class BridgeAuthTest extends TestCase {
 				'revoked_at' => null,
 			),
 		) );
+		$auth->create_scoped_api_key( 'mcpwp sentinel', array( 'read' ) );
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 
-		// A GET request to a read route must succeed.
 		$read_request = new WP_REST_Request(
 			'GET',
 			'/mcpwp/v1/site-info',
@@ -354,6 +384,6 @@ final class BridgeAuthTest extends TestCase {
 		$result = $auth->verify_api_key( $read_request );
 
 		$this->assertTrue( $result,
-			'A read-scoped spai_ key must be accepted on a GET route' );
+			'A read-scoped adopted key must be accepted on a GET route' );
 	}
 }

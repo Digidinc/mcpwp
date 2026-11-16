@@ -998,11 +998,10 @@ class Mcpwp_Activator {
 	 * revokes or deletes a key — an admin who wants one gone still has to
 	 * revoke it explicitly.
 	 *
-	 * Covers both the current (mcpwp_api_keys) and legacy (spai_api_keys)
-	 * scoped-key stores — find_legacy_spai_key() still authenticates against
-	 * spai_api_keys directly on a site that has not been through
-	 * Mcpwp_Migrate::run() yet, so a custom-role key minted before the
-	 * spai_ → mcpwp_ rename is exposed to exactly the same #1041 bug.
+	 * Covers both the current (mcpwp_api_keys) and leftover (spai_api_keys)
+	 * scoped-key stores — a custom-role key minted before the spai_ → mcpwp_
+	 * rename may still sit in spai_api_keys until adopt_spai_credentials()
+	 * moves it, so it is exposed to exactly the same #1041 bug until then.
 	 *
 	 * Gated on its OWN flag, not the mcpwp_db_version check in mcpwp.php's
 	 * plugins_loaded — a same-version deployment never re-enters that branch,
@@ -1161,20 +1160,25 @@ class Mcpwp_Activator {
 	/** Label of an adopted record; the Setup page explains what it can do. */
 	const SPAI_ADOPTED_LABEL = 'Migrated 2.8 key';
 
-	/** The id the bridge gives the single spai_api_key; kept, because approvals compare key ids. */
+	/** The id adoption gives the single spai_api_key; kept, because approvals compare key ids. */
 	const SPAI_SINGLE_KEY_ID = 'spai_legacy_single';
 
 	/**
 	 * One-time adoption of the 2.8 spai credentials into the revocable store
-	 * (#1098), then deletion of the originals.
+	 * (#1098 / #1120), then deletion of the originals.
+	 *
+	 * Last-chance upgrade path: a site that jumps straight from 2.8 to a
+	 * release without the request-time spai auth bridge still keeps its keys,
+	 * because this runs on plugins_loaded (while the flag is unset) and on
+	 * activation — never as part of authenticating a request. Auth reads only
+	 * the scoped store (and the empty-store mcpwp_api_key fallback).
 	 *
 	 * On the normal upgrade path activate() mints mcpwp_api_key before
 	 * Mcpwp_Migrate::run(), so a single spai_api_key is never copied (the copy
-	 * skips a target that already has a value). That key then authenticated as
-	 * admin through find_legacy_spai_key() for good, and no screen could revoke
-	 * it. Here every live spai credential becomes an ordinary scoped record
-	 * that Active Keys lists and Revoke kills, and the spai options are
-	 * deleted so the bridge has nothing left to honour.
+	 * skips a target that already has a value). Without adoption that key
+	 * would be stranded; here every live spai credential becomes an ordinary
+	 * scoped record that Active Keys lists and Revoke kills, and the spai
+	 * options are deleted so nothing remains to re-import.
 	 *
 	 * One Mcpwp_Key_Store::mutate() call (#1166): the store lock, a database
 	 * read, a compare-and-swap. The mutator is a pure function of the keys it
@@ -1182,8 +1186,8 @@ class Mcpwp_Activator {
 	 *  - a hash already in the store, active OR revoked, is never added again;
 	 *  - a REVOKED spai record is written as a revoked placeholder, so the
 	 *    revocation outlives the deletion of the spai options;
-	 *  - an adopted record keeps exactly what the bridge granted it (scopes,
-	 *    role, tool_categories, rate_limits, allow_destructive) and its id —
+	 *  - an adopted record keeps exactly the scopes/role/tool_categories/
+	 *    rate_limits/allow_destructive the 2.8 record carried, and its id —
 	 *    the single key keeps 'spai_legacy_single': the approvals
 	 *    self-approval check compares key ids, so renaming an identity would
 	 *    let a key approve its own earlier request;
@@ -1199,8 +1203,8 @@ class Mcpwp_Activator {
 	 * single key first (deleting spai_api_keys first would leave a revoked twin
 	 * of spai_api_key as a live admin record), and the flag is set only after
 	 * both deletes are verified. A failed delete keeps the originals; the
-	 * revoked placeholders keep the bridge refusing their hashes. Nothing here
-	 * logs or prints a key or a hash.
+	 * revoked placeholders keep those hashes refused after a later successful
+	 * adoption. Nothing here logs or prints a key or a hash.
 	 *
 	 * @return bool True when adoption is complete (flag set).
 	 */
@@ -1378,7 +1382,7 @@ class Mcpwp_Activator {
 				}
 			}
 
-			// 2. Live spai_api_keys records, as the bridge granted them.
+			// 2. Live spai_api_keys records, with the fields they carried in 2.8.
 			if ( ! $revoke ) {
 				foreach ( $spai_keys as $key ) {
 					if ( ! is_array( $key ) || ! empty( $key['revoked_at'] ) ) {
@@ -1386,7 +1390,7 @@ class Mcpwp_Activator {
 					}
 					$hash = isset( $key['hash'] ) ? Mcpwp_Key_State::canonical_verifier( $key['hash'] ) : '';
 					$id   = isset( $key['id'] ) ? sanitize_key( (string) $key['id'] ) : '';
-					// Not a verifier, or no id: the bridge refuses it (no plaintext
+					// Not a verifier, or no id: never a live principal (no plaintext
 					// match for a store record, no principal without an id), so it
 					// is already dead and is not adopted.
 					if ( '' === $hash || '' === $id || isset( $present[ $hash ] ) || ! Mcpwp_Key_State::is_stored_verifier( $hash ) ) {

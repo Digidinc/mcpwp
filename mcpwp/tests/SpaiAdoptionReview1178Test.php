@@ -1,8 +1,9 @@
 <?php
 /**
- * #1178 adversarial-review round: Argon2 and other non-core hash formats, the
- * bridge after adoption, rotation atomicity, bounded retries, and the legacy
- * key cases the first round's tests let through.
+ * #1178 adversarial-review round: Argon2 and other non-core hash formats,
+ * leftover spai options after adoption (#1120: no request-time bridge),
+ * rotation atomicity, bounded retries, and the legacy key cases the first
+ * round's tests let through.
  *
  * @package MCPWP
  */
@@ -17,10 +18,6 @@ class Mcpwp_Spai_Review_Test_Auth {
 
 	public function store_record( $k ) {
 		return $this->find_scoped_api_key( $k );
-	}
-
-	public function bridge_record( $k ) {
-		return $this->find_legacy_spai_key( $k );
 	}
 }
 
@@ -147,7 +144,7 @@ final class SpaiAdoptionReview1178Test extends TestCase {
 		$key = 'spai_' . str_repeat( 'e', 48 );
 		$this->seed();
 		update_option( 'spai_api_keys', array( array( 'id' => 'a1', 'hash' => $this->argon( $key ), 'scopes' => array( 'read' ), 'role' => 'author', 'revoked_at' => null ) ) );
-		$this->assertTrue( $this->works( $key ), 'Precondition: the 2.8 key works.' );
+		$this->assertFalse( $this->works( $key ), 'Precondition: refused before adoption.' );
 
 		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 
@@ -162,15 +159,15 @@ final class SpaiAdoptionReview1178Test extends TestCase {
 		update_option( 'spai_api_keys', array( array( 'id' => 'd1', 'hash' => $hash, 'scopes' => array( 'read' ), 'role' => 'designer', 'revoked_at' => null ) ) );
 		update_option( 'spai_api_key', $hash );
 		$a = new Mcpwp_Spai_Review_Test_Auth();
-		$this->assertSame( 'designer', $a->bridge_record( $key )['role'] ?? null, 'The bridge must find the designer record, not the admin fallback.' );
+		$this->assertFalse( $this->works( $key ), 'Refused before adoption.' );
 
 		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
 
-		$this->assertSame( 'designer', $a->store_record( $key )['role'] ?? null );
+		$this->assertSame( 'designer', $a->store_record( $key )['role'] ?? null, 'Adoption prefers the scoped record role over the single-key admin fallback.' );
 		$this->assertCount( 1, $this->with_hash( $hash ), 'One record, not an extra admin one.' );
 	}
 
-	// ── P2-1: the bridge after adoption ───────────────────────────────────
+	// ── P2-1: leftover options after adoption ─────────────────────────────
 
 	public function test_after_adoption_a_spai_key_that_reappears_is_refused(): void {
 		$this->seed();
@@ -180,15 +177,17 @@ final class SpaiAdoptionReview1178Test extends TestCase {
 		update_option( 'spai_api_key', password_hash( $fresh, PASSWORD_BCRYPT ) );
 		update_option( 'spai_api_keys', array( array( 'id' => 'n1', 'hash' => password_hash( $fresh, PASSWORD_BCRYPT ), 'revoked_at' => null ) ) );
 
-		$this->assertNull( ( new Mcpwp_Spai_Review_Test_Auth() )->bridge_record( $fresh ) );
-		$this->assertFalse( $this->works( $fresh ), 'Not an unlisted admin key.' );
+		$this->assertNull( ( new Mcpwp_Spai_Review_Test_Auth() )->store_record( $fresh ) );
+		$this->assertFalse( $this->works( $fresh ), 'Not an unlisted admin key; flag set so adoption will not re-import.' );
 	}
 
-	public function test_before_adoption_finishes_the_bridge_still_honours_an_uncopied_key(): void {
+	public function test_before_adoption_finishes_an_uncopied_key_is_refused(): void {
 		$this->seed();
 		$key = 'spai_' . str_repeat( 'g', 48 );
 		update_option( 'spai_api_key', password_hash( $key, PASSWORD_BCRYPT ) );
-		$this->assertTrue( $this->works( $key ) );
+		$this->assertFalse( $this->works( $key ), 'Request auth never reads the old options (#1120).' );
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$this->assertTrue( $this->works( $key ), 'Accepted from the scoped store after adoption.' );
 	}
 
 	// ── P2-3: the rotation carries the spai placeholders ──────────────────
@@ -327,10 +326,12 @@ final class SpaiAdoptionReview1178Test extends TestCase {
 		$this->assertTrue( $this->works( $legacy ) );
 	}
 
-	public function test_the_bridge_never_matches_a_spai_api_keys_record_as_plaintext(): void {
+	public function test_a_plaintext_spai_api_keys_record_is_never_a_credential(): void {
 		$this->seed();
 		update_option( 'spai_api_keys', array( array( 'id' => 'pl', 'hash' => 'plain-secret-value', 'revoked_at' => null ) ) );
-		$this->assertNull( ( new Mcpwp_Spai_Review_Test_Auth() )->bridge_record( 'plain-secret-value' ) );
-		$this->assertFalse( $this->works( 'plain-secret-value' ) );
+		$this->assertFalse( $this->works( 'plain-secret-value' ), 'Refused before adoption.' );
+		$this->assertTrue( Mcpwp_Activator::adopt_spai_credentials() );
+		$this->assertNull( ( new Mcpwp_Spai_Review_Test_Auth() )->store_record( 'plain-secret-value' ) );
+		$this->assertFalse( $this->works( 'plain-secret-value' ), 'Plaintext store hashes are not adopted as live keys.' );
 	}
 }
