@@ -8,9 +8,11 @@
 use PHPUnit\Framework\TestCase;
 
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-elementor.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-pages.php';
 require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-mcp.php';
 require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-page-builder.php';
 require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-elementor-pro.php';
+require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
 
 final class PageTemplatePreserve1231RouteMcpTest extends TestCase {
 
@@ -102,6 +104,32 @@ final class PageTemplatePreserve1231RouteMcpTest extends TestCase {
 				if ( '/mcpwp/v1/elementor/page' === $route ) {
 					$controller = new Mcpwp_REST_Elementor();
 					$answer     = $controller->create_elementor_page( $request );
+					if ( $answer instanceof WP_Error ) {
+						return $answer;
+					}
+					return $answer instanceof WP_REST_Response ? $answer : rest_ensure_response( $answer );
+				}
+				if ( '/mcpwp/v1/elementor/landing-page' === $route ) {
+					$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
+					$controller = new Mcpwp_REST_Elementor_Pro( new Mcpwp_Elementor_Pro() );
+					$answer     = $controller->create_landing_page( $request );
+					if ( $answer instanceof WP_Error ) {
+						return $answer;
+					}
+					return $answer instanceof WP_REST_Response ? $answer : rest_ensure_response( $answer );
+				}
+				if ( '/mcpwp/v1/pages' === $route && 'POST' === $request->get_method() ) {
+					$controller = new Mcpwp_REST_Pages();
+					$answer     = $controller->create_page( $request );
+					if ( $answer instanceof WP_Error ) {
+						return $answer;
+					}
+					return $answer instanceof WP_REST_Response ? $answer : rest_ensure_response( $answer );
+				}
+				if ( preg_match( '#^/mcpwp/v1/elementor/templates/(\d+)/apply$#', $route, $matches ) ) {
+					$request->set_url_params( array( 'id' => (int) $matches[1] ) );
+					$controller = new Mcpwp_REST_Elementor_Pro( new Mcpwp_Elementor_Pro() );
+					$answer     = $controller->apply_template( $request );
 					if ( $answer instanceof WP_Error ) {
 						return $answer;
 					}
@@ -346,5 +374,130 @@ final class PageTemplatePreserve1231RouteMcpTest extends TestCase {
 		$this->assertFalse( $result['template']['requested'] );
 		$this->assertSame( 'default', $result['template']['before'] );
 		$this->assertSame( 'default', $result['template']['after'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_rest_create_landing_page_refuses_bogus_template_before_insert(): void {
+		$this->pretend_elementor_is_installed();
+		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
+
+		$count_before = count( $GLOBALS['_mcpwp_test_posts'] );
+		$request      = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/landing-page' );
+		$request->set_body_params(
+			array(
+				'title'          => 'Should not exist',
+				'elementor_data' => $this->minimal_section_json(),
+				'template'       => 'bogus-template-slug',
+			)
+		);
+
+		$result = ( new Mcpwp_REST_Elementor_Pro( new Mcpwp_Elementor_Pro() ) )->create_landing_page( $request );
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_template', $result->get_error_code() );
+		$this->assertSame( $count_before, count( $GLOBALS['_mcpwp_test_posts'] ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_rest_create_landing_page_forwards_template_to_core(): void {
+		$this->pretend_elementor_is_installed();
+		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
+
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/landing-page' );
+		$request->set_body_params(
+			array(
+				'title'          => 'Canvas landing',
+				'elementor_data' => $this->minimal_section_json(),
+				'template'       => 'elementor_canvas',
+			)
+		);
+
+		$response = ( new Mcpwp_REST_Elementor_Pro( new Mcpwp_Elementor_Pro() ) )->create_landing_page( $request );
+		$this->assertInstanceOf( WP_REST_Response::class, $response );
+		$data = $response->get_data();
+		$this->assertTrue( $data['template']['requested'] );
+		$this->assertSame( 'elementor_canvas', $data['template']['after'] );
+		$this->assertSame( 'elementor_canvas', get_post_meta( (int) $data['id'], '_wp_page_template', true ) );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_mcp_wp_create_page_keeps_template_slug_and_template_change(): void {
+		$payload = $this->mcp_call(
+			'wp_create_page',
+			array(
+				'title'    => 'MCP plain page',
+				'template' => 'elementor_header_footer',
+			)
+		);
+
+		$this->assertArrayNotHasKey( 'error', $payload );
+		$structured = $this->mcp_tool_payload( $payload );
+		$this->assertSame( 'elementor_header_footer', $structured['template'] );
+		$this->assertTrue( $structured['template_change']['requested'] );
+		$this->assertSame( 'elementor_header_footer', $structured['template_change']['after'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_mcp_apply_tools_accept_template_parameter(): void {
+		foreach ( array( 'wp_apply_elementor_template', 'wp_apply_elementor_archetype', 'wp_apply_elementor_part' ) as $tool ) {
+			$payload = $this->mcp_call(
+				$tool,
+				array(
+					'id'       => 99991,
+					'page_id'  => self::PAGE_ID,
+					'template' => 'elementor_canvas',
+				)
+			);
+			$this->assertArrayHasKey( 'result', $payload );
+			$is_error = ! empty( $payload['result']['isError'] );
+			if ( $is_error ) {
+				$error = $payload['result']['structuredContent']['error'] ?? json_decode( (string) $payload['result']['content'][0]['text'], true );
+				$this->assertIsArray( $error );
+				$this->assertNotSame( 'invalid_arguments', $error['code'] ?? ( $error['error']['code'] ?? '' ), "{$tool} must accept template in the schema." );
+			}
+		}
+	}
+
+	public function test_rest_apply_template_surfaces_template_report(): void {
+		$mock = $this->getMockBuilder( Mcpwp_Elementor_Pro::class )
+			->onlyMethods( array( 'apply_template_to_page' ) )
+			->getMock();
+		$mock->method( 'apply_template_to_page' )->willReturn(
+			array(
+				'success'  => true,
+				'template' => array(
+					'before'    => 'default',
+					'after'     => 'elementor_canvas',
+					'requested' => true,
+				),
+			)
+		);
+
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/templates/1/apply' );
+		$request->set_url_params( array( 'id' => 1 ) );
+		$request->set_body_params(
+			array(
+				'page_id'  => self::PAGE_ID,
+				'template' => 'elementor_canvas',
+			)
+		);
+
+		$response = ( new Mcpwp_REST_Elementor_Pro( $mock ) )->apply_template( $request );
+		$this->assertInstanceOf( WP_REST_Response::class, $response );
+		$data = $response->get_data();
+		$this->assertTrue( $data['template']['requested'] );
+		$this->assertSame( 'elementor_canvas', $data['template']['after'] );
 	}
 }

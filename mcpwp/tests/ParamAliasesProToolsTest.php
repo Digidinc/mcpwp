@@ -54,7 +54,20 @@ final class ParamAliasesProToolsTest extends TestCase {
 
 		$props = $this->schemaProperties( 'wp_apply_elementor_template' );
 		$this->assertArrayHasKey( 'id', $props );
+		$this->assertArrayHasKey( 'template', $props );
 		$this->assertArrayNotHasKey( 'template_id', $props, 'template_id is a deprecated alias — not advertised in the schema.' );
+	}
+
+	public function test_apply_elementor_tools_declare_page_template_param(): void {
+		foreach ( array( 'wp_apply_elementor_template', 'wp_apply_elementor_archetype', 'wp_apply_elementor_part' ) as $tool ) {
+			$props = $this->schemaProperties( $tool );
+			$this->assertArrayHasKey( 'template', $props, "{$tool} must accept optional page template slug." );
+		}
+	}
+
+	public function test_wp_create_landing_page_declares_template_param(): void {
+		$props = $this->schemaProperties( 'wp_create_landing_page' );
+		$this->assertArrayHasKey( 'template', $props );
 	}
 
 	public function test_wp_delete_elementor_template_accepts_template_id_alias(): void {

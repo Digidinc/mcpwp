@@ -137,6 +137,7 @@ final class PostRefInventoryGuard1101cTest extends TestCase {
 			'template'   => 'a page template slug (_wp_page_template), not a post id',
 		),
 		'POST /elementor/page'                               => array( 'template' => 'a page template slug (_wp_page_template), not a post id' ),
+		'POST /elementor/landing-page'                      => array( 'template' => 'a page template slug (_wp_page_template), not a post id' ),
 		'POST /elementor/build-page'                         => array( 'template' => 'a page template slug (_wp_page_template), not a post id' ),
 		'POST /elementor/(?P<id>\\d+)/edit-section'           => array( 'element_id' => 'an Elementor element id inside the page named by {id}, not a post' ),
 		'POST /elementor/(?P<id>\\d+)/remove-section'         => array( 'element_id' => 'an Elementor element id inside the page named by {id}, not a post' ),

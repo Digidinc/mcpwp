@@ -154,9 +154,8 @@ final class PageTemplatePreserve1231Test extends TestCase {
 		$this->assertIsArray( $created );
 		$this->assertArrayHasKey( 'template_change', $created );
 		$this->assertFalse( $created['template_change']['requested'] );
-		$this->assertSame( $created['template_change'], $created['template'] );
-		$this->assertSame( 'default', $created['template']['after'] );
-		$this->assertSame( 'default', $created['page_template'] );
+		$this->assertSame( 'default', $created['template'] );
+		$this->assertSame( 'default', $created['template_change']['after'] );
 		$this->assertSame( '', (string) get_post_meta( (int) $created['id'], '_wp_page_template', true ) );
 	}
 
@@ -171,8 +170,8 @@ final class PageTemplatePreserve1231Test extends TestCase {
 
 		$this->assertIsArray( $created );
 		$this->assertTrue( $created['template_change']['requested'] );
-		$this->assertSame( 'elementor_header_footer', $created['template']['after'] );
-		$this->assertSame( 'elementor_header_footer', $created['page_template'] );
+		$this->assertSame( 'elementor_header_footer', $created['template'] );
+		$this->assertSame( 'elementor_header_footer', $created['template_change']['after'] );
 		$this->assertSame(
 			'elementor_header_footer',
 			get_post_meta( (int) $created['id'], '_wp_page_template', true )

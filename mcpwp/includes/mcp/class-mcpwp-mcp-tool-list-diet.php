@@ -209,6 +209,19 @@ class Mcpwp_MCP_Tool_List_Diet {
 			'status'   => 'draft, publish or private.',
 			'template' => 'Optional template slug; omit for theme default.',
 		),
+		'wp_create_landing_page'   => array(
+			'template'    => 'Optional slug; omit for theme default.',
+			'template_id' => 'Elementor library template to copy.',
+		),
+		'wp_apply_elementor_template' => array(
+			'template' => 'Optional slug after apply.',
+		),
+		'wp_apply_elementor_archetype' => array(
+			'template' => 'Optional slug after apply.',
+		),
+		'wp_apply_elementor_part'  => array(
+			'template' => 'Optional slug (replace mode).',
+		),
 		'wp_upload_media_from_url' => array(
 			'url'      => '',
 			'filename' => '',

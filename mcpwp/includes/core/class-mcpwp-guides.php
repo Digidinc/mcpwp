@@ -352,8 +352,8 @@ class Mcpwp_Guides {
 						. "**When you need a different frame:**\n"
 						. "- `elementor_canvas` — content only, no theme header/footer\n"
 						. "- `elementor_header_footer` — full-width Elementor content with the theme header/footer\n"
-						. "- Pass `template` on `wp_create_page`, `wp_create_elementor_page`, `wp_build_page`, or `wp_create_landing_page` at creation time\n\n"
-						. "Responses report `template: {before, after, requested}` on Elementor writes. `wp_create_page` also echoes the same object as `template_change` (legacy alias).",
+						. "- **At creation:** pass `template` (slug) on `wp_create_page`, `wp_build_page`, or `wp_create_landing_page`. Blank Elementor pages: `POST /elementor/page` (REST only — no MCP tool) accepts the same optional `template`.\n\n"
+						. "**Responses:** Elementor saves and apply tools return `template: {before, after, requested}`. Plain page tools keep `template` as the slug string (same as `wp_get_page` / `wp_list_pages`) and add `template_change` with that report object on create.",
 				),
 				array(
 					'heading' => 'Relevant Tools',
