@@ -95,11 +95,24 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_templates' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'status' => array(
+							'type'        => 'string',
+							'description' => __( 'Optional comma-separated post statuses to include. Write/admin keys default to publish,draft,private,pending; read keys default to publish only.', 'mcpwp' ),
+						),
+					),
 				),
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
 					'callback'            => array( $this, 'create_theme_template' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => array(
+						'status' => array(
+							'type'        => 'string',
+							'enum'        => array( 'draft', 'private', 'publish' ),
+							'description' => __( 'Post status for the new Theme Builder template. Defaults to draft.', 'mcpwp' ),
+						),
+					),
 				),
 			)
 		);
@@ -218,8 +231,10 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 		}
 
 		$args = array(
-			'per_page' => $request->get_param( 'per_page' ) ?: 50,
-			'type'     => $request->get_param( 'type' ),
+			'per_page'         => $request->get_param( 'per_page' ) ?: 50,
+			'type'             => $request->get_param( 'type' ),
+			'status'           => $request->get_param( 'status' ),
+			'caller_read_only' => ! $this->requester_can_see_non_public(),
 		);
 
 		$templates = $this->theme_builder->get_templates( $args );

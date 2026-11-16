@@ -89,6 +89,10 @@ class Mcpwp_MCP_Tool_List_Diet {
 		'wp_get_blueprint'           => 'Generate one Elementor section as JSON from a blueprint type, ready for wp_add_section. Types and their item fields: wp_list_blueprints.',
 		'wp_upload_design_reference' => 'Save a design reference from an image (URL, base64 or media ID) to guide future page building.',
 		'wp_update_plugin_settings'  => 'Update MCPWP plugin settings. Send only the keys to change.',
+		'wp_list_elementor_templates' => 'List Elementor library templates; write keys include drafts.',
+		'wp_list_elementor_archetypes' => 'List Elementor archetypes with optional scope/class filters.',
+		'wp_list_elementor_parts'    => 'List reusable Elementor parts (heroes, CTAs, sections).',
+		'wp_list_theme_templates'    => 'List Theme Builder templates with display conditions.',
 	);
 
 	/**
@@ -271,6 +275,41 @@ class Mcpwp_MCP_Tool_List_Diet {
 			'status' => 'pending, approved, applied, rejected or rolled_back.',
 			'limit'  => '',
 			'order'  => 'date or priority.',
+		),
+		'wp_list_elementor_templates' => array(
+			'status'          => 'Post statuses to include.',
+			'include_summary' => '',
+			'per_page'        => '1-100.',
+			'page'            => '',
+		),
+		'wp_list_elementor_archetypes' => array(
+			'status'          => 'Post statuses to include.',
+			'include_summary' => '',
+			'archetype_scope' => '',
+			'archetype_class' => '',
+			'archetype_style' => '',
+			'scope'           => '',
+			'style'           => '',
+			'search'          => '',
+			'per_page'        => '1-100.',
+			'page'            => '',
+		),
+		'wp_list_elementor_parts'  => array(
+			'status'          => 'Post statuses to include.',
+			'include_summary' => '',
+			'kind'            => '',
+			'part_kind'       => '',
+			'style'           => '',
+			'part_style'      => '',
+			'tag'             => '',
+			'part_tags'       => '',
+			'search'          => '',
+			'per_page'        => '1-100.',
+			'page'            => '',
+		),
+		'wp_list_theme_templates'  => array(
+			'status' => 'Post statuses to include.',
+			'type'   => '',
 		),
 		'mcpwp_find_tools'         => array(
 			'query'    => 'Keywords, e.g. "elementor heading".',

@@ -45,6 +45,7 @@ require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-elementor.php'
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-learnpress.php';
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-events.php';
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
+require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-woocommerce.php';
 
 final class PublishGateSchemaInvariantTest extends TestCase {
@@ -67,6 +68,7 @@ final class PublishGateSchemaInvariantTest extends TestCase {
 		( new Mcpwp_REST_LearnPress( null ) )->register_routes();
 		( new Mcpwp_REST_Events( null ) )->register_routes();
 		( new Mcpwp_REST_Elementor_Pro( null ) )->register_routes();
+		( new Mcpwp_REST_Theme_Builder( null ) )->register_routes();
 		( new Mcpwp_REST_WooCommerce( null ) )->register_routes();
 	}
 

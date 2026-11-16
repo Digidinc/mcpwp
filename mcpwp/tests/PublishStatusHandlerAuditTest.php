@@ -107,7 +107,8 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 		'pro/core/class-mcpwp-events.php'              => 'gated: /mcpwp/v1/events',
 		'pro/core/class-mcpwp-page-builder.php'        => 'gated: /mcpwp/v1/elementor/build-page',
 		'core/traits/trait-mcpwp-elementor-writer.php' => 'gated: /mcpwp/v1/elementor/page',
-		'pro/core/class-mcpwp-elementor-pro.php'       => 'gated: create_landing_page() -> /mcpwp/v1/elementor/landing-page, clone_page() -> /mcpwp/v1/elementor/clone. The same file also wp_insert_post()s template-library entries with post_status hardcoded to \'publish\' (never caller input) — not a gating concern.',
+		'pro/core/class-mcpwp-elementor-pro.php'       => 'gated: create_landing_page() -> /mcpwp/v1/elementor/landing-page, clone_page() -> /mcpwp/v1/elementor/clone, create_template()/save_section_as_template() -> /mcpwp/v1/elementor/{templates,archetypes,parts,save-section-as-template}.',
+		'pro/core/class-mcpwp-theme-builder.php'       => 'gated: create_theme_template() -> /mcpwp/v1/theme-builder/templates (#1211)',
 		// Translations are caller-controlled too, but their own routes
 		// (/posts/{id}/translations, /pages/{id}/translations) are already
 		// covered by the /mcpwp/v1/posts and /mcpwp/v1/pages prefixes above —
@@ -146,7 +147,6 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 
 		// ── Not caller-controlled at all — post_status is a hardcoded
 		// literal or restricted to a context with no API key involved.
-		'pro/core/class-mcpwp-theme-builder.php'       => 'not caller-controlled: post_status hardcoded to \'publish\'',
 		'core/class-mcpwp-media.php'                   => 'not caller-controlled: post_status hardcoded to \'inherit\' (attachments)',
 		'admin/traits/trait-mcpwp-admin-library.php'   => 'not caller-controlled: post_status hardcoded to \'draft\', and only runs inside wp-admin under the visiting user\'s own WP capabilities — no API key involved',
 
@@ -191,6 +191,9 @@ final class PublishStatusHandlerAuditTest extends TestCase {
 		'elementor landing-page'      => array( 'POST', '/mcpwp/v1/elementor/landing-page', array( 'title' => 'x' ) ),
 		'elementor clone'             => array( 'POST', '/mcpwp/v1/elementor/clone', array( 'source_id' => 1 ) ),
 		'elementor page'              => array( 'POST', '/mcpwp/v1/elementor/page', array( 'title' => 'x' ) ),
+		'elementor template create'   => array( 'POST', '/mcpwp/v1/elementor/templates', array( 'title' => 'x', 'type' => 'page' ) ),
+		'elementor part create'       => array( 'POST', '/mcpwp/v1/elementor/parts', array( 'title' => 'x' ) ),
+		'theme builder template create' => array( 'POST', '/mcpwp/v1/theme-builder/templates', array( 'title' => 'x', 'type' => 'header' ) ),
 		// BLOCK 2's route. Whether get_required_scope_for_request() takes its
 		// Mcpwp_REST_WooCommerce::archetype_apply_targets_publish_status()
 		// branch or its request_targets_publish_status() fallback here

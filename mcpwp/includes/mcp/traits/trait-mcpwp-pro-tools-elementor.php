@@ -21,7 +21,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 		// Elementor Pro Tools
 		$pro_tools[] = $this->define_tool(
 			'wp_list_elementor_templates',
-			'List all saved Elementor templates (page, section, header, footer, popup). Use to find template IDs before applying.',
+			'List saved Elementor templates (page, section, header, footer, popup), including drafts for write/admin keys. Use to find template IDs before applying.',
 			array(
 				'page'     => array(
 					'type'        => 'number',
@@ -37,6 +37,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'boolean',
 					'default'     => false,
 					'description' => 'Include a structural summary per item — section_count, widget_count, top_level_ids, data_bytes — so a library can be verified without a get call per item (#635).',
+				),
+				'status'          => array(
+					'type'        => 'string',
+					'description' => 'Optional comma-separated post statuses to include. Write/admin keys default to publish,draft,private,pending; read keys default to published templates only.',
 				),
 			)
 		);
@@ -98,6 +102,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'object',
 					'description' => 'Elementor document settings to store with the template: template (canvas/header-footer), hide_title, background_*, padding, custom_css. A full-page template without these carries the layout and loses the frame (#638). Unrecognised keys are reported in page_settings_result.skipped rather than dropped silently.',
 				),
+				'status'        => array(
+					'type'        => 'string',
+					'enum'        => array( 'draft', 'private', 'publish' ),
+					'description' => 'Post status: draft (default). publish and private require admin scope.',
+				),
 			)
 		);
 
@@ -126,6 +135,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'page_settings' => array(
 					'type'        => 'object',
 					'description' => 'Elementor document settings to store with the template: template (canvas/header-footer), hide_title, background_*, padding, custom_css. A full-page template without these carries the layout and loses the frame (#638). Unrecognised keys are reported in page_settings_result.skipped rather than dropped silently.',
+				),
+				'status'        => array(
+					'type'        => 'string',
+					'enum'        => array( 'draft', 'private', 'publish' ),
+					'description' => 'Publish or privatize an existing library template. publish and private require admin scope.',
 				),
 			)
 		);
@@ -213,6 +227,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'default'     => false,
 					'description' => 'Include a structural summary per item — section_count, widget_count, top_level_ids, data_bytes — so a library can be verified without a get call per item (#635).',
 				),
+				'status'          => array(
+					'type'        => 'string',
+					'description' => 'Optional comma-separated post statuses to include. Write/admin keys default to publish,draft,private,pending; read keys default to published templates only.',
+				),
 			)
 		);
 
@@ -267,6 +285,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'page_settings' => array(
 					'type'        => 'object',
 					'description' => 'Elementor document settings to store with the template: template (canvas/header-footer), hide_title, background_*, padding, custom_css. A full-page template without these carries the layout and loses the frame (#638). Unrecognised keys are reported in page_settings_result.skipped rather than dropped silently.',
+				),
+				'status'        => array(
+					'type'        => 'string',
+					'enum'        => array( 'draft', 'private', 'publish' ),
+					'description' => 'Post status: draft (default). publish and private require admin scope.',
 				),
 			)
 		);
@@ -350,6 +373,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'default'     => false,
 					'description' => 'Include a structural summary per item — section_count, widget_count, top_level_ids, data_bytes — so a library can be verified without a get call per item (#635).',
 				),
+				'status'          => array(
+					'type'        => 'string',
+					'description' => 'Optional comma-separated post statuses to include. Write/admin keys default to publish,draft,private,pending; read keys default to published templates only.',
+				),
 			)
 		);
 
@@ -400,6 +427,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'description' => 'Optional list of part tags',
 					'items'       => array( 'type' => 'string' ),
 				),
+				'status'         => array(
+					'type'        => 'string',
+					'enum'        => array( 'draft', 'private', 'publish' ),
+					'description' => 'Post status: draft (default). publish and private require admin scope.',
+				),
 			)
 		);
 
@@ -433,6 +465,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'array',
 					'description' => 'Optional list of part tags',
 					'items'       => array( 'type' => 'string' ),
+				),
+				'status'     => array(
+					'type'        => 'string',
+					'enum'        => array( 'draft', 'private', 'publish' ),
+					'description' => 'Post status: draft (default). publish and private require admin scope.',
 				),
 			)
 		);
@@ -628,6 +665,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'title'      => array(
 					'type'        => 'string',
 					'description' => 'Title for the saved template. Defaults to "Section from Page {id}"',
+				),
+				'status'     => array(
+					'type'        => 'string',
+					'enum'        => array( 'draft', 'private', 'publish' ),
+					'description' => 'Post status: draft (default). publish and private require admin scope.',
 				),
 			)
 		);
@@ -929,11 +971,15 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 
 		$pro_tools[] = $this->define_tool(
 			'wp_list_theme_templates',
-			'List Theme Builder templates (header, footer, single, archive, etc.) with their display conditions',
+			'List Theme Builder templates (header, footer, single, archive, etc.) with their display conditions. Includes drafts for write/admin keys.',
 			array(
 				'type' => array(
 					'type'        => 'string',
 					'description' => 'Filter by template type: header, footer, single, single-post, single-page, archive, search-results, error-404',
+				),
+				'status' => array(
+					'type'        => 'string',
+					'description' => 'Optional comma-separated post statuses to include. Write/admin keys default to publish,draft,private,pending; read keys default to published templates only.',
 				),
 			)
 		);
@@ -1019,7 +1065,7 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 
 		$pro_tools[] = $this->define_tool(
 			'wp_create_theme_template',
-			'Create a Theme Builder template (header, footer, single, archive) and assign it to a display scope in one step',
+			'Create a Theme Builder template (header, footer, single, archive), assign display scope, default draft. Published templates render on the site; draft/private need admin scope to publish via status.',
 			array(
 				'title' => array(
 					'type'        => 'string',
@@ -1054,6 +1100,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'boolean',
 					'description' => 'Validate without creating or publishing the template (#828: previously ignored here, so a dry run still created and published the template).',
 					'default'     => false,
+				),
+				'status' => array(
+					'type'        => 'string',
+					'enum'        => array( 'draft', 'private', 'publish' ),
+					'description' => 'Post status: draft (default). publish and private require admin scope. Theme templates do not render until published.',
 				),
 			),
 			null,
