@@ -450,6 +450,46 @@ final class PageTemplatePreserve1231RouteMcpTest extends TestCase {
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
+	public function test_rest_apply_part_insert_refuses_template_argument(): void {
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/parts/1/apply' );
+		$request->set_url_params( array( 'id' => 1 ) );
+		$request->set_body_params(
+			array(
+				'page_id'  => self::PAGE_ID,
+				'mode'     => 'insert',
+				'template' => 'elementor_canvas',
+			)
+		);
+
+		$mock = $this->getMockBuilder( Mcpwp_Elementor_Pro::class )
+			->onlyMethods( array( 'insert_part_into_page' ) )
+			->getMock();
+		$mock->expects( $this->never() )->method( 'insert_part_into_page' );
+
+		$result = ( new Mcpwp_REST_Elementor_Pro( $mock ) )->apply_part( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_template', $result->get_error_code() );
+		$this->assertSame( 400, $result->get_error_data()['status'] );
+	}
+
+	public function test_rest_apply_part_insert_refuses_invalid_template_argument(): void {
+		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/parts/1/apply' );
+		$request->set_url_params( array( 'id' => 1 ) );
+		$request->set_body_params(
+			array(
+				'page_id'  => self::PAGE_ID,
+				'mode'     => 'insert',
+				'template' => 'not-a-real-template',
+			)
+		);
+
+		$mock = $this->getMockBuilder( Mcpwp_Elementor_Pro::class )->getMock();
+		$result = ( new Mcpwp_REST_Elementor_Pro( $mock ) )->apply_part( $request );
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'invalid_template', $result->get_error_code() );
+		$this->assertSame( 400, $result->get_error_data()['status'] );
+	}
+
 	public function test_mcp_apply_tools_accept_template_parameter(): void {
 		foreach ( array( 'wp_apply_elementor_template', 'wp_apply_elementor_archetype', 'wp_apply_elementor_part' ) as $tool ) {
 			$payload = $this->mcp_call(

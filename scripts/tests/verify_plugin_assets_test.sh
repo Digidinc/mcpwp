@@ -120,5 +120,17 @@ rm -f "$shim/grep"
 expect fail "no arguments" bash "$VERIFY"
 expect fail "nonexistent zip" bash "$VERIFY" "$WORK/nope.zip"
 
+# macOS often ships shasum without sha256sum; the verifier must still digest marks.
+if command -v shasum >/dev/null 2>&1; then
+	shim_hash="$WORK/shim_hash"
+	mkdir -p "$shim_hash"
+	cat > "$shim_hash/sha256sum" <<'SH'
+#!/usr/bin/env bash
+exit 127
+SH
+	chmod +x "$shim_hash/sha256sum"
+	expect pass "shasum -a 256 fallback for brand mark digest" env PATH="$shim_hash:$PATH" bash "$VERIFY" "$WORK/full.zip"
+fi
+
 echo "verify_plugin_assets_test: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

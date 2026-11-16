@@ -52,11 +52,25 @@ final class ElementorPreviewUrlTest extends TestCase {
 		$this->assertSame( '', Mcpwp_Elementor_Preview_Url::for_post( 999999 ) );
 	}
 
+	public function test_trashed_post_returns_edit_url_not_preview_link(): void {
+		$this->seed_post( 'trash' );
+
+		$url = Mcpwp_Elementor_Preview_Url::for_post( self::PAGE_ID );
+
+		$this->assertStringContainsString( 'post.php', $url );
+		$this->assertStringContainsString( 'post=' . self::PAGE_ID, $url );
+		$this->assertStringContainsString( 'action=edit', $url );
+		$this->assertStringNotContainsString( 'preview=true', $url );
+		$this->assertStringNotContainsString( 'elementor-preview', $url );
+	}
+
 	public function test_production_code_does_not_build_elementor_preview_query_arg(): void {
 		$includes = dirname( __DIR__ ) . '/includes';
 		$iterator   = new RecursiveIteratorIterator(
 			new RecursiveDirectoryIterator( $includes, FilesystemIterator::SKIP_DOTS )
 		);
+
+		$helper_basename = 'class-mcpwp-elementor-preview-url.php';
 
 		foreach ( $iterator as $file ) {
 			if ( ! $file instanceof SplFileInfo || 'php' !== $file->getExtension() ) {
@@ -65,8 +79,12 @@ final class ElementorPreviewUrlTest extends TestCase {
 			$path     = $file->getPathname();
 			$contents = (string) file_get_contents( $path );
 
+			if ( $helper_basename === $file->getFilename() ) {
+				$contents = (string) preg_replace( '#/\*\*.*?\*/#s', '', $contents, 1 );
+			}
+
 			$this->assertStringNotContainsString(
-				"add_query_arg( 'elementor-preview'",
+				'elementor-preview',
 				$contents,
 				$path
 			);

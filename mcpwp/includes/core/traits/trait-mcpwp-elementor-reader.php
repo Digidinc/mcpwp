@@ -928,7 +928,9 @@ trait Mcpwp_Elementor_Reader_Trait {
 		// Build element statistics from the raw JSON structure.
 		$stats = $this->compute_element_stats( $elementor_data_raw );
 
-		// Preview URL.
+		// Preview URL (read-only: published pages use the plain permalink; we do not
+		// purge HTML page caches here — callers behind query-string-ignoring caches
+		// may see a stale public copy until the cache expires).
 		$preview_url = Mcpwp_Elementor_Preview_Url::for_post( $post_id );
 
 		// Use Elementor's frontend to render the content.

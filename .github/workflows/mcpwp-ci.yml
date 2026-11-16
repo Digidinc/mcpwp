@@ -92,11 +92,10 @@ jobs:
         run: node --test mcpwp/tests/js/*.test.js
 
       # Lint and unit tests read the tree; a distribution build is the tree
-      # minus whatever its script and .distignore strip. Every build stripped
-      # assets/icon-*.png while the Freemius build shipped freemius-init.php
-      # pointing the SDK at assets/mcpwp-mark-ochre-256.png, so every premium opt-in
-      # screen showed a broken image. Build each zip and check that what it
-      # ships references only files it contains. Nothing is uploaded.
+      # minus whatever its script and .distignore strip. #1188 was a missing
+      # assets/icon-128x128.png after stripping WP.org icons while Freemius still
+      # referenced it. Today's check also pins approved admin marks and every PHP
+      # image path a build ships. Build each zip; nothing is uploaded.
       - name: Distribution Asset Check
         run: |
           bash scripts/tests/verify_plugin_assets_test.sh

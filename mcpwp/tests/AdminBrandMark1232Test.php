@@ -75,6 +75,22 @@ final class AdminBrandMark1232Test extends TestCase {
 		$this->assertStringContainsString( 'height="42"', $markup );
 	}
 
+	public function test_white_label_with_agency_logo_omits_hidden_product_img_markup() {
+		update_option(
+			Mcpwp_White_Label::OPTION_KEY,
+			array(
+				'enabled'     => true,
+				'agency_name' => 'Agency',
+				'logo_url'    => 'https://agency.test/logo.png',
+			)
+		);
+
+		$markup = Mcpwp_Admin_Brand::get_header_badge_markup();
+		$this->assertSame( '', $markup );
+
+		delete_option( Mcpwp_White_Label::OPTION_KEY );
+	}
+
 	public function test_white_label_with_agency_logo_hides_mark_and_resets_badge_container() {
 		if ( ! function_exists( 'esc_js' ) ) {
 			function esc_js( $text ) { // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound

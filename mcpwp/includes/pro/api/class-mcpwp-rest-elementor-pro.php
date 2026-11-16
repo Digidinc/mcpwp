@@ -2767,6 +2767,23 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mcpwp' ), 400 );
 		}
 
+		if ( 'insert' === $mode && $request instanceof WP_REST_Request && $request->has_param( 'template' ) ) {
+			$validated = Mcpwp_Page_Template::validate_requested( $request->get_param( 'template' ) );
+			if ( is_wp_error( $validated ) ) {
+				$this->log_activity( 'apply_part', $request, null, 400 );
+				return $this->error_response_from_wp_error( $validated );
+			}
+			return $this->error_response(
+				'invalid_template',
+				__( 'The template argument applies only to mode=replace; it was not applied in insert mode.', 'mcpwp' ),
+				400,
+				array(
+					'mode'     => $mode,
+					'template' => $validated,
+				)
+			);
+		}
+
 		$allow_duplicate = $request->get_param( 'allow_duplicate' );
 		if ( null === $allow_duplicate ) {
 			$allow_duplicate = true;
