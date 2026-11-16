@@ -5,6 +5,16 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.19](https://github.com/Digidinc/mcpwp/compare/v3.14.18...v3.14.19) (2026-11-16)
+
+
+### Bug Fixes
+
+* **auth:** admin scope requires write scope on API keys and the key form says so ([#1220](https://github.com/Digidinc/mcpwp/issues/1220)) ([36c0d30](https://github.com/Digidinc/mcpwp/commit/36c0d301523dfcf104d0a14a196406b33b3ccc86))
+* **content:** report content that WordPress removed on save ([#1214](https://github.com/Digidinc/mcpwp/issues/1214)) ([3c6917e](https://github.com/Digidinc/mcpwp/commit/3c6917e338e10e3a592b02f93bb3d6a7659b2be4))
+* **elementor:** create library templates as draft by default and report the saved status ([#1215](https://github.com/Digidinc/mcpwp/issues/1215)) ([e50e4e4](https://github.com/Digidinc/mcpwp/commit/e50e4e4f3ffdee81f904132c91867f3700d49bcf))
+* small follow-ups (thumbnail restore row order, key hygiene cron backoff, setup page Claude Desktop tab) ([#1221](https://github.com/Digidinc/mcpwp/issues/1221)) ([b2d4f0e](https://github.com/Digidinc/mcpwp/commit/b2d4f0e71fdd5f8c7d1da92918f150314bcdd590))
+
 ## [3.14.18](https://github.com/Digidinc/mcpwp/compare/v3.14.17...v3.14.18) (2026-11-16)
 
 
