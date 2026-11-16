@@ -2289,7 +2289,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$result = $this->elementor_pro->apply_template_to_page(
 			$page_id,
 			$template_id,
-			(string) ( $request->get_param( 'page_settings_mode' ) ?: 'preserve' )
+			(string) ( $request->get_param( 'page_settings_mode' ) ?: 'preserve' ),
+			Mcpwp_Page_Template::page_options_from_request( $request )
 		);
 
 		if ( is_wp_error( $result ) ) {
@@ -2451,10 +2452,13 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mcpwp' ), 400 );
 		}
 
+		$page_options = Mcpwp_Page_Template::page_options_from_request( $request );
+
 		$result = $this->elementor_pro->apply_archetype_to_page(
 			$archetype_id,
 			$page_id,
-			(string) ( $request->get_param( 'page_settings_mode' ) ?: 'preserve' )
+			(string) ( $request->get_param( 'page_settings_mode' ) ?: 'preserve' ),
+			$page_options
 		);
 
 		if ( is_wp_error( $result ) ) {
@@ -2759,7 +2763,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				)
 			);
 		} else {
-			$result = $this->elementor_pro->apply_part_to_page( $part_id, $page_id );
+			$result = $this->elementor_pro->apply_part_to_page( $part_id, $page_id, Mcpwp_Page_Template::page_options_from_request( $request ) );
 		}
 
 		if ( is_wp_error( $result ) ) {

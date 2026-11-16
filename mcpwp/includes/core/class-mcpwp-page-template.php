@@ -201,4 +201,67 @@ class Mcpwp_Page_Template {
 
 		return true;
 	}
+
+	/**
+	 * Copy template from a REST request only when the client sent it.
+	 *
+	 * @param array            $data    Writer payload.
+	 * @param WP_REST_Request  $request Incoming request.
+	 * @return array
+	 */
+	public static function merge_rest_template( array $data, $request ) {
+		if ( $request instanceof WP_REST_Request && $request->has_param( 'template' ) ) {
+			$data['template'] = $request->get_param( 'template' );
+		}
+
+		return $data;
+	}
+
+	/**
+	 * Validate/plan an existing-page template change without writing meta.
+	 *
+	 * After a successful save, call finalize_existing_after_save().
+	 *
+	 * @param int   $page_id Post ID.
+	 * @param array $data    Request payload.
+	 * @return array|WP_Error
+	 */
+	public static function plan_existing( $page_id, $data ) {
+		return self::apply_on_existing( $page_id, $data, true );
+	}
+
+	/**
+	 * Persist a planned template change after Elementor data saved cleanly.
+	 *
+	 * @param int   $page_id Post ID.
+	 * @param array $data    Request payload.
+	 * @param array $planned plan_existing() result.
+	 * @return array|WP_Error
+	 */
+	public static function finalize_existing_after_save( $page_id, $data, $planned ) {
+		if ( is_wp_error( $planned ) ) {
+			return $planned;
+		}
+
+		if ( empty( $planned['requested'] ) ) {
+			return $planned;
+		}
+
+		return self::apply_on_existing( $page_id, $data, false );
+	}
+
+	/**
+	 * Build page-options for apply-template paths from a REST request.
+	 *
+	 * @param WP_REST_Request $request Request.
+	 * @return array
+	 */
+	public static function page_options_from_request( $request ) {
+		$options = array();
+		if ( $request instanceof WP_REST_Request && $request->has_param( 'template' ) ) {
+			$options['template'] = $request->get_param( 'template' );
+		}
+
+		return $options;
+	}
 }

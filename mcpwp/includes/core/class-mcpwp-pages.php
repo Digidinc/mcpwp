@@ -220,7 +220,10 @@ class Mcpwp_Pages {
 
 		$created = $this->get_page( $page_id );
 		if ( is_array( $created ) ) {
+			$page_template_slug       = $created['template'];
+			$created['page_template'] = $page_template_slug;
 			$created['template_change'] = $template_report;
+			$created['template']        = $template_report;
 			if ( ! empty( $terms_applied ) ) {
 				$created['terms'] = $terms_applied;
 			}

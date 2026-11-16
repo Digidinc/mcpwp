@@ -1493,13 +1493,13 @@ class Mcpwp_Elementor_Pro {
 	 * @param int $page_id Target page ID.
 	 * @return bool|WP_Error
 	 */
-	public function apply_part_to_page( $part_id, $page_id ) {
+	public function apply_part_to_page( $part_id, $page_id, $page_options = array() ) {
 		$part = $this->get_part( $part_id );
 		if ( is_wp_error( $part ) ) {
 			return $part;
 		}
 
-		return $this->apply_template_to_page( $page_id, $part_id );
+		return $this->apply_template_to_page( $page_id, $part_id, 'preserve', $page_options );
 	}
 
 	/**
@@ -1509,13 +1509,13 @@ class Mcpwp_Elementor_Pro {
 	 * @param int $page_id      Target page ID.
 	 * @return bool|WP_Error
 	 */
-	public function apply_archetype_to_page( $archetype_id, $page_id, $page_settings_mode = 'preserve' ) {
+	public function apply_archetype_to_page( $archetype_id, $page_id, $page_settings_mode = 'preserve', $page_options = array() ) {
 		$archetype = $this->get_archetype( $archetype_id );
 		if ( is_wp_error( $archetype ) ) {
 			return $archetype;
 		}
 
-		return $this->apply_template_to_page( $page_id, $archetype_id, $page_settings_mode );
+		return $this->apply_template_to_page( $page_id, $archetype_id, $page_settings_mode, $page_options );
 	}
 
 	/**
@@ -2136,6 +2136,11 @@ class Mcpwp_Elementor_Pro {
 			}
 		}
 
+		$template_payload_ok = Mcpwp_Page_Template::validate_create_payload( $data );
+		if ( is_wp_error( $template_payload_ok ) ) {
+			return $template_payload_ok;
+		}
+
 		// Create the page.
 		$page_data = array(
 			'post_title'  => $title,
@@ -2160,8 +2165,12 @@ class Mcpwp_Elementor_Pro {
 			return $page_id;
 		}
 
-		// Set Elementor template.
-		update_post_meta( $page_id, '_wp_page_template', 'elementor_header_footer' );
+		$template_report = Mcpwp_Page_Template::apply_on_create( $page_id, $data );
+		if ( is_wp_error( $template_report ) ) {
+			wp_delete_post( $page_id, true );
+			return $template_report;
+		}
+
 		update_post_meta( $page_id, '_elementor_edit_mode', 'builder' );
 
 		if ( null !== $landing_elementor_data ) {
@@ -2201,6 +2210,7 @@ class Mcpwp_Elementor_Pro {
 			'url'            => get_permalink( $page_id ),
 			'edit_url'       => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
 			'elementor_data' => get_post_meta( $page_id, '_elementor_data', true ),
+			'template'       => $template_report,
 		);
 
 		return $result;
@@ -2268,11 +2278,13 @@ class Mcpwp_Elementor_Pro {
 	/**
 	 * Apply a template to a page.
 	 *
-	 * @param int $page_id     Target page ID.
-	 * @param int $template_id Template ID.
+	 * @param int    $page_id              Target page ID.
+	 * @param int    $template_id          Template ID.
+	 * @param string $page_settings_mode   Document settings merge mode.
+	 * @param array  $page_options         Optional page options (`template` slug).
 	 * @return array|WP_Error Save result, or error on failure.
 	 */
-	public function apply_template_to_page( $page_id, $template_id, $page_settings_mode = 'preserve' ) {
+	public function apply_template_to_page( $page_id, $template_id, $page_settings_mode = 'preserve', $page_options = array() ) {
 		// #1024/#1030 round-2 review, BLOCK-B: this used to write
 		// _elementor_edit_mode/_wp_page_template/_elementor_template_type to
 		// $page_id (below) BEFORE validating it at all — a caller reaching
@@ -2315,9 +2327,14 @@ class Mcpwp_Elementor_Pro {
 			$template_data = $template_tree['elements'];
 		}
 
+		$page_options  = is_array( $page_options ) ? $page_options : array();
+		$template_plan = Mcpwp_Page_Template::plan_existing( $page_id, $page_options );
+		if ( is_wp_error( $template_plan ) ) {
+			return $template_plan;
+		}
+
 		// Set required meta for frontend rendering.
 		update_post_meta( $page_id, '_elementor_edit_mode', 'builder' );
-		update_post_meta( $page_id, '_wp_page_template', 'elementor_header_footer' );
 
 		$post_type  = get_post_type( $page_id );
 		$type_value = ( 'elementor_library' === $post_type ) ? 'section' : 'wp-page';
@@ -2334,6 +2351,11 @@ class Mcpwp_Elementor_Pro {
 		$save_result = $this->save_elementor_data( $page_id, $template_data );
 		if ( is_wp_error( $save_result ) ) {
 			return $save_result;
+		}
+
+		$template_report = Mcpwp_Page_Template::finalize_existing_after_save( $page_id, $page_options, $template_plan );
+		if ( is_wp_error( $template_report ) ) {
+			return $template_report;
 		}
 
 		// Carry the template's document settings too, under an explicit mode.
@@ -2354,6 +2376,7 @@ class Mcpwp_Elementor_Pro {
 
 		if ( is_array( $save_result ) ) {
 			$save_result['page_settings'] = $settings_report;
+			$save_result['template']      = $template_report;
 		}
 
 		return $save_result;

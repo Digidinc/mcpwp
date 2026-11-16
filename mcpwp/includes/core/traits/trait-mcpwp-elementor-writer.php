@@ -1715,7 +1715,10 @@ trait Mcpwp_Elementor_Writer_Trait {
 				$result['id_repair'] = $validation['id_repair'];
 			}
 
-			$result['template'] = Mcpwp_Page_Template::apply_on_existing( $page_id, $data, true );
+			$result['template'] = Mcpwp_Page_Template::plan_existing( $page_id, $data );
+			if ( is_wp_error( $result['template'] ) ) {
+				return $result['template'];
+			}
 
 			return $result;
 		}
@@ -1814,7 +1817,7 @@ trait Mcpwp_Elementor_Writer_Trait {
 			$save_debug['id_repair'] = $validation['id_repair'];
 		}
 
-		$page_template_report = Mcpwp_Page_Template::apply_on_existing( $page_id, $data, false );
+		$page_template_report = Mcpwp_Page_Template::plan_existing( $page_id, $data );
 		if ( is_wp_error( $page_template_report ) ) {
 			return $page_template_report;
 		}
@@ -2284,6 +2287,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		$result = $this->decorate_render_status( $result, $save_debug );
 
+		$page_template_report = Mcpwp_Page_Template::finalize_existing_after_save( $page_id, $data, $page_template_report );
+		if ( is_wp_error( $page_template_report ) ) {
+			return $page_template_report;
+		}
+
 		$result['template'] = $page_template_report;
 
 		return $result;
@@ -2305,6 +2313,11 @@ trait Mcpwp_Elementor_Writer_Trait {
 		}
 
 		// Create page
+		$template_payload_ok = Mcpwp_Page_Template::validate_create_payload( $data );
+		if ( is_wp_error( $template_payload_ok ) ) {
+			return $template_payload_ok;
+		}
+
 		$page_data = array(
 			'post_type'    => 'page',
 			'post_title'   => isset( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'New Page', 'mcpwp' ),
@@ -2316,12 +2329,6 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		if ( is_wp_error( $page_id ) ) {
 			return $page_id;
-		}
-
-		$template_payload_ok = Mcpwp_Page_Template::validate_create_payload( $data );
-		if ( is_wp_error( $template_payload_ok ) ) {
-			wp_delete_post( $page_id, true );
-			return $template_payload_ok;
 		}
 
 		$template_report = Mcpwp_Page_Template::apply_on_create( $page_id, $data );

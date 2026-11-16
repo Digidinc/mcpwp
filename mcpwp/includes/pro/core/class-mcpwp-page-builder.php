@@ -233,7 +233,7 @@ class Mcpwp_Page_Builder {
 			'meta_verified'   => $meta_verified,
 			'sections_saved'  => $final_count,
 			'render_verified' => isset( $save_result['render_verified'] ) ? (bool) $save_result['render_verified'] : true,
-			'template'        => isset( $save_result['template'] ) ? $save_result['template'] : $template_report,
+			'template'        => $template_report,
 			'warnings'        => array_merge( $warnings, isset( $save_result['warnings'] ) ? (array) $save_result['warnings'] : array() ),
 			'debug'           => isset( $save_result['debug'] ) ? $save_result['debug'] : array(),
 		);

@@ -348,12 +348,12 @@ class Mcpwp_Guides {
 				),
 				array(
 					'heading' => 'Page templates',
-					'content' => "**Updates preserve the current template.** `wp_set_elementor` does not change `_wp_page_template` unless you pass an explicit `template` argument (or use `wp_update_page_template`). Unset or `default` stays as the theme default — match Elementor's editor.\n\n"
+					'content' => "**Updates preserve the current template.** `wp_set_elementor`, `wp_apply_elementor_template`, `wp_apply_elementor_archetype`, and `wp_apply_elementor_part` (replace mode) do not change `_wp_page_template` unless you pass an explicit `template` argument (or use `wp_update_page_template`). Unset or `default` stays as the theme default — match Elementor's editor.\n\n"
 						. "**When you need a different frame:**\n"
 						. "- `elementor_canvas` — content only, no theme header/footer\n"
 						. "- `elementor_header_footer` — full-width Elementor content with the theme header/footer\n"
-						. "- Or pass `template` on `wp_create_page` / `wp_build_page` at creation time\n\n"
-						. "Responses from Elementor save/create tools include `template: {before, after, requested}` so you can see whether the template changed.",
+						. "- Pass `template` on `wp_create_page`, `wp_create_elementor_page`, `wp_build_page`, or `wp_create_landing_page` at creation time\n\n"
+						. "Responses report `template: {before, after, requested}` on Elementor writes. `wp_create_page` also echoes the same object as `template_change` (legacy alias).",
 				),
 				array(
 					'heading' => 'Relevant Tools',

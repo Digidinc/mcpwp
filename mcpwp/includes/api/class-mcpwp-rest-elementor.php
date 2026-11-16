@@ -933,6 +933,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			// would_convert_existing_content 409 (#883).
 			'convert'               => rest_sanitize_boolean( $request->get_param( 'convert' ) ),
 		);
+		$data = Mcpwp_Page_Template::merge_rest_template( $data, $request );
 
 		$result = $this->elementor->set_elementor_data( $page_id, $data, $dry_run );
 
@@ -1060,6 +1061,7 @@ class Mcpwp_REST_Elementor extends Mcpwp_REST_API {
 			'status'         => $request->get_param( 'status' ),
 			'elementor_data' => $request->get_param( 'elementor_data' ),
 		);
+		$data = Mcpwp_Page_Template::merge_rest_template( $data, $request );
 
 		$result = $this->elementor->create_elementor_page( $data );
 
