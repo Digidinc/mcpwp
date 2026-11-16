@@ -5,6 +5,16 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.20](https://github.com/Digidinc/mcpwp/compare/v3.14.19...v3.14.20) (2026-11-16)
+
+
+### Bug Fixes
+
+* admin header badge uses approved ochre M/W mark ([#1232](https://github.com/Digidinc/mcpwp/issues/1232)) ([#1235](https://github.com/Digidinc/mcpwp/issues/1235)) ([e4c8bcc](https://github.com/Digidinc/mcpwp/commit/e4c8bccc29eab2e443537c8adca6f2274c22d3f1))
+* **elementor:** use WordPress preview links instead of editor iframe param ([#1229](https://github.com/Digidinc/mcpwp/issues/1229)) ([e029b5c](https://github.com/Digidinc/mcpwp/commit/e029b5c450ebdd9cfdb154866e1ec04f7d713a9b))
+* preserve page template on Elementor saves unless requested ([#1234](https://github.com/Digidinc/mcpwp/issues/1234)) ([d11616d](https://github.com/Digidinc/mcpwp/commit/d11616d1040bcb17ef5f79c14a3538e84bd9e928))
+* setup scoped-key follow-ups ([#1222](https://github.com/Digidinc/mcpwp/issues/1222)) ([#1223](https://github.com/Digidinc/mcpwp/issues/1223)) ([c77d5cd](https://github.com/Digidinc/mcpwp/commit/c77d5cde0c808650b2e615454092bcbe23df2c7b))
+
 ## [3.14.19](https://github.com/Digidinc/mcpwp/compare/v3.14.18...v3.14.19) (2026-11-16)
 
 
