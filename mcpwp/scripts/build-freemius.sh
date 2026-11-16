@@ -53,9 +53,12 @@ trap 'rm -rf "$BUILD_DIR"' EXIT
 echo "    Copying plugin files..."
 cp -a "$PLUGIN_DIR" "$DEST"
 
-# Remove WP.org directory assets (uploaded separately to SVN assets/). The
-# plugin icon is copied back after .distignore runs, below.
-FREEMIUS_ICON="assets/icon-128x128.png"
+# Remove WP.org directory assets (uploaded separately to SVN assets/). Admin
+# brand marks are copied back after .distignore runs, below.
+ADMIN_MARK_FILES=(
+	assets/mcpwp-mark-ochre.svg
+	assets/mcpwp-mark-ochre-256.png
+)
 rm -f "$DEST"/assets/banner-*.png
 rm -f "$DEST"/assets/icon-*.png
 rm -f "$DEST"/assets/screenshot-*.png
@@ -87,13 +90,10 @@ if [[ -f "$DEST/.distignore" ]]; then
 	rm -f "$DEST/.distignore"
 fi
 
-# Put back exactly one asset: the plugin icon. includes/freemius-init.php hands
-# the Freemius SDK assets/icon-128x128.png for its opt-in, connect and pricing
-# screens, and this is the only build that ships that bootstrap. Stripping it
-# shipped a broken image on every premium install. Copying it back after the
-# /assets/*.png rule (rather than exempting the rule) keeps any other PNG added
-# to assets/ out of this zip. scripts/verify_plugin_assets.sh enforces it.
-cp "$PLUGIN_DIR/$FREEMIUS_ICON" "$DEST/$FREEMIUS_ICON"
+# Put back the admin header badge assets after the /assets/*.png|.svg rule.
+for _mark in "${ADMIN_MARK_FILES[@]}"; do
+	cp "$PLUGIN_DIR/$_mark" "$DEST/$_mark"
+done
 
 # Freemius handles Pro updates; do not ship the legacy self-hosted updater.
 rm -f "$DEST/includes/class-mcpwp-updater.php"
@@ -139,20 +139,23 @@ else
 	exit 1
 fi
 
-if grep -qx "mcpwp/$FREEMIUS_ICON" "$ZIP_MANIFEST"; then
-	echo "    [OK] Freemius plugin icon included ($FREEMIUS_ICON)"
+if grep -qx "mcpwp/freemius/assets/img/plugin-icon.png" "$ZIP_MANIFEST"; then
+	echo "    [OK] Freemius plugin icon included (freemius/assets/img/plugin-icon.png)"
 else
-	echo "    [FAIL] Freemius plugin icon missing ($FREEMIUS_ICON) — opt-in screens would show a broken image"
+	echo "    [FAIL] Freemius plugin icon missing — opt-in screens would show a broken image"
 	exit 1
 fi
 
-# The only image under assets/ must be the icon: anything else is a WP.org
-# directory asset (or a new file) that .distignore meant to keep out.
-ASSET_IMAGES="$(grep -iE "^mcpwp/assets/[^/]+\.(png|svg|jpe?g|gif|webp)$" "$ZIP_MANIFEST" || true)"
-if [[ "$ASSET_IMAGES" == "mcpwp/$FREEMIUS_ICON" ]]; then
-	echo "    [OK] assets/ ships only the plugin icon"
+# The only images under assets/ must be the admin brand marks: anything else is
+# a WP.org directory asset (or a new file) that .distignore meant to keep out.
+ASSET_IMAGES="$(grep -iE "^mcpwp/assets/[^/]+\.(png|svg|jpe?g|gif|webp)$" "$ZIP_MANIFEST" | LC_ALL=C sort || true)"
+EXPECTED_ASSETS="$(printf 'mcpwp/%s\n' "${ADMIN_MARK_FILES[@]}" | LC_ALL=C sort)"
+if [[ "$ASSET_IMAGES" == "$EXPECTED_ASSETS" ]]; then
+	echo "    [OK] assets/ ships only the admin brand marks"
 else
-	echo "    [FAIL] assets/ images in the Freemius zip must be exactly $FREEMIUS_ICON, got:"
+	echo "    [FAIL] assets/ images in the Freemius zip must be exactly:"
+	printf '%s\n' "${ADMIN_MARK_FILES[@]}" | sed 's/^/           /'
+	echo "    got:"
 	printf '%s\n' "$ASSET_IMAGES" | sed 's/^/           /'
 	exit 1
 fi

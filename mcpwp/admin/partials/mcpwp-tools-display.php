@@ -17,7 +17,10 @@ if ( ! defined( 'ABSPATH' ) ) {
 <div class="wrap mcpwp-admin mcpwp-tools-page">
 	<h1 class="mcpwp-header">
 		<span class="mcpwp-logo">
-			<span class="dashicons dashicons-admin-tools"></span>
+			<?php
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Markup is escaped in helper.
+			echo Mcpwp_Admin_Brand::get_header_logo_img_markup();
+			?>
 		</span>
 		<?php esc_html_e( 'Tools', 'mcpwp' ); ?>
 	</h1>

@@ -44,7 +44,10 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 <div class="wrap mcpwp-admin mcpwp-control-room">
 	<h1 class="mcpwp-header">
 		<span class="mcpwp-logo">
-			<span class="dashicons dashicons-shield"></span>
+			<?php
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Markup is escaped in helper.
+			echo Mcpwp_Admin_Brand::get_header_logo_img_markup();
+			?>
 		</span>
 		<?php esc_html_e( 'Control Room', 'mcpwp' ); ?>
 		<span class="mcpwp-version">v<?php echo esc_html( MCPWP_VERSION ); ?></span>
@@ -70,7 +73,7 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'Pending approvals', 'mcpwp' ); ?></span>
 		</div>
 		<div class="mcpwp-library-stat mcpwp-control-stat <?php echo esc_attr( $applied_count > 0 ? 'is-info' : 'is-good' ); ?>">
-			<span class="mcpwp-control-stat__icon dashicons <?php echo esc_attr( $applied_count > 0 ? 'dashicons-backup' : 'dashicons-shield' ); ?>"></span>
+			<span class="mcpwp-control-stat__icon dashicons <?php echo esc_attr( $applied_count > 0 ? 'dashicons-backup' : 'dashicons-yes-alt' ); ?>"></span>
 			<span class="mcpwp-library-stat__value"><?php echo esc_html( (string) $applied_count ); ?></span>
 			<span class="mcpwp-library-stat__label"><?php esc_html_e( 'Rollback-ready changes', 'mcpwp' ); ?></span>
 		</div>
@@ -131,7 +134,7 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 
 		<div class="mcpwp-card" id="mcpwp-section-approvals">
 			<h2>
-				<span class="dashicons dashicons-shield"></span>
+				<span class="dashicons dashicons-clipboard"></span>
 				<?php esc_html_e( 'Pending Approvals', 'mcpwp' ); ?>
 			</h2>
 			<?php if ( empty( $pending_items ) ) : ?>
@@ -266,7 +269,7 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 			</p>
 			<?php if ( empty( $approved_items ) ) : ?>
 				<div class="mcpwp-control-empty is-muted">
-					<span class="dashicons dashicons-shield"></span>
+					<span class="dashicons dashicons-marker"></span>
 					<p><?php esc_html_e( 'No approved approval requests are waiting to apply.', 'mcpwp' ); ?></p>
 				</div>
 			<?php else : ?>
@@ -476,7 +479,7 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 			</form>
 			<?php if ( empty( $rollback_items ) ) : ?>
 				<div class="mcpwp-control-empty is-muted">
-					<span class="dashicons dashicons-shield"></span>
+					<span class="dashicons dashicons-marker"></span>
 					<p><?php esc_html_e( 'No applied approval requests are currently listed for rollback.', 'mcpwp' ); ?></p>
 				</div>
 			<?php else : ?>

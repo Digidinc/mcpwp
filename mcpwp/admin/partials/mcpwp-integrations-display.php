@@ -42,7 +42,10 @@ if ( ! function_exists( 'mcpwp_integration_stored_select_value' ) ) {
 <div class="wrap mcpwp-admin mcpwp-integrations-page">
 	<h1 class="mcpwp-header">
 		<span class="mcpwp-logo">
-			<span class="dashicons dashicons-admin-plugins"></span>
+			<?php
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Markup is escaped in helper.
+			echo Mcpwp_Admin_Brand::get_header_logo_img_markup();
+			?>
 		</span>
 		<?php esc_html_e( 'AI Integrations', 'mcpwp' ); ?>
 		<!-- F-20: version pill matching other pages -->

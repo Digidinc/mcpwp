@@ -72,6 +72,9 @@ final class SetupPageScopedKeyCreate1207Test extends TestCase {
 		if ( ! defined( 'MCPWP_PLUGIN_DIR' ) ) {
 			define( 'MCPWP_PLUGIN_DIR', $mcpwp_dir . '/' );
 		}
+		if ( ! defined( 'MCPWP_PLUGIN_URL' ) ) {
+			define( 'MCPWP_PLUGIN_URL', 'https://example.test/wp-content/plugins/mcpwp/' );
+		}
 		if ( ! defined( 'MCPWP_VERSION' ) ) {
 			define( 'MCPWP_VERSION', '3.14.0-test' );
 		}
@@ -79,6 +82,7 @@ final class SetupPageScopedKeyCreate1207Test extends TestCase {
 		foreach ( array( 'setup', 'control-room', 'chat', 'library', 'settings', 'activity', 'mupot' ) as $trait ) {
 			require_once $mcpwp_dir . '/includes/admin/traits/trait-mcpwp-admin-' . $trait . '.php';
 		}
+		require_once $mcpwp_dir . '/includes/admin/class-mcpwp-admin-brand.php';
 		require_once $mcpwp_dir . '/includes/admin/class-mcpwp-admin.php';
 		foreach (
 			array(

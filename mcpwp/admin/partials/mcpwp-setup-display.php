@@ -141,7 +141,10 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 <div class="wrap mcpwp-admin">
 	<h1 class="mcpwp-header">
 		<span class="mcpwp-logo">
-			<span class="dashicons dashicons-shield"></span>
+			<?php
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Markup is escaped in helper.
+			echo Mcpwp_Admin_Brand::get_header_logo_img_markup();
+			?>
 		</span>
 		<?php esc_html_e( 'MCPWP', 'mcpwp' ); ?>
 		<span class="mcpwp-version">v<?php echo esc_html( MCPWP_VERSION ); ?></span>

@@ -91,6 +91,11 @@ if [[ -f "$DEST/.distignore" ]]; then
     rm -f "$DEST/.distignore"
 fi
 
+# Admin header badge assets (referenced via MCPWP_PLUGIN_URL in admin partials).
+for _mark in assets/mcpwp-mark-ochre.svg assets/mcpwp-mark-ochre-256.png; do
+	cp "$PLUGIN_DIR/$_mark" "$DEST/$_mark"
+done
+
 # Remove build scripts from output (scripts/ is already in .distignore)
 rm -rf "$DEST/scripts"
 
