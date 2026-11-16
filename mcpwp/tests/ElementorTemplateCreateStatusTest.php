@@ -8,13 +8,23 @@
 
 use PHPUnit\Framework\TestCase;
 
-require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-elementor-pro.php';
+if ( ! class_exists( 'Mcpwp_Elementor_Pro' ) ) {
+	require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-elementor-pro.php';
+}
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
-require_once __DIR__ . '/fixtures/elementor-template-type-doubles.php';
 
 final class ElementorTemplateCreateStatusTest extends TestCase {
 
 	protected function setUp(): void {
+		$GLOBALS['mcpwp_test_options']      = array();
+		$GLOBALS['mcpwp_test_transients']   = array();
+		$GLOBALS['mcpwp_test_current_user'] = 0;
+		if ( method_exists( 'Mcpwp_REST_API', 'reset_verdict_memo' ) ) {
+			Mcpwp_REST_API::reset_verdict_memo();
+		}
+	}
+
+	private function install_elementor_registry(): void {
 		$GLOBALS['mcpwp_test_document_types'] = array(
 			'page'    => \Elementor\Mcpwp_Fake_Doc_Page::class,
 			'section' => \Elementor\Mcpwp_Fake_Doc_Section::class,
@@ -23,17 +33,11 @@ final class ElementorTemplateCreateStatusTest extends TestCase {
 			\Elementor\Mcpwp_Fake_Doc_Page::class    => array( 'show_in_library' => true ),
 			\Elementor\Mcpwp_Fake_Doc_Section::class => array( 'show_in_library' => true ),
 		);
+		require_once __DIR__ . '/fixtures/elementor-template-type-doubles.php';
 		\Elementor\Plugin::$instance               = new \Elementor\Plugin();
 		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
 		$GLOBALS['_mcpwp_test_posts']                         = array();
 		$GLOBALS['_mcpwp_test_meta']                          = array();
-
-		$GLOBALS['mcpwp_test_options']      = array();
-		$GLOBALS['mcpwp_test_transients']   = array();
-		$GLOBALS['mcpwp_test_current_user'] = 0;
-		if ( method_exists( 'Mcpwp_REST_API', 'reset_verdict_memo' ) ) {
-			Mcpwp_REST_API::reset_verdict_memo();
-		}
 	}
 
 	private function write_key( Mcpwp_REST_Elementor_Pro $controller ): string {
@@ -49,6 +53,8 @@ final class ElementorTemplateCreateStatusTest extends TestCase {
 	 * @preserveGlobalState disabled
 	 */
 	public function test_create_template_defaults_to_draft_and_reports_stored_status(): void {
+		$this->install_elementor_registry();
+
 		$result = ( new Mcpwp_Elementor_Pro() )->create_template(
 			array(
 				'title' => 'Draft by default',
@@ -66,6 +72,8 @@ final class ElementorTemplateCreateStatusTest extends TestCase {
 	 * @preserveGlobalState disabled
 	 */
 	public function test_create_template_with_publish_reports_publish_after_write(): void {
+		$this->install_elementor_registry();
+
 		$result = ( new Mcpwp_Elementor_Pro() )->create_template(
 			array(
 				'title'  => 'Published library template',
@@ -84,6 +92,8 @@ final class ElementorTemplateCreateStatusTest extends TestCase {
 	 * @preserveGlobalState disabled
 	 */
 	public function test_create_template_refuses_invalid_status(): void {
+		$this->install_elementor_registry();
+
 		$result = ( new Mcpwp_Elementor_Pro() )->create_template(
 			array(
 				'title'  => 'Bad status',

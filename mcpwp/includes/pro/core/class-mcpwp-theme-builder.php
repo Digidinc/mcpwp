@@ -133,10 +133,18 @@ class Mcpwp_Theme_Builder {
 			return array();
 		}
 
+		if ( ! class_exists( 'Mcpwp_Elementor_Pro', false ) ) {
+			require_once dirname( __FILE__ ) . '/class-mcpwp-elementor-pro.php';
+		}
+
+		$read_only     = ! empty( $args['caller_read_only'] );
+		$status_filter = isset( $args['status'] ) ? $args['status'] : null;
+		unset( $args['caller_read_only'], $args['status'] );
+
 		$query_args = array(
 			'post_type'      => 'elementor_library',
 			'posts_per_page' => isset( $args['per_page'] ) ? absint( $args['per_page'] ) : 50,
-			'post_status'    => 'publish',
+			'post_status'    => Mcpwp_Elementor_Pro::resolve_library_list_post_statuses( $status_filter, $read_only ),
 			'meta_query'     => array(
 				array(
 					'key'     => '_elementor_template_type',
@@ -1354,13 +1362,10 @@ class Mcpwp_Theme_Builder {
 			// write) but BEFORE display conditions are assigned. Draft/private
 			// creates stay drafts through assignment (#1211).
 			//
-			// Conditions MUST be assigned AFTER a publish transition, not
-			// before (RC review BLOCK, 2026-09-25): assign_to_location() ->
-			// set_template_conditions() calls ElementorPro\Modules\ThemeBuilder\
-			// ...\Conditions_Manager::save_conditions() then ->get_cache()->
-			// regenerate(). regenerate() runs a WP_Query with no post_status,
-			// which under a REST request (not is_admin()) only matches PUBLIC
-			// statuses — a draft is invisible to it.
+			// Conditions are assigned after create; for published templates the
+			// conditions cache is regenerated while the post is already public
+			// (#828). Draft templates with a scope are stored with conditions
+			// meta but are not live until published (see live/next_step below).
 			if ( 'publish' === $target_status ) {
 				$published = wp_update_post(
 					array(
@@ -1445,11 +1450,46 @@ class Mcpwp_Theme_Builder {
 		if ( null !== $conditions_error ) {
 			$template['conditions_error'] = $conditions_error;
 			$template['status']             = (string) get_post_status( $template_id );
-			return $template;
+			return $this->annotate_theme_template_status_response( $template, $data );
 		}
 
 		$template['assigned'] = true;
 		$template['status']   = (string) get_post_status( $template_id );
+
+		return $this->annotate_theme_template_status_response( $template, $data );
+	}
+
+	/**
+	 * Attach live/next_step for Theme Builder creates (#1211).
+	 *
+	 * @param array $template Create response.
+	 * @param array $data     Original request payload.
+	 * @return array
+	 */
+	private function annotate_theme_template_status_response( array $template, array $data ) {
+		$stored = isset( $template['status'] ) ? (string) $template['status'] : 'draft';
+		$template['live'] = ( 'publish' === $stored );
+		if ( ! $template['live'] ) {
+			$template['next_step'] = __( 'Theme template is saved but not rendered until published. Set status to publish via wp_create_theme_template (admin scope) or wp_update_elementor_template.', 'mcpwp' );
+		}
+
+		if ( isset( $data['status'] ) && '' !== $data['status'] ) {
+			$requested = sanitize_key( (string) $data['status'] );
+			if ( '' !== $requested && $stored !== $requested ) {
+				$template['warnings']        = isset( $template['warnings'] ) && is_array( $template['warnings'] ) ? $template['warnings'] : array();
+				$template['warnings'][]      = sprintf(
+					/* translators: 1: requested status, 2: stored status */
+					__( 'status_mismatch: requested %1$s but stored %2$s.', 'mcpwp' ),
+					$requested,
+					$stored
+				);
+				$template['status_mismatch'] = array(
+					'requested' => $requested,
+					'stored'    => $stored,
+				);
+			}
+		}
+
 		return $template;
 	}
 

@@ -401,9 +401,19 @@ class Mcpwp_Elementor_Pro {
 
 		unset( $args['per_page'], $args['page'] );
 
+		$read_only     = ! empty( $args['caller_read_only'] );
+		$status_filter = null;
+		if ( array_key_exists( 'status', $args ) ) {
+			$status_filter = $args['status'];
+			unset( $args['status'] );
+		} elseif ( array_key_exists( 'post_status', $args ) ) {
+			$status_filter = $args['post_status'];
+		}
+		unset( $args['caller_read_only'] );
+
 		$defaults = array(
 			'post_type'   => 'elementor_library',
-			'post_status' => 'publish',
+			'post_status' => self::resolve_library_list_post_statuses( $status_filter, $read_only ),
 			'orderby'     => 'title',
 			'order'       => 'ASC',
 		);
@@ -798,6 +808,79 @@ class Mcpwp_Elementor_Pro {
 	}
 
 	/**
+	 * Post statuses a library list query may filter on (#1211).
+	 *
+	 * @return string[]
+	 */
+	public static function allowed_library_list_statuses() {
+		return array( 'publish', 'draft', 'private', 'pending' );
+	}
+
+	/**
+	 * Default post_status filter for library lists, scoped to the caller (#1211).
+	 *
+	 * @param bool $read_only_caller Whether the caller is read-scoped only.
+	 * @return string[]
+	 */
+	public static function default_library_list_post_statuses( $read_only_caller ) {
+		if ( $read_only_caller ) {
+			return array( 'publish' );
+		}
+
+		return self::allowed_library_list_statuses();
+	}
+
+	/**
+	 * Resolve post_status for a library list query (#1211).
+	 *
+	 * @param mixed $filter           Optional status filter (string CSV or array).
+	 * @param bool  $read_only_caller Whether the caller is read-scoped only.
+	 * @return string|string[]
+	 */
+	public static function resolve_library_list_post_statuses( $filter, $read_only_caller ) {
+		$default = self::default_library_list_post_statuses( $read_only_caller );
+
+		if ( null === $filter || '' === $filter || ( is_array( $filter ) && empty( $filter ) ) ) {
+			return $default;
+		}
+
+		$requested = array();
+		if ( is_string( $filter ) ) {
+			foreach ( explode( ',', $filter ) as $piece ) {
+				$piece = sanitize_key( trim( $piece ) );
+				if ( '' !== $piece ) {
+					$requested[] = $piece;
+				}
+			}
+		} elseif ( is_array( $filter ) ) {
+			foreach ( $filter as $piece ) {
+				$piece = sanitize_key( (string) $piece );
+				if ( '' !== $piece ) {
+					$requested[] = $piece;
+				}
+			}
+		}
+
+		if ( empty( $requested ) ) {
+			return $default;
+		}
+
+		$resolved = array_values( array_intersect( $requested, self::allowed_library_list_statuses() ) );
+		if ( empty( $resolved ) ) {
+			return $default;
+		}
+
+		if ( $read_only_caller ) {
+			$resolved = array_values( array_intersect( $resolved, array( 'publish' ) ) );
+			if ( empty( $resolved ) ) {
+				return array( 'publish' );
+			}
+		}
+
+		return 1 === count( $resolved ) ? $resolved[0] : $resolved;
+	}
+
+	/**
 	 * Resolve the target post_status for a new library template create.
 	 *
 	 * @param array $data Request/tool payload.
@@ -831,11 +914,12 @@ class Mcpwp_Elementor_Pro {
 	/**
 	 * Transition a library template to its finalized post_status after data is stored.
 	 *
-	 * @param int    $template_id    Template post ID.
-	 * @param string $target_status  Requested terminal status (default draft).
+	 * @param int    $template_id      Template post ID.
+	 * @param string $target_status    Requested terminal status (default draft).
+	 * @param string $previous_status  Status before this transition.
 	 * @return true|WP_Error
 	 */
-	private function finalize_library_template_status( $template_id, $target_status ) {
+	private function finalize_library_template_status( $template_id, $target_status, $previous_status = 'draft' ) {
 		if ( 'draft' === $target_status ) {
 			return true;
 		}
@@ -860,7 +944,115 @@ class Mcpwp_Elementor_Pro {
 				);
 		}
 
+		$this->maybe_sync_theme_conditions_after_publish( $template_id, (string) $previous_status, $target_status );
+
 		return true;
+	}
+
+	/**
+	 * Transition an existing library template's post_status (#1211).
+	 *
+	 * @param int    $template_id   Template post ID.
+	 * @param string $target_status Requested status.
+	 * @return true|WP_Error
+	 */
+	public function transition_library_template_status( $template_id, $target_status ) {
+		$template_id = absint( $template_id );
+		if ( $template_id < 1 ) {
+			return new WP_Error( 'invalid_template_id', __( 'Template ID is required.', 'mcpwp' ), array( 'status' => 400 ) );
+		}
+
+		$before = (string) get_post_status( $template_id );
+		if ( $before === $target_status ) {
+			return true;
+		}
+
+		if ( 'draft' === $target_status ) {
+			$updated = wp_update_post(
+				array(
+					'ID'          => $template_id,
+					'post_status' => 'draft',
+				),
+				true
+			);
+			if ( is_wp_error( $updated ) || ! $updated ) {
+				return is_wp_error( $updated )
+					? $updated
+					: new WP_Error( 'elementor_template_status_failed', __( 'The template status could not be updated.', 'mcpwp' ), array( 'status' => 500 ) );
+			}
+
+			return true;
+		}
+
+		return $this->finalize_library_template_status( $template_id, $target_status, $before );
+	}
+
+	/**
+	 * When a Theme Builder library item is published, refresh its conditions cache entry (#1211).
+	 *
+	 * @param int    $template_id    Template post ID.
+	 * @param string $previous_status Status before transition.
+	 * @param string $target_status   Status after transition.
+	 */
+	private function maybe_sync_theme_conditions_after_publish( $template_id, $previous_status, $target_status ) {
+		if ( 'publish' !== $target_status || 'publish' === $previous_status ) {
+			return;
+		}
+
+		$conditions = get_post_meta( $template_id, '_elementor_conditions', true );
+		if ( empty( $conditions ) || ! is_array( $conditions ) ) {
+			return;
+		}
+
+		if ( ! class_exists( '\Elementor\Plugin' ) ) {
+			return;
+		}
+
+		$document = \Elementor\Plugin::instance()->documents->get( $template_id );
+		if ( ! $document || ! method_exists( $document, 'get_location' ) ) {
+			return;
+		}
+
+		if ( ! class_exists( 'Mcpwp_Custom_Code_Cache_Entry', false ) ) {
+			require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-custom-code-cache-entry.php';
+		}
+
+		Mcpwp_Custom_Code_Cache_Entry::sync( $template_id, $document->get_location(), $conditions );
+	}
+
+	/**
+	 * Attach live/next_step hints and any status mismatch warning (#1211).
+	 *
+	 * @param array       $response          Template payload.
+	 * @param string|null $requested_status  Caller-supplied status, if any.
+	 * @return array
+	 */
+	private function annotate_library_template_status_response( array $response, $requested_status = null ) {
+		$stored = isset( $response['status'] ) ? (string) $response['status'] : (string) get_post_status( (int) ( $response['id'] ?? 0 ) );
+		$response['status'] = $stored;
+		$response['live']     = ( 'publish' === $stored );
+		if ( ! $response['live'] ) {
+			$response['next_step'] = __( 'Not applied on the frontend until published. Set status to publish via wp_update_elementor_template (or the part/archetype/theme update route); publish and private require admin scope.', 'mcpwp' );
+		}
+
+		if ( null !== $requested_status && '' !== $requested_status ) {
+			$requested = sanitize_key( (string) $requested_status );
+			if ( '' !== $requested && $stored !== $requested ) {
+				$response['warnings']   = isset( $response['warnings'] ) && is_array( $response['warnings'] ) ? $response['warnings'] : array();
+				$response['warnings'][]   = sprintf(
+					/* translators: 1: requested status, 2: stored status */
+					__( 'status_mismatch: requested %1$s but stored %2$s.', 'mcpwp' ),
+					$requested,
+					$stored
+				);
+				$response['status_mismatch'] = array(
+					'requested' => $requested,
+					'stored'    => $stored,
+				);
+			}
+		}
+
+		return $response;
 	}
 
 	/**
@@ -963,7 +1155,7 @@ class Mcpwp_Elementor_Pro {
 		$this->save_part_metadata( $template_id, $data );
 		$this->save_archetype_metadata( $template_id, $data );
 
-		$finalized = $this->finalize_library_template_status( $template_id, $target_status );
+		$finalized = $this->finalize_library_template_status( $template_id, $target_status, 'draft' );
 		if ( is_wp_error( $finalized ) ) {
 			return $finalized;
 		}
@@ -974,7 +1166,9 @@ class Mcpwp_Elementor_Pro {
 			$created['page_settings_result'] = $settings_report;
 		}
 
-		return $created;
+		return is_array( $created )
+			? $this->annotate_library_template_status_response( $created, $data['status'] ?? null )
+			: $created;
 	}
 
 	/**
@@ -1114,13 +1308,28 @@ class Mcpwp_Elementor_Pro {
 		$this->save_part_metadata( $template_id, $data );
 		$this->save_archetype_metadata( $template_id, $data );
 
+		$requested_status = null;
+		if ( isset( $data['status'] ) && '' !== $data['status'] ) {
+			$requested_status = $data['status'];
+			$target_status    = self::resolve_library_create_status( array( 'status' => $data['status'] ) );
+			if ( is_wp_error( $target_status ) ) {
+				return $target_status;
+			}
+			$moved = $this->transition_library_template_status( $template_id, $target_status );
+			if ( is_wp_error( $moved ) ) {
+				return $moved;
+			}
+		}
+
 		$updated = $this->get_template( $template_id );
 
 		if ( is_array( $updated ) && null !== $settings_report ) {
 			$updated['page_settings_result'] = $settings_report;
 		}
 
-		return $updated;
+		return is_array( $updated )
+			? $this->annotate_library_template_status_response( $updated, $requested_status )
+			: $updated;
 	}
 
 	/**
@@ -2184,7 +2393,7 @@ class Mcpwp_Elementor_Pro {
 		// Set taxonomy term for Elementor library type.
 		wp_set_object_terms( $template_id, $template_type, 'elementor_library_type' );
 
-		$finalized = $this->finalize_library_template_status( $template_id, $target_status );
+		$finalized = $this->finalize_library_template_status( $template_id, $target_status, 'draft' );
 		if ( is_wp_error( $finalized ) ) {
 			return $finalized;
 		}

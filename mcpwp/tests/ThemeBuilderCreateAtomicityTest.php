@@ -531,6 +531,12 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 					continue;
 				}
 				$value = $bag[ $key ];
+				if ( is_array( $value ) ) {
+					return true;
+				}
+				if ( ! is_scalar( $value ) ) {
+					continue;
+				}
 				if ( false === $value || 0 === $value || '0' === (string) $value ) {
 					continue;
 				}
@@ -564,9 +570,6 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		}, 10, 2 );
 
 		$args += array( 'title' => 'Alias preview', 'type' => 'single', 'scope' => 'entire_site' );
-		if ( ! $this->is_preview_payload( $args, $query ) && ! isset( $args['status'] ) ) {
-			$args['status'] = 'publish';
-		}
 		if ( 'core' === $door ) {
 			return ( new Mcpwp_Theme_Builder() )->create_theme_template( $args, array( $query, $body, $args ) );
 		}
@@ -683,7 +686,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			$data = $data['results'][0]['data'];
 		}
 		$this->assertArrayHasKey( 'id', $data );
-		$this->assertSame( 'publish', $data['status'] );
+		$this->assertSame( 'draft', $data['status'] );
 		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 		$this->assertNotEmpty( $GLOBALS['_mcpwp_test_meta'][ $data['id'] ] );
 	}
@@ -783,7 +786,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 					$this->assertSame( 0, $GLOBALS['mcpwp_theme_test_cache_regenerate_calls'], $cell );
 					$this->assertTrue( $data['dry_run'], $cell );
 				} else {
-					$this->assertSame( 'publish', $data['status'], $cell );
+					$this->assertSame( 'draft', $data['status'], $cell );
 					$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'], $cell );
 				}
 			}
@@ -894,7 +897,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$this->assertCount( 0, $context->getValue() );
 		$this->assertFalse( Mcpwp_REST_Batch::$is_batch_sub_request );
 		$next = $this->dispatch_template_args( 'REST', array( 'dry_run' => false ) );
-		$this->assertSame( 'publish', $next->get_data()['status'] );
+		$this->assertSame( 'draft', $next->get_data()['status'] );
 	}
 
 	/**
@@ -1114,7 +1117,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			$second = $data['results'][1]['data'];
 		}
 		$this->assertTrue( $first['dry_run'] );
-		$this->assertSame( 'publish', $second['status'] );
+		$this->assertSame( 'draft', $second['status'] );
 		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 		foreach ( array( 'raw_parameter_context', 'raw_parameter_sources', 'raw_body_paths' ) as $name ) {
 			$property = new ReflectionProperty( Mcpwp_REST_API::class, $name );
@@ -1135,7 +1138,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			'note' => 'Quoted "dry_run":true,"dry_run":false, braces {} [], backslash \\ and unicode.',
 		) );
 		$result = $this->dispatch_raw_template_request( 'REST', $body, 'dry_run=0' )->get_data();
-		$this->assertSame( 'publish', $result['status'] );
+		$this->assertSame( 'draft', $result['status'] );
 		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 	}
 
@@ -1191,7 +1194,7 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 		$second = json_decode( $data[1]['result']['content'][0]['text'], true );
 		$this->assertArrayHasKey( 'dry_run', $first );
 		$this->assertTrue( $first['dry_run'] );
-		$this->assertSame( 'publish', $second['status'] );
+		$this->assertSame( 'draft', $second['status'] );
 		$this->assertCount( 1, $GLOBALS['_mcpwp_test_posts'] );
 	}
 
@@ -1389,7 +1392,9 @@ final class ThemeBuilderCreateAtomicityTest extends TestCase {
 			$this->markTestSkipped( 'This boundary test requires a finite limit above the required fields.' );
 		}
 		$data = array( 'title' => 'Bounded', 'type' => 'single', 'status' => 'publish' );
-		$count = $limit - 2 - ( $at_limit ? 0 : 1 );
+		// Stay strictly below max_input_vars when exercising the happy path: title+type+status
+		// are three fields on top of the padding keys.
+		$count = $at_limit ? ( $limit - 2 ) : ( $limit - 4 );
 		for ( $i = 0; $i < $count; ++$i ) {
 			if ( $nested ) {
 				$data['padding'][ $i ] = 'x';

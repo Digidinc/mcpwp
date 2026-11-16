@@ -91,6 +91,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_templates' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_library_template_status_list_args(),
 				),
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
@@ -115,6 +116,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_template' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_library_template_status_write_args(),
 				),
 				array(
 					'methods'             => WP_REST_Server::DELETABLE,
@@ -143,6 +145,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_archetypes' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_library_template_status_list_args(),
 				),
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
@@ -166,6 +169,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_archetype' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_library_template_status_write_args(),
 				),
 			)
 		);
@@ -189,6 +193,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::READABLE,
 					'callback'            => array( $this, 'get_parts' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_library_template_status_list_args(),
 				),
 				array(
 					'methods'             => WP_REST_Server::CREATABLE,
@@ -212,6 +217,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 					'methods'             => WP_REST_Server::EDITABLE,
 					'callback'            => array( $this, 'update_part' ),
 					'permission_callback' => array( $this, 'check_permission' ),
+					'args'                => $this->get_library_template_status_write_args(),
 				),
 			)
 		);
@@ -423,6 +429,34 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'description' => __( 'Post status for the new library template. Defaults to draft.', 'mcpwp' ),
 			),
 		);
+	}
+
+	/**
+	 * Optional status filter for library list routes (#1211).
+	 *
+	 * @return array
+	 */
+	private function get_library_template_status_list_args() {
+		return array(
+			'status' => array(
+				'type'        => 'string',
+				'description' => __( 'Optional comma-separated post statuses to include. Write/admin keys default to publish,draft,private,pending; read keys default to publish only.', 'mcpwp' ),
+			),
+		);
+	}
+
+	/**
+	 * Whether the authenticated caller is read-scoped for library lists (#1211).
+	 *
+	 * @return bool
+	 */
+	private function caller_is_read_only_for_library_list() {
+		$record = $this->get_current_api_key_record();
+		if ( empty( $record ) || ! is_array( $record ) ) {
+			return false;
+		}
+
+		return ! $this->key_has_scope( $record, 'write' );
 	}
 
 	/**
@@ -2083,6 +2117,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'per_page' => $request->get_param( 'per_page' ) ?: 50,
 			'page'     => $request->get_param( 'page' ) ?: 1,
 			'type'     => $request->get_param( 'type' ),
+			'status'   => $request->get_param( 'status' ),
+			'caller_read_only' => $this->caller_is_read_only_for_library_list(),
 		);
 
 		$args['include_summary'] = (bool) $request->get_param( 'include_summary' );
@@ -2178,6 +2214,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 
 		if ( $request->has_param( 'title' ) ) {
 			$data['title'] = $request->get_param( 'title' );
+		}
+
+		if ( $request->has_param( 'status' ) ) {
+			$data['status'] = $request->get_param( 'status' );
 		}
 
 		if ( $this->has_elementor_payload_in_request( $request ) ) {
@@ -2285,6 +2325,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'archetype_class' => $request->get_param( 'archetype_class' ),
 			'style'           => $request->get_param( 'style' ),
 			'search'          => $request->get_param( 'search' ),
+			'status'          => $request->get_param( 'status' ),
+			'caller_read_only' => $this->caller_is_read_only_for_library_list(),
 		);
 
 		$args['include_summary'] = (bool) $request->get_param( 'include_summary' );
@@ -2379,6 +2421,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			}
 		}
 
+		if ( $request->has_param( 'status' ) ) {
+			$data['status'] = $request->get_param( 'status' );
+		}
+
 		$archetype = $this->elementor_pro->update_template( $archetype_id, $data );
 
 		if ( is_wp_error( $archetype ) ) {
@@ -2456,6 +2502,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'style'    => $request->get_param( 'style' ),
 			'tag'      => $tag,
 			'search'   => $request->get_param( 'search' ),
+			'status'   => $request->get_param( 'status' ),
+			'caller_read_only' => $this->caller_is_read_only_for_library_list(),
 		);
 
 		$args['include_summary'] = (bool) $request->get_param( 'include_summary' );
@@ -2548,6 +2596,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			if ( $request->has_param( $field ) ) {
 				$data[ $field ] = $request->get_param( $field );
 			}
+		}
+
+		if ( $request->has_param( 'status' ) ) {
+			$data['status'] = $request->get_param( 'status' );
 		}
 
 		$part = $this->elementor_pro->update_template( $part_id, $data );
