@@ -49,7 +49,7 @@ cp -a "$PLUGIN_DIR" "$DEST"
 # ── Strip WP.org directory assets (uploaded separately to SVN assets/) ──
 rm -f "$DEST"/assets/banner-*.png
 # Icons included: this build also drops includes/freemius-init.php (the only
-# shipped code that names assets/icon-128x128.png). Only build-freemius.sh
+# shipped code that names assets/mcpwp-mark-ochre.svg). Only build-freemius.sh
 # keeps it. scripts/verify_plugin_assets.sh fails the build if that changes.
 rm -f "$DEST"/assets/icon-*.png
 rm -f "$DEST"/assets/screenshot-*.png
@@ -90,6 +90,11 @@ if [[ -f "$DEST/.distignore" ]]; then
     done < "$DEST/.distignore"
     rm -f "$DEST/.distignore"
 fi
+
+# Admin header badge assets (referenced via MCPWP_PLUGIN_URL in admin partials).
+for _mark in assets/mcpwp-mark-ochre.svg assets/mcpwp-mark-ochre-256.png; do
+	cp "$PLUGIN_DIR/$_mark" "$DEST/$_mark"
+done
 
 # Remove build scripts from output (scripts/ is already in .distignore)
 rm -rf "$DEST/scripts"

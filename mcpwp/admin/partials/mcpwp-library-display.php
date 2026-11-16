@@ -43,7 +43,10 @@ $unlinked_archetype_count = count(
 <div class="wrap mcpwp-admin">
 	<h1 class="mcpwp-header">
 		<span class="mcpwp-logo">
-			<span class="dashicons dashicons-screenoptions"></span>
+			<?php
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Markup is escaped in helper.
+			echo Mcpwp_Admin_Brand::get_header_badge_markup();
+			?>
 		</span>
 		<?php esc_html_e( 'Library', 'mcpwp' ); ?>
 		<span class="mcpwp-version">v<?php echo esc_html( MCPWP_VERSION ); ?></span>

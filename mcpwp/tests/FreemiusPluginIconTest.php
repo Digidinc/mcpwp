@@ -11,6 +11,9 @@
  *
  * @package MCPWP
  */
+
+require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-admin-brand.php';
+
 use PHPUnit\Framework\TestCase;
 
 final class FreemiusPluginIconTest extends TestCase {
@@ -49,32 +52,29 @@ final class FreemiusPluginIconTest extends TestCase {
 		unlink( $lifted );
 	}
 
-	public function test_the_bootstrap_references_exactly_the_icon_the_freemius_build_keeps() {
+	public function test_the_bootstrap_references_the_admin_brand_png_path() {
 		$refs = self::referenced_icon_paths();
-		$this->assertSame( array( 'assets/icon-128x128.png' ), $refs );
-
-		$build = (string) file_get_contents( self::plugin_dir() . 'scripts/build-freemius.sh' );
-		$this->assertStringContainsString( 'FREEMIUS_ICON="' . $refs[0] . '"', $build, 'build-freemius.sh must keep the icon freemius-init.php references' );
+		$this->assertSame( array( 'assets/mcpwp-mark-ochre-256.png' ), $refs );
 	}
 
 	/**
-	 * Review of #1188: exempting the whole /assets/*.png rule would let any
-	 * future PNG in assets/ ride into the premium zip. The build keeps the rule,
-	 * copies the one icon back after it, and asserts the result is that icon alone.
+	 * Review of #1188 / #1232: exempting the whole /assets/*.png rule would let
+	 * any future PNG in assets/ ride into the premium zip. The build keeps the
+	 * rule, copies the admin brand marks back after it, and asserts the result.
 	 */
-	public function test_the_freemius_build_keeps_the_assets_rule_and_ships_only_the_icon() {
+	public function test_the_freemius_build_keeps_the_assets_rule_and_ships_admin_brand_marks_only() {
 		$build = (string) file_get_contents( self::plugin_dir() . 'scripts/build-freemius.sh' );
 
 		$this->assertStringNotContainsString( '"/assets/*.png" ]] && continue', $build, 'build-freemius.sh must not skip the .distignore /assets/*.png rule' );
 		$this->assertStringNotContainsString( '"/assets/*.svg" ]] && continue', $build, 'build-freemius.sh must not skip the .distignore /assets/*.svg rule' );
 
-		$distignore_loop = strpos( $build, 'done < "$DEST/.distignore"' );
-		$copy_back       = strpos( $build, 'cp "$PLUGIN_DIR/$FREEMIUS_ICON" "$DEST/$FREEMIUS_ICON"' );
-		$this->assertNotFalse( $distignore_loop );
-		$this->assertNotFalse( $copy_back, 'build-freemius.sh must copy the icon back' );
-		$this->assertGreaterThan( $distignore_loop, $copy_back, 'the icon must be copied back after .distignore runs, or the rule deletes it' );
+		$this->assertMatchesRegularExpression(
+			'/done < "\$DEST\/\.distignore"[\s\S]*for _mark in "\$\{ADMIN_MARK_FILES\[@\]\}"/',
+			$build,
+			'build-freemius.sh must copy admin brand marks back after .distignore runs'
+		);
 
-		$this->assertStringContainsString( '[[ "$ASSET_IMAGES" == "mcpwp/$FREEMIUS_ICON" ]]', $build, 'build-freemius.sh must fail unless assets/ images are exactly the icon' );
+		$this->assertStringContainsString( 'assets/ ships only the admin brand marks', $build, 'build-freemius.sh must assert assets/ image allowlist' );
 
 		$distignore = (string) file_get_contents( self::plugin_dir() . '.distignore' );
 		$this->assertMatchesRegularExpression( '#^/assets/\*\.png$#m', $distignore );
@@ -86,7 +86,21 @@ final class FreemiusPluginIconTest extends TestCase {
 			$path = self::plugin_dir() . $rel;
 			$this->assertFileExists( $path );
 			$this->assertSame( "\x89PNG", substr( (string) file_get_contents( $path ), 0, 4 ), $rel . ' is not a PNG' );
+			$this->assertSame(
+				Mcpwp_Admin_Brand::HEADER_MARK_PNG_256_SHA256,
+				hash_file( 'sha256', $path ),
+				$rel . ' must be the approved ochre 256px mark'
+			);
 		}
+	}
+
+	public function test_freemius_sdk_default_plugin_icon_is_untouched() {
+		$path = self::plugin_dir() . 'freemius/assets/img/plugin-icon.png';
+		$this->assertFileExists( $path );
+		$this->assertSame(
+			Mcpwp_Admin_Brand::FREEMIUS_SDK_DEFAULT_ICON_SHA256,
+			hash_file( 'sha256', $path )
+		);
 	}
 
 	/**
@@ -95,22 +109,10 @@ final class FreemiusPluginIconTest extends TestCase {
 	 */
 	public function test_the_filter_returns_the_shipped_icon_when_present() {
 		self::lift_icon_filter( self::plugin_dir() );
-		$this->assertSame( self::plugin_dir() . 'assets/icon-128x128.png', mcpwp_fs_custom_icon( false ) );
-	}
-
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
-	public function test_a_missing_icon_falls_back_to_the_sdk_default_icon() {
-		$empty = sys_get_temp_dir() . '/mcpwp-fs-icon-' . uniqid() . '/';
-		mkdir( $empty );
-		define( 'WP_FS__DIR_IMG', self::plugin_dir() . 'freemius/assets/img' );
-		self::lift_icon_filter( $empty );
-
-		$this->assertFileExists( WP_FS__DIR_IMG . '/plugin-icon.png' );
-		$this->assertSame( WP_FS__DIR_IMG . '/plugin-icon.png', mcpwp_fs_custom_icon( false ) );
-		rmdir( $empty );
+		$this->assertSame(
+			self::plugin_dir() . 'assets/mcpwp-mark-ochre-256.png',
+			mcpwp_fs_custom_icon( false )
+		);
 	}
 
 	/**

@@ -8,6 +8,10 @@
  */
 
 $mcpwp_1098_dir = dirname( __DIR__, 2 );
+if ( ! defined( 'MCPWP_PLUGIN_URL' ) ) {
+	define( 'MCPWP_PLUGIN_URL', 'https://example.test/wp-content/plugins/mcpwp/' );
+}
+require_once $mcpwp_1098_dir . '/includes/admin/class-mcpwp-admin-brand.php';
 require_once $mcpwp_1098_dir . '/includes/core/class-mcpwp-key-state.php';
 foreach ( array( 'setup', 'control-room', 'chat', 'library', 'settings', 'activity', 'mupot' ) as $mcpwp_1098_trait ) {
 	require_once $mcpwp_1098_dir . '/includes/admin/traits/trait-mcpwp-admin-' . $mcpwp_1098_trait . '.php';

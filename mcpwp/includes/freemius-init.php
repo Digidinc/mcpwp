@@ -127,9 +127,8 @@ function mcpwp_get_fs_instance() {
  *
  * Freemius::get_local_icon_url() takes this as a local filesystem path and turns
  * it into a URL under the plugin directory, so it must name a file that ships —
- * a remote URL does not work here. The Freemius build keeps this one PNG while
- * stripping the other directory assets (scripts/build-freemius.sh), and
- * scripts/verify_plugin_assets.sh fails a build whose zip lacks it.
+ * a remote URL does not work here. The approved ochre M/W mark ships under
+ * mcpwp/assets/ and is copied back into every premium build (see build-freemius.sh).
  *
  * If the file is missing anyway, fall back to the SDK's own bundled default icon
  * rather than handing the SDK a path that renders as a broken image.
@@ -138,13 +137,9 @@ function mcpwp_get_fs_instance() {
  * @return string|false
  */
 function mcpwp_fs_custom_icon( $default = false ) {
-	$icon = MCPWP_PLUGIN_DIR . 'assets/icon-128x128.png';
+	$icon = MCPWP_PLUGIN_DIR . 'assets/mcpwp-mark-ochre-256.png';
 	if ( file_exists( $icon ) ) {
 		return $icon;
-	}
-
-	if ( defined( 'WP_FS__DIR_IMG' ) && file_exists( WP_FS__DIR_IMG . '/plugin-icon.png' ) ) {
-		return WP_FS__DIR_IMG . '/plugin-icon.png';
 	}
 
 	return $default;

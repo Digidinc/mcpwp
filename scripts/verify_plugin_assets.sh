@@ -5,7 +5,7 @@
 # Every build script strips the WordPress.org directory assets (banners,
 # screenshots, icons) from assets/, and .distignore excludes /assets/*.png and
 # /assets/*.svg. includes/freemius-init.php hands the Freemius SDK
-# MCPWP_PLUGIN_DIR . 'assets/icon-128x128.png' as the plugin icon, so the
+# MCPWP_PLUGIN_DIR . 'assets/mcpwp-mark-ochre-256.png' as the plugin icon, so the
 # premium package shipped a broken image on every opt-in, connect and pricing
 # screen: the bootstrap was in the zip, its icon was not.
 #
@@ -67,6 +67,11 @@ WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
 FAILED=0
+
+MARK_SVG_REL="assets/mcpwp-mark-ochre.svg"
+MARK_PNG_REL="assets/mcpwp-mark-ochre-256.png"
+MARK_SVG_SHA="d104a414a9d8538536a61a9add8c72f6edb2ec0f4d2479f284a04fe3c512d42a"
+MARK_PNG_SHA="1891372b32a9cef2a69f3f4398f9d0d70b246210b64a07e9733d2937e08173bf"
 
 # Print the path a matched expression resolves to, relative to the plugin root.
 # $1 = matched text, $2 = directory of the PHP file relative to the plugin root.
@@ -155,6 +160,28 @@ for zip in "$@"; do
 		FAILED=1
 	else
 		echo "OK: $name ($extracted_php PHP file(s), $refs image reference(s), all shipped)"
+	fi
+
+	mark_failed=0
+	for mark_rel in "$MARK_SVG_REL" "$MARK_PNG_REL"; do
+		mark_path="$root/$mark_rel"
+		if ! grep -qxF "$mark_path" "$manifest"; then
+			echo "FAIL: $name: required brand mark $mark_rel is not in the zip" >&2
+			mark_failed=1
+			continue
+		fi
+		want_sha="$MARK_SVG_SHA"
+		[[ "$mark_rel" == "$MARK_PNG_REL" ]] && want_sha="$MARK_PNG_SHA"
+		got_sha="$(unzip -p "$zip" "$mark_path" | sha256sum | awk '{print $1}')"
+		if [[ "$got_sha" != "$want_sha" ]]; then
+			echo "FAIL: $name: $mark_rel sha256 is $got_sha (want $want_sha)" >&2
+			mark_failed=1
+		fi
+	done
+	if [[ "$mark_failed" -eq 1 ]]; then
+		FAILED=1
+	else
+		echo "OK: $name (approved admin brand marks present with expected sha256)"
 	fi
 done
 

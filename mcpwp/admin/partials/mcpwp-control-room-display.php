@@ -44,7 +44,10 @@ $event_escalated_count = (int) ( $event_summary['escalated'] ?? 0 );
 <div class="wrap mcpwp-admin mcpwp-control-room">
 	<h1 class="mcpwp-header">
 		<span class="mcpwp-logo">
-			<span class="dashicons dashicons-shield"></span>
+			<?php
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Markup is escaped in helper.
+			echo Mcpwp_Admin_Brand::get_header_badge_markup();
+			?>
 		</span>
 		<?php esc_html_e( 'Control Room', 'mcpwp' ); ?>
 		<span class="mcpwp-version">v<?php echo esc_html( MCPWP_VERSION ); ?></span>

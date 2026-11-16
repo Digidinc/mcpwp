@@ -118,6 +118,26 @@
 	margin: 18px 0 8px;
 }
 
+.mcpwp-logo {
+	align-items: center;
+	background: #f3efe7;
+	border: 1px solid rgba(255, 255, 255, 0.24);
+	border-radius: 12px;
+	box-shadow: 0 8px 22px rgba(0, 0, 0, 0.3);
+	display: inline-flex;
+	height: 42px;
+	justify-content: center;
+	vertical-align: middle;
+	width: 42px;
+}
+
+.mcpwp-logo .mcpwp-logo-mark {
+	display: block;
+	height: 42px;
+	object-fit: contain;
+	width: 42px;
+}
+
 .mcpwp-logo .dashicons {
 	align-items: center;
 	background: #f3efe7;

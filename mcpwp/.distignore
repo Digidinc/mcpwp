@@ -22,9 +22,8 @@ CLAUDE_DESKTOP_SETUP.md
 MCP_IMPLEMENTATION.md
 CHANGELOG.md
 # WP.org directory assets. Every build applies these. build-freemius.sh then
-# copies back assets/icon-128x128.png alone, the Freemius plugin icon
-# freemius-init.php references (scripts/verify_plugin_assets.sh checks every
-# built zip).
+# copies back assets/mcpwp-mark-ochre.* alone (admin header badge). The
+# Freemius SDK icon lives under freemius/assets/img/ (not affected here).
 /assets/*.png
 /assets/*.svg
 /includes/class-mcpwp-updater.php

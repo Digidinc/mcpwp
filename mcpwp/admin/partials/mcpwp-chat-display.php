@@ -28,7 +28,10 @@ $model_label = $model_labels[ $chat_model ] ?? 'Workers AI';
 <div class="wrap mcpwp-admin mcpwp-chat-page">
 	<h1 class="mcpwp-header">
 		<span class="mcpwp-logo">
-			<span class="dashicons dashicons-format-chat"></span>
+			<?php
+			// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- Markup is escaped in helper.
+			echo Mcpwp_Admin_Brand::get_header_badge_markup();
+			?>
 		</span>
 		<?php esc_html_e( 'MCPWP Chat', 'mcpwp' ); ?>
 		<span class="mcpwp-chat-model-badge"><?php echo esc_html( $model_label ); ?></span>
