@@ -456,6 +456,8 @@ final class PostMetaIdRefs1121Test extends TestCase {
 		'_mcpwp_blueprint_id'          => 'not: reserved _mcpwp prefix; a blueprint id',
 		'_mcpwp_part_source_page_id'   => 'not: reserved _mcpwp prefix; written by the plugin only',
 		'_mcpwp_part_source_element_id' => 'not: reserved _mcpwp prefix; an Elementor element id',
+		'_mcpwp_applied_part_ids'      => 'not: reserved _mcpwp prefix; library template ids applied to a page, not post refs',
+		'_mcpwp_applied_part_id'       => 'not: Elementor settings stamp on an inserted part root; a library template id, not a post ref',
 		'_bulk_approval_ids'           => 'not: an approval id list the plugin writes; approvals are not posts',
 		'_element_id'                  => 'not: an Elementor element id, inside _elementor_data',
 		'_product_id'                  => 'not: WooCommerce ORDER-ITEM meta (woocommerce_order_itemmeta), not post meta',

@@ -33,6 +33,7 @@ final class ForgivingParamsClassificationTest extends TestCase {
 		'alerts_window_minutes'               => false,
 		'allow_compounding'                   => true,
 		'allow_destructive'                   => true,
+		'allow_duplicate'                     => true,
 		'allow_restricted_blocks'             => true,
 		'allow_secrets'                       => true,
 		'allowed_origins'                     => true,

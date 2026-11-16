@@ -461,6 +461,11 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'description' => 'For mode=insert: start, end, before:{section_id}, after:{section_id}',
 					'default'     => 'end',
 				),
+				'allow_duplicate' => array(
+					'type'        => 'boolean',
+					'description' => 'When true (default), each apply inserts another copy; ids are regenerated only on collision with the target page. When false, refuses if a stamped copy of this part is already on the page (#826).',
+					'default'     => true,
+				),
 			)
 		);
 
