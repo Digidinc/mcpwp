@@ -4667,6 +4667,17 @@ function wp_update_post($postarr, $wp_error = false)
 
     $post_id = (int) $postarr['ID'];
     $old_status = $GLOBALS['_mcpwp_test_posts'][ $post_id ]->post_status ?? '';
+
+    if (
+        ! empty( $GLOBALS['mcpwp_test_wp_update_post_status_fails'] )
+        && is_array( $GLOBALS['mcpwp_test_wp_update_post_status_fails'] )
+        && in_array( $post_id, $GLOBALS['mcpwp_test_wp_update_post_status_fails'], true )
+        && isset( $postarr['post_status'] )
+        && (string) $postarr['post_status'] !== (string) $old_status
+    ) {
+        return $wp_error ? new WP_Error( 'mcpwp_test_status_failed', 'Simulated post_status refusal.' ) : 0;
+    }
+
     // Snapshot BEFORE any field mutation below, for the post_updated action
     // (WordPress core passes the pre-update post object as its 3rd arg).
     $post_before = clone $GLOBALS['_mcpwp_test_posts'][ $post_id ];

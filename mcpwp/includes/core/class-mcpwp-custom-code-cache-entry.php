@@ -27,6 +27,10 @@ class Mcpwp_Custom_Code_Cache_Entry {
 
 	/** @return true|WP_Error */
 	public static function sync( $post_id, $location, array $conditions ) {
+		if ( isset( $GLOBALS['mcpwp_test_custom_code_cache_sync'] ) && is_callable( $GLOBALS['mcpwp_test_custom_code_cache_sync'] ) ) {
+			return call_user_func( $GLOBALS['mcpwp_test_custom_code_cache_sync'], $post_id, $location, $conditions );
+		}
+
 		$post_id = (int) $post_id;
 		$entry   = self::entry_payload( $post_id, $location, $conditions );
 		if ( is_wp_error( $entry ) ) {

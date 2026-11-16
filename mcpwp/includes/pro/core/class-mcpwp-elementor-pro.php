@@ -52,6 +52,13 @@ class Mcpwp_Elementor_Pro {
 	private $part_tags_index_meta_key = '_mcpwp_part_tags_index';
 
 	/**
+	 * Warning from the last publish-time conditions-cache sync (#1211).
+	 *
+	 * @var string
+	 */
+	private $last_publish_conditions_sync_warning = '';
+
+	/**
 	 * Post meta key: source page ID for extracted parts.
 	 *
 	 * @var string
@@ -917,9 +924,10 @@ class Mcpwp_Elementor_Pro {
 	 * @param int    $template_id      Template post ID.
 	 * @param string $target_status    Requested terminal status (default draft).
 	 * @param string $previous_status  Status before this transition.
+	 * @param bool   $delete_on_failure Whether a failed status write force-deletes the post (#1211 create rollback only).
 	 * @return true|WP_Error
 	 */
-	private function finalize_library_template_status( $template_id, $target_status, $previous_status = 'draft' ) {
+	private function finalize_library_template_status( $template_id, $target_status, $previous_status = 'draft', $delete_on_failure = true ) {
 		if ( 'draft' === $target_status ) {
 			return true;
 		}
@@ -933,7 +941,9 @@ class Mcpwp_Elementor_Pro {
 		);
 
 		if ( is_wp_error( $updated ) || ! $updated ) {
-			wp_delete_post( $template_id, true );
+			if ( $delete_on_failure ) {
+				wp_delete_post( $template_id, true );
+			}
 
 			return is_wp_error( $updated )
 				? $updated
@@ -944,9 +954,34 @@ class Mcpwp_Elementor_Pro {
 				);
 		}
 
-		$this->maybe_sync_theme_conditions_after_publish( $template_id, (string) $previous_status, $target_status );
+		$synced = $this->maybe_sync_theme_conditions_after_publish( $template_id, (string) $previous_status, $target_status );
+		if ( is_wp_error( $synced ) ) {
+			$this->last_publish_conditions_sync_warning = $synced->get_error_message();
+		}
 
 		return true;
+	}
+
+	/**
+	 * Re-sync Theme Builder conditions cache when a library item is published (#1211).
+	 *
+	 * Covers admin/UI publishes (e.g. PUT /posts/{id}) as well as MCP routes.
+	 *
+	 * @param string  $new_status New post status.
+	 * @param string  $old_status Previous post status.
+	 * @param WP_Post $post       Post object.
+	 */
+	public static function on_library_template_status_transition( $new_status, $old_status, $post ) {
+		if ( ! ( $post instanceof WP_Post ) || 'elementor_library' !== $post->post_type ) {
+			return;
+		}
+
+		if ( 'publish' !== $new_status || 'publish' === $old_status ) {
+			return;
+		}
+
+		$handler = new self();
+		$handler->maybe_sync_theme_conditions_after_publish( (int) $post->ID, (string) $old_status, 'publish' );
 	}
 
 	/**
@@ -984,7 +1019,7 @@ class Mcpwp_Elementor_Pro {
 			return true;
 		}
 
-		return $this->finalize_library_template_status( $template_id, $target_status, $before );
+		return $this->finalize_library_template_status( $template_id, $target_status, $before, false );
 	}
 
 	/**
@@ -993,31 +1028,54 @@ class Mcpwp_Elementor_Pro {
 	 * @param int    $template_id    Template post ID.
 	 * @param string $previous_status Status before transition.
 	 * @param string $target_status   Status after transition.
+	 * @return true|WP_Error
 	 */
 	private function maybe_sync_theme_conditions_after_publish( $template_id, $previous_status, $target_status ) {
 		if ( 'publish' !== $target_status || 'publish' === $previous_status ) {
-			return;
+			return true;
 		}
 
 		$conditions = get_post_meta( $template_id, '_elementor_conditions', true );
 		if ( empty( $conditions ) || ! is_array( $conditions ) ) {
-			return;
+			return true;
 		}
 
 		if ( ! class_exists( '\Elementor\Plugin' ) ) {
-			return;
+			return true;
 		}
 
 		$document = \Elementor\Plugin::instance()->documents->get( $template_id );
 		if ( ! $document || ! method_exists( $document, 'get_location' ) ) {
-			return;
+			return true;
 		}
 
 		if ( ! class_exists( 'Mcpwp_Custom_Code_Cache_Entry', false ) ) {
 			require_once dirname( __DIR__, 2 ) . '/core/class-mcpwp-custom-code-cache-entry.php';
 		}
 
-		Mcpwp_Custom_Code_Cache_Entry::sync( $template_id, $document->get_location(), $conditions );
+		$synced = Mcpwp_Custom_Code_Cache_Entry::sync( $template_id, $document->get_location(), $conditions );
+		return is_wp_error( $synced ) ? $synced : true;
+	}
+
+	/**
+	 * Merge publish-time conditions-cache sync failures into a library response (#1211).
+	 *
+	 * @param array $response Template payload.
+	 * @return array
+	 */
+	private function apply_publish_conditions_sync_warning( array $response ) {
+		if ( '' === $this->last_publish_conditions_sync_warning ) {
+			return $response;
+		}
+
+		$message = $this->last_publish_conditions_sync_warning;
+		$this->last_publish_conditions_sync_warning = '';
+
+		$response['warnings']   = isset( $response['warnings'] ) && is_array( $response['warnings'] ) ? $response['warnings'] : array();
+		$response['warnings'][]   = $message;
+		$response['live']         = false;
+
+		return $response;
 	}
 
 	/**
@@ -1065,6 +1123,8 @@ class Mcpwp_Elementor_Pro {
 		if ( ! $this->is_elementor_active() ) {
 			return new WP_Error( 'elementor_inactive', __( 'Elementor is not active.', 'mcpwp' ) );
 		}
+
+		$this->last_publish_conditions_sync_warning = '';
 
 		$title = ! empty( $data['title'] ) ? sanitize_text_field( $data['title'] ) : __( 'Untitled Template', 'mcpwp' );
 
@@ -1166,9 +1226,13 @@ class Mcpwp_Elementor_Pro {
 			$created['page_settings_result'] = $settings_report;
 		}
 
-		return is_array( $created )
-			? $this->annotate_library_template_status_response( $created, $data['status'] ?? null )
-			: $created;
+		if ( ! is_array( $created ) ) {
+			return $created;
+		}
+
+		$created = $this->annotate_library_template_status_response( $created, $data['status'] ?? null );
+
+		return $this->apply_publish_conditions_sync_warning( $created );
 	}
 
 	/**
@@ -1284,6 +1348,21 @@ class Mcpwp_Elementor_Pro {
 			return new WP_Error( 'not_found', __( 'Template not found.', 'mcpwp' ) );
 		}
 
+		$this->last_publish_conditions_sync_warning = '';
+
+		$requested_status = null;
+		if ( isset( $data['status'] ) && '' !== $data['status'] ) {
+			$requested_status = $data['status'];
+			$target_status    = self::resolve_library_create_status( array( 'status' => $data['status'] ) );
+			if ( is_wp_error( $target_status ) ) {
+				return $target_status;
+			}
+			$moved = $this->transition_library_template_status( $template_id, $target_status );
+			if ( is_wp_error( $moved ) ) {
+				return $moved;
+			}
+		}
+
 		// Update title if provided.
 		if ( ! empty( $data['title'] ) ) {
 			wp_update_post( array(
@@ -1308,28 +1387,19 @@ class Mcpwp_Elementor_Pro {
 		$this->save_part_metadata( $template_id, $data );
 		$this->save_archetype_metadata( $template_id, $data );
 
-		$requested_status = null;
-		if ( isset( $data['status'] ) && '' !== $data['status'] ) {
-			$requested_status = $data['status'];
-			$target_status    = self::resolve_library_create_status( array( 'status' => $data['status'] ) );
-			if ( is_wp_error( $target_status ) ) {
-				return $target_status;
-			}
-			$moved = $this->transition_library_template_status( $template_id, $target_status );
-			if ( is_wp_error( $moved ) ) {
-				return $moved;
-			}
-		}
-
 		$updated = $this->get_template( $template_id );
 
 		if ( is_array( $updated ) && null !== $settings_report ) {
 			$updated['page_settings_result'] = $settings_report;
 		}
 
-		return is_array( $updated )
-			? $this->annotate_library_template_status_response( $updated, $requested_status )
-			: $updated;
+		if ( ! is_array( $updated ) ) {
+			return $updated;
+		}
+
+		$updated = $this->annotate_library_template_status_response( $updated, $requested_status );
+
+		return $this->apply_publish_conditions_sync_warning( $updated );
 	}
 
 	/**

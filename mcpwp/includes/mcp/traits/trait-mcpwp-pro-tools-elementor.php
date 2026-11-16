@@ -668,7 +668,8 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				),
 				'status'     => array(
 					'type'        => 'string',
-					'description' => 'Post status: draft (default), private, or publish.',
+					'enum'        => array( 'draft', 'private', 'publish' ),
+					'description' => 'Post status: draft (default). publish and private require admin scope.',
 				),
 			)
 		);

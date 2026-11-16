@@ -1362,10 +1362,11 @@ class Mcpwp_Theme_Builder {
 			// write) but BEFORE display conditions are assigned. Draft/private
 			// creates stay drafts through assignment (#1211).
 			//
-			// Conditions are assigned after create; for published templates the
-			// conditions cache is regenerated while the post is already public
-			// (#828). Draft templates with a scope are stored with conditions
-			// meta but are not live until published (see live/next_step below).
+			// Conditions meta and the per-document cache entry are written in
+			// set_template_conditions() regardless of status (#1211). Publish
+			// only controls whether the template renders on the frontend.
+			// Draft templates with a scope carry conditions meta but are not
+			// live until published (see live/next_step below).
 			if ( 'publish' === $target_status ) {
 				$published = wp_update_post(
 					array(
@@ -1470,7 +1471,7 @@ class Mcpwp_Theme_Builder {
 		$stored = isset( $template['status'] ) ? (string) $template['status'] : 'draft';
 		$template['live'] = ( 'publish' === $stored );
 		if ( ! $template['live'] ) {
-			$template['next_step'] = __( 'Theme template is saved but not rendered until published. Set status to publish via wp_create_theme_template (admin scope) or wp_update_elementor_template.', 'mcpwp' );
+			$template['next_step'] = __( 'Theme template is saved but not rendered until published. Set status to publish via wp_update_elementor_template (admin scope).', 'mcpwp' );
 		}
 
 		if ( isset( $data['status'] ) && '' !== $data['status'] ) {

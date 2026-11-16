@@ -230,14 +230,11 @@ class Mcpwp_REST_Theme_Builder extends Mcpwp_REST_API {
 			);
 		}
 
-		$record = $this->get_current_api_key_record();
-		$read_only = ! empty( $record ) && is_array( $record ) && ! $this->key_has_scope( $record, 'write' );
-
 		$args = array(
 			'per_page'         => $request->get_param( 'per_page' ) ?: 50,
 			'type'             => $request->get_param( 'type' ),
 			'status'           => $request->get_param( 'status' ),
-			'caller_read_only' => $read_only,
+			'caller_read_only' => ! $this->requester_can_see_non_public(),
 		);
 
 		$templates = $this->theme_builder->get_templates( $args );

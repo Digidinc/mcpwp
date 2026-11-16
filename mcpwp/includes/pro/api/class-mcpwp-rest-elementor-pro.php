@@ -451,12 +451,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	 * @return bool
 	 */
 	private function caller_is_read_only_for_library_list() {
-		$record = $this->get_current_api_key_record();
-		if ( empty( $record ) || ! is_array( $record ) ) {
-			return false;
-		}
-
-		return ! $this->key_has_scope( $record, 'write' );
+		return ! $this->requester_can_see_non_public();
 	}
 
 	/**
