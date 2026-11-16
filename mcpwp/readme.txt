@@ -157,6 +157,10 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.18 =
+* fix: **elementor:** collision-only part id remap on apply ([#826](https://github.com/Digidinc/mcpwp/issues/826)) ([#1204](https://github.com/Digidinc/mcpwp/issues/1204))
+* fix: **setup:** do not embed the admin key in a copyable connector URL and correct the connector key wording ([#1203](https://github.com/Digidinc/mcpwp/issues/1203))
+
 = 3.14.17 =
 * fix: **docs:** one generated source for tool counts and consistent public metadata ([#1200](https://github.com/Digidinc/mcpwp/issues/1200))
 * fix: **mcp:** answer GET on the MCP endpoint with 405 and an Allow header ([#1199](https://github.com/Digidinc/mcpwp/issues/1199))
