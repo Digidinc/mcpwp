@@ -2667,8 +2667,22 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mcpwp' ), 400 );
 		}
 
+		$allow_duplicate = $request->get_param( 'allow_duplicate' );
+		if ( null === $allow_duplicate ) {
+			$allow_duplicate = true;
+		} else {
+			$allow_duplicate = rest_sanitize_boolean( $allow_duplicate );
+		}
+
 		if ( 'insert' === $mode ) {
-			$result = $this->elementor_pro->insert_part_into_page( $part_id, $page_id, $position );
+			$result = $this->elementor_pro->insert_part_into_page(
+				$part_id,
+				$page_id,
+				$position,
+				array(
+					'allow_duplicate' => $allow_duplicate,
+				)
+			);
 		} else {
 			$result = $this->elementor_pro->apply_part_to_page( $part_id, $page_id );
 		}
@@ -2677,6 +2691,21 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			$status = $this->get_wp_error_status( $result );
 			$this->log_activity( 'apply_part', $request, null, $status );
 			return $this->error_response_from_wp_error( $result );
+		}
+
+		if ( is_array( $result ) && isset( $result['status'] ) && 'already_present' === $result['status'] ) {
+			$this->log_activity( 'apply_part', $request, null, 409 );
+			return $this->error_response(
+				'part_already_present',
+				__( 'This part is already present on the page (allow_duplicate=false).', 'mcpwp' ),
+				409,
+				array(
+					'part_id'  => $part_id,
+					'page_id'  => $page_id,
+					'mode'     => $mode,
+					'position' => 'insert' === $mode ? $position : null,
+				)
+			);
 		}
 
 		$this->log_activity( 'apply_part', $request );
@@ -2697,6 +2726,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		// and rendered returned the same top-level response (#765). Lift the
 		// writer's verdict to where a caller will actually read it.
 		$response = $this->lift_render_status( $response, $result );
+
+		if ( is_array( $result ) ) {
+			foreach ( array( 'id_map', 'sections_before', 'sections_after', 'css_scoped_to_ids', 'warnings' ) as $lifted ) {
+				if ( isset( $result[ $lifted ] ) ) {
+					$response[ $lifted ] = $result[ $lifted ];
+				}
+			}
+		}
 
 		return $this->success_response( $response );
 	}

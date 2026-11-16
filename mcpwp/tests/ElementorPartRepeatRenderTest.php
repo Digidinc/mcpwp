@@ -174,9 +174,13 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		$this->assertTrue( $second['last_operation']['debug']['html_cache_rebuilt'], 'Elementor completed the second render call.' );
 		$this->assertFalse( $second['last_operation']['debug']['html_rebuild_corrupted_data'] ?? false, 'Adding default false fields must not be classified as data corruption.' );
 		$this->assertTrue( $second['last_operation']['render_verified'], 'A successful normalized second insert is a verified render.' );
-		$this->assertSame( array( '41c3ee18', 'hnext0sec' ), $GLOBALS['mcpwp_test_rendered_root_ids'], 'The rebuilt HTML tree contains both inserted roots in order.' );
 
 		$stored = json_decode( $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], true );
+		$this->assertSame(
+			array_column( $stored, 'id' ),
+			$GLOBALS['mcpwp_test_rendered_root_ids'],
+			'The rebuilt HTML tree contains both inserted roots in order (#826 remaps ids on each apply).'
+		);
 		$this->assertCount( 2, $stored );
 		$this->assertSame( false, $stored[1]['isInner'], 'The harmless Elementor normal form remains stored instead of being rolled back.' );
 		$this->assertSame( false, $stored[1]['elements'][0]['isInner'] );
@@ -210,9 +214,13 @@ final class ElementorPartRepeatRenderTest extends TestCase {
 		$this->assertTrue( $second['last_operation']['debug']['html_cache_rebuilt'] );
 		$this->assertFalse( $second['last_operation']['debug']['html_rebuild_corrupted_data'] ?? false );
 		$this->assertTrue( $second['last_operation']['render_verified'] );
-		$this->assertSame( array( '41c3ee18', 'hnext0sec' ), $GLOBALS['mcpwp_test_rendered_root_ids'] );
 
 		$stored = json_decode( $GLOBALS['_mcpwp_test_meta'][ self::PAGE_ID ]['_elementor_data'], true );
+		$this->assertSame(
+			array_column( $stored, 'id' ),
+			$GLOBALS['mcpwp_test_rendered_root_ids'],
+			'Both inserted roots render after id remap (#826).'
+		);
 		$this->assertSame( array(), $stored[1]['elements'][0]['elements'][0]['elements'] );
 	}
 

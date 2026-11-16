@@ -414,7 +414,7 @@ class Mcpwp_Guides {
 						. "- `wp_create_elementor_part_from_section(page_id, element_id, title, part_kind, part_style, part_tags)` — extract a reusable part from a live page\n"
 						. "- `wp_create_elementor_part(title, elementor_data, part_kind, part_style, part_tags)` — create a canonical part directly from Elementor JSON\n"
 						. "- `wp_create_page(title, status)` — create the destination page\n"
-						. "- `wp_apply_elementor_part(id, page_id, mode, position)` — insert a reusable part into a page or replace the full page from the part\n"
+						. "- `wp_apply_elementor_part(id, page_id, mode, position, allow_duplicate)` — insert a reusable part into a page or replace the full page from the part. First insert keeps part element ids; a second insert remaps only ids that collide. `allow_duplicate=false` refuses when a stamped copy already exists; response includes `id_map` when ids were remapped.\n"
 						. "- `wp_edit_widget(id, widget_id, settings)` — adapt copy and links without rebuilding structure\n"
 						. "- `wp_preview_elementor(id)` — verify the assembled page before publishing\n\n"
 						. "The goal is not just to generate pages. The goal is to build a growing library of stable, reusable sections that make future pages faster and more consistent.",

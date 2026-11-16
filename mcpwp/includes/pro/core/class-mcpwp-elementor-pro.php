@@ -66,6 +66,13 @@ class Mcpwp_Elementor_Pro {
 	private $part_source_element_meta_key = '_mcpwp_part_source_element_id';
 
 	/**
+	 * Post meta key: part IDs already inserted on a page (#826 allow_duplicate).
+	 *
+	 * @var string
+	 */
+	private $applied_parts_meta_key = '_mcpwp_applied_part_ids';
+
+	/**
 	 * Post meta key: marks an Elementor template as a reusable archetype.
 	 *
 	 * @var string
@@ -1128,9 +1135,12 @@ class Mcpwp_Elementor_Pro {
 	 * @param int    $part_id   Part/template ID.
 	 * @param int    $page_id   Target page ID.
 	 * @param string $position  Insert position: start, end, before:{id}, after:{id}.
+	 * @param array  $options   {
+	 *     @type bool $allow_duplicate Default true. When false, refuse if this part was already applied.
+	 * }
 	 * @return array|WP_Error
 	 */
-	public function insert_part_into_page( $part_id, $page_id, $position = 'end' ) {
+	public function insert_part_into_page( $part_id, $page_id, $position = 'end', $options = array() ) {
 		$part = $this->get_part( $part_id );
 		if ( is_wp_error( $part ) ) {
 			return $part;
@@ -1159,10 +1169,52 @@ class Mcpwp_Elementor_Pro {
 			return new WP_Error( 'empty_part', __( 'Reusable part has no Elementor elements.', 'mcpwp' ) );
 		}
 
-		$basic   = $this->get_basic_handler();
-		$results = array();
+		$allow_duplicate = ! is_array( $options ) || ! array_key_exists( 'allow_duplicate', $options ) || ! empty( $options['allow_duplicate'] );
+		if ( ! $allow_duplicate && $this->page_has_applied_part( $page_id, $part_id, $elements ) ) {
+			return array(
+				'status'  => 'already_present',
+				'part_id' => (int) $part_id,
+				'page_id' => (int) $page_id,
+			);
+		}
 
-		foreach ( array_values( $elements ) as $index => $element ) {
+		$stored = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) ) {
+			return Mcpwp_Elementor_Stored_Tree::refusal( $stored );
+		}
+		$page_tree       = is_array( $stored['elements'] ) ? $stored['elements'] : array();
+		$sections_before = count( $page_tree );
+		$reserved_ids    = Mcpwp_Elementor_Element_Ids::ids( $page_tree );
+		$apply_index     = Mcpwp_Elementor_Element_Ids::count_part_markers_in_tree( $page_tree, $part_id ) + 1;
+		$id_seed         = $page_id . '|' . $part_id . '|' . $apply_index;
+
+		$roots           = array_values( array_filter( $elements, 'is_array' ) );
+		$part_source_ids = array_keys( Mcpwp_Elementor_Element_Ids::ids( $roots ) );
+		$remap           = Mcpwp_Elementor_Element_Ids::remap_part_roots_for_insert( $roots, $id_seed, $reserved_ids );
+		$roots           = $remap['roots'];
+
+		if ( empty( $roots ) ) {
+			return new WP_Error(
+				'part_remap_failed',
+				__( 'Could not prepare the part for insertion.', 'mcpwp' ),
+				array( 'status' => 500 )
+			);
+		}
+
+		$basic      = $this->get_basic_handler();
+		$results    = array();
+		$id_map     = (array) $remap['id_map'];
+		$css_scoped = array();
+		$warnings   = array();
+
+		foreach ( $roots as $index => $element ) {
+			if ( empty( $element['settings'] ) || ! is_array( $element['settings'] ) ) {
+				$element['settings'] = array();
+			}
+			$element['settings']['_mcpwp_applied_part_id'] = (int) $part_id;
+
+			$css_scoped = array_merge( $css_scoped, Mcpwp_Elementor_Element_Ids::css_scoped_to_ids( $element, $part_source_ids ) );
+
 			$current_position = ( 0 === $index ) ? $position : 'end';
 			$result           = $basic->add_section(
 				$page_id,
@@ -1179,16 +1231,94 @@ class Mcpwp_Elementor_Pro {
 			$results[] = $result;
 		}
 
-		return array(
-			'inserted'        => true,
-			'part_id'         => (int) $part_id,
-			'page_id'         => (int) $page_id,
-			'position'        => $position,
-			'inserted_count'  => count( $results ),
-			'inserted_ids'    => wp_list_pluck( $results, 'element_id' ),
-			'operations'      => $results,
-			'last_operation'  => end( $results ),
+		$stored_after   = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		$sections_after = is_array( $stored_after['elements'] ) ? count( $stored_after['elements'] ) : 0;
+		$inserted_roots = count( $results );
+
+		if ( $inserted_roots < 1 ) {
+			return new WP_Error(
+				'part_insert_noop',
+				__( 'The part was not inserted — no sections were added.', 'mcpwp' ),
+				array(
+					'status'          => 422,
+					'sections_before' => $sections_before,
+					'sections_after'  => $sections_after,
+					'inserted_count'  => $inserted_roots,
+				)
+			);
+		}
+
+		$tree_grew = $sections_after > $sections_before;
+		if ( ! $tree_grew ) {
+			$claimed = true;
+			foreach ( $results as $operation ) {
+				if ( ! is_array( $operation ) || empty( $operation['element_id'] ) ) {
+					$claimed = false;
+					break;
+				}
+			}
+			if ( ! $claimed ) {
+				return new WP_Error(
+					'part_insert_noop',
+					__( 'The part was not inserted — the page section count did not increase.', 'mcpwp' ),
+					array(
+						'status'          => 422,
+						'sections_before' => $sections_before,
+						'sections_after'  => $sections_after,
+						'inserted_count'  => $inserted_roots,
+					)
+				);
+			}
+		}
+
+		$kit_css_hits = $this->kit_css_scoped_to_ids( $part_source_ids );
+		if ( ! empty( $kit_css_hits ) ) {
+			$css_scoped = array_merge( $css_scoped, $kit_css_hits );
+			$warnings[] = sprintf(
+				/* translators: %s: comma-separated element ids */
+				__( 'Kit CSS references element id(s) from this part (%s). Scoped rules apply to every copy; use class selectors instead.', 'mcpwp' ),
+				implode( ', ', $kit_css_hits )
+			);
+		}
+		if ( ! empty( $css_scoped ) ) {
+			$css_scoped = array_values( array_unique( $css_scoped ) );
+			$warnings[] = sprintf(
+				/* translators: %s: comma-separated element ids */
+				__( 'This part\'s custom CSS references element id(s) (%s). ID-scoped rules affect every copy on the page.', 'mcpwp' ),
+				implode( ', ', $css_scoped )
+			);
+		}
+
+		$this->record_part_application( $page_id, $part_id );
+
+		$response = array(
+			'inserted'         => true,
+			'part_id'          => (int) $part_id,
+			'page_id'          => (int) $page_id,
+			'position'         => $position,
+			'inserted_count'   => count( $results ),
+			'inserted_ids'     => wp_list_pluck( $results, 'element_id' ),
+			'id_map'           => (object) $id_map,
+			'sections_before'  => $sections_before,
+			'sections_after'   => $sections_after,
+			'operations'       => $results,
+			'last_operation'   => end( $results ),
 		);
+
+		if ( ! empty( $remap['references_repointed'] ) ) {
+			$response['references_repointed'] = $remap['references_repointed'];
+		}
+		if ( ! empty( $remap['possible_references'] ) ) {
+			$response['possible_references'] = $remap['possible_references'];
+		}
+		if ( ! empty( $css_scoped ) ) {
+			$response['css_scoped_to_ids'] = $css_scoped;
+		}
+		if ( ! empty( $warnings ) ) {
+			$response['warnings'] = array_values( array_unique( $warnings ) );
+		}
+
+		return $response;
 	}
 
 	/**
@@ -2012,5 +2142,123 @@ class Mcpwp_Elementor_Pro {
 	 */
 	private function generate_element_id() {
 		return Mcpwp_Elementor_Element_Ids::generate();
+	}
+
+	/**
+	 * @param int        $page_id     Page ID.
+	 * @param int        $part_id     Part template ID.
+	 * @param array|null $part_roots  Top-level elements from the part (optional).
+	 * @return bool
+	 */
+	private function page_has_applied_part( $page_id, $part_id, $part_roots = null ) {
+		$stored = Mcpwp_Elementor_Stored_Tree::of_post( $page_id );
+		if ( ! Mcpwp_Elementor_Stored_Tree::is_unusable( $stored ) && is_array( $stored['elements'] ?? null ) ) {
+			if ( Mcpwp_Elementor_Element_Ids::count_part_markers_in_tree( $stored['elements'], $part_id ) > 0 ) {
+				return true;
+			}
+
+			return $this->page_has_unstamped_part_roots( $stored['elements'], $part_roots );
+		}
+
+		return $this->count_part_applications_history( $page_id, $part_id ) > 0;
+	}
+
+	/**
+	 * Detect a pre-stamp copy by matching the part's root ids on the page (#826).
+	 *
+	 * @param array      $page_elements Top-level page sections/containers.
+	 * @param array|null $part_roots    Top-level elements from the part.
+	 * @return bool
+	 */
+	private function page_has_unstamped_part_roots( array $page_elements, $part_roots ) {
+		if ( ! is_array( $part_roots ) || empty( $part_roots ) ) {
+			return false;
+		}
+
+		$expected = array();
+		foreach ( $part_roots as $root ) {
+			if ( ! is_array( $root ) || empty( $root['id'] ) ) {
+				continue;
+			}
+			if ( is_string( $root['id'] ) || is_int( $root['id'] ) ) {
+				$expected[] = (string) $root['id'];
+			}
+		}
+		if ( empty( $expected ) ) {
+			return false;
+		}
+
+		$page_root_ids = array();
+		foreach ( $page_elements as $el ) {
+			if ( ! is_array( $el ) || ! array_key_exists( 'id', $el ) ) {
+				continue;
+			}
+			if ( is_string( $el['id'] ) || is_int( $el['id'] ) ) {
+				$page_root_ids[] = (string) $el['id'];
+			}
+		}
+
+		$missing = array_diff( $expected, $page_root_ids );
+		return empty( $missing );
+	}
+
+	/**
+	 * @param int $page_id Page ID.
+	 * @param int $part_id Part template ID.
+	 * @return int
+	 */
+	private function count_part_applications_history( $page_id, $part_id ) {
+		$raw = get_post_meta( (int) $page_id, $this->applied_parts_meta_key, true );
+		if ( ! is_array( $raw ) ) {
+			return 0;
+		}
+
+		return count(
+			array_filter(
+				array_map( 'intval', $raw ),
+				static function ( $id ) use ( $part_id ) {
+					return (int) $part_id === $id;
+				}
+			)
+		);
+	}
+
+	/**
+	 * @param int $page_id Page ID.
+	 * @param int $part_id Part template ID.
+	 */
+	private function record_part_application( $page_id, $part_id ) {
+		$page_id  = (int) $page_id;
+		$part_id  = (int) $part_id;
+		$existing = get_post_meta( $page_id, $this->applied_parts_meta_key, true );
+		if ( ! is_array( $existing ) ) {
+			$existing = array();
+		}
+		$existing[] = $part_id;
+		Mcpwp_Elementor_Meta_Write::update( $page_id, $this->applied_parts_meta_key, $existing );
+	}
+
+	/**
+	 * Active kit custom_css that names a part element id (#826).
+	 *
+	 * @param array $part_ids Original ids from the part tree.
+	 * @return string[]
+	 */
+	private function kit_css_scoped_to_ids( array $part_ids ) {
+		if ( empty( $part_ids ) ) {
+			return array();
+		}
+
+		$kit_id = (int) get_option( 'elementor_active_kit', 0 );
+		if ( $kit_id < 1 ) {
+			return array();
+		}
+
+		$settings = get_post_meta( $kit_id, '_elementor_page_settings', true );
+		if ( ! is_array( $settings ) || empty( $settings['custom_css'] ) || ! is_string( $settings['custom_css'] ) ) {
+			return array();
+		}
+
+		return Mcpwp_Elementor_Element_Ids::find_ids_in_css( $settings['custom_css'], $part_ids );
 	}
 }
