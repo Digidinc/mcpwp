@@ -137,9 +137,12 @@ class Mcpwp_Theme_Builder {
 			require_once dirname( __FILE__ ) . '/class-mcpwp-elementor-pro.php';
 		}
 
-		$read_only     = ! empty( $args['caller_read_only'] );
+		$read_only = true;
+		if ( array_key_exists( 'caller_read_only', $args ) ) {
+			$read_only = (bool) $args['caller_read_only'];
+		}
 		$status_filter = isset( $args['status'] ) ? $args['status'] : null;
-		unset( $args['caller_read_only'], $args['status'] );
+		unset( $args['caller_read_only'], $args['status'], $args['post_status'] );
 
 		$query_args = array(
 			'post_type'      => 'elementor_library',

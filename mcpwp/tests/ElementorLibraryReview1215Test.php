@@ -11,6 +11,8 @@ require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-oauth.php';
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-elementor-pro.php';
 require_once dirname( __DIR__ ) . '/includes/pro/api/class-mcpwp-rest-theme-builder.php';
 require_once dirname( __DIR__ ) . '/includes/pro/core/class-mcpwp-elementor-pro.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-site-info.php';
+require_once dirname( __DIR__ ) . '/includes/api/class-mcpwp-rest-mcp.php';
 require_once __DIR__ . '/ApiAuthTest.php';
 
 if ( ! class_exists( 'Mcpwp_WebMCP' ) ) {
@@ -44,47 +46,54 @@ class Mcpwp_Elementor_Library_List_Harness extends Mcpwp_REST_Elementor_Pro {
 	}
 }
 
-class Mcpwp_Mcp_Publish_Gate_Harness {
-	use Mcpwp_Api_Auth;
-
-	public function rest_scope( string $method, string $route, array $params = array() ): string {
-		return $this->get_required_scope_for_request( new WP_REST_Request( $method, $route, $params ) );
-	}
-}
-
 final class ElementorLibraryReview1215Test extends TestCase {
 
 	const EDITOR  = 7;
 	const AUTHOR  = 11;
 	const WEBMCP  = 21;
 
+	/** @var array */
+	private $saved_users;
+
+	/** @var array */
+	private $saved_user_caps;
+
 	protected function setUp(): void {
+		$this->saved_users     = $GLOBALS['mcpwp_test_users'];
+		$this->saved_user_caps = $GLOBALS['mcpwp_test_user_caps'];
+
 		$GLOBALS['_mcpwp_test_posts']       = array();
 		$GLOBALS['_mcpwp_test_meta']        = array();
 		$GLOBALS['mcpwp_test_options']      = array();
 		$GLOBALS['mcpwp_test_transients']   = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
-		$GLOBALS['mcpwp_test_filters']      = array();
-		$GLOBALS['mcpwp_test_users'] = array(
-			(object) array( 'ID' => self::EDITOR, 'roles' => array( 'editor' ), 'user_login' => 'editor' ),
-			(object) array( 'ID' => self::AUTHOR, 'roles' => array( 'author' ), 'user_login' => 'author' ),
-			(object) array( 'ID' => self::WEBMCP, 'roles' => array( 'editor' ), 'user_login' => 'webmcp' ),
+
+		foreach (
+			array(
+				self::EDITOR => array( 'editor', 'editor' ),
+				self::AUTHOR => array( 'author', 'author' ),
+				self::WEBMCP => array( 'editor', 'webmcp' ),
+			) as $id => $pair
+		) {
+			$GLOBALS['mcpwp_test_users'][] = (object) array(
+				'ID'         => $id,
+				'roles'      => array( $pair[0] ),
+				'user_login' => $pair[1],
+			);
+		}
+		$GLOBALS['mcpwp_test_user_caps'][ self::EDITOR ] = array(
+			'read'               => true,
+			'edit_posts'         => true,
+			'edit_others_posts'  => true,
+			'read_private_posts' => true,
 		);
-		$GLOBALS['mcpwp_test_user_caps']    = array(
-			self::EDITOR => array(
-				'read'                => true,
-				'edit_posts'          => true,
-				'edit_others_posts'   => true,
-				'read_private_posts'  => true,
-			),
-			self::AUTHOR => array(
-				'read'       => true,
-				'edit_posts' => true,
-			),
-			self::WEBMCP => array(
-				'read'       => true,
-				'edit_posts' => true,
-			),
+		$GLOBALS['mcpwp_test_user_caps'][ self::AUTHOR ] = array(
+			'read'       => true,
+			'edit_posts' => true,
+		);
+		$GLOBALS['mcpwp_test_user_caps'][ self::WEBMCP ] = array(
+			'read'       => true,
+			'edit_posts' => true,
 		);
 		update_option( 'mcpwp_settings', array( 'oauth_enabled' => true ) );
 		update_option( 'mcpwp_oauth_local_min_role', 'author' );
@@ -94,7 +103,9 @@ final class ElementorLibraryReview1215Test extends TestCase {
 	}
 
 	protected function tearDown(): void {
-		unset( $GLOBALS['mcpwp_test_custom_code_cache_sync'], $GLOBALS['mcpwp_test_wp_update_post_status_fails'] );
+		$GLOBALS['mcpwp_test_users']     = $this->saved_users;
+		$GLOBALS['mcpwp_test_user_caps'] = $this->saved_user_caps;
+		unset( $GLOBALS['mcpwp_test_wp_update_post_status_fails'] );
 		Mcpwp_REST_API::reset_verdict_memo();
 	}
 
@@ -138,7 +149,34 @@ final class ElementorLibraryReview1215Test extends TestCase {
 		return array_map( 'intval', array_column( $items, 'id' ) );
 	}
 
-	public function test_update_publish_failure_leaves_live_template_and_elementor_data(): void {
+	private function call_private( $object, string $method, array $args ) {
+		$ref = new ReflectionMethod( get_class( $object ), $method );
+		$ref->setAccessible( true );
+		return $ref->invokeArgs( $object, $args );
+	}
+
+	private function mcp_tools_call( Mcpwp_REST_MCP $controller, string $key, string $tool, array $arguments = array() ): array {
+		$request = new WP_REST_Request(
+			'POST',
+			'/mcpwp/v1/mcp',
+			array(),
+			array( 'X-API-Key' => $key, 'MCP-Protocol-Version' => '2025-11-25' ),
+			array(
+				'jsonrpc' => '2.0',
+				'id'      => 1,
+				'method'  => 'tools/call',
+				'params'  => array(
+					'name'      => $tool,
+					'arguments' => $arguments,
+				),
+			)
+		);
+		Mcpwp_REST_MCP::reset_verdict_memo();
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+		return json_decode( wp_json_encode( $controller->handle_mcp( $request )->get_data() ), true );
+	}
+
+	public function test_update_publish_failure_leaves_prior_content_but_unpublished(): void {
 		$GLOBALS['_mcpwp_test_posts'][55] = new WP_Post(
 			(object) array(
 				'ID'           => 55,
@@ -166,10 +204,41 @@ final class ElementorLibraryReview1215Test extends TestCase {
 		unset( $GLOBALS['mcpwp_test_wp_update_post_status_fails'] );
 
 		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertTrue( $result->get_error_data()['partial_write'] ?? false );
 		$this->assertTrue( isset( $GLOBALS['_mcpwp_test_posts'][55] ), 'A failed publish on update must not force-delete the template.' );
 		$this->assertSame( 'private', get_post_status( 55 ) );
-		$this->assertSame( 'Live header', $GLOBALS['_mcpwp_test_posts'][55]->post_title, 'Status is resolved before title/data writes.' );
-		$this->assertSame( '[{"id":"hdr0001","elType":"section"}]', $GLOBALS['_mcpwp_test_meta'][55]['_elementor_data'][0] );
+		$this->assertSame( 'Renamed header', $GLOBALS['_mcpwp_test_posts'][55]->post_title, 'Title/data run before the status transition.' );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_data_save_failure_after_publish_request_leaves_template_draft(): void {
+		$GLOBALS['_mcpwp_test_posts'][56] = new WP_Post(
+			(object) array(
+				'ID'          => 56,
+				'post_title'  => 'Draft header',
+				'post_type'   => 'elementor_library',
+				'post_status' => 'draft',
+			)
+		);
+		$GLOBALS['_mcpwp_test_meta'][56] = array(
+			'_elementor_template_type' => array( 'header' ),
+			'_elementor_data'          => array( '[{"id":"hdr0001","elType":"section"}]' ),
+		);
+		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
+
+		$result = ( new Mcpwp_Elementor_Pro() )->update_template(
+			56,
+			array(
+				'elementor_data' => array( array( 'not' => 'an element tree' ) ),
+				'status'         => 'publish',
+			)
+		);
+
+		$this->assertInstanceOf( WP_Error::class, $result );
+		$this->assertSame( 'draft', get_post_status( 56 ) );
 	}
 
 	public function test_status_refusal_before_title_write_on_update(): void {
@@ -269,6 +338,41 @@ final class ElementorLibraryReview1215Test extends TestCase {
 		$this->assertSame( array( 101 ), $ids );
 	}
 
+	public function test_site_context_read_key_never_surfaces_draft_archetype_brief(): void {
+		$GLOBALS['mcpwp_test_did_action']['elementor/loaded'] = 1;
+		$GLOBALS['_mcpwp_test_posts'][222] = new WP_Post(
+			(object) array(
+				'ID'          => 222,
+				'post_title'  => 'Draft archetype',
+				'post_type'   => 'elementor_library',
+				'post_status' => 'draft',
+			)
+		);
+		$GLOBALS['_mcpwp_test_meta'][222] = array(
+			'_mcpwp_is_archetype'     => array( 'yes' ),
+			'_mcpwp_archetype_scope'  => array( 'page' ),
+			'_mcpwp_archetype_class'  => array( 'landing' ),
+			'_mcpwp_archetype_brief'  => array( 'SECRET draft archetype brief' ),
+			'_elementor_template_type' => array( 'page' ),
+		);
+		update_option( 'mcpwp_site_context', 'Base brand voice only.' );
+
+		$controller = new Mcpwp_REST_Site_Info();
+		$created    = $controller->create_scoped_api_key( 'read', array( 'read' ), 'admin' );
+		$request    = new WP_REST_Request(
+			'GET',
+			'/mcpwp/v1/site-context',
+			array( 'scope' => 'page', 'archetype_class' => 'landing' ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->assertTrue( $controller->verify_api_key( $request ) );
+
+		$data = $controller->get_site_context( $request )->get_data();
+		$this->assertSame( 'Base brand voice only.', $data['effective_context'] );
+		$this->assertFalse( $data['inheritance']['matched'] );
+		$this->assertStringNotContainsString( 'SECRET', $data['effective_context'] );
+	}
+
 	public function test_status_mismatch_warning_when_stored_status_differs(): void {
 		$GLOBALS['_mcpwp_test_posts'][88] = new WP_Post(
 			(object) array(
@@ -288,6 +392,10 @@ final class ElementorLibraryReview1215Test extends TestCase {
 		$this->assertSame( 'draft', get_post_status( 88 ) );
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_transition_post_status_hook_resyncs_conditions_on_admin_publish(): void {
 		if ( ! defined( 'ELEMENTOR_PRO_VERSION' ) ) {
 			define( 'ELEMENTOR_PRO_VERSION', '4.0.0' );
@@ -310,10 +418,13 @@ final class ElementorLibraryReview1215Test extends TestCase {
 		);
 
 		$syncs = 0;
-		$GLOBALS['mcpwp_test_custom_code_cache_sync'] = static function () use ( &$syncs ) {
-			++$syncs;
-			return true;
-		};
+		add_filter(
+			'mcpwp_custom_code_cache_entry_sync',
+			static function () use ( &$syncs ) {
+				++$syncs;
+				return true;
+			}
+		);
 
 		add_action( 'transition_post_status', array( 'Mcpwp_Elementor_Pro', 'on_library_template_status_transition' ), 10, 3 );
 		wp_update_post( array( 'ID' => 199, 'post_status' => 'publish' ) );
@@ -321,6 +432,10 @@ final class ElementorLibraryReview1215Test extends TestCase {
 		$this->assertSame( 1, $syncs );
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_publish_sync_failure_sets_live_false_and_warning(): void {
 		if ( ! defined( 'ELEMENTOR_PRO_VERSION' ) ) {
 			define( 'ELEMENTOR_PRO_VERSION', '4.0.0' );
@@ -342,9 +457,12 @@ final class ElementorLibraryReview1215Test extends TestCase {
 			'_elementor_conditions'    => array( 'include/general' ),
 		);
 
-		$GLOBALS['mcpwp_test_custom_code_cache_sync'] = static function () {
-			return new WP_Error( 'sync_failed', 'Cache sync refused.' );
-		};
+		add_filter(
+			'mcpwp_custom_code_cache_entry_sync',
+			static function () {
+				return new WP_Error( 'sync_failed', 'Cache sync refused.' );
+			}
+		);
 
 		$result = ( new Mcpwp_Elementor_Pro() )->update_template( 301, array( 'status' => 'publish' ) );
 		$this->assertIsArray( $result );
@@ -353,20 +471,61 @@ final class ElementorLibraryReview1215Test extends TestCase {
 		$this->assertNotEmpty( $result['warnings'] ?? array() );
 	}
 
-	public function test_mcp_dispatch_route_publish_on_update_requires_admin_scope(): void {
-		$auth = new Mcpwp_Mcp_Publish_Gate_Harness();
-		$this->assertSame(
-			'admin',
-			$auth->rest_scope(
-				'PUT',
-				'/mcpwp/v1/elementor/templates/12',
-				array(
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_mcp_tools_call_publish_on_update_requires_admin_scope(): void {
+		$marker = dirname( __DIR__ ) . '/includes/agency-license.php';
+		file_put_contents( $marker, "<?php\nreturn 'MCPWP_AGENCY_LICENSE_V1';\n" );
+		try {
+			$this->run_mcp_tools_call_publish_gate_assertions();
+		} finally {
+			if ( is_file( $marker ) ) {
+				unlink( $marker );
+			}
+		}
+	}
+
+	private function run_mcp_tools_call_publish_gate_assertions(): void {
+		$GLOBALS['_mcpwp_test_posts'][12] = new WP_Post(
+			(object) array(
+				'ID'          => 12,
+				'post_title'  => 'Template',
+				'post_type'   => 'elementor_library',
+				'post_status' => 'draft',
+			)
+		);
+		$controller = new Mcpwp_REST_MCP();
+		$key        = $this->elementor_templates_controller()->create_scoped_api_key( 'write', array( 'read', 'write' ), 'admin' )['key'];
+
+		$direct = $this->mcp_tools_call(
+			$controller,
+			$key,
+			'wp_update_elementor_template',
+			array(
+				'id'     => 12,
+				'status' => 'publish',
+			)
+		);
+		$this->assertTrue( $direct['result']['isError'] ?? false );
+		$direct_code = $direct['result']['structuredContent']['error']['code'] ?? null;
+		$this->assertSame( 'scope_denied', $direct_code, 'Direct tools/call must reach the REST publish gate.' );
+
+		$wrapped = $this->mcp_tools_call(
+			$controller,
+			$key,
+			'mcpwp_call',
+			array(
+				'name'      => 'wp_update_elementor_template',
+				'arguments' => array(
 					'id'     => 12,
 					'status' => 'publish',
-				)
-			),
-			'tools/call dispatches template updates through this REST route.'
+				),
+			)
 		);
+		$this->assertTrue( $wrapped['result']['isError'] ?? false );
+		$this->assertSame( 'scope_denied', $wrapped['result']['structuredContent']['error']['code'] ?? null, 'mcpwp_call must route through the same gate.' );
 	}
 
 	public function test_write_key_refused_publish_on_template_update_via_rest_gate(): void {

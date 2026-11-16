@@ -59,6 +59,13 @@ class Mcpwp_Elementor_Pro {
 	private $last_publish_conditions_sync_warning = '';
 
 	/**
+	 * Skip transition_post_status hook sync while finalize runs wp_update_post.
+	 *
+	 * @var array<int,bool>
+	 */
+	private static $skip_hook_publish_sync_for = array();
+
+	/**
 	 * Post meta key: source page ID for extracted parts.
 	 *
 	 * @var string
@@ -406,9 +413,12 @@ class Mcpwp_Elementor_Pro {
 
 		$page = max( 1, $page );
 
-		unset( $args['per_page'], $args['page'] );
+		unset( $args['per_page'], $args['page'], $args['paged'], $args['posts_per_page'] );
 
-		$read_only     = ! empty( $args['caller_read_only'] );
+		$read_only = true;
+		if ( array_key_exists( 'caller_read_only', $args ) ) {
+			$read_only = (bool) $args['caller_read_only'];
+		}
 		$status_filter = null;
 		if ( array_key_exists( 'status', $args ) ) {
 			$status_filter = $args['status'];
@@ -416,7 +426,7 @@ class Mcpwp_Elementor_Pro {
 		} elseif ( array_key_exists( 'post_status', $args ) ) {
 			$status_filter = $args['post_status'];
 		}
-		unset( $args['caller_read_only'] );
+		unset( $args['caller_read_only'], $args['post_status'] );
 
 		$defaults = array(
 			'post_type'   => 'elementor_library',
@@ -932,6 +942,7 @@ class Mcpwp_Elementor_Pro {
 			return true;
 		}
 
+		self::$skip_hook_publish_sync_for[ (int) $template_id ] = true;
 		$updated = wp_update_post(
 			array(
 				'ID'          => $template_id,
@@ -939,6 +950,7 @@ class Mcpwp_Elementor_Pro {
 			),
 			true
 		);
+		unset( self::$skip_hook_publish_sync_for[ (int) $template_id ] );
 
 		if ( is_wp_error( $updated ) || ! $updated ) {
 			if ( $delete_on_failure ) {
@@ -980,8 +992,13 @@ class Mcpwp_Elementor_Pro {
 			return;
 		}
 
+		$post_id = (int) $post->ID;
+		if ( ! empty( self::$skip_hook_publish_sync_for[ $post_id ] ) ) {
+			return;
+		}
+
 		$handler = new self();
-		$handler->maybe_sync_theme_conditions_after_publish( (int) $post->ID, (string) $old_status, 'publish' );
+		$handler->maybe_sync_theme_conditions_after_publish( $post_id, (string) $old_status, 'publish' );
 	}
 
 	/**
@@ -1351,17 +1368,16 @@ class Mcpwp_Elementor_Pro {
 		$this->last_publish_conditions_sync_warning = '';
 
 		$requested_status = null;
+		$target_status    = null;
 		if ( isset( $data['status'] ) && '' !== $data['status'] ) {
 			$requested_status = $data['status'];
 			$target_status    = self::resolve_library_create_status( array( 'status' => $data['status'] ) );
 			if ( is_wp_error( $target_status ) ) {
 				return $target_status;
 			}
-			$moved = $this->transition_library_template_status( $template_id, $target_status );
-			if ( is_wp_error( $moved ) ) {
-				return $moved;
-			}
 		}
+
+		$had_writes = false;
 
 		// Update title if provided.
 		if ( ! empty( $data['title'] ) ) {
@@ -1369,14 +1385,19 @@ class Mcpwp_Elementor_Pro {
 				'ID'         => $template_id,
 				'post_title' => sanitize_text_field( $data['title'] ),
 			) );
+			$had_writes = true;
 		}
 
 		// Update Elementor data if provided.
 		if ( ! empty( $data['elementor_data'] ) ) {
 			$save_result = $this->save_elementor_data( $template_id, $data['elementor_data'] );
 			if ( is_wp_error( $save_result ) ) {
+				if ( $had_writes ) {
+					$save_result->add_data( array( 'partial_write' => true ) );
+				}
 				return $save_result;
 			}
+			$had_writes = true;
 		}
 
 		$settings_report = $this->store_template_page_settings( $template_id, $data );
@@ -1386,6 +1407,14 @@ class Mcpwp_Elementor_Pro {
 
 		$this->save_part_metadata( $template_id, $data );
 		$this->save_archetype_metadata( $template_id, $data );
+
+		if ( null !== $target_status ) {
+			$moved = $this->transition_library_template_status( $template_id, $target_status );
+			if ( is_wp_error( $moved ) ) {
+				$moved->add_data( array( 'partial_write' => true ) );
+				return $moved;
+			}
+		}
 
 		$updated = $this->get_template( $template_id );
 

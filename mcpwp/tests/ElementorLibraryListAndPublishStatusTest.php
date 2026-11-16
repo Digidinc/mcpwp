@@ -63,6 +63,13 @@ final class ElementorLibraryListAndPublishStatusTest extends TestCase {
 		$this->assertSame( array( 101 ), $ids );
 	}
 
+	public function test_internal_list_without_visibility_flag_defaults_to_publish_only(): void {
+		$this->seed_library_posts();
+		$page = ( new Mcpwp_Elementor_Pro() )->get_templates_page( array() );
+		$ids  = array_column( $page['items'], 'id' );
+		$this->assertSame( array( 101 ), $ids );
+	}
+
 	public function test_admin_key_can_publish_existing_template_via_update_route_gate(): void {
 		$GLOBALS['_mcpwp_test_posts'][55] = new WP_Post(
 			(object) array(
