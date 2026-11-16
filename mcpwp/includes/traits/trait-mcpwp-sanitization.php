@@ -118,7 +118,7 @@ trait Mcpwp_Sanitization {
 				$content = (string) $content;
 			} else {
 				return array(
-					'content' => wp_kses_post( $content ),
+					'content' => $this->kses_post_content( $content ),
 					'removed' => array(),
 				);
 			}
@@ -150,9 +150,66 @@ trait Mcpwp_Sanitization {
 		}
 
 		return array(
-			'content' => wp_kses_post( $content ),
+			// #1212: scoped safe-SVG allow-list around this kses call only.
+			'content' => $this->kses_post_content( $content ),
 			'removed' => $removed,
 		);
+	}
+
+	/**
+	 * Run post-body kses under MCPWP's scoped safe-SVG allow-list (#1212).
+	 *
+	 * Non-string input is handed to bare wp_kses_post() — same as before #1212 —
+	 * so array/object content keeps the prior shape. String/scalar bodies go
+	 * through Mcpwp_Content_Kses when loaded.
+	 *
+	 * @param mixed $content Content to kses.
+	 * @return mixed
+	 */
+	protected function kses_post_content( $content ) {
+		if ( ! is_string( $content ) && ! is_scalar( $content ) ) {
+			return wp_kses_post( $content );
+		}
+		if ( class_exists( 'Mcpwp_Content_Kses', false ) ) {
+			return Mcpwp_Content_Kses::kses_post( (string) $content );
+		}
+		return wp_kses_post( $content );
+	}
+
+	/**
+	 * After a content write, compare the caller's input to the saved row and
+	 * return a content_modified report (kinds + counts only — never the raw
+	 * stripped payload). Empty array when nothing security-relevant changed.
+	 *
+	 * @param mixed $submitted Content the caller sent.
+	 * @param int   $post_id   Post that was just written.
+	 * @return array{removed: array<int, array{kind:string, count:int}>}|array{}
+	 */
+	protected function content_modified_from_saved( $submitted, $post_id ) {
+		if ( ! class_exists( 'Mcpwp_Content_Kses', false ) ) {
+			return array();
+		}
+		$saved = Mcpwp_Content_Kses::saved_post_content( (int) $post_id );
+		return Mcpwp_Content_Kses::describe_modifications( $submitted, $saved );
+	}
+
+	/**
+	 * Attach content_modified to a write response when the sanitiser changed
+	 * the body (#1212). Response content must already be the saved row.
+	 *
+	 * @param array $result    Write response (by ref).
+	 * @param mixed $submitted Original content string the caller sent.
+	 * @param int   $post_id   Saved post id.
+	 * @return void
+	 */
+	protected function attach_content_modified_report( array &$result, $submitted, $post_id ) {
+		if ( ! is_string( $submitted ) && ! is_scalar( $submitted ) ) {
+			return;
+		}
+		$report = $this->content_modified_from_saved( $submitted, $post_id );
+		if ( ! empty( $report['removed'] ) ) {
+			$result['content_modified'] = $report;
+		}
 	}
 
 	/**
@@ -547,7 +604,7 @@ trait Mcpwp_Sanitization {
 		}
 
 		if ( isset( $data['content'] ) ) {
-			$sanitized['content'] = wp_kses_post( $data['content'] );
+			$sanitized['content'] = $this->kses_post_content( $data['content'] );
 		}
 
 		if ( isset( $data['excerpt'] ) ) {
