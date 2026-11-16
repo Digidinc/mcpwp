@@ -181,6 +181,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'default'     => 'preserve',
 					'description' => 'How the template\'s document settings meet the target page\'s. preserve (default): the page keeps every setting it already has, and only gains ones it lacks — applying a template never silently restyles a page\'s canvas, title visibility or page CSS. replace: the page takes the template\'s document wholesale. merge: the template wins per key, the page keeps what the template does not mention. The response reports applied / preserved / skipped by name.',
 				),
+				'template' => array(
+					'type'        => 'string',
+					'description' => 'Optional page template slug to set on the target page when you apply. Omit to preserve the current template.',
+				),
 			)
 		);
 
@@ -313,6 +317,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'enum'        => array( 'preserve', 'replace', 'merge' ),
 					'default'     => 'preserve',
 					'description' => 'How the template\'s document settings meet the target page\'s. preserve (default): the page keeps every setting it already has, and only gains ones it lacks — applying a template never silently restyles a page\'s canvas, title visibility or page CSS. replace: the page takes the template\'s document wholesale. merge: the template wins per key, the page keeps what the template does not mention. The response reports applied / preserved / skipped by name.',
+				),
+				'template' => array(
+					'type'        => 'string',
+					'description' => 'Optional page template slug to set on the target page when you apply. Omit to preserve the current template.',
 				),
 			),
 			null,
@@ -503,6 +511,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'description' => 'When true (default), each apply inserts another copy; ids are regenerated only on collision with the target page. When false, refuses if a stamped copy of this part is already on the page (#826).',
 					'default'     => true,
 				),
+				'template' => array(
+					'type'        => 'string',
+					'description' => 'Optional page template slug (mode=replace only). Omit to preserve the current template.',
+				),
 			)
 		);
 
@@ -518,6 +530,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 				'template_id' => array(
 					'type'        => 'number',
 					'description' => 'Optional template ID to use',
+				),
+				'template' => array(
+					'type'        => 'string',
+					'description' => 'Optional page template slug. Omit to leave the theme default; use elementor_header_footer or elementor_canvas for full-width Elementor framing.',
 				),
 			)
 		);
@@ -567,6 +583,10 @@ trait Mcpwp_Pro_Tools_Elementor_Trait {
 					'type'        => 'string',
 					'description' => 'Page status: draft (default), publish, private',
 					'default'     => 'draft',
+				),
+				'template' => array(
+					'type'        => 'string',
+					'description' => 'Optional page template slug. Omit to leave the theme default; set elementor_header_footer or elementor_canvas for full-width Elementor framing.',
 				),
 			),
 			null,

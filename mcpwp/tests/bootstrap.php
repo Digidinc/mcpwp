@@ -5989,6 +5989,7 @@ if (! class_exists('WP_HTML_Tag_Processor', false)) {
 }
 
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-content-modified-report.php';
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-page-template.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-pages.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-posts.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-drafts.php';

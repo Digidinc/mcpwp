@@ -289,6 +289,7 @@ if ( ! function_exists( 'mcpwp_load_plugin' ) ) {
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-content-guardrails.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-content-modified-report.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-posts.php';
+	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-page-template.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-pages.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-media.php';
 	require_once MCPWP_PLUGIN_DIR . 'includes/core/class-mcpwp-drafts.php';

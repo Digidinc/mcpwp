@@ -263,7 +263,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'methods'             => WP_REST_Server::CREATABLE,
 				'callback'            => array( $this, 'create_landing_page' ),
 				'permission_callback' => array( $this, 'check_permission' ),
-				'args'                => $this->get_status_targeting_write_args(),
+				'args'                => $this->get_landing_page_write_args(),
 			)
 		);
 
@@ -486,6 +486,23 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 	}
 
 	/**
+	 * Write arguments for /elementor/landing-page (status + optional page template).
+	 *
+	 * @return array
+	 */
+	private function get_landing_page_write_args() {
+		return array_merge(
+			$this->get_status_targeting_write_args(),
+			array(
+				'template' => array(
+					'type'        => 'string',
+					'description' => __( 'Optional page template slug (default, elementor_header_footer, elementor_canvas, or a theme template). When omitted, the page stays on the theme default like Elementor\'s editor.', 'mcpwp' ),
+				),
+			)
+		);
+	}
+
+	/**
 	 * Get write arguments for /elementor/build-page.
 	 *
 	 * RC 3.12.1 adversarial review, Requirement 1: Mcpwp_Page_Builder::build()
@@ -509,6 +526,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				'type'        => 'string',
 				'enum'        => array( 'draft', 'private', 'publish' ),
 				'description' => __( 'Post status for the built page.', 'mcpwp' ),
+			),
+			'template' => array(
+				'type'        => 'string',
+				'description' => __( 'Optional page template slug (default, elementor_header_footer, elementor_canvas, or a theme template). When omitted, the page stays on the theme default like Elementor\'s editor.', 'mcpwp' ),
 			),
 		);
 	}
@@ -2285,7 +2306,8 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$result = $this->elementor_pro->apply_template_to_page(
 			$page_id,
 			$template_id,
-			(string) ( $request->get_param( 'page_settings_mode' ) ?: 'preserve' )
+			(string) ( $request->get_param( 'page_settings_mode' ) ?: 'preserve' ),
+			Mcpwp_Page_Template::page_options_from_request( $request )
 		);
 
 		if ( is_wp_error( $result ) ) {
@@ -2302,8 +2324,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'page_id'     => $page_id,
 			'edit_url'    => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
 		);
+		$response = $this->lift_render_status( $response, $result );
+		$response = $this->merge_apply_template_report( $response, $result );
 
-		return $this->success_response( $this->lift_render_status( $response, $result ) );
+		return $this->success_response( $response );
 	}
 
 	/**
@@ -2447,10 +2471,13 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			return $this->error_response( 'missing_page_id', __( 'Page ID is required.', 'mcpwp' ), 400 );
 		}
 
+		$page_options = Mcpwp_Page_Template::page_options_from_request( $request );
+
 		$result = $this->elementor_pro->apply_archetype_to_page(
 			$archetype_id,
 			$page_id,
-			(string) ( $request->get_param( 'page_settings_mode' ) ?: 'preserve' )
+			(string) ( $request->get_param( 'page_settings_mode' ) ?: 'preserve' ),
+			$page_options
 		);
 
 		if ( is_wp_error( $result ) ) {
@@ -2467,8 +2494,10 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'page_id'      => $page_id,
 			'edit_url'     => admin_url( 'post.php?post=' . $page_id . '&action=elementor' ),
 		);
+		$response = $this->lift_render_status( $response, $result );
+		$response = $this->merge_apply_template_report( $response, $result );
 
-		return $this->success_response( $this->lift_render_status( $response, $result ) );
+		return $this->success_response( $response );
 	}
 
 	/**
@@ -2755,7 +2784,7 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				)
 			);
 		} else {
-			$result = $this->elementor_pro->apply_part_to_page( $part_id, $page_id );
+			$result = $this->elementor_pro->apply_part_to_page( $part_id, $page_id, Mcpwp_Page_Template::page_options_from_request( $request ) );
 		}
 
 		if ( is_wp_error( $result ) ) {
@@ -2805,8 +2834,24 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				}
 			}
 		}
+		$response = $this->merge_apply_template_report( $response, $result );
 
 		return $this->success_response( $response );
+	}
+
+	/**
+	 * Copy a nested template change report onto a top-level apply response.
+	 *
+	 * @param array $response Response being built.
+	 * @param mixed $result   Writer result.
+	 * @return array
+	 */
+	private function merge_apply_template_report( array $response, $result ) {
+		if ( is_array( $result ) && isset( $result['template'] ) ) {
+			$response['template'] = $result['template'];
+		}
+
+		return $response;
 	}
 
 	/**
@@ -2964,6 +3009,14 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 			'sections'       => $request->get_param( 'sections' ),
 			'elementor_data' => $request->get_param( 'elementor_data' ),
 		);
+		$data = Mcpwp_Page_Template::merge_rest_template( $data, $request );
+
+		$template_payload_ok = Mcpwp_Page_Template::validate_create_payload( $data );
+		if ( is_wp_error( $template_payload_ok ) ) {
+			$status = $this->get_wp_error_status( $template_payload_ok );
+			$this->log_activity( 'create_landing_page', $request, null, $status );
+			return $this->error_response_from_wp_error( $template_payload_ok );
+		}
 
 		$result = $this->elementor_pro->create_landing_page( $data );
 
@@ -3315,10 +3368,11 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 		$title    = $request->get_param( 'title' );
 		$sections = $request->get_param( 'sections' );
 		$status   = $request->get_param( 'status' ) ?: 'draft';
+		$template = $request->get_param( 'template' );
 
 		$builder = new Mcpwp_Page_Builder();
 		$builder->set_template_ref_gate( $this->template_ref_gate() );
-		$result = $builder->build( $title, $sections, $status );
+		$result = $builder->build( $title, $sections, $status, $template );
 
 		if ( is_wp_error( $result ) ) {
 			return $result;

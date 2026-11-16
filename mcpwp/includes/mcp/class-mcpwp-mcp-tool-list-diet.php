@@ -190,6 +190,7 @@ class Mcpwp_MCP_Tool_List_Diet {
 			'dry_run'               => 'Validate without saving.',
 			'repair_ids'            => 'Rewrite element ids that are not 7 alphanumeric characters.',
 			'convert'               => 'Allow replacing existing non-Elementor content.',
+			'template'              => 'Optional template slug; omit to preserve current.',
 		),
 		'wp_get_page_by_slug'      => array(
 			'slug' => '',
@@ -206,6 +207,20 @@ class Mcpwp_MCP_Tool_List_Diet {
 		'wp_build_page'            => array(
 			'sections' => 'Section objects, each with "type" plus its params.',
 			'status'   => 'draft, publish or private.',
+			'template' => 'Optional template slug; omit for theme default.',
+		),
+		'wp_create_landing_page'   => array(
+			'template'    => 'Optional slug; omit for theme default.',
+			'template_id' => 'Elementor library template to copy.',
+		),
+		'wp_apply_elementor_template' => array(
+			'template' => 'Optional slug after apply.',
+		),
+		'wp_apply_elementor_archetype' => array(
+			'template' => 'Optional slug after apply.',
+		),
+		'wp_apply_elementor_part'  => array(
+			'template' => 'Optional slug (replace mode).',
 		),
 		'wp_upload_media_from_url' => array(
 			'url'      => '',
