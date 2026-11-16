@@ -123,9 +123,10 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		return $made;
 	}
 
-	/** A later page load: the failed-attempt back-off has expired. */
+	/** A later page load: the failed-attempt back-off / busy cool-down has expired. */
 	private function later_load(): bool {
 		delete_transient( Mcpwp_Activator::SPAI_ADOPTION_BACKOFF );
+		delete_transient( Mcpwp_Activator::SPAI_ADOPTION_BUSY_COOLDOWN );
 		return Mcpwp_Activator::adopt_spai_credentials();
 	}
 

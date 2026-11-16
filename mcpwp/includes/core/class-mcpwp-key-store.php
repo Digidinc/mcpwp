@@ -49,6 +49,18 @@ class Mcpwp_Key_Store {
 	/** Read-mutate-swap tries inside one lock hold. */
 	const SWAP_ATTEMPTS = 3;
 
+	/** @var bool Whether invalidate_option_cache() already ran this request. */
+	private static $option_cache_invalidated_this_request = false;
+
+	/**
+	 * Clear per-request cache-invalidation markers (tests / new request).
+	 *
+	 * @return void
+	 */
+	public static function clear_request_state() {
+		self::$option_cache_invalidated_this_request = false;
+	}
+
 	/**
 	 * Read-modify-write the key store without losing a concurrent write.
 	 *
@@ -390,13 +402,19 @@ class Mcpwp_Key_Store {
 	 * Drop a stale options-cache view of the key store so the next get_option()
 	 * re-reads (used after a busy adoption while a peer may have written).
 	 *
+	 * Only the mcpwp_api_keys entry — not alloptions/notoptions — so a Redis
+	 * or Memcached site is not forced into a site-wide options reload on every
+	 * concurrent first request. At most once per request.
+	 *
 	 * @return void
 	 */
 	public static function invalidate_option_cache() {
+		if ( self::$option_cache_invalidated_this_request ) {
+			return;
+		}
+		self::$option_cache_invalidated_this_request = true;
 		if ( function_exists( 'wp_cache_delete' ) ) {
 			wp_cache_delete( self::OPTION, 'options' );
-			wp_cache_delete( 'alloptions', 'options' );
-			wp_cache_delete( 'notoptions', 'options' );
 		}
 	}
 

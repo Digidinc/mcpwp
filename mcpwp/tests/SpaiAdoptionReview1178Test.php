@@ -91,6 +91,7 @@ final class SpaiAdoptionReview1178Test extends TestCase {
 
 	private function later_load(): bool {
 		delete_transient( Mcpwp_Activator::SPAI_ADOPTION_BACKOFF );
+		delete_transient( Mcpwp_Activator::SPAI_ADOPTION_BUSY_COOLDOWN );
 		return Mcpwp_Activator::adopt_spai_credentials();
 	}
 

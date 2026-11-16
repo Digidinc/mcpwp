@@ -1158,6 +1158,24 @@ class Mcpwp_Activator {
 	const SPAI_ADOPTION_BACKOFF_TTL = 60;
 
 	/**
+	 * Short cool-down after a busy store lock so unauthenticated floods are not
+	 * serialised behind ~1 s lock waits (#1209 P2-A).
+	 */
+	const SPAI_ADOPTION_BUSY_COOLDOWN     = 'mcpwp_spai_adoption_busy_cooldown';
+	const SPAI_ADOPTION_BUSY_COOLDOWN_TTL = 5;
+
+	/**
+	 * Consecutive-busy streak (not autoloaded-shaped; a transient). Shape:
+	 * array{ count: int, first_at: int }. Never holds a key or hash.
+	 * A normal two-request race must not raise Site Health; only a sustained
+	 * busy window records 'busy' (#1209 P2-B).
+	 */
+	const SPAI_ADOPTION_BUSY_STREAK              = 'mcpwp_spai_adoption_busy_streak';
+	const SPAI_ADOPTION_BUSY_STREAK_TTL          = 60;
+	const SPAI_ADOPTION_BUSY_RECORD_AFTER_COUNT  = 3;
+	const SPAI_ADOPTION_BUSY_RECORD_AFTER_SECONDS = 30;
+
+	/**
 	 * Last adoption failure reason code (not autoloaded). Shape:
 	 * array{ reason: string, at: int }. Never holds a key or hash.
 	 */
@@ -1183,8 +1201,13 @@ class Mcpwp_Activator {
 	}
 
 	/**
-	 * Whether adoption should wait ~1.5 s for the store lock (admin, WP-CLI,
-	 * REST/MCP). Other front-end loads stay impatient.
+	 * Whether adoption should wait ~1.5 s for the store lock.
+	 *
+	 * Patient only when the request presents a credential (so auth can see the
+	 * adopted record), for a logged-in manage_options admin, or WP-CLI.
+	 * Path alone (REST_REQUEST, /wp-json/, rest_route=, bare is_admin() for
+	 * unauthenticated admin-ajax/admin-post) must not wait — those were the
+	 * amplification surface (#1209 P2-A).
 	 *
 	 * @return bool
 	 */
@@ -1192,17 +1215,56 @@ class Mcpwp_Activator {
 		if ( defined( 'WP_CLI' ) && WP_CLI ) {
 			return true;
 		}
-		if ( function_exists( 'is_admin' ) && is_admin() ) {
+		if ( self::request_presents_credential() ) {
 			return true;
 		}
-		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+		// Logged-in admin — not is_admin(), which is true for unauthenticated
+		// admin-ajax / admin-post and would re-open the wait amplification.
+		if ( function_exists( 'get_current_user_id' ) && (int) get_current_user_id() > 0
+			&& function_exists( 'current_user_can' ) && current_user_can( 'manage_options' ) ) {
 			return true;
 		}
-		$uri = isset( $_SERVER['REQUEST_URI'] ) ? (string) $_SERVER['REQUEST_URI'] : ''; // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- path check only.
-		if ( false !== strpos( $uri, '/wp-json/' ) || false !== strpos( $uri, 'rest_route=' ) ) {
+		return false;
+	}
+
+	/**
+	 * Whether this request presents an API credential (header or api_key param).
+	 *
+	 * Presence only — the value is never logged or returned.
+	 *
+	 * @return bool
+	 */
+	public static function request_presents_credential() {
+		if ( ! empty( $_SERVER['HTTP_X_API_KEY'] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- presence check only.
 			return true;
 		}
-		if ( isset( $_GET['rest_route'] ) ) { // phpcs:ignore WordPress.Security.NonceVerification.Recommended -- presence check only.
+		if ( ! empty( $_SERVER['HTTP_AUTHORIZATION'] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- presence check only.
+			return true;
+		}
+		if ( ! empty( $_SERVER['REDIRECT_HTTP_AUTHORIZATION'] ) ) { // phpcs:ignore WordPress.Security.ValidatedSanitizedInput.InputNotSanitized -- presence check only.
+			return true;
+		}
+		if ( function_exists( 'getallheaders' ) ) {
+			$headers = getallheaders();
+			if ( is_array( $headers ) ) {
+				foreach ( $headers as $name => $value ) {
+					$lower = strtolower( (string) $name );
+					if ( ( 'x-api-key' === $lower || 'authorization' === $lower ) && '' !== (string) $value ) {
+						return true;
+					}
+				}
+			}
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- presence check only.
+		if ( isset( $_GET['api_key'] ) && '' !== (string) $_GET['api_key'] ) {
+			return true;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Missing -- presence check only.
+		if ( isset( $_POST['api_key'] ) && '' !== (string) $_POST['api_key'] ) {
+			return true;
+		}
+		// phpcs:ignore WordPress.Security.NonceVerification.Recommended -- presence check only.
+		if ( isset( $_REQUEST['api_key'] ) && '' !== (string) $_REQUEST['api_key'] ) {
 			return true;
 		}
 		return false;
@@ -1237,6 +1299,9 @@ class Mcpwp_Activator {
 	 */
 	public static function clear_spai_adoption_request_state() {
 		self::$spai_adoption_busy_this_request = false;
+		if ( class_exists( 'Mcpwp_Key_Store' ) && method_exists( 'Mcpwp_Key_Store', 'clear_request_state' ) ) {
+			Mcpwp_Key_Store::clear_request_state();
+		}
 	}
 
 	/**
@@ -1251,16 +1316,16 @@ class Mcpwp_Activator {
 	/**
 	 * Record a failure reason for the admin notice / Site Health (no secrets).
 	 *
+	 * 'busy' is never written here — use note_spai_adoption_busy() so a normal
+	 * two-request race does not raise a critical alarm (#1209 P2-B).
+	 *
 	 * @param string $reason Reason code from Mcpwp_Key_Store::mutate() or delete_failed.
 	 * @return void
 	 */
 	private static function record_spai_adoption_failure( $reason ) {
 		$reason = sanitize_key( (string) $reason );
-		if ( '' === $reason ) {
-			$reason = 'busy';
-		}
-		if ( 'busy' === $reason ) {
-			self::$spai_adoption_busy_this_request = true;
+		if ( '' === $reason || 'busy' === $reason ) {
+			return;
 		}
 		update_option(
 			self::SPAI_ADOPTION_FAILURE,
@@ -1273,12 +1338,54 @@ class Mcpwp_Activator {
 	}
 
 	/**
+	 * Handle a busy store lock: short cool-down, mark this request, and only
+	 * record a Site Health failure after a sustained streak (#1209 P2-A/B).
+	 *
+	 * @return void
+	 */
+	private static function note_spai_adoption_busy() {
+		self::$spai_adoption_busy_this_request = true;
+		set_transient( self::SPAI_ADOPTION_BUSY_COOLDOWN, 1, self::SPAI_ADOPTION_BUSY_COOLDOWN_TTL );
+
+		$now    = time();
+		$streak = get_transient( self::SPAI_ADOPTION_BUSY_STREAK );
+		if ( ! is_array( $streak ) ) {
+			$streak = array(
+				'count'    => 0,
+				'first_at' => $now,
+			);
+		}
+		$streak['count']    = isset( $streak['count'] ) ? (int) $streak['count'] + 1 : 1;
+		$streak['first_at'] = isset( $streak['first_at'] ) ? (int) $streak['first_at'] : $now;
+		if ( $streak['first_at'] <= 0 ) {
+			$streak['first_at'] = $now;
+		}
+		set_transient( self::SPAI_ADOPTION_BUSY_STREAK, $streak, self::SPAI_ADOPTION_BUSY_STREAK_TTL );
+
+		$sustained = $streak['count'] >= self::SPAI_ADOPTION_BUSY_RECORD_AFTER_COUNT
+			|| ( $now - $streak['first_at'] ) >= self::SPAI_ADOPTION_BUSY_RECORD_AFTER_SECONDS;
+		if ( ! $sustained ) {
+			return;
+		}
+		update_option(
+			self::SPAI_ADOPTION_FAILURE,
+			array(
+				'reason' => 'busy',
+				'at'     => $now,
+			),
+			false
+		);
+	}
+
+	/**
 	 * Clear the recorded failure after a successful adoption.
 	 *
 	 * @return void
 	 */
 	private static function clear_spai_adoption_failure() {
 		delete_option( self::SPAI_ADOPTION_FAILURE );
+		delete_transient( self::SPAI_ADOPTION_BUSY_COOLDOWN );
+		delete_transient( self::SPAI_ADOPTION_BUSY_STREAK );
 	}
 
 	/**
@@ -1423,11 +1530,13 @@ class Mcpwp_Activator {
 	 *    only while the store stays empty, so it moves into the store in the
 	 *    same write.
 	 *
-	 * On admin, WP-CLI and REST/MCP the lock waits ~1.5 s (patient) so
-	 * concurrent first requests after upgrade adopt or re-read instead of
-	 * failing closed immediately. A busy result does not start the back-off
-	 * (a peer may finish immediately); other failures do, and record a reason
-	 * code for the admin notice / Site Health item.
+	 * Credential-bearing requests, logged-in manage_options admins, and WP-CLI
+	 * wait ~1.5 s (patient) so concurrent first requests after upgrade adopt or
+	 * re-read instead of failing closed immediately. Other requests try once.
+	 * A busy result starts a short cool-down (not the 60 s back-off) so floods
+	 * are not serialised behind the lock; other failures use the back-off and
+	 * record a reason code. 'busy' is recorded for Site Health only after a
+	 * sustained streak (#1209 P2-A/B).
 	 *
 	 * Fails closed: an unreadable store, or a refused write (unreadable,
 	 * unsupported_characters, unwritable, busy), changes nothing and leaves the
@@ -1441,7 +1550,7 @@ class Mcpwp_Activator {
 	 * adoption. Nothing here logs or prints a key or a hash.
 	 *
 	 * @param bool|null $patient True/false forces lock patience; null detects
-	 *                           admin / WP-CLI / REST.
+	 *                           credential / admin / WP-CLI.
 	 * @return bool True when adoption is complete (flag set).
 	 */
 	public static function adopt_spai_credentials( $patient = null ) {
@@ -1465,21 +1574,28 @@ class Mcpwp_Activator {
 			if ( false !== get_transient( self::SPAI_ADOPTION_BACKOFF ) ) {
 				return false;
 			}
+			// Short cool-down after busy: skip the lock wait entirely (#1209 P2-A).
+			if ( false !== get_transient( self::SPAI_ADOPTION_BUSY_COOLDOWN ) ) {
+				return false;
+			}
 			if ( ! class_exists( 'Mcpwp_Key_Store' ) ) {
 				require_once __DIR__ . '/core/class-mcpwp-key-store.php';
 			}
 			if ( null === $patient ) {
 				$patient = self::adoption_should_wait();
 			}
+			// Mutator factory is cheap; bcrypt/hash work runs inside the callback
+			// only after mutate() holds the lock (#1209 P2-A).
 			$stored = Mcpwp_Key_Store::mutate(
 				self::spai_credential_mutator( $spai_keys, $spai_single, false ),
 				(bool) $patient
 			);
 			if ( ! $stored['written'] || ! self::delete_spai_options() ) {
 				$reason = $stored['written'] ? 'delete_failed' : ( isset( $stored['reason'] ) && '' !== (string) $stored['reason'] ? (string) $stored['reason'] : 'busy' );
-				self::record_spai_adoption_failure( $reason );
-				// Busy: a peer holds the lock and may finish; do not punish the next request.
-				if ( 'busy' !== $reason ) {
+				if ( 'busy' === $reason ) {
+					self::note_spai_adoption_busy();
+				} else {
+					self::record_spai_adoption_failure( $reason );
 					set_transient( self::SPAI_ADOPTION_BACKOFF, 1, self::SPAI_ADOPTION_BACKOFF_TTL );
 				}
 				return false;
@@ -1549,23 +1665,60 @@ class Mcpwp_Activator {
 		$spai_keys = is_array( $spai_keys ) ? $spai_keys : array();
 		$single    = ( is_string( $spai_single ) && '' !== $spai_single ) ? $spai_single : '';
 		$now       = function_exists( 'current_time' ) ? current_time( 'mysql' ) : gmdate( 'Y-m-d H:i:s' );
+		// Prepared lazily on first callback invoke (under the store lock): a
+		// busy mutate must not pay bcrypt before it holds the lock (#1209 P2-A).
+		// Hashed once per mutate hold: a salted hash differs on every call, and
+		// mutate may re-run the callback after a swap miss.
+		$prepared = null;
 
-		// Hashed once, outside the mutator: a salted hash differs on every call.
-		// A stored verifier (password hash or MD5-era hash) is carried as it is
-		// (an MD5 in its canonical lower case): hashing it would make the stored
-		// string itself the key.
-		$single_is_hash = '' !== $single && Mcpwp_Key_State::is_stored_verifier( $single );
-		$single_is_md5  = '' !== $single && Mcpwp_Key_State::is_md5_shaped( $single );
-		$single_hash    = '' === $single ? '' : ( $single_is_hash ? Mcpwp_Key_State::canonical_verifier( $single ) : wp_hash_password( $single ) );
+		return static function ( array $keys ) use ( $spai_keys, $single, $now, $revoke, &$prepared ) {
+			/**
+			 * Fires when the spai credential mutator runs under the store lock.
+			 *
+			 * Tests count this to prove a busy lock never builds/hashes.
+			 *
+			 * @since 3.14.x
+			 */
+			do_action( 'mcpwp_spai_adoption_mutator_run' );
 
-		$legacy          = (string) get_option( 'mcpwp_api_key', '' );
-		$legacy_verifier = '' !== $legacy && Mcpwp_Key_State::is_stored_verifier( $legacy );
-		$legacy_hash     = '' === $legacy ? '' : ( $legacy_verifier ? Mcpwp_Key_State::canonical_verifier( $legacy ) : wp_hash_password( $legacy ) );
-		// A plaintext legacy key gets a fresh salted hash that no stored hash
-		// equals, so it is also compared by verification.
-		$legacy_plain = ( '' !== $legacy && ! $legacy_verifier ) ? $legacy : '';
+			if ( null === $prepared ) {
+				/**
+				 * Fires once per mutate hold when hash/prep work starts (under lock).
+				 *
+				 * @param bool $prepare Always true; tests may count via this filter.
+				 * @since 3.14.x
+				 */
+				apply_filters( 'mcpwp_spai_credential_mutator_prepare', true );
 
-		return static function ( array $keys ) use ( $spai_keys, $single, $single_is_hash, $single_is_md5, $single_hash, $legacy_hash, $legacy_plain, $now, $revoke ) {
+				// A stored verifier (password hash or MD5-era hash) is carried as
+				// it is (an MD5 in its canonical lower case): hashing it would
+				// make the stored string itself the key.
+				$single_is_hash = '' !== $single && Mcpwp_Key_State::is_stored_verifier( $single );
+				$single_is_md5  = '' !== $single && Mcpwp_Key_State::is_md5_shaped( $single );
+				$single_hash    = '' === $single ? '' : ( $single_is_hash ? Mcpwp_Key_State::canonical_verifier( $single ) : wp_hash_password( $single ) );
+
+				$legacy          = (string) get_option( 'mcpwp_api_key', '' );
+				$legacy_verifier = '' !== $legacy && Mcpwp_Key_State::is_stored_verifier( $legacy );
+				$legacy_hash     = '' === $legacy ? '' : ( $legacy_verifier ? Mcpwp_Key_State::canonical_verifier( $legacy ) : wp_hash_password( $legacy ) );
+				// A plaintext legacy key gets a fresh salted hash that no stored
+				// hash equals, so it is also compared by verification.
+				$legacy_plain = ( '' !== $legacy && ! $legacy_verifier ) ? $legacy : '';
+
+				$prepared = array(
+					'single_is_hash' => $single_is_hash,
+					'single_is_md5'  => $single_is_md5,
+					'single_hash'    => $single_hash,
+					'legacy_hash'    => $legacy_hash,
+					'legacy_plain'   => $legacy_plain,
+				);
+			}
+
+			$single_is_hash = $prepared['single_is_hash'];
+			$single_is_md5  = $prepared['single_is_md5'];
+			$single_hash    = $prepared['single_hash'];
+			$legacy_hash    = $prepared['legacy_hash'];
+			$legacy_plain   = $prepared['legacy_plain'];
+
 			$present = array();
 			foreach ( $keys as $record ) {
 				if ( is_array( $record ) && isset( $record['hash'] ) && '' !== (string) $record['hash'] ) {
