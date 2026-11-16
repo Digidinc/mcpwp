@@ -242,7 +242,7 @@ final class SetupPageScopedKeyCreate1207Test extends TestCase {
 		$this->assertNotEmpty( $dup );
 		$this->assertFalse( get_transient( Mcpwp_Admin::setup_pending_errors_transient_name( 1 ) ) );
 		$this->assertGreaterThan( Mcpwp_Admin::NEW_PRIMARY_KEY_TRANSIENT_TTL, Mcpwp_Admin::SCOPED_FORM_SPENT_TTL );
-		$this->assertGreaterThanOrEqual( 12 * HOUR_IN_SECONDS, Mcpwp_Admin::SCOPED_FORM_SPENT_TTL );
+		$this->assertSame( DAY_IN_SECONDS, Mcpwp_Admin::SCOPED_FORM_SPENT_TTL );
 	}
 
 	public function test_replayed_form_uid_still_blocked_after_legacy_three_minute_window(): void {
@@ -251,7 +251,7 @@ final class SetupPageScopedKeyCreate1207Test extends TestCase {
 
 		$spent_name = 'mcpwp_scoped_form_spent_1_' . self::FORM_UID;
 		$ttl        = (int) ( $GLOBALS['mcpwp_test_transients'][ $spent_name ]['ttl'] ?? 0 );
-		$this->assertGreaterThanOrEqual( 12 * HOUR_IN_SECONDS, $ttl );
+		$this->assertSame( DAY_IN_SECONDS, $ttl );
 
 		// Five minutes after submit the spent marker must still block a replay (old TTL was 3 minutes).
 		$GLOBALS['mcpwp_test_transients'][ $spent_name ]['expires'] = time() + $ttl - ( 5 * MINUTE_IN_SECONDS );
@@ -260,6 +260,28 @@ final class SetupPageScopedKeyCreate1207Test extends TestCase {
 		try {
 			( new Mcpwp_Admin() )->handle_setup_page_load();
 			$this->fail( 'Expected redirect on duplicate form submit after five minutes.' );
+		} catch ( Mcpwp_Test_Redirect_Signal $e ) {
+			$this->assertStringContainsString( 'mcpwp_setup_notice=1', $e->getMessage() );
+		}
+
+		$this->assertCount( 1, ( new Mcpwp_Admin() )->list_scoped_api_keys( false ) );
+	}
+
+	public function test_replayed_form_uid_still_blocked_after_twelve_hours_while_nonce_valid(): void {
+		$_POST = $this->claude_desktop_post();
+		( new Mcpwp_Admin() )->handle_setup_page_load();
+
+		$spent_name = 'mcpwp_scoped_form_spent_1_' . self::FORM_UID;
+		$ttl        = (int) ( $GLOBALS['mcpwp_test_transients'][ $spent_name ]['ttl'] ?? 0 );
+		$this->assertSame( DAY_IN_SECONDS, $ttl );
+
+		// Thirteen hours later the form nonce can still verify, but the spent marker must block a second mint.
+		$GLOBALS['mcpwp_test_transients'][ $spent_name ]['expires'] = time() + $ttl - ( 13 * HOUR_IN_SECONDS );
+
+		$_POST = $this->claude_desktop_post();
+		try {
+			( new Mcpwp_Admin() )->handle_setup_page_load();
+			$this->fail( 'Expected redirect on duplicate form submit after thirteen hours.' );
 		} catch ( Mcpwp_Test_Redirect_Signal $e ) {
 			$this->assertStringContainsString( 'mcpwp_setup_notice=1', $e->getMessage() );
 		}
