@@ -55,15 +55,15 @@ if ( ! function_exists( 'selected' ) ) {
 /**
  * Include the partial with the locals render_setup_page() provides.
  *
- * @param array       $scoped_keys list_scoped_api_keys( true ) rows.
- * @param string|null $new_key     Plaintext key just generated, if any.
+ * @param array       $scoped_keys           list_scoped_api_keys( true ) rows.
+ * @param string|null $new_key               Plaintext key just generated, if any.
+ * @param array|null  $new_scoped_key        Just-created scoped key payload, if any.
+ * @param string      $chatgpt_new_url       Just-minted ChatGPT connector URL, if any.
+ * @param bool        $local_oauth_enabled   Whether local WordPress OAuth is on.
  */
-function mcpwp_1098_render_setup_partial( array $scoped_keys, $new_key ) {
-	$new_scoped_key         = null;
+function mcpwp_1098_render_setup_partial( array $scoped_keys, $new_key, $new_scoped_key = null, $chatgpt_new_url = '', $local_oauth_enabled = false ) {
 	$chatgpt_connector      = null;
-	$chatgpt_new_url        = '';
 	$chatgpt_oauth_conflict = false;
-	$local_oauth_enabled    = false;
 	$chatgpt_active_key     = null;
 	$broker_enrolled        = false;
 	$broker_enrollment      = array();

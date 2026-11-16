@@ -3795,7 +3795,8 @@ The server name includes the WordPress site title so you can distinguish multipl
 In Claude Desktop, go to **Settings → Connectors → Add custom connector**:
 
 - **Name:** `mcpwp-mysite`
-- **Remote MCP server URL:** `https://your-site.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_api_key`
+- **Remote MCP server URL (preferred when local OAuth is on):** `https://your-site.com/wp-json/mcpwp/v1/mcp` — Claude opens your WordPress login; no key in the URL (Setup copies this address on the Claude Desktop tab).
+- **Alternate (scoped API key):** `https://your-site.com/wp-json/mcpwp/v1/mcp?api_key=mcpwp_your_scoped_key` — use a non-admin scoped key created for Claude Desktop on Setup; never the primary admin key, and never the Add to ChatGPT connector link.
 - Leave OAuth fields empty
 
 This connects Claude Desktop directly to your WordPress site — no npm package or proxy needed.

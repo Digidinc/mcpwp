@@ -1805,6 +1805,55 @@ final class ElementorNoCollateralKsesTest extends TestCase {
 	}
 
 	/**
+	 * #1093: a write-scope ChatGPT / connector key cannot store script HTML
+	 * through Elementor writes — sanitized the same as any key. Admin-scoped
+	 * keys only get raw Kit CSS (#1179); `_elementor_data` never goes raw.
+	 *
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_a_chatgpt_connector_key_cannot_store_script_html_through_elementor(): void {
+		require_once dirname( __DIR__ ) . '/includes/admin/class-mcpwp-chatgpt-connector.php';
+
+		$controller = $this->with_scopes(
+			new Mcpwp_REST_Elementor(),
+			Mcpwp_ChatGPT_Connector::SCOPES
+		);
+		// Mirror the connector's category + role shape so a future gate that
+		// reads those fields still sees a ChatGPT-shaped record.
+		$property = new ReflectionProperty( $controller, 'current_api_key_record' );
+		$property->setAccessible( true );
+		$property->setValue(
+			$controller,
+			array(
+				'id'              => 'chatgpt-connector',
+				'label'           => 'ChatGPT connector',
+				'scopes'          => Mcpwp_ChatGPT_Connector::SCOPES,
+				'role'            => Mcpwp_ChatGPT_Connector::ROLE,
+				'tool_categories' => Mcpwp_ChatGPT_Connector::CATEGORIES,
+			)
+		);
+
+		$script = '<script>window.__chatgpt1093=1;</script><p>kept</p>';
+		$result = $controller->edit_widget(
+			$this->rest_request(
+				'POST',
+				'/mcpwp/v1/elementor/' . self::PAGE_ID . '/edit-widget',
+				array(
+					'id'        => self::PAGE_ID,
+					'widget_id' => 'sc82901',
+					'settings'  => array( 'html' => $script ),
+				)
+			)
+		);
+		$this->assert_ok( $result, 'connector edit_widget' );
+
+		$stored = self::find( $this->stored_tree( self::PAGE_ID ), 'sc82901' )['settings']['html'];
+		$this->assertSame( wp_kses_post( $script ), $stored );
+		$this->assertStringNotContainsString( '<script', $stored );
+	}
+
+	/**
 	 * @runInSeparateProcess
 	 * @preserveGlobalState disabled
 	 */
