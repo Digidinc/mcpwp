@@ -34,14 +34,6 @@ class Mcpwp_Admin_Requires_Write_1210_Harness {
 	}
 }
 
-/**
- * Admin Setup create-key POST surface (#1210), without the full page render.
- */
-class Mcpwp_Admin_Requires_Write_1210_Setup_Harness {
-	use Mcpwp_Api_Auth;
-	use Mcpwp_Admin_Setup_Trait;
-}
-
 final class AdminScopeRequiresWrite1210Test extends TestCase {
 
 	protected function setUp(): void {
@@ -336,7 +328,8 @@ final class AdminScopeRequiresWrite1210Test extends TestCase {
 			'mcpwp_scoped_key_scopes'          => array( 'read', 'write', 'admin' ),
 		);
 
-		$created = ( new Mcpwp_Admin_Requires_Write_1210_Setup_Harness() )->process_create_scoped_key_post();
+		( new Mcpwp_Admin() )->handle_setup_page_load();
+		$created = $this->setup_new_scoped_key_from_handler();
 
 		$this->assertIsArray( $created );
 		$this->assertArrayNotHasKey( 'error', $created );
@@ -360,9 +353,14 @@ final class AdminScopeRequiresWrite1210Test extends TestCase {
 			'mcpwp_scoped_key_categories' => array( 'content' ),
 		);
 
-		$created = ( new Mcpwp_Admin_Requires_Write_1210_Setup_Harness() )->process_create_scoped_key_post();
+		try {
+			( new Mcpwp_Admin() )->handle_setup_page_load();
+			$this->fail( 'Expected PRG redirect on invalid scopes.' );
+		} catch ( Mcpwp_Admin_1210_Test_Redirect_Signal $e ) {
+			$this->assertStringContainsString( 'page=mcpwp', $e->getMessage() );
+		}
 
-		$this->assertNull( $created );
+		$this->assertNull( $this->setup_new_scoped_key_from_handler() );
 		$this->assertSame( 'mcpwp_scoped_key_error', $GLOBALS['mcpwp_test_settings_errors'][0]['code'] ?? null );
 		$this->assertSame( 'error', $GLOBALS['mcpwp_test_settings_errors'][0]['type'] ?? null );
 		$this->assertStringContainsString( 'write', strtolower( (string) ( $GLOBALS['mcpwp_test_settings_errors'][0]['message'] ?? '' ) ) );
@@ -431,13 +429,28 @@ final class AdminScopeRequiresWrite1210Test extends TestCase {
 	 * @return void
 	 */
 	private function install_admin_post_stubs(): void {
-		$GLOBALS['mcpwp_test_settings_errors'] = array();
-		$GLOBALS['mcpwp_test_options']         = array();
-		$GLOBALS['mcpwp_test_transients']      = array();
-		$GLOBALS['mcpwp_test_current_user']    = 1;
+		$GLOBALS['mcpwp_test_settings_errors']   = array();
+		$GLOBALS['mcpwp_test_options']           = array();
+		$GLOBALS['mcpwp_test_transients']        = array();
+		$GLOBALS['mcpwp_test_current_user']      = 1;
+		$GLOBALS['mcpwp_test_valid_admin_referer'] = array( 'mcpwp_manage_scoped_keys' => true );
+
+		$mcpwp_dir = dirname( __DIR__ );
+		if ( ! defined( 'MCPWP_PLUGIN_DIR' ) ) {
+			define( 'MCPWP_PLUGIN_DIR', $mcpwp_dir . '/' );
+		}
+		foreach ( array( 'setup', 'control-room', 'chat', 'library', 'settings', 'activity', 'mupot' ) as $trait ) {
+			require_once $mcpwp_dir . '/includes/admin/traits/trait-mcpwp-admin-' . $trait . '.php';
+		}
+		require_once $mcpwp_dir . '/includes/admin/class-mcpwp-admin.php';
+		Mcpwp_Admin::reset_setup_page_request_state();
 
 		if ( ! function_exists( 'check_admin_referer' ) ) {
 			function check_admin_referer( $action = -1, $query_arg = '_wpnonce' ) {
+				$valid = ! empty( $GLOBALS['mcpwp_test_valid_admin_referer'][ $action ] );
+				if ( ! $valid ) {
+					throw new RuntimeException( 'Invalid nonce: ' . $action );
+				}
 				return true;
 			}
 		}
@@ -451,10 +464,33 @@ final class AdminScopeRequiresWrite1210Test extends TestCase {
 				);
 			}
 		}
+		if ( ! function_exists( 'get_settings_errors' ) ) {
+			function get_settings_errors() {
+				return $GLOBALS['mcpwp_test_settings_errors'] ?? array();
+			}
+		}
+		if ( ! function_exists( 'wp_safe_redirect' ) ) {
+			function wp_safe_redirect( $location, $status = 302 ) {
+				throw new Mcpwp_Admin_1210_Test_Redirect_Signal( (string) $location );
+			}
+		}
 		if ( ! function_exists( 'wp_die' ) ) {
 			function wp_die( $message = '', $title = '', $args = array() ) {
 				throw new RuntimeException( is_string( $message ) ? $message : 'wp_die' );
 			}
 		}
 	}
+
+	/**
+	 * @return array|null
+	 */
+	private function setup_new_scoped_key_from_handler() {
+		$prop = ( new ReflectionClass( Mcpwp_Admin::class ) )->getProperty( 'setup_new_scoped_key' );
+		$prop->setAccessible( true );
+
+		return $prop->getValue();
+	}
+}
+
+final class Mcpwp_Admin_1210_Test_Redirect_Signal extends RuntimeException {
 }
