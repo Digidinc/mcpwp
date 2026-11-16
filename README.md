@@ -142,7 +142,7 @@ Hermes auto-discovers every tool the site exposes. With [Tool Search](https://he
 
 Add as a custom MCP server — same URL and key in your MCP settings.
 
-### ChatGPT (Custom GPT)
+### ChatGPT
 
 Follow the [Connect ChatGPT to WordPress guide](https://mcpwp.net/connect-chatgpt-to-wordpress/).
 
