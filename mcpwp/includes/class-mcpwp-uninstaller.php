@@ -273,6 +273,7 @@ class Mcpwp_Uninstaller {
 		'mcpwp_key_hygiene_revoked',
 		'mcpwp_key_hygiene_pending',
 		'mcpwp_key_hygiene_lock',
+		'mcpwp_key_hygiene_cron_fail_count',
 		'mcpwp_settings',
 		'mcpwp_version',
 		'mcpwp_db_version',

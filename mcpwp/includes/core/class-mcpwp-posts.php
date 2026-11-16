@@ -251,7 +251,7 @@ class Mcpwp_Posts {
 		// run get_post_metadata filters, which can supply a default without a DB row.
 		$previous_raw = $wpdb->get_var(
 			$wpdb->prepare(
-				"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_thumbnail_id' ORDER BY meta_id DESC LIMIT 1",
+				"SELECT meta_value FROM {$wpdb->postmeta} WHERE post_id = %d AND meta_key = '_thumbnail_id' ORDER BY meta_id ASC LIMIT 1",
 				$post_id
 			)
 		);

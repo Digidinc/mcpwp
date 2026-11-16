@@ -3167,6 +3167,23 @@ if (! isset($GLOBALS['wpdb'])) {
             }
             if (preg_match("/^SELECT (OCTET_LENGTH\\(meta_value\\)|meta_value) FROM \\S*postmeta WHERE post_id = (\\d+) AND meta_key = '((?:[^'\\\\]|\\\\.)*)'/s", trim((string)$query), $m)) {
                 $id=(int)$m[2];$key=str_replace("\\'","'",$m[3]);
+                $order = null;
+                if (preg_match('/ORDER BY meta_id (ASC|DESC) LIMIT 1\\s*$/', (string) $query, $ord_m)) {
+                    $order = $ord_m[1];
+                }
+                if (null !== $order && ! empty($GLOBALS['_mcpwp_test_postmeta_rows'][$id][$key])) {
+                    $rows = $GLOBALS['_mcpwp_test_postmeta_rows'][$id][$key];
+                    usort(
+                        $rows,
+                        static function ($a, $b) use ($order) {
+                            $cmp = (int) $a['meta_id'] <=> (int) $b['meta_id'];
+                            return 'DESC' === $order ? -$cmp : $cmp;
+                        }
+                    );
+                    $raw = (string) $rows[0]['meta_value'];
+                    if ('meta_value'===$m[1] && preg_match('/OCTET_LENGTH\\(meta_value\\) <= (\\d+)/',$query,$bound) && strlen($raw)>(int)$bound[1]) {return null;}
+                    return 'meta_value'===$m[1]?$raw:strlen($raw);
+                }
                 if (! array_key_exists($key,$GLOBALS['_mcpwp_test_meta'][$id]??array())) {return null;}
                 $raw=(string)maybe_serialize($GLOBALS['_mcpwp_test_meta'][$id][$key]);
                 if ('meta_value'===$m[1] && preg_match('/OCTET_LENGTH\\(meta_value\\) <= (\\d+)/',$query,$bound) && strlen($raw)>(int)$bound[1]) {return null;}
@@ -3629,7 +3646,10 @@ if (! isset($GLOBALS['wpdb'])) {
             // HEX(option_value) is immune to the column's case-insensitive,
             // pad-space collation. Evaluated through update(), so every
             // concurrency hook a test arms still applies, with an exact compare.
-            if (preg_match("/^UPDATE (\\S*options) SET option_value = '((?:[^'\\\\]|\\\\.)*)' WHERE option_name = '((?:[^'\\\\]|\\\\.)*)' AND HEX\\(option_value\\) = '([0-9A-Fa-f]*)'$/s", trim((string) $query), $m)) {
+            // Parsed without a greedy value capture — large key stores exceed
+            // PCRE backtrack limits on the old single-regex path (#1198).
+            $hex_swap = self::parse_hex_option_compare_swap((string) $query);
+            if (null !== $hex_swap) {
                 // A latin1 table read over a utf8mb4 connection (#1096): the byte-exact
                 // compare can never match, though the row is unchanged.
                 if (! empty($GLOBALS['mcpwp_test_wpdb_hex_compare_blind'])) {
@@ -3638,9 +3658,9 @@ if (! isset($GLOBALS['wpdb'])) {
                 $this->exact_option_value_compare = true;
                 try {
                     return $this->update(
-                        $m[1],
-                        array('option_value' => str_replace("\\'", "'", $m[2])),
-                        array('option_name' => str_replace("\\'", "'", $m[3]), 'option_value' => (string) hex2bin($m[4]))
+                        $hex_swap['table'],
+                        array('option_value' => $hex_swap['new_value']),
+                        array('option_name' => $hex_swap['option_name'], 'option_value' => (string) hex2bin($hex_swap['expected_hex']))
                     );
                 } finally {
                     $this->exact_option_value_compare = false;
@@ -3840,6 +3860,58 @@ if (! isset($GLOBALS['wpdb'])) {
         {
             // Core: backslash-escape the LIKE metacharacters.
             return addcslashes((string) $text, '_%\\');
+        }
+
+        /**
+         * Parse UPDATE … HEX(option_value) compare-and-swap without PCRE backtracking on huge values.
+         *
+         * @param string $query Raw SQL from $wpdb->prepare().
+         * @return array{table:string,new_value:string,option_name:string,expected_hex:string}|null
+         */
+        private static function parse_hex_option_compare_swap($query)
+        {
+            $query = trim($query);
+            $and_hex = " AND HEX(option_value) = '";
+            $and_at  = strrpos($query, $and_hex);
+            if (false === $and_at || 0 !== strpos($query, 'UPDATE ')) {
+                return null;
+            }
+            if (! preg_match('/^UPDATE (\\S+options) /', $query, $table_m)) {
+                return null;
+            }
+            $hex_tail = substr($query, $and_at + strlen($and_hex));
+            if (! preg_match('/^([0-9A-Fa-f]*)\'$/s', $hex_tail, $hex_m)) {
+                return null;
+            }
+            $name_open_needle = " WHERE option_name = '";
+            $name_open_at     = strrpos(substr($query, 0, $and_at), $name_open_needle);
+            if (false === $name_open_at) {
+                return null;
+            }
+            $name_open_at += strlen($name_open_needle);
+            $name_close_at = $and_at - 1;
+            if ($name_close_at < $name_open_at || "'" !== $query[ $name_close_at ]) {
+                return null;
+            }
+            $value_open_needle = ' SET option_value = \'';
+            $value_open_at       = strpos($query, $value_open_needle);
+            if (false === $value_open_at) {
+                return null;
+            }
+            $value_open_at += strlen($value_open_needle);
+            $value_close_at = $name_open_at - strlen($name_open_needle) - 1;
+            if ($value_close_at < $value_open_at || "'" !== $query[ $value_close_at ]) {
+                return null;
+            }
+            $unescape = static function ($sql) {
+                return str_replace("\\'", "'", $sql);
+            };
+            return array(
+                'table'        => $table_m[1],
+                'new_value'    => $unescape(substr($query, $value_open_at, $value_close_at - $value_open_at)),
+                'option_name'  => $unescape(substr($query, $name_open_at, $name_close_at - $name_open_at)),
+                'expected_hex' => $hex_m[1],
+            );
         }
     }
 

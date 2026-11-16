@@ -760,7 +760,7 @@ final class KeyHygieneSweepTest extends TestCase {
 
 	public function test_the_uninstaller_removes_the_sweep_options(): void {
 		require_once dirname( __DIR__ ) . '/includes/class-mcpwp-uninstaller.php';
-		foreach ( array( Mcpwp_Key_Hygiene::FLAG, Mcpwp_Key_Hygiene::STATE_OPTION, Mcpwp_Key_Hygiene::REVOKED_OPTION, Mcpwp_Key_Hygiene::PENDING_OPTION, Mcpwp_Key_Hygiene::LOCK ) as $option ) {
+		foreach ( array( Mcpwp_Key_Hygiene::FLAG, Mcpwp_Key_Hygiene::STATE_OPTION, Mcpwp_Key_Hygiene::REVOKED_OPTION, Mcpwp_Key_Hygiene::PENDING_OPTION, Mcpwp_Key_Hygiene::LOCK, Mcpwp_Key_Hygiene::CRON_FAIL_OPTION ) as $option ) {
 			$this->assertContains( $option, Mcpwp_Uninstaller::LEGACY_OPTIONS );
 		}
 		$this->assertContains( Mcpwp_Key_Hygiene::DISMISSED_META, Mcpwp_Uninstaller::LEGACY_USER_META );
@@ -889,6 +889,26 @@ final class KeyHygieneSweepTest extends TestCase {
 		}
 	}
 
+	public function test_cron_time_budget_stays_below_sweep_lock_lifetime(): void {
+		$this->assertLessThan(
+			Mcpwp_Key_Hygiene::SWEEP_LOCK_LIFETIME - Mcpwp_Key_Hygiene::CRON_LOCK_HEADROOM,
+			Mcpwp_Key_Hygiene::CRON_TIME_BUDGET,
+			'A cron pass must finish well inside the sweep lock lifetime.'
+		);
+		$this->assertSame( Mcpwp_OAuth_Clients::LOCK_TTL, Mcpwp_Key_Hygiene::SWEEP_LOCK_LIFETIME );
+	}
+
+	public function test_cron_does_not_reschedule_when_store_is_unreadable(): void {
+		update_option( Mcpwp_Key_Store::OPTION, self::CORRUPT );
+		wp_schedule_single_event( time() + 5, Mcpwp_Key_Hygiene::CRON_HOOK );
+		$this->assertNotFalse( wp_next_scheduled( Mcpwp_Key_Hygiene::CRON_HOOK ) );
+
+		Mcpwp_Key_Hygiene::maybe_run_for_cron();
+
+		$this->assertFalse( wp_next_scheduled( Mcpwp_Key_Hygiene::CRON_HOOK ) );
+		$this->assertFalse( Mcpwp_Key_Hygiene::is_done() );
+	}
+
 	public function test_cron_path_completes_record_vs_record_work(): void {
 		$other = wp_hash_password( 'other-secret-cron' );
 		update_option(
@@ -979,5 +999,45 @@ final class KeyHygieneSweepTest extends TestCase {
 		$this->assertNotEmpty( $this->by_id( 'k_b' )['revoked_at'] );
 		$auth = new Mcpwp_Key_Hygiene_Test_Auth();
 		$this->assertNull( $auth->scoped_lookup( $legacy ) );
+	}
+
+	public function test_cron_sized_budget_still_revokes_a_proven_match(): void {
+		$legacy = md5( 'legacy-cron-revoke-headroom' );
+		update_option( 'mcpwp_api_key', $legacy );
+		update_option(
+			Mcpwp_Key_Store::OPTION,
+			array( $this->record( 'k_match', 'Match', md5( $legacy ) ) )
+		);
+
+		add_action(
+			'mcpwp_key_hygiene_between_checks',
+			static function () {
+				usleep( 3_500_000 );
+			}
+		);
+
+		$outcome = Mcpwp_Key_Hygiene::run( Mcpwp_Key_Hygiene::CRON_TIME_BUDGET, Mcpwp_Key_Hygiene::CRON_MAX_CHECKS );
+		unset( $GLOBALS['mcpwp_test_actions']['mcpwp_key_hygiene_between_checks'] );
+
+		$this->assertNotEmpty( $this->by_id( 'k_match' )['revoked_at'], 'Cron revoke headroom must not strand a proven match.' );
+		$this->assertContains( $outcome['status'], array( 'partial', 'done' ) );
+	}
+
+	public function test_cron_null_outcome_schedules_with_exponential_backoff(): void {
+		delete_option( Mcpwp_Key_Hygiene::CRON_FAIL_OPTION );
+		update_option( Mcpwp_Key_Store::OPTION, array( $this->record( 'k1', 'One', md5( 'one' ) ) ) );
+		wp_schedule_single_event( time(), Mcpwp_Key_Hygiene::CRON_HOOK );
+
+		add_filter( 'mcpwp_test_key_hygiene_run_throw', '__return_true' );
+		Mcpwp_Key_Hygiene::maybe_run_for_cron();
+		remove_filter( 'mcpwp_test_key_hygiene_run_throw', '__return_true' );
+
+		$next = wp_next_scheduled( Mcpwp_Key_Hygiene::CRON_HOOK );
+		$this->assertIsInt( $next );
+		$this->assertGreaterThanOrEqual( time() + ( Mcpwp_Key_Hygiene::CRON_SPACING * 2 ), $next );
+		$this->assertSame( 1, (int) get_option( Mcpwp_Key_Hygiene::CRON_FAIL_OPTION ) );
+
+		delete_option( Mcpwp_Key_Hygiene::CRON_FAIL_OPTION );
+		wp_clear_scheduled_hook( Mcpwp_Key_Hygiene::CRON_HOOK );
 	}
 }

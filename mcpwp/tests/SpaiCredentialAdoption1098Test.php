@@ -192,7 +192,7 @@ final class SpaiCredentialAdoption1098Test extends TestCase {
 		update_option( 'spai_settings', array( 'enable_logging' => true ) );
 
 		Mcpwp_Activator::activate();
-		$minted = (string) get_transient( 'mcpwp_new_api_key' );
+		$minted = (string) get_transient( 'mcpwp_new_api_key_0' );
 		Mcpwp_Migrate::run();
 		$this->assertNotSame( $hash, get_option( 'mcpwp_api_key' ), 'Precondition: the migration did not copy it.' );
 		$this->assertSame( array(), $this->records_with_hash( $hash ), 'Precondition: no scoped record (the #1098 P1).' );

@@ -2453,8 +2453,8 @@ class Mcpwp_Activator {
 		if ( Mcpwp_Key_State::is_fresh_site() ) {
 			$api_key = self::generate_api_key();
 			update_option( 'mcpwp_api_key', wp_hash_password( $api_key ) );
-			// Store plain text temporarily so admin can see it on first visit
-			set_transient( 'mcpwp_new_api_key', $api_key, HOUR_IN_SECONDS );
+			// Store plain text temporarily so admin can see it on first visit (user bucket 0 — pre-login activation).
+			set_transient( 'mcpwp_new_api_key_0', $api_key, 60 );
 			// Flag first activation for welcome flow
 			update_option( 'mcpwp_first_activation', true );
 		}

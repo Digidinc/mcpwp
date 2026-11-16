@@ -324,17 +324,37 @@
 		var tabs   = tabNav.querySelectorAll('.mcpwp-inner-tab');
 		var panels = document.querySelectorAll('.mcpwp-inner-tab-content');
 
+		function activateConnectTab(target) {
+			if (!target) {
+				return;
+			}
+			tabs.forEach(function(t) {
+				t.classList.toggle('nav-tab-active', t.getAttribute('data-tab') === target);
+			});
+			panels.forEach(function(p) {
+				p.style.display = p.id === 'mcpwp-tab-' + target ? '' : 'none';
+			});
+		}
+
+		var allowedTabs = {};
+		tabs.forEach(function(t) {
+			var id = t.getAttribute('data-tab');
+			if (id) {
+				allowedTabs[id] = true;
+			}
+		});
+		var params = new URLSearchParams(window.location.search);
+		var setupTab = params.get('setup_tab');
+		if (setupTab && allowedTabs[setupTab]) {
+			activateConnectTab(setupTab);
+		}
+
 		tabs.forEach(function(tab) {
 			tab.addEventListener('click', function(e) {
 				e.preventDefault();
 				var target = this.getAttribute('data-tab');
 
-				tabs.forEach(function(t) { t.classList.remove('nav-tab-active'); });
-				this.classList.add('nav-tab-active');
-
-				panels.forEach(function(p) {
-					p.style.display = p.id === 'mcpwp-tab-' + target ? '' : 'none';
-				});
+				activateConnectTab(target);
 				if (window.posthog) {
 					posthog.capture('ai_client_tab_switched', { client: target });
 				}

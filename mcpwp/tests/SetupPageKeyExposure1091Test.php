@@ -194,6 +194,8 @@ final class SetupPageKeyExposure1091Test extends TestCase {
 		$this->assertStringContainsString( 'Create a Claude Desktop key', $html );
 		$this->assertStringContainsString( 'name="mcpwp_create_scoped_key"', $html );
 		$this->assertStringContainsString( 'value="Claude Desktop"', $html );
+		$this->assertStringContainsString( 'Prefer WordPress sign-in above when it is available', $html );
+		$this->assertStringContainsString( 'name="mcpwp_setup_return_tab" value="claude-desktop"', $html );
 		$this->assertStringContainsString( 'id="mcpwp-claude-desktop-oauth-url"', $html );
 		if ( ! preg_match( '#id="mcpwp-claude-desktop-oauth-url">(.*?)</pre>#s', $html, $m ) ) {
 			$this->fail( 'Claude Desktop OAuth URL block missing.' );
@@ -252,6 +254,32 @@ final class SetupPageKeyExposure1091Test extends TestCase {
 		// The connection step status immediately before that body is Done.
 		$this->assertMatchesRegularExpression(
 			'#mcpwp-onboarding-step__status is-done">\s*Done\s*</span>\s*<div class="mcpwp-onboarding-step__body">\s*<strong>Make your first connection</strong>#s',
+			$html
+		);
+	}
+
+	public function test_claude_desktop_helper_omits_oauth_prefer_when_local_oauth_is_off(): void {
+		$html = $this->render( array(), null, null, '', false );
+
+		$this->assertStringNotContainsString( 'Prefer WordPress sign-in above when it is available', $html );
+		$this->assertStringContainsString( 'Elementor template access', $html );
+		$this->assertStringContainsString( 'including Elementor templates and theme builder', $html );
+	}
+
+	public function test_setup_tab_query_shows_claude_desktop_panel_without_js(): void {
+		$_GET['setup_tab'] = 'claude-desktop';
+		try {
+			$html = $this->render( array() );
+		} finally {
+			unset( $_GET['setup_tab'] );
+		}
+
+		$this->assertMatchesRegularExpression(
+			'#data-tab="claude-desktop"[^>]*nav-tab-active|nav-tab-active[^>]*data-tab="claude-desktop"#',
+			$html
+		);
+		$this->assertStringNotContainsString(
+			'id="mcpwp-tab-claude-desktop" style="display:none;"',
 			$html
 		);
 	}
