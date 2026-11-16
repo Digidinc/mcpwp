@@ -5,7 +5,14 @@
 #
 # Run it before merging a release PR. It uses throwaway containers with unique names
 # and removes them (by exact name) at the end. It never touches wp-rig-* containers
-# except to COPY Elementor Pro out of wp-rig-wp-dev (read-only).
+# (forbidden; use SMOKE_ELEMENTOR_PRO_DIR for an optional Pro copy).
+#
+# Environment:
+#   SMOKE_WPCLI_MEMORY   PHP memory_limit for every WP-CLI invocation (default 512M).
+#                        Applied with `php -d memory_limit=...` before wp-settings.php loads.
+#   SMOKE_ELEMENTOR_PRO_DIR   Host path to an elementor-pro plugin directory; copied into
+#                        the throwaway site when set and readable. Without it, Pro is not
+#                        exercised and the summary prints PRO PATHS: NOT EXERCISED.
 #
 # Usage:
 #   bash scripts/release_smoke.sh --candidate mcpwp/scripts/mcpwp-selfhosted-3.14.9.zip
@@ -33,6 +40,8 @@ BASELINE_URL="https://updates.mcpwp.net/mcpwp-latest.zip"
 PORT=9190
 NAME=smk
 KEEP=0
+SMOKE_WPCLI_MEMORY="${SMOKE_WPCLI_MEMORY:-512M}"
+PRO_PATHS_EXERCISED=0
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -41,7 +50,7 @@ while [[ $# -gt 0 ]]; do
 		--port) PORT="${2:-}"; shift 2 ;;
 		--name) NAME="${2:-}"; shift 2 ;;
 		--keep) KEEP=1; shift ;;
-		-h|--help) sed -n 2,30p "$0"; exit 0 ;;
+		-h|--help) sed -n 2,35p "$0"; exit 0 ;;
 		*) echo "Unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -80,7 +89,7 @@ wpcli() {
 	docker run --rm -i --network "$NET" --volumes-from "$WP" --user 33:33 \
 		-e WORDPRESS_DB_HOST="$DB:3306" -e WORDPRESS_DB_USER=smk -e WORDPRESS_DB_PASSWORD=smkpass \
 		-e WORDPRESS_DB_NAME=smk_wp -e HOME=/tmp \
-		wordpress:cli wp "$@"
+		wordpress:cli php -d "memory_limit=${SMOKE_WPCLI_MEMORY}" /usr/local/bin/wp "$@"
 }
 
 # Match helpers. Never pipe into `grep -q` under pipefail: grep exits on the first match,
@@ -98,6 +107,57 @@ check() {
 	fi
 }
 
+# Create a scoped smoke key via the plugin's supported store path (preserves activation keys).
+# Prints the plaintext key on success; writes SMK:ERROR:... on failure paths wp eval can emit.
+smoke_create_scoped_key_php() {
+	local label="$1"
+	local scopes_csv="$2"
+	local role="${3:-admin}"
+	cat <<PHP
+\$admin = get_user_by( 'login', 'admin' );
+if ( ! \$admin ) {
+	echo 'SMK:ERROR:no_admin';
+	return;
+}
+wp_set_current_user( \$admin->ID );
+if ( ! class_exists( 'Mcpwp_REST_MCP' ) ) {
+	echo 'SMK:ERROR:no_mcp_class';
+	return;
+}
+\$c = new Mcpwp_REST_MCP();
+if ( ! method_exists( \$c, 'create_scoped_api_key' ) ) {
+	echo 'SMK:ERROR:no_creator';
+	return;
+}
+\$scopes = array_map( 'trim', explode( ',', '${scopes_csv}' ) );
+\$r = \$c->create_scoped_api_key( '${label}', \$scopes, '${role}' );
+wp_set_current_user( 0 );
+if ( isset( \$r['error'] ) || empty( \$r['key'] ) ) {
+	echo 'SMK:ERROR:' . wp_json_encode( \$r );
+	return;
+}
+echo \$r['key'];
+PHP
+}
+
+create_smoke_key() {
+	local label="$1" scopes="$2" role="${3:-admin}"
+	local out key_line
+	out=$(wpcli eval "$(smoke_create_scoped_key_php "$label" "$scopes" "$role")" 2>"$WORK/key-err.log" || true)
+	key_line=$(grep -E '^mcpwp_' <<<"$out" | tail -1)
+	if [[ -n "$key_line" ]]; then
+		echo "$key_line"
+		return 0
+	fi
+	if grep -q 'SMK:ERROR:no_creator' <<<"$out"; then
+		die2 "baseline $(wpcli plugin get mcpwp --field=version 2>/dev/null) has no create_scoped_api_key(); cannot seed smoke key without legacy store wipe (forbidden)"
+	fi
+	if grep -q 'SMK:ERROR:' <<<"$out"; then
+		die2 "scoped key creation failed: $(grep 'SMK:ERROR:' <<<"$out" | tail -1)"
+	fi
+	die2 "scoped key creation produced no mcpwp_* key"
+}
+
 rpc() {
 	# rpc METHOD PARAMS_JSON  -> prints JSON-RPC response body
 	curl -s -m 60 -X POST "$URL/wp-json/mcpwp/v1/mcp" -H "X-API-Key: $KEY" \
@@ -105,12 +165,19 @@ rpc() {
 		-d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$1\",\"params\":$2}"
 }
 
+rpc_with_key() {
+	local key="$1" method="$2" params="$3"
+	curl -s -m 60 -X POST "$URL/wp-json/mcpwp/v1/mcp" -H "X-API-Key: $key" \
+		-H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+		-d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$method\",\"params\":$params}"
+}
+
 tool() {
 	# tool NAME ARGS_JSON -> prints the tool's first text content (the JSON payload)
 	rpc tools/call "{\"name\":\"$1\",\"arguments\":$2}" | jq -r '.result.content[0].text // .error.message // empty'
 }
 
-echo "==> Throwaway site $WP on $URL"
+echo "==> Throwaway site $WP on $URL (WP-CLI memory ${SMOKE_WPCLI_MEMORY})"
 docker network create "$NET" >/dev/null || die2 "docker network create"
 docker run -d --name "$DB" --network "$NET" \
 	-e MARIADB_DATABASE=smk_wp -e MARIADB_USER=smk -e MARIADB_PASSWORD=smkpass -e MARIADB_ROOT_PASSWORD=smkroot \
@@ -138,12 +205,15 @@ for p in elementor woocommerce; do
 	wpcli plugin is-active "$p" 2>/dev/null || { echo "  (warn) $p not active; continuing:"; tail -3 "$WORK/plugins.log"; }
 done
 
-if [[ -n "$(docker ps -q --filter 'name=^wp-rig-wp-dev$')" ]]; then
-	docker cp wp-rig-wp-dev:/var/www/html/wp-content/plugins/elementor-pro "$WORK/elementor-pro" >/dev/null 2>&1 \
-		&& docker cp "$WORK/elementor-pro" "$WP:/var/www/html/wp-content/plugins/elementor-pro" >/dev/null \
+if [[ -n "${SMOKE_ELEMENTOR_PRO_DIR:-}" && -d "$SMOKE_ELEMENTOR_PRO_DIR" ]]; then
+	if docker cp "$SMOKE_ELEMENTOR_PRO_DIR" "$WP:/var/www/html/wp-content/plugins/elementor-pro" \
 		&& docker exec "$WP" chown -R 33:33 /var/www/html/wp-content/plugins/elementor-pro \
-		&& wpcli plugin activate elementor-pro >/dev/null 2>&1 \
-		|| echo "  (warn) Elementor Pro copy/activate failed; continuing without it"
+		&& wpcli plugin activate elementor-pro >/dev/null 2>&1; then
+		PRO_PATHS_EXERCISED=1
+		echo "  Elementor Pro installed from SMOKE_ELEMENTOR_PRO_DIR"
+	else
+		echo "  (warn) SMOKE_ELEMENTOR_PRO_DIR copy/activate failed; continuing without Pro"
+	fi
 fi
 
 echo "==> Baseline: $BASELINE_URL"
@@ -154,8 +224,8 @@ wpcli plugin install /var/www/html/wp-content/smk-baseline.zip --activate >/dev/
 BASE_VER=$(wpcli plugin get mcpwp --field=version)
 echo "    baseline version $BASE_VER"
 
-KEY="mcpwp_$(openssl rand -hex 24)"
-wpcli eval "update_option('mcpwp_api_key', wp_hash_password('$KEY'));" >/dev/null || die2 "create API key"
+KEY=$(create_smoke_key "Release smoke" "read,write,admin" admin)
+READONLY_KEY=$(create_smoke_key "Release smoke read-only" "read" admin)
 
 # Seed content on the baseline so the upgrade has something to migrate.
 SEED_ID=$(wpcli post create --post_type=page --post_status=publish --post_title='Smoke seed page' --porcelain)
@@ -178,6 +248,13 @@ SI=$(curl -s -m 30 "$URL/wp-json/mcpwp/v1/site-info" -H "X-API-Key: $KEY")
 # 2. Unauthenticated call is refused.
 code=$(curl -s -o /dev/null -w '%{http_code}' "$URL/wp-json/mcpwp/v1/pages")
 [[ "$code" == "401" || "$code" == "403" ]]; check "no key -> 401/403 (got $code)" $?
+
+# 2b. Read-only key cannot create pages.
+ro_create=$(rpc_with_key "$READONLY_KEY" tools/call '{"name":"wp_create_page","arguments":{"title":"RO denied","status":"draft"}}')
+ro_denied=1
+echo "$ro_create" | jq -e '.result.isError == true' >/dev/null 2>&1 && ro_denied=0
+echo "$ro_create" | jq -e '.error' >/dev/null 2>&1 && ro_denied=0
+check "read-only key denied wp_create_page" $ro_denied "$ro_create"
 
 # 3. MCP handshake + tools/list.
 INIT=$(rpc initialize '{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"smoke","version":"1"}}')
@@ -235,6 +312,11 @@ LOG=$(docker exec "$WP" sh -c 'cat /var/www/html/wp-content/debug.log 2>/dev/nul
 [[ -z "$LOG" ]]; check "debug.log clean of mcpwp PHP errors" $? "$LOG"
 
 echo ""
+if [[ "$PRO_PATHS_EXERCISED" -eq 1 ]]; then
+	echo "PRO PATHS: exercised"
+else
+	echo "PRO PATHS: NOT EXERCISED"
+fi
 echo "==> $BASE_VER -> $CAND_VER: $PASS passed, $FAIL failed"
 if [[ "$FAIL" -gt 0 ]]; then
 	printf '    failed: %s\n' "${FAILED_NAMES[@]}"
