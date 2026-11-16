@@ -157,6 +157,12 @@ MCPWP can send anonymous usage data from your WordPress server to PostHog when t
 
 == Changelog ==
 
+= 3.14.19 =
+* fix: **auth:** admin scope requires write scope on API keys and the key form says so ([#1220](https://github.com/Digidinc/mcpwp/issues/1220))
+* fix: **content:** report content that WordPress removed on save ([#1214](https://github.com/Digidinc/mcpwp/issues/1214))
+* fix: **elementor:** create library templates as draft by default and report the saved status ([#1215](https://github.com/Digidinc/mcpwp/issues/1215))
+* fix: small follow-ups (thumbnail restore row order, key hygiene cron backoff, setup page Claude Desktop tab) ([#1221](https://github.com/Digidinc/mcpwp/issues/1221))
+
 = 3.14.18 =
 * fix: **elementor:** collision-only part id remap on apply ([#826](https://github.com/Digidinc/mcpwp/issues/826)) ([#1204](https://github.com/Digidinc/mcpwp/issues/1204))
 * fix: **setup:** do not embed the admin key in a copyable connector URL and correct the connector key wording ([#1203](https://github.com/Digidinc/mcpwp/issues/1203))
