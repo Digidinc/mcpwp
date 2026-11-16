@@ -600,114 +600,32 @@ function _n($single, $plural, $number)
     return 1 === (int) $number ? $single : $plural;
 }
 
-if (! function_exists('mcpwp_test_default_post_allowed_html')) {
-    /**
-     * Core-like 'post' allow-list for the harness. Real wp_kses_allowed_html('post')
-     * starts from this shape; scoped filters (#1212 SVG) merge into it. Without a
-     * baseline, a filter that only ADDS tags would leave ordinary <p> stripped.
-     */
-    function mcpwp_test_default_post_allowed_html()
-    {
-        return array(
-            'p'      => array( 'class' => true ),
-            'a'      => array( 'href' => true, 'title' => true ),
-            'strong' => array(),
-            'em'     => array(),
-            'span'   => array( 'class' => true ),
-            'div'    => array( 'class' => true ),
-            'br'     => array(),
-            'b'      => array(),
-            'i'      => array(),
-            'ul'     => array(),
-            'ol'     => array(),
-            'li'     => array(),
-            'h1'     => array(),
-            'h2'     => array(),
-            'h3'     => array(),
-            'h4'     => array(),
-            'h5'     => array(),
-            'h6'     => array(),
-            'img'    => array( 'src' => true, 'alt' => true, 'width' => true, 'height' => true ),
-        );
-    }
-}
-
 if (! function_exists('wp_kses_post')) {
     function wp_kses_post($text)
     {
         // Enough of core's behaviour for tests to tell "post-safe HTML" from
         // "left as sent": script/style blocks and their bodies are removed.
-        // Honour wp_kses_allowed_html('post') so a scoped filter (#1212 safe
-        // SVG) can temporarily widen the tag set the way real core does.
+        // Tag names are lowercased like real wp_kses() (#1212 review).
         if (! is_string($text)) {
             return $text;
         }
         $text = preg_replace('#<(script|style)\b[^>]*>.*?</\1>#is', '', $text);
-
-        // Ensure the harness has a core-like base map before filters run, so an
-        // additive SVG filter cannot replace the entire post allow-list.
-        if (empty($GLOBALS['mcpwp_test_allowed_html']) || ! is_array($GLOBALS['mcpwp_test_allowed_html'])) {
-            $GLOBALS['mcpwp_test_allowed_html'] = mcpwp_test_default_post_allowed_html();
-        }
-
-        $allowed = function_exists('wp_kses_allowed_html')
-            ? wp_kses_allowed_html('post')
-            : $GLOBALS['mcpwp_test_allowed_html'];
-        if (! is_array($allowed)) {
-            $allowed = mcpwp_test_default_post_allowed_html();
-        }
-
-        $allowed_lower = array();
-        foreach ($allowed as $tag => $attrs) {
-            $allowed_lower[ strtolower( (string) $tag ) ] = is_array( $attrs ) ? $attrs : array();
-        }
-
-        // Denylist matching the pre-#1212 harness: strip these unless a
-        // wp_kses_allowed_html filter has explicitly allowed them (safe SVG).
-        // Unknown custom elements (style-guide, script-loader) are left alone —
-        // that is what KsesRawTextStripTest pins, and what the old denylist did.
-        $deny = array(
-            'svg' => true, 'path' => true, 'g' => true, 'circle' => true, 'rect' => true,
-            'line' => true, 'polyline' => true, 'polygon' => true, 'ellipse' => true,
-            'defs' => true, 'lineargradient' => true, 'radialgradient' => true, 'stop' => true,
-            'use' => true, 'foreignobject' => true,
-            'iframe' => true, 'object' => true, 'embed' => true, 'math' => true,
-            'base' => true, 'meta' => true, 'link' => true, 'input' => true, 'button' => true,
-            'textarea' => true, 'select' => true, 'option' => true, 'form' => true,
-            'animate' => true, 'animatetransform' => true, 'set' => true,
-        );
-
-        $text = preg_replace_callback(
-            '#</?([a-zA-Z][a-zA-Z0-9:-]*)(?=[\s/>])[^<>]*>#',
-            static function ($m) use ($allowed_lower, $deny) {
-                $name = strtolower($m[1]);
-                $local = $name;
-                if (false !== strpos($name, ':')) {
-                    $parts = explode(':', $name, 2);
-                    $local = $parts[1];
-                }
-                if (isset($allowed_lower[ $name ]) || isset($allowed_lower[ $local ])) {
-                    return $m[0];
-                }
-                if (isset($deny[ $name ]) || isset($deny[ $local ])) {
-                    return '';
-                }
-                return $m[0];
-            },
-            $text
-        );
-
-        // Attr pass: same as the pre-#1212 harness — strip on* and javascript:/
-        // vbscript:/data: URL values. Fine-grained SVG attr policy lives in
-        // Mcpwp_Content_Kses::scrub_dangerous_svg() (production), not here.
-        // Matching attrs inside tags only (stop at next '<') keeps
-        // title="<style>" and comment bodies intact for KsesRawTextStripTest.
+        // #829 review round 3: enough more of core's 'post' allow-list that a
+        // test can see what real kses removes. Tags outside it (svg,
+        // iframe, object, embed, math, form controls) lose the tag and keep
+        // their text; every on* event attribute is removed; a
+        // javascript:/vbscript:/data: URL in any attribute is emptied.
+        // script/style keep the block rule above, which KsesRawTextStripTest
+        // pins; a tag name must be followed by whitespace, '/' or '>', and
+        // the attribute scan stops at the next '<', so it stays linear.
+        $text = preg_replace('#</?(svg|path|g|circle|rect|line|polyline|polygon|ellipse|defs|lineargradient|radialgradient|stop|use|iframe|object|embed|math|base|meta|link|input|button|textarea|select|option|form)(?=[\s/>])[^<>]*>#i', '', $text);
         $text = preg_replace_callback(
             '#<([a-zA-Z][a-zA-Z0-9:-]*)(\s[^<>]*)(/?)>#',
             static function ($m) {
+                $tag = strtolower($m[1]);
                 $attrs = preg_replace('#\s+on[a-z]+\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]*)#i', '', $m[2]);
                 $attrs = preg_replace('#(=\s*["\']?)\s*(javascript|vbscript|data)\s*:[^"\'\s>]*#i', '$1', $attrs);
-                return '<' . $m[1] . $attrs . $m[3] . '>';
+                return '<' . $tag . $attrs . $m[3] . '>';
             },
             $text
         );
@@ -4694,6 +4612,24 @@ function mcpwp_test_apply_page_template($post_id, $postarr, $wp_error)
     return null;
 }
 
+
+if (! function_exists('mcpwp_test_maybe_kses_post_content')) {
+    /**
+     * Mirror core content_save_pre → wp_filter_post_kses for principals
+     * without unfiltered_html (#1212 reporting tests need a core-like save).
+     */
+    function mcpwp_test_maybe_kses_post_content($content)
+    {
+        if (! is_string($content)) {
+            return $content;
+        }
+        if (function_exists('current_user_can') && current_user_can('unfiltered_html')) {
+            return $content;
+        }
+        return wp_kses_post($content);
+    }
+}
+
 function wp_insert_post($postarr, $wp_error = false)
 {
     $is_update = ! empty($postarr['ID']) && ! empty($GLOBALS['_mcpwp_test_posts'][ (int) $postarr['ID'] ]);
@@ -4708,6 +4644,10 @@ function wp_insert_post($postarr, $wp_error = false)
     $filtered = apply_filters('wp_insert_post_data', $postarr, $postarr, $postarr, $is_update);
     if (is_array($filtered)) {
         $postarr = $filtered;
+    }
+
+    if (isset($postarr['post_content'])) {
+        $postarr['post_content'] = mcpwp_test_maybe_kses_post_content($postarr['post_content']);
     }
 
     $next_id = empty($GLOBALS['_mcpwp_test_posts']) ? 1 : max(array_map('intval', array_keys($GLOBALS['_mcpwp_test_posts']))) + 1;
@@ -4787,6 +4727,10 @@ function wp_update_post($postarr, $wp_error = false)
     $filtered = apply_filters('wp_insert_post_data', $postarr, $postarr, $postarr, true);
     if (is_array($filtered)) {
         $postarr = $filtered;
+    }
+
+    if (isset($postarr['post_content'])) {
+        $postarr['post_content'] = mcpwp_test_maybe_kses_post_content($postarr['post_content']);
     }
 
     $post = $GLOBALS['_mcpwp_test_posts'][ $post_id ];
@@ -5819,7 +5763,102 @@ require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-autofix.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-search-performance.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-seo-flags.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-woocommerce-seo.php';
-require_once dirname(__DIR__) . '/includes/core/class-mcpwp-content-kses.php';
+
+if (! class_exists('WP_HTML_Tag_Processor', false)) {
+    /**
+     * Minimal WP_HTML_Tag_Processor stand-in for inventory reporting tests (#1212).
+     * Walks open tags and exposes attribute names; does not mutate HTML.
+     */
+    class WP_HTML_Tag_Processor {
+        private $html;
+        private $offset = 0;
+        private $tag = null;
+        private $attr_names = array();
+
+        public function __construct($html)
+        {
+            $this->html = (string) $html;
+        }
+
+        public function next_tag($query = null)
+        {
+            $html = $this->html;
+            $len  = strlen($html);
+            while ($this->offset < $len) {
+                $lt = strpos($html, '<', $this->offset);
+                if (false === $lt) {
+                    $this->offset = $len;
+                    return false;
+                }
+                $next = $lt + 1;
+                if ($next >= $len) {
+                    $this->offset = $len;
+                    return false;
+                }
+                $c = $html[$next];
+                if ('/' === $c || '!' === $c || '?' === $c) {
+                    $gt = strpos($html, '>', $lt);
+                    $this->offset = false === $gt ? $len : $gt + 1;
+                    continue;
+                }
+                if (! preg_match('/\G<([a-zA-Z][a-zA-Z0-9:-]*)/', $html, $m, 0, $lt)) {
+                    $this->offset = $lt + 1;
+                    continue;
+                }
+                $tag = $m[1];
+                $after_name = $lt + 1 + strlen($tag);
+                $gt = strpos($html, '>', $after_name);
+                if (false === $gt) {
+                    $this->offset = $len;
+                    return false;
+                }
+                $attr_blob = substr($html, $after_name, $gt - $after_name);
+                $this->tag = strtoupper($tag);
+                $this->attr_names = array();
+                if (preg_match_all('/([^\s=\/>]+)(\s*=\s*("[^"]*"|\'[^\']*\'|[^\s>]*))?/', $attr_blob, $am)) {
+                    foreach ($am[1] as $name) {
+                        $name = trim($name);
+                        if ('' === $name || '/' === $name) {
+                            continue;
+                        }
+                        $this->attr_names[] = $name;
+                    }
+                }
+                $this->offset = $gt + 1;
+                if (is_array($query) && isset($query['tag_name'])) {
+                    if (strtolower($tag) !== strtolower((string) $query['tag_name'])) {
+                        continue;
+                    }
+                } elseif (is_string($query) && '' !== $query) {
+                    if (strtolower($tag) !== strtolower($query)) {
+                        continue;
+                    }
+                }
+                return true;
+            }
+            return false;
+        }
+
+        public function get_tag()
+        {
+            return $this->tag;
+        }
+
+        public function get_attribute_names_with_prefix($prefix)
+        {
+            $prefix = (string) $prefix;
+            $out = array();
+            foreach ($this->attr_names as $name) {
+                if (0 === stripos($name, $prefix)) {
+                    $out[] = $name;
+                }
+            }
+            return $out;
+        }
+    }
+}
+
+require_once dirname(__DIR__) . '/includes/core/class-mcpwp-content-modified-report.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-pages.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-posts.php';
 require_once dirname(__DIR__) . '/includes/core/class-mcpwp-drafts.php';

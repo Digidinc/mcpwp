@@ -771,25 +771,6 @@ never an entry condition: a site ranking only at positions 64-91 must still get 
 Credentials are BYO via WP Admin > Integrations > DataForSEO (login + password, HTTP Basic).
 Nothing runs on a timer — every lookup is an explicit user or agent action.
 
-## Content body sanitisation (#808 / #1212)
-
-Post/page/block content writes go through `Mcpwp_Sanitization::sanitize_content_body()`
-(not bare `wp_kses_post()`):
-
-1. Strip `<script>`/`<style>` whole (tag + body) so source never survives as visible text (#808).
-2. Run kses under a **scoped** `wp_kses_allowed_html` filter that adds a safe inline-SVG
-   allow-list (`Mcpwp_Content_Kses`) for write-scope keys without `unfiltered_html`, then
-   remove the filter — never global, never applied to Elementor meta (#1179) or Kit CSS.
-3. After the write, compare the caller's input to `get_post_field( 'post_content' )` and,
-   when the sanitiser removed anything security-relevant, return `content_modified.removed`
-   as `{kind, count}` only (e.g. `script`, `on_attributes`, `svg_elements`) — never echo the
-   pre-sanitisation payload. Response `content` / parsed blocks always come from the saved row.
-
-Safe SVG tags: `svg`, `g`, `path`, `circle`, `rect`, `line`, `polyline`, `polygon`, `ellipse`,
-`defs`, `linearGradient`, `radialGradient`, `stop`, `title`, `desc`, `use` (same-document
-`#fragment` hrefs only). Scrub strips `foreignObject`, `on*`, `style` attrs with `url()`,
-`javascript:`/`data:` URLs, and external `<use>` references.
-
 ## Elementor Data Format
 
 See `docs/ELEMENTOR_WIDGET_REFERENCE.md` for the complete widget key reference.

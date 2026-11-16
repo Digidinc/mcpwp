@@ -314,13 +314,6 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 			);
 		}
 
-		// #1212: same content-body sanitiser as page/post writers (safe SVG +
-		// script/style strip). Apply before safety/approval so the queued and
-		// stored body match what will persist.
-		$submitted_content = is_string( $content ) ? $content : (string) $content;
-		$sanitized_body    = $this->sanitize_content_body( $submitted_content );
-		$content           = $sanitized_body['content'];
-
 		$safety_report = $this->build_block_safety_report( $content );
 		if ( ! $safety_report['pass'] ) {
 			if ( ! $allow_restricted_blocks ) {
@@ -409,10 +402,8 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 			);
 		}
 
-		// Re-parse to return the saved state (#1212: never echo pre-kses input).
-		$saved_content = class_exists( 'Mcpwp_Content_Kses', false )
-			? Mcpwp_Content_Kses::saved_post_content( $post_id )
-			: (string) get_post_field( 'post_content', $post_id );
+		// Re-parse to return the saved state.
+		$saved_content = get_post_field( 'post_content', $post_id );
 		$parsed        = $this->clean_blocks( parse_blocks( $saved_content ) );
 
 		$this->log_activity( 'set_blocks', $request, array( 'post_id' => $post_id ) );
@@ -425,10 +416,8 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 			'safety'                     => $safety_report,
 			'approved_restricted_blocks' => ( ! $safety_report['pass'] && $allow_restricted_blocks ),
 		);
-		if ( ! empty( $sanitized_body['removed'] ) ) {
-			$payload['sanitized'] = $sanitized_body['removed'];
-		}
-		$this->attach_content_modified_report( $payload, $submitted_content, (int) $post_id );
+		// #1212: report only — do not re-kses the assembled body here.
+		$this->attach_content_modified_report( $payload, $content, (int) $post_id );
 
 		return $this->success_response( $payload );
 	}
@@ -706,11 +695,7 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 			return $this->error_response( 'section_patch_failed', 'Could not replace the selected section.', 500 );
 		}
 
-		$patched_content     = serialize_blocks( $patched_blocks );
-		// #1212: sanitise the assembled body the same way as set_blocks.
-		$submitted_patched   = $patched_content;
-		$sanitized_patched   = $this->sanitize_content_body( $patched_content );
-		$patched_content     = $sanitized_patched['content'];
+		$patched_content    = serialize_blocks( $patched_blocks );
 		$approval_required = null === $request->get_param( 'approval_required' )
 			? true
 			: rest_sanitize_boolean( $request->get_param( 'approval_required' ) );
@@ -791,22 +776,16 @@ class Mcpwp_REST_Blocks extends Mcpwp_REST_API {
 
 		$this->log_activity( 'patch_block_section', $request, array( 'post_id' => $post_id ) );
 
-		$saved_content = class_exists( 'Mcpwp_Content_Kses', false )
-			? Mcpwp_Content_Kses::saved_post_content( $post_id )
-			: (string) get_post_field( 'post_content', $post_id );
-
 		$payload = array(
 			'success'     => true,
 			'post_id'     => (int) $post_id,
 			'selector'    => $selector,
 			'path'        => $path,
-			'block_count' => count( $this->clean_blocks( parse_blocks( $saved_content ) ) ),
+			'block_count' => count( $this->clean_blocks( parse_blocks( $patched_content ) ) ),
 			'safety'      => $safety_report,
 		);
-		if ( ! empty( $sanitized_patched['removed'] ) ) {
-			$payload['sanitized'] = $sanitized_patched['removed'];
-		}
-		$this->attach_content_modified_report( $payload, $submitted_patched, (int) $post_id );
+		// #1212: report only — sanitising path unchanged from main.
+		$this->attach_content_modified_report( $payload, $patched_content, (int) $post_id );
 
 		return $this->success_response( $payload );
 	}
