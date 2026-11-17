@@ -70,12 +70,16 @@ and by design it cannot be reached by a web request.)
 
 ### Generate API Key
 ```bash
-docker exec wp-rig-wp-dev bash -c 'php -r "
-require_once \"/var/www/html/wp-load.php\";
-\$key = \"mcpwp_\" . bin2hex(random_bytes(24));
-update_option(\"mcpwp_api_key\", wp_hash_password(\$key));
-echo \$key;
-"'
+docker exec wp-rig-wp-dev wp eval '
+$admin = get_user_by( "login", "admin" );
+if ( ! $admin ) { fwrite( STDERR, "no WordPress user with login \"admin\" — create one or pick another login\n" ); exit( 1 ); }
+wp_set_current_user( $admin->ID );
+$c = new Mcpwp_REST_MCP();
+$r = $c->create_scoped_api_key( "CLI key", array( "read", "write", "admin" ), "admin" );
+wp_set_current_user( 0 );
+if ( empty( $r["key"] ) ) { fwrite( STDERR, wp_json_encode( $r ) ); exit(1); }
+echo $r["key"];
+' --allow-root
 ```
 
 ### Quick Test
