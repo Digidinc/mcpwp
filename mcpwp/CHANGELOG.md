@@ -5,6 +5,25 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.20](https://github.com/Digidinc/mcpwp/compare/v3.14.19...v3.14.20) (2026-11-16)
+
+
+### Bug Fixes
+
+* admin header badge uses approved ochre M/W mark ([#1232](https://github.com/Digidinc/mcpwp/issues/1232)) ([#1235](https://github.com/Digidinc/mcpwp/issues/1235)) ([e4c8bcc](https://github.com/Digidinc/mcpwp/commit/e4c8bccc29eab2e443537c8adca6f2274c22d3f1))
+* **elementor:** use WordPress preview links instead of editor iframe param ([#1229](https://github.com/Digidinc/mcpwp/issues/1229)) ([e029b5c](https://github.com/Digidinc/mcpwp/commit/e029b5c450ebdd9cfdb154866e1ec04f7d713a9b))
+* preserve page template on Elementor saves unless requested ([#1234](https://github.com/Digidinc/mcpwp/issues/1234)) ([d11616d](https://github.com/Digidinc/mcpwp/commit/d11616d1040bcb17ef5f79c14a3538e84bd9e928))
+* setup scoped-key follow-ups ([#1222](https://github.com/Digidinc/mcpwp/issues/1222)) ([#1223](https://github.com/Digidinc/mcpwp/issues/1223)) ([c77d5cd](https://github.com/Digidinc/mcpwp/commit/c77d5cde0c808650b2e615454092bcbe23df2c7b))
+
+### Upgrade Notes
+
+* Elementor saves and page builds now preserve the existing page template unless you request a template explicitly. New pages are no longer forced to `elementor_header_footer`; request `elementor_canvas` when you want a canvas page. Existing pages are not migrated or changed by this update.
+* Elementor save/build/apply responses report the template before and after the operation and whether it was requested. Page-creation tools keep the existing `template` slug field and add `template_change`.
+* Draft preview links now use WordPress's preview route and require a signed-in user with permission to edit the draft. They are not public share links.
+* Replaying a submitted Setup key-creation form is refused for 24 hours (12 hours in 3.14.19). The approved ochre M/W mark appears in the admin headers and Freemius icon; directory/updater icon assets are unchanged.
+* Known template limitation: `wp_apply_elementor_part` in insert mode still ignores an explicit template ([#1237](https://github.com/Digidinc/mcpwp/issues/1237)). The completed template verification does not establish approval-queued writes, classic themes or Elementor Pro/Theme Builder compatibility; review a draft on your own theme before changing live pages.
+* Build/brand follow-ups remain tracked in [#1238](https://github.com/Digidinc/mcpwp/issues/1238). Analytics behavior is unchanged; the admin-browser SDK disclosure follow-up is [#1239](https://github.com/Digidinc/mcpwp/issues/1239).
+
 ## [3.14.19](https://github.com/Digidinc/mcpwp/compare/v3.14.18...v3.14.19) (2026-11-16)
 
 
