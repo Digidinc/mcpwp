@@ -2773,15 +2773,26 @@ class Mcpwp_REST_Elementor_Pro extends Mcpwp_REST_API {
 				$this->log_activity( 'apply_part', $request, null, 400 );
 				return $this->error_response_from_wp_error( $validated );
 			}
-			return $this->error_response(
-				'invalid_template',
+			$this->log_activity( 'apply_part', $request, null, 400 );
+			$error = new WP_Error(
+				'template_not_applicable_in_insert_mode',
 				__( 'The template argument applies only to mode=replace; it was not applied in insert mode.', 'mcpwp' ),
-				400,
 				array(
+					'status'   => 400,
 					'mode'     => $mode,
 					'template' => $validated,
 				)
 			);
+			if ( class_exists( 'Mcpwp_Error_Hints' ) ) {
+				$error = Mcpwp_Error_Hints::enhance_error(
+					$error,
+					array(
+						'mode'     => $mode,
+						'template' => $validated,
+					)
+				);
+			}
+			return $error;
 		}
 
 		$allow_duplicate = $request->get_param( 'allow_duplicate' );

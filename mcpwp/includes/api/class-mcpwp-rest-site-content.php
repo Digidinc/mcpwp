@@ -1483,6 +1483,13 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			if ( ! $this->requester_can_read_post( $post ) ) {
 				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
 			}
+			if ( 'trash' === $post->post_status ) {
+				return $this->error_response(
+					'post_in_trash',
+					__( 'Trashed content has no preview URL to fetch.', 'mcpwp' ),
+					400
+				);
+			}
 			// #1030 round-3 review, test_every_id_shaped_route_is_declared_
 			// or_explicitly_excluded: 'id' resolves ANY post type with no
 			// category check at all — a content-only key could render a
@@ -1949,8 +1956,8 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 
 		$window = $this->window_html_response( $html, $offset, $max_bytes );
 
-		$result = array(
-			'url'            => Mcpwp_Elementor_Preview_Url::for_post( $post_id ),
+		$preview_url = Mcpwp_Elementor_Preview_Url::for_post( $post_id );
+		$result      = array(
 			'status_code'    => 200,
 			'html'           => $window['html'],
 			'length'         => $window['length'],
@@ -1969,6 +1976,9 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				'This post is not published, so it was rendered in-process without the theme. Only the assigned templates are known; publish it (or fetch its public URL) to see which templates render.'
 			),
 		);
+		if ( '' !== $preview_url ) {
+			$result['url'] = $preview_url;
+		}
 
 		// This method exists BECAUSE host-level gates intercept a loopback
 		// fetch — the branch that chooses it says so. Working around a gate and

@@ -51,6 +51,7 @@ final class RestSiteContentTest extends TestCase {
 
 	private const PUBLISHED_ID = 101;
 	private const DRAFT_ID     = 202;
+	private const TRASHED_ID   = 303;
 
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options']            = array();
@@ -81,6 +82,17 @@ final class RestSiteContentTest extends TestCase {
 					'post_status'  => 'draft',
 					'post_content' => 'A secret zebra body.',
 					'post_excerpt' => 'Secret excerpt.',
+				)
+			),
+			self::TRASHED_ID   => new WP_Post(
+				array(
+					'ID'           => self::TRASHED_ID,
+					'post_type'    => 'page',
+					'post_title'   => 'Trashed plain page',
+					'post_name'    => 'trashed-page',
+					'post_status'  => 'trash',
+					'post_content' => 'Trashed body.',
+					'post_excerpt' => '',
 				)
 			),
 		);
@@ -303,6 +315,28 @@ final class RestSiteContentTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $resp );
 		$this->assertSame( 'not_found', $resp->get_error_code() );
 		$this->assertSame( 404, $resp->get_error_data()['status'] );
+	}
+
+	public function test_rendered_html_trashed_non_elementor_write_key_refuses_fetch(): void {
+		$controller = new Mcpwp_REST_Site_Content();
+		$created    = $controller->create_scoped_api_key(
+			'test key',
+			array( 'write' ),
+			'custom',
+			array( 'site', 'content' )
+		);
+		$request    = new WP_REST_Request(
+			'GET',
+			'/mcpwp/v1/rendered-html',
+			array( 'id' => self::TRASHED_ID ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->verdict = $controller->verify_api_key( $request );
+		$resp          = $this->dispatch( $controller, 'get_rendered_html', $request );
+
+		$this->assertInstanceOf( WP_Error::class, $resp );
+		$this->assertSame( 'post_in_trash', $resp->get_error_code() );
+		$this->assertSame( 400, $resp->get_error_data()['status'] );
 	}
 
 	// ── post-meta: non-public meta gated to write scope ──────────────────

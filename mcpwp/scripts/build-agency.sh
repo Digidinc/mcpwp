@@ -50,11 +50,10 @@ cp -a "$PLUGIN_DIR" "$DEST"
 
 # Remove WP.org banner/icon assets (not needed in plugin zip)
 rm -f "$DEST"/assets/banner-*.png
-# Icon files stay in the zip (admin header + Freemius). This build drops
-# includes/freemius-init.php (the only shipped code that names the 256px PNG).
-# class-mcpwp-admin-brand.php still names assets/mcpwp-mark-ochre.svg in every
-# build. Only build-freemius.sh keeps freemius-init.php. scripts/verify_plugin_assets.sh
-# fails the build if a shipped PHP reference is missing its file.
+# Drop WP.org directory icon PNGs; this build has no Freemius SDK or freemius-init.php.
+# Shipped PHP still references assets/mcpwp-mark-ochre.svg and
+# assets/mcpwp-mark-ochre-256.png via includes/admin/class-mcpwp-admin-brand.php;
+# those files stay. scripts/verify_plugin_assets.sh fails if a reference is missing.
 rm -f "$DEST"/assets/icon-*.png
 rm -f "$DEST"/assets/screenshot-*.png
 rm -f "$DEST"/assets/icon.svg

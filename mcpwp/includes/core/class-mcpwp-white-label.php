@@ -21,6 +21,25 @@ class Mcpwp_White_Label {
 	 *
 	 * @return array
 	 */
+	/**
+	 * Logo URL safe for admin CSS/img (http/https only, must survive esc_url).
+	 *
+	 * @param string $url Raw setting value.
+	 * @return string Sanitized URL or empty when unusable.
+	 */
+	public static function safe_logo_url( $url ) {
+		$url = (string) $url;
+		if ( '' === $url || ! filter_var( $url, FILTER_VALIDATE_URL ) ) {
+			return '';
+		}
+		$scheme = wp_parse_url( $url, PHP_URL_SCHEME );
+		if ( ! is_string( $scheme ) || ! in_array( strtolower( $scheme ), array( 'http', 'https' ), true ) ) {
+			return '';
+		}
+		$esc = esc_url( $url );
+		return '' !== $esc ? $esc : '';
+	}
+
 	public static function defaults(): array {
 		return array(
 			'enabled'             => false,
@@ -80,9 +99,9 @@ class Mcpwp_White_Label {
 			$merged['primary_color'] = '#7c3aed';
 		}
 
-		// Validate logo URL (must be https or empty).
-		if ( ! empty( $merged['logo_url'] ) && ! filter_var( $merged['logo_url'], FILTER_VALIDATE_URL ) ) {
-			$merged['logo_url'] = '';
+		// Validate logo URL: http(s) only, and a value esc_url() will emit in CSS.
+		if ( ! empty( $merged['logo_url'] ) ) {
+			$merged['logo_url'] = self::safe_logo_url( $merged['logo_url'] );
 		}
 
 		update_option( self::OPTION_KEY, $merged );
@@ -127,7 +146,7 @@ class Mcpwp_White_Label {
 		}
 
 		$primary = esc_attr( $s['primary_color'] );
-		$logo    = esc_url( $s['logo_url'] );
+		$logo    = self::safe_logo_url( $s['logo_url'] );
 
 		echo '<style id="mcpwp-white-label-css">';
 		echo '.mcpwp-product-name { display: none !important; }';

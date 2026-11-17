@@ -957,14 +957,16 @@ trait Mcpwp_Elementor_Reader_Trait {
 			$fallback_text = $this->extract_text_from_elementor_json( $elementor_data_raw );
 
 			$response = array(
-				'id'          => $post_id,
-				'title'       => get_the_title( $post_id ),
-				'format'      => $format,
-				'text'        => $fallback_text ? mb_substr( $fallback_text, 0, 500 ) : '',
-				'stats'       => $stats,
-				'preview_url' => $preview_url,
-				'message'     => __( 'Elementor returned empty HTML. Text extracted from raw data instead. The page may need to be saved in the Elementor editor first.', 'mcpwp' ),
+				'id'      => $post_id,
+				'title'   => get_the_title( $post_id ),
+				'format'  => $format,
+				'text'    => $fallback_text ? mb_substr( $fallback_text, 0, 500 ) : '',
+				'stats'   => $stats,
+				'message' => __( 'Elementor returned empty HTML. Text extracted from raw data instead. The page may need to be saved in the Elementor editor first.', 'mcpwp' ),
 			);
+			if ( '' !== $preview_url ) {
+				$response['preview_url'] = $preview_url;
+			}
 
 			return $response;
 		}
@@ -974,12 +976,14 @@ trait Mcpwp_Elementor_Reader_Trait {
 
 		// Build response based on requested format.
 		$response = array(
-			'id'          => $post_id,
-			'title'       => get_the_title( $post_id ),
-			'format'      => $format,
-			'stats'       => $stats,
-			'preview_url' => $preview_url,
+			'id'     => $post_id,
+			'title'  => get_the_title( $post_id ),
+			'format' => $format,
+			'stats'  => $stats,
 		);
+		if ( '' !== $preview_url ) {
+			$response['preview_url'] = $preview_url;
+		}
 
 		switch ( $format ) {
 			case 'html':

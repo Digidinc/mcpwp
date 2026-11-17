@@ -52,16 +52,10 @@ final class ElementorPreviewUrlTest extends TestCase {
 		$this->assertSame( '', Mcpwp_Elementor_Preview_Url::for_post( 999999 ) );
 	}
 
-	public function test_trashed_post_returns_edit_url_not_preview_link(): void {
+	public function test_trashed_post_has_no_browseable_preview_url(): void {
 		$this->seed_post( 'trash' );
 
-		$url = Mcpwp_Elementor_Preview_Url::for_post( self::PAGE_ID );
-
-		$this->assertStringContainsString( 'post.php', $url );
-		$this->assertStringContainsString( 'post=' . self::PAGE_ID, $url );
-		$this->assertStringContainsString( 'action=edit', $url );
-		$this->assertStringNotContainsString( 'preview=true', $url );
-		$this->assertStringNotContainsString( 'elementor-preview', $url );
+		$this->assertSame( '', Mcpwp_Elementor_Preview_Url::for_post( self::PAGE_ID ) );
 	}
 
 	public function test_production_code_does_not_build_elementor_preview_query_arg(): void {

@@ -121,16 +121,34 @@ expect fail "no arguments" bash "$VERIFY"
 expect fail "nonexistent zip" bash "$VERIFY" "$WORK/nope.zip"
 
 # macOS often ships shasum without sha256sum; the verifier must still digest marks.
-if command -v shasum >/dev/null 2>&1; then
-	shim_hash="$WORK/shim_hash"
-	mkdir -p "$shim_hash"
-	cat > "$shim_hash/sha256sum" <<'SH'
+shim_hash="$WORK/shim_hash"
+mkdir -p "$shim_hash"
+cat > "$shim_hash/sha256sum" <<'SH'
 #!/usr/bin/env bash
 exit 127
 SH
-	chmod +x "$shim_hash/sha256sum"
-	expect pass "shasum -a 256 fallback for brand mark digest" env PATH="$shim_hash:$PATH" bash "$VERIFY" "$WORK/full.zip"
-fi
+chmod +x "$shim_hash/sha256sum"
+expect pass "shasum -a 256 fallback for brand mark digest" env PATH="$shim_hash:$PATH" bash "$VERIFY" "$WORK/full.zip"
+
+# Wrong digest for a shipped mark must fail (not silently pass).
+bad_zip="$WORK/bad-hash.zip"
+bad_tree="$WORK/bad-tree"
+mkdir -p "$bad_tree"
+unzip -q "$WORK/full.zip" -d "$bad_tree"
+printf 'not-the-approved-png' > "$bad_tree/mcpwp/assets/mcpwp-mark-ochre-256.png"
+( cd "$bad_tree" && zip -qr "$bad_zip" mcpwp )
+expect fail "wrong brand mark sha256" bash "$VERIFY" "$bad_zip"
+
+# Neither sha256sum nor shasum: digest step must fail closed.
+no_hash_shim="$WORK/no_hash_shim"
+mkdir -p "$no_hash_shim"
+printf '#!/usr/bin/env bash\nexit 127\n' > "$no_hash_shim/sha256sum"
+printf '#!/usr/bin/env bash\nexit 127\n' > "$no_hash_shim/shasum"
+chmod +x "$no_hash_shim/sha256sum" "$no_hash_shim/shasum"
+PATH_saved="$PATH"
+PATH="$no_hash_shim"
+expect fail "no sha256sum or shasum available" bash "$VERIFY" "$WORK/full.zip"
+PATH="$PATH_saved"
 
 echo "verify_plugin_assets_test: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

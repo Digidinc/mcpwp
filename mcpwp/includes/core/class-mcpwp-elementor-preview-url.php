@@ -36,10 +36,9 @@ class Mcpwp_Elementor_Preview_Url {
 			return is_string( $url ) ? $url : '';
 		}
 
-		// Trashed posts: core preview links 404 in the browser — send editors to wp-admin.
+		// Trashed posts: no safe browser-openable view (preview 404s; core edit screen 409s).
 		if ( 'trash' === $post->post_status ) {
-			$edit = admin_url( 'post.php?post=' . (int) $post->ID . '&action=edit' );
-			return is_string( $edit ) ? $edit : '';
+			return '';
 		}
 
 		$url = get_preview_post_link( $post );

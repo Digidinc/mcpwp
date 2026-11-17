@@ -119,6 +119,35 @@ final class AdminBrandMark1232Test extends TestCase {
 		delete_option( Mcpwp_White_Label::OPTION_KEY );
 	}
 
+	public function test_unsafe_logo_url_does_not_hide_default_mark_or_emit_css_logo() {
+		if ( ! function_exists( 'esc_js' ) ) {
+			function esc_js( $text ) { // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+				return (string) $text;
+			}
+		}
+
+		update_option(
+			Mcpwp_White_Label::OPTION_KEY,
+			array(
+				'enabled'     => true,
+				'agency_name' => 'Agency',
+				'logo_url'    => 'javascript:alert(1)',
+			)
+		);
+
+		$markup = Mcpwp_Admin_Brand::get_header_badge_markup();
+		$this->assertStringContainsString( 'dashicons-shield', $markup );
+		$this->assertStringNotContainsString( 'mcpwp-logo-mark', $markup );
+
+		ob_start();
+		Mcpwp_White_Label::inject_admin_branding_css();
+		$css = (string) ob_get_clean();
+		$this->assertStringNotContainsString( 'javascript:', $css );
+		$this->assertStringNotContainsString( '.mcpwp-logo::before', $css );
+
+		delete_option( Mcpwp_White_Label::OPTION_KEY );
+	}
+
 	public function test_hide_mcpwp_branding_without_logo_shows_neutral_shield_not_product_mark() {
 		update_option(
 			Mcpwp_White_Label::OPTION_KEY,

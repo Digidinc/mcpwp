@@ -446,10 +446,6 @@ final class PageTemplatePreserve1231RouteMcpTest extends TestCase {
 		$this->assertSame( 'elementor_header_footer', $structured['template_change']['after'] );
 	}
 
-	/**
-	 * @runInSeparateProcess
-	 * @preserveGlobalState disabled
-	 */
 	public function test_rest_apply_part_insert_refuses_template_argument(): void {
 		$request = new WP_REST_Request( 'POST', '/mcpwp/v1/elementor/parts/1/apply' );
 		$request->set_url_params( array( 'id' => 1 ) );
@@ -468,8 +464,11 @@ final class PageTemplatePreserve1231RouteMcpTest extends TestCase {
 
 		$result = ( new Mcpwp_REST_Elementor_Pro( $mock ) )->apply_part( $request );
 		$this->assertInstanceOf( WP_Error::class, $result );
-		$this->assertSame( 'invalid_template', $result->get_error_code() );
-		$this->assertSame( 400, $result->get_error_data()['status'] );
+		$this->assertSame( 'template_not_applicable_in_insert_mode', $result->get_error_code() );
+		$data = $result->get_error_data();
+		$this->assertSame( 400, $data['status'] );
+		$this->assertSame( 'insert', $data['mode'] );
+		$this->assertSame( 'elementor_canvas', $data['template'] );
 	}
 
 	public function test_rest_apply_part_insert_refuses_invalid_template_argument(): void {
@@ -490,6 +489,10 @@ final class PageTemplatePreserve1231RouteMcpTest extends TestCase {
 		$this->assertSame( 400, $result->get_error_data()['status'] );
 	}
 
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
 	public function test_mcp_apply_tools_accept_template_parameter(): void {
 		foreach ( array( 'wp_apply_elementor_template', 'wp_apply_elementor_archetype', 'wp_apply_elementor_part' ) as $tool ) {
 			$payload = $this->mcp_call(
