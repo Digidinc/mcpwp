@@ -51,7 +51,8 @@ final class RestSiteContentTest extends TestCase {
 
 	private const PUBLISHED_ID = 101;
 	private const DRAFT_ID     = 202;
-	private const TRASHED_ID   = 303;
+	private const TRASHED_ID            = 303;
+	private const TRASHED_ELEMENTOR_ID  = 304;
 
 	protected function setUp(): void {
 		$GLOBALS['mcpwp_test_options']            = array();
@@ -84,7 +85,7 @@ final class RestSiteContentTest extends TestCase {
 					'post_excerpt' => 'Secret excerpt.',
 				)
 			),
-			self::TRASHED_ID   => new WP_Post(
+			self::TRASHED_ID           => new WP_Post(
 				array(
 					'ID'           => self::TRASHED_ID,
 					'post_type'    => 'page',
@@ -95,7 +96,20 @@ final class RestSiteContentTest extends TestCase {
 					'post_excerpt' => '',
 				)
 			),
+			self::TRASHED_ELEMENTOR_ID => new WP_Post(
+				array(
+					'ID'           => self::TRASHED_ELEMENTOR_ID,
+					'post_type'    => 'page',
+					'post_title'   => 'Trashed elementor page',
+					'post_name'    => 'trashed-el',
+					'post_status'  => 'trash',
+					'post_content' => '',
+					'post_excerpt' => '',
+				)
+			),
 		);
+
+		$GLOBALS['_mcpwp_test_meta'][ self::TRASHED_ELEMENTOR_ID ]['_elementor_data'] = '[]';
 	}
 
 	// ── Helpers ──────────────────────────────────────────────────────────
@@ -337,6 +351,36 @@ final class RestSiteContentTest extends TestCase {
 		$this->assertInstanceOf( WP_Error::class, $resp );
 		$this->assertSame( 'post_in_trash', $resp->get_error_code() );
 		$this->assertSame( 400, $resp->get_error_data()['status'] );
+	}
+
+	/**
+	 * @runInSeparateProcess
+	 * @preserveGlobalState disabled
+	 */
+	public function test_rendered_html_trashed_elementor_write_key_renders_in_process(): void {
+		require_once dirname( __DIR__ ) . '/tests/fixtures/elementor-render-doubles.php';
+		\Elementor\Plugin::$instance = new \Elementor\Plugin();
+		$GLOBALS['mcpwp_test_render_html'] = '<div class="trashed-el">builder</div>';
+
+		$controller = new Mcpwp_REST_Site_Content();
+		$created    = $controller->create_scoped_api_key(
+			'test key',
+			array( 'write' ),
+			'custom',
+			array( 'site', 'content' )
+		);
+		$request    = new WP_REST_Request(
+			'GET',
+			'/mcpwp/v1/rendered-html',
+			array( 'id' => self::TRASHED_ELEMENTOR_ID ),
+			array( 'X-API-Key' => $created['key'] )
+		);
+		$this->verdict = $controller->verify_api_key( $request );
+		$resp          = $this->dispatch( $controller, 'get_rendered_html', $request );
+
+		$this->assertInstanceOf( WP_REST_Response::class, $resp );
+		$this->assertSame( 200, $resp->get_status() );
+		$this->assertStringContainsString( 'trashed-el', $resp->get_data()['html'] );
 	}
 
 	// ── post-meta: non-public meta gated to write scope ──────────────────

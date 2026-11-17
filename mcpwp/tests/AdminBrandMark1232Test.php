@@ -148,6 +148,51 @@ final class AdminBrandMark1232Test extends TestCase {
 		delete_option( Mcpwp_White_Label::OPTION_KEY );
 	}
 
+	public function test_save_settings_stores_logo_url_with_raw_ampersands_in_query() {
+		Mcpwp_White_Label::save_settings(
+			array(
+				'enabled'     => true,
+				'agency_name' => 'Agency',
+				'logo_url'    => 'https://cdn.example/l.png?w=64&h=64',
+			)
+		);
+
+		$stored = Mcpwp_White_Label::get_settings()['logo_url'];
+		$this->assertSame( 'https://cdn.example/l.png?w=64&h=64', $stored );
+		$this->assertStringNotContainsString( '&#038;', $stored );
+		$this->assertStringNotContainsString( '&amp;', $stored );
+
+		delete_option( Mcpwp_White_Label::OPTION_KEY );
+	}
+
+	public function test_css_logo_url_preserves_ampersand_and_escapes_quotes_for_url() {
+		if ( ! function_exists( 'esc_js' ) ) {
+			function esc_js( $text ) { // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+				return (string) $text;
+			}
+		}
+
+		$logo = 'https://cdn.example/logo.png?x=1&y="2"';
+		update_option(
+			Mcpwp_White_Label::OPTION_KEY,
+			array(
+				'enabled'     => true,
+				'agency_name' => 'Agency',
+				'logo_url'    => $logo,
+			)
+		);
+
+		ob_start();
+		Mcpwp_White_Label::inject_admin_branding_css();
+		$css = (string) ob_get_clean();
+
+		$this->assertStringContainsString( 'https://cdn.example/logo.png?x=1&y=', $css );
+		$this->assertStringContainsString( 'y=\\"2\\"', $css );
+		$this->assertStringNotContainsString( '&#038;', $css );
+
+		delete_option( Mcpwp_White_Label::OPTION_KEY );
+	}
+
 	public function test_hide_mcpwp_branding_without_logo_shows_neutral_shield_not_product_mark() {
 		update_option(
 			Mcpwp_White_Label::OPTION_KEY,

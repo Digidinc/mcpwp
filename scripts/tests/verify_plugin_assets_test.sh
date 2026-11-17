@@ -139,16 +139,85 @@ printf 'not-the-approved-png' > "$bad_tree/mcpwp/assets/mcpwp-mark-ochre-256.png
 ( cd "$bad_tree" && zip -qr "$bad_zip" mcpwp )
 expect fail "wrong brand mark sha256" bash "$VERIFY" "$bad_zip"
 
-# Neither sha256sum nor shasum: digest step must fail closed.
+# sha256sum absent: wrong mark digest via shasum fallback must still fail.
+expect fail "wrong brand mark via shasum fallback" env PATH="$shim_hash:$PATH" bash "$VERIFY" "$bad_zip"
+
+# Neither sha256sum nor shasum: digest step must fail closed (keep bash/unzip/grep on PATH).
 no_hash_shim="$WORK/no_hash_shim"
 mkdir -p "$no_hash_shim"
 printf '#!/usr/bin/env bash\nexit 127\n' > "$no_hash_shim/sha256sum"
 printf '#!/usr/bin/env bash\nexit 127\n' > "$no_hash_shim/shasum"
 chmod +x "$no_hash_shim/sha256sum" "$no_hash_shim/shasum"
 PATH_saved="$PATH"
-PATH="$no_hash_shim"
-expect fail "no sha256sum or shasum available" bash "$VERIFY" "$WORK/full.zip"
-PATH="$PATH_saved"
+expect fail "no sha256sum or shasum available" env PATH="$no_hash_shim:$PATH_saved" bash "$VERIFY" "$WORK/full.zip"
+
+# Mutation probes — the suite must fail when the verifier is weakened.
+run_mutated_suite() {
+	local label="$1"
+	local mutated="$WORK/verify_mutated.sh"
+	cp "$VERIFY" "$mutated"
+	case "$label" in
+		"fail-open when no hash tool")
+			sed -i 's/got_sha="$(unzip -p "$zip" "$mark_path" | sha256_digest)"/got_sha="$want_sha" # mutated: skip digest/' "$mutated"
+			;;
+		"skip mark digest comparison")
+			sed -i 's/\[\[ "$got_sha" != "$want_sha" \]\]/false/' "$mutated"
+			;;
+		*)
+			echo "not ok: unknown mutation $label" >&2
+			FAIL=$((FAIL + 1))
+			return
+			;;
+	esac
+	local mpass=0 mfail=0 got=0
+	case "$label" in
+		"fail-open when no hash tool")
+			if env PATH="$no_hash_shim:$PATH_saved" bash "$mutated" "$WORK/full.zip" > "$WORK/mut-out" 2>&1; then
+				got=0
+			else
+				got=$?
+			fi
+			if [[ "$got" -eq 0 ]]; then
+				mpass=1
+			else
+				mfail=1
+				echo "not ok: mutation probe $label (weakened verifier still failed; exit $got)" >&2
+				sed 's/^/    /' "$WORK/mut-out" >&2
+			fi
+			;;
+		"skip mark digest comparison")
+			if bash "$mutated" "$bad_zip" > "$WORK/mut-out" 2>&1; then
+				got=0
+			else
+				got=$?
+			fi
+			if [[ "$got" -eq 0 ]]; then
+				mpass=1
+			else
+				mfail=1
+				echo "not ok: mutation probe $label (weakened verifier still failed; exit $got)" >&2
+				sed 's/^/    /' "$WORK/mut-out" >&2
+			fi
+			if env PATH="$shim_hash:$PATH" bash "$mutated" "$bad_zip" > "$WORK/mut-out" 2>&1; then
+				got=0
+			else
+				got=$?
+			fi
+			if [[ "$got" -eq 0 ]]; then
+				mpass=$((mpass + 1))
+			else
+				mfail=$((mfail + 1))
+				echo "not ok: mutation probe $label shasum path (weakened verifier still failed; exit $got)" >&2
+				sed 's/^/    /' "$WORK/mut-out" >&2
+			fi
+			;;
+	esac
+	PASS=$((PASS + mpass))
+	FAIL=$((FAIL + mfail))
+}
+
+run_mutated_suite "fail-open when no hash tool"
+run_mutated_suite "skip mark digest comparison"
 
 echo "verify_plugin_assets_test: $PASS passed, $FAIL failed"
 [[ "$FAIL" -eq 0 ]]

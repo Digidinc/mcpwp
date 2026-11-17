@@ -1483,13 +1483,6 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 			if ( ! $this->requester_can_read_post( $post ) ) {
 				return $this->error_response( 'not_found', __( 'Post not found.', 'mcpwp' ), 404 );
 			}
-			if ( 'trash' === $post->post_status ) {
-				return $this->error_response(
-					'post_in_trash',
-					__( 'Trashed content has no preview URL to fetch.', 'mcpwp' ),
-					400
-				);
-			}
 			// #1030 round-3 review, test_every_id_shaped_route_is_declared_
 			// or_explicitly_excluded: 'id' resolves ANY post type with no
 			// category check at all — a content-only key could render a
@@ -1515,11 +1508,18 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset, '', $post );
 			} else {
 				// Draft/pending — WordPress preview link (not editor iframe param).
-				$url = Mcpwp_Elementor_Preview_Url::for_post( $post );
+				$url = Mcpwp_Elementor_Preview_Url::for_post( $post_id );
 			}
 		}
 
 		if ( empty( $url ) ) {
+			if ( $post instanceof WP_Post && 'trash' === $post->post_status ) {
+				return $this->error_response(
+					'post_in_trash',
+					__( 'Trashed content has no preview URL to fetch.', 'mcpwp' ),
+					400
+				);
+			}
 			return $this->error_response( 'missing_param', __( 'Either id or url is required.', 'mcpwp' ), 400 );
 		}
 

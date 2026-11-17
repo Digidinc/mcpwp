@@ -17,6 +17,10 @@ namespace Elementor {
 		public function get_builder_content( $post_id, $with_css = false ) {
 			return '';
 		}
+
+		public function get_builder_content_for_display( $post_id, $with_css = false ) {
+			return (string) ( $GLOBALS['mcpwp_test_render_html'] ?? '<div>elementor-in-process</div>' );
+		}
 	}
 
 	class Plugin {
