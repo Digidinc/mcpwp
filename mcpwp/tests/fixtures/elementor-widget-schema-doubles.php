@@ -20,6 +20,26 @@
  * @package MCPWP
  */
 
+namespace Elementor\Core\Frontend {
+
+	if ( ! class_exists( __NAMESPACE__ . '\\Performance', false ) ) {
+		class Performance {
+
+			public static function should_optimize_controls() {
+				return false;
+			}
+
+			public static function is_use_style_controls() {
+				return false;
+			}
+
+			public static function set_use_style_controls( $is_use ) {
+				// No-op for clean-path fixtures.
+			}
+		}
+	}
+}
+
 namespace Elementor {
 
 	class Mcpwp_Schema_Fake_Widget {
@@ -42,6 +62,25 @@ namespace Elementor {
 
 		public function get_controls() {
 			return $this->controls;
+		}
+
+		public function get_stack() {
+			$tabs = array( 'content' => array( 'label' => 'Content' ) );
+			foreach ( $this->controls as $control ) {
+				if ( ! is_array( $control ) || ! empty( $control['is_internal'] ) ) {
+					continue;
+				}
+				$tab = isset( $control['tab'] ) ? (string) $control['tab'] : 'content';
+				if ( ! isset( $tabs[ $tab ] ) ) {
+					$tabs[ $tab ] = array( 'label' => ucfirst( $tab ) );
+				}
+			}
+
+			return array(
+				'controls'       => $this->controls,
+				'style_controls' => array(),
+				'tabs'           => $tabs,
+			);
 		}
 	}
 
