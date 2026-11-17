@@ -471,7 +471,7 @@ trait Mcpwp_Free_Tools_Elementor_Trait {
 
 		$tools[] = $this->define_tool(
 			'wp_get_widget_schema',
-			'Get the detailed controls schema for a specific Elementor widget type. Returns all valid control keys grouped by tab (content, style, advanced) with types, labels, defaults, and options. If Elementor built controls in frontend-optimized mode, the response includes controls_optimized and warning — tabs/labels may be unreliable; prefer listed keys or wp_elementor_widget_help.',
+			'Get the detailed controls schema for a specific Elementor widget type. Returns all valid control keys grouped by tab (content, style, advanced) with types, labels, defaults, and options. Use this to discover valid settings keys before building pages.',
 			array(
 				'widget_type' => array(
 					'type'        => 'string',

@@ -760,7 +760,7 @@ trait Mcpwp_Elementor_Reader_Trait {
 			}
 
 			if ( null !== $fields ) {
-				$result = array_intersect_key( $result, array_flip( $fields ) );
+				$result = $this->mcpwp_elementor_schema_apply_fields_projection( $result, $fields );
 			}
 
 			return $result;
@@ -768,82 +768,89 @@ trait Mcpwp_Elementor_Reader_Trait {
 
 		$controls           = $widget->get_controls();
 		$controls_optimized = $this->mcpwp_elementor_widget_controls_look_optimized( $widget, $controls );
+		$restore_style_controls = null;
 		if ( $controls_optimized ) {
-			$this->mcpwp_elementor_schema_enable_style_controls();
-			$controls = $widget->get_controls();
+			$restore_style_controls = $this->mcpwp_elementor_schema_begin_style_controls_recovery();
+			$controls               = $widget->get_controls();
 		}
 
-		$grouped = array();
+		try {
+			$grouped = array();
 
-		foreach ( $controls as $key => $control ) {
-			// Skip internal/hidden controls.
-			if ( ! empty( $control['is_internal'] ) ) {
-				continue;
+			foreach ( $controls as $key => $control ) {
+				// Skip internal/hidden controls.
+				if ( ! empty( $control['is_internal'] ) ) {
+					continue;
+				}
+
+				$tab = isset( $control['tab'] ) ? $control['tab'] : 'content';
+
+				// Narrow to one tab (#830) — never on by default.
+				if ( '' !== $tab_only && $tab !== $tab_only ) {
+					continue;
+				}
+
+				if ( ! isset( $grouped[ $tab ] ) ) {
+					$grouped[ $tab ] = array();
+				}
+
+				$entry = array(
+					'name'    => $key,
+					'type'    => isset( $control['type'] ) ? $control['type'] : 'unknown',
+					'label'   => isset( $control['label'] ) ? $control['label'] : $key,
+				);
+
+				if ( isset( $control['default'] ) && '' !== $control['default'] ) {
+					$entry['default'] = $control['default'];
+				}
+				if ( ! empty( $control['options'] ) ) {
+					$entry['options'] = $control['options'];
+				}
+				if ( ! empty( $control['selectors'] ) ) {
+					$entry['selectors'] = $control['selectors'];
+				}
+
+				$grouped[ $tab ][] = $entry;
 			}
 
-			$tab = isset( $control['tab'] ) ? $control['tab'] : 'content';
-
-			// Narrow to one tab (#830) — never on by default.
-			if ( '' !== $tab_only && $tab !== $tab_only ) {
-				continue;
-			}
-
-			if ( ! isset( $grouped[ $tab ] ) ) {
-				$grouped[ $tab ] = array();
-			}
-
-			$entry = array(
-				'name'    => $key,
-				'type'    => isset( $control['type'] ) ? $control['type'] : 'unknown',
-				'label'   => isset( $control['label'] ) ? $control['label'] : $key,
+			$result = array(
+				'widget' => $widget_type,
+				'title'  => $widget->get_title(),
+				'icon'   => $widget->get_icon(),
+				'tabs'   => $grouped,
 			);
 
-			if ( isset( $control['default'] ) && '' !== $control['default'] ) {
-				$entry['default'] = $control['default'];
+			if ( $controls_optimized ) {
+				$result['controls_optimized'] = true;
+				$result['warning']            = $this->mcpwp_elementor_schema_optimized_controls_warning();
+				if ( '' !== $tab_only && ( empty( $grouped ) || ! isset( $grouped[ $tab_only ] ) ) ) {
+					$result['tab_filter_warning'] = sprintf(
+						/* translators: %s: Elementor control tab slug (content, style, advanced) */
+						__( 'Cannot reliably filter to the "%s" tab because Elementor stripped tab metadata when this widget\'s controls were built in frontend-optimized mode. Style and advanced controls may only appear under the content tab, without correct labels.', 'mcpwp' ),
+						$tab_only
+					);
+				}
 			}
-			if ( ! empty( $control['options'] ) ) {
-				$entry['options'] = $control['options'];
+
+			// Enrich with offline reference data if available.
+			$ref = Mcpwp_Elementor_Widgets::get( $widget_type );
+			if ( $ref ) {
+				$result['description']     = $ref['description'];
+				$result['category']        = $ref['category'];
+				$result['example']         = $ref['example'];
+				$result['common_mistakes'] = $ref['common_mistakes'];
 			}
-			if ( ! empty( $control['selectors'] ) ) {
-				$entry['selectors'] = $control['selectors'];
+
+			if ( null !== $fields ) {
+				$result = $this->mcpwp_elementor_schema_apply_fields_projection( $result, $fields );
 			}
 
-			$grouped[ $tab ][] = $entry;
-		}
-
-		$result = array(
-			'widget' => $widget_type,
-			'title'  => $widget->get_title(),
-			'icon'   => $widget->get_icon(),
-			'tabs'   => $grouped,
-		);
-
-		if ( $controls_optimized ) {
-			$result['controls_optimized'] = true;
-			$result['warning']            = $this->mcpwp_elementor_schema_optimized_controls_warning();
-			if ( '' !== $tab_only && ( empty( $grouped ) || ! isset( $grouped[ $tab_only ] ) ) ) {
-				$result['tab_filter_warning'] = sprintf(
-					/* translators: %s: Elementor control tab slug (content, style, advanced) */
-					__( 'Cannot reliably filter to the "%s" tab because Elementor stripped tab metadata when this widget\'s controls were built in frontend-optimized mode. Style and advanced controls may only appear under the content tab, without correct labels.', 'mcpwp' ),
-					$tab_only
-				);
+			return $result;
+		} finally {
+			if ( null !== $restore_style_controls ) {
+				$this->mcpwp_elementor_schema_end_style_controls_recovery( $restore_style_controls );
 			}
 		}
-
-		// Enrich with offline reference data if available.
-		$ref = Mcpwp_Elementor_Widgets::get( $widget_type );
-		if ( $ref ) {
-			$result['description']     = $ref['description'];
-			$result['category']        = $ref['category'];
-			$result['example']         = $ref['example'];
-			$result['common_mistakes'] = $ref['common_mistakes'];
-		}
-
-		if ( null !== $fields ) {
-			$result = array_intersect_key( $result, array_flip( $fields ) );
-		}
-
-		return $result;
 	}
 
 	/**
@@ -1201,25 +1208,27 @@ trait Mcpwp_Elementor_Reader_Trait {
 	 * @return bool
 	 */
 	private function mcpwp_elementor_widget_controls_look_optimized( $widget, array $controls ) {
+		if ( class_exists( '\Elementor\Core\Frontend\Performance' )
+			&& method_exists( '\Elementor\Core\Frontend\Performance', 'should_optimize_controls' )
+			&& \Elementor\Core\Frontend\Performance::should_optimize_controls() ) {
+			return true;
+		}
+
 		if ( ! is_object( $widget ) || ! method_exists( $widget, 'get_stack' ) ) {
 			return false;
 		}
 
 		$stack = $widget->get_stack();
-		if ( ! is_array( $stack ) || empty( $stack['style_controls'] ) || ! is_array( $stack['style_controls'] ) ) {
+		if ( ! is_array( $stack ) ) {
 			return false;
 		}
 
-		$style_keys     = array_keys( $stack['style_controls'] );
-		$missing_styles = array_diff( $style_keys, array_keys( $controls ) );
-		if ( ! empty( $missing_styles ) ) {
-			return true;
-		}
-
-		if ( class_exists( '\Elementor\Core\Frontend\Performance' )
-			&& method_exists( '\Elementor\Core\Frontend\Performance', 'should_optimize_controls' )
-			&& \Elementor\Core\Frontend\Performance::should_optimize_controls() ) {
-			return true;
+		if ( ! empty( $stack['style_controls'] ) && is_array( $stack['style_controls'] ) ) {
+			$style_keys     = array_keys( $stack['style_controls'] );
+			$missing_styles = array_diff( $style_keys, array_keys( $controls ) );
+			if ( ! empty( $missing_styles ) ) {
+				return true;
+			}
 		}
 
 		$registered_tabs = array();
@@ -1244,15 +1253,58 @@ trait Mcpwp_Elementor_Reader_Trait {
 	}
 
 	/**
-	 * Ask Elementor to merge style_controls into get_controls() for schema reads.
+	 * Merge style_controls into get_controls() for this schema read and remember the prior flag.
+	 *
+	 * @return bool|null Prior is_use_style_controls() value, or null when Performance is unavailable.
 	 */
-	private function mcpwp_elementor_schema_enable_style_controls() {
+	private function mcpwp_elementor_schema_begin_style_controls_recovery() {
 		if ( ! class_exists( '\Elementor\Core\Frontend\Performance' ) ) {
-			return;
+			return null;
+		}
+
+		$previous = false;
+		if ( method_exists( '\Elementor\Core\Frontend\Performance', 'is_use_style_controls' ) ) {
+			$previous = (bool) \Elementor\Core\Frontend\Performance::is_use_style_controls();
 		}
 		if ( method_exists( '\Elementor\Core\Frontend\Performance', 'set_use_style_controls' ) ) {
 			\Elementor\Core\Frontend\Performance::set_use_style_controls( true );
 		}
+
+		return $previous;
+	}
+
+	/**
+	 * Restore Elementor's use_style_controls flag after a schema read.
+	 *
+	 * @param bool|null $previous Value from begin_style_controls_recovery().
+	 */
+	private function mcpwp_elementor_schema_end_style_controls_recovery( $previous ) {
+		if ( null === $previous || ! class_exists( '\Elementor\Core\Frontend\Performance' ) ) {
+			return;
+		}
+		if ( method_exists( '\Elementor\Core\Frontend\Performance', 'set_use_style_controls' ) ) {
+			\Elementor\Core\Frontend\Performance::set_use_style_controls( $previous );
+		}
+	}
+
+	/**
+	 * Apply a fields allowlist while preserving optimized-control metadata (#1236).
+	 *
+	 * @param array $result Full schema result.
+	 * @param array $fields Requested top-level keys.
+	 * @return array
+	 */
+	private function mcpwp_elementor_schema_apply_fields_projection( array $result, array $fields ) {
+		$pinned = array();
+		foreach ( array( 'controls_optimized', 'warning', 'tab_filter_warning' ) as $key ) {
+			if ( isset( $result[ $key ] ) ) {
+				$pinned[ $key ] = $result[ $key ];
+			}
+		}
+
+		$projected = array_intersect_key( $result, array_flip( $fields ) );
+
+		return array_merge( $projected, $pinned );
 	}
 
 	/**
@@ -1261,6 +1313,6 @@ trait Mcpwp_Elementor_Reader_Trait {
 	 * @return string
 	 */
 	private function mcpwp_elementor_schema_optimized_controls_warning() {
-		return __( 'Elementor built this widget\'s control stack in frontend-optimized mode (often from an early init hook before REST_REQUEST). Control tabs and labels in this response may be wrong or missing; key names under the content tab are more reliable than tab filters. Prefer wp_elementor_widget_help for offline reference or re-read after a clean request when possible.', 'mcpwp' );
+		return __( 'Elementor built this widget\'s control stack in frontend-optimized mode (often from an early init hook before REST_REQUEST). Control tabs and labels in this response may be wrong or missing; key names under the content tab are more reliable than tab filters. Prefer wp_elementor_widget_help for offline reference.', 'mcpwp' );
 	}
 }

@@ -78,6 +78,19 @@ namespace Elementor {
 	class Mcpwp_Schema_Optimized_Fake_Widgets_Manager {
 
 		public function get_widget_types() {
+			$html_like_controls = array(
+				'html' => array(
+					'type'  => 'textarea',
+					'label' => 'HTML',
+					'tab'   => 'content',
+				),
+				'advanced_margin' => array(
+					'type'  => 'dimensions',
+					'label' => 'advanced_margin',
+					'tab'   => 'content',
+				),
+			);
+
 			return array(
 				'mcpwp-optimized-widget' => new Mcpwp_Schema_Optimized_Fake_Widget(
 					'mcpwp-optimized-widget',
@@ -99,6 +112,16 @@ namespace Elementor {
 					array(
 						'content' => array( 'label' => 'Content' ),
 						'style'   => array( 'label' => 'Style' ),
+					)
+				),
+				'mcpwp-html-like-widget' => new Mcpwp_Schema_Optimized_Fake_Widget(
+					'mcpwp-html-like-widget',
+					$html_like_controls,
+					array(),
+					array(
+						'content'  => array( 'label' => 'Content' ),
+						'style'    => array( 'label' => 'Style' ),
+						'advanced' => array( 'label' => 'Advanced' ),
 					)
 				),
 			);
