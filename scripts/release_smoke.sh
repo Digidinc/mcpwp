@@ -83,7 +83,11 @@ teardown() {
 }
 trap teardown EXIT
 
-die2() { echo "COULD NOT RUN: $*" >&2; echo "NO RESULT OBSERVED. Do not infer success from this exit."; exit 2; }
+die2() {
+	echo "COULD NOT RUN: $*" >&2
+	echo "NO RESULT OBSERVED. Do not infer success from this exit." >&2
+	exit 2
+}
 
 wpcli() {
 	docker run --rm -i --network "$NET" --volumes-from "$WP" --user 33:33 \
@@ -205,8 +209,10 @@ for p in elementor woocommerce; do
 	wpcli plugin is-active "$p" 2>/dev/null || { echo "  (warn) $p not active; continuing:"; tail -3 "$WORK/plugins.log"; }
 done
 
-if [[ -n "${SMOKE_ELEMENTOR_PRO_DIR:-}" && -d "$SMOKE_ELEMENTOR_PRO_DIR" ]]; then
-	if docker cp "$SMOKE_ELEMENTOR_PRO_DIR" "$WP:/var/www/html/wp-content/plugins/elementor-pro" \
+if [[ -n "${SMOKE_ELEMENTOR_PRO_DIR:-}" ]]; then
+	if [[ ! -d "$SMOKE_ELEMENTOR_PRO_DIR" ]]; then
+		echo "  (warn) SMOKE_ELEMENTOR_PRO_DIR is set but is not a readable directory: '$SMOKE_ELEMENTOR_PRO_DIR' (continuing without Elementor Pro)"
+	elif docker cp "$SMOKE_ELEMENTOR_PRO_DIR" "$WP:/var/www/html/wp-content/plugins/elementor-pro" \
 		&& docker exec "$WP" chown -R 33:33 /var/www/html/wp-content/plugins/elementor-pro \
 		&& wpcli plugin activate elementor-pro >/dev/null 2>&1; then
 		PRO_PATHS_EXERCISED=1
@@ -224,8 +230,14 @@ wpcli plugin install /var/www/html/wp-content/smk-baseline.zip --activate >/dev/
 BASE_VER=$(wpcli plugin get mcpwp --field=version)
 echo "    baseline version $BASE_VER"
 
-KEY=$(create_smoke_key "Release smoke" "read,write,admin" admin)
-READONLY_KEY=$(create_smoke_key "Release smoke read-only" "read" admin)
+if [[ "${SMOKE_INJECT_KEY_FAIL:-}" == "1" ]]; then
+	die2 "injected key-creation failure (SMOKE_INJECT_KEY_FAIL)"
+fi
+
+create_smoke_key "Release smoke" "read,write,admin" admin >"$WORK/admin.key" || exit 2
+KEY=$(<"$WORK/admin.key")
+create_smoke_key "Release smoke read-only" "read" admin >"$WORK/readonly.key" || exit 2
+READONLY_KEY=$(<"$WORK/readonly.key")
 
 # Seed content on the baseline so the upgrade has something to migrate.
 SEED_ID=$(wpcli post create --post_type=page --post_status=publish --post_title='Smoke seed page' --porcelain)
@@ -241,19 +253,29 @@ curl -s -o /dev/null "$URL/"; curl -s -o /dev/null "$URL/wp-admin/admin-ajax.php
 echo "==> Checks"
 
 # 1. site-info answers and reports the candidate version.
-SI=$(curl -s -m 30 "$URL/wp-json/mcpwp/v1/site-info" -H "X-API-Key: $KEY")
+SI_RAW=$(curl -s -m 30 -w $'\n%{http_code}' "$URL/wp-json/mcpwp/v1/site-info" -H "X-API-Key: $KEY")
+SI_CODE="${SI_RAW##*$'\n'}"
+SI="${SI_RAW%$'\n'*}"
+si_ok=1
+[[ "$SI_CODE" == "200" ]] && [[ -n "$SI" ]] && echo "$SI" | jq -e '.plugin.version != null and .url != null' >/dev/null 2>&1 && si_ok=0
 [[ "$(wpcli plugin get mcpwp --field=version)" == "$CAND_VER" ]]; check "installed version is $CAND_VER" $? "$(wpcli plugin get mcpwp --field=version)"
-[[ -n "$SI" ]] && echo "$SI" | jq -e . >/dev/null 2>&1; check "site-info returns JSON" $? "$SI"
+check "site-info returns JSON" $si_ok "http=$SI_CODE body=${SI:0:200}"
 
 # 2. Unauthenticated call is refused.
 code=$(curl -s -o /dev/null -w '%{http_code}' "$URL/wp-json/mcpwp/v1/pages")
 [[ "$code" == "401" || "$code" == "403" ]]; check "no key -> 401/403 (got $code)" $?
 
-# 2b. Read-only key cannot create pages.
+# 2b. Read-only key cannot create pages (insufficient_scope; page must not exist).
 ro_create=$(rpc_with_key "$READONLY_KEY" tools/call '{"name":"wp_create_page","arguments":{"title":"RO denied","status":"draft"}}')
 ro_denied=1
-echo "$ro_create" | jq -e '.result.isError == true' >/dev/null 2>&1 && ro_denied=0
-echo "$ro_create" | jq -e '.error' >/dev/null 2>&1 && ro_denied=0
+if echo "$ro_create" | jq -e '.result.isError == true and .result.structuredContent.error.code == "insufficient_scope"' >/dev/null 2>&1; then
+	RO_LIST=$(curl -s -m 30 "$URL/wp-json/mcpwp/v1/pages?search=RO%20denied&per_page=20" -H "X-API-Key: $KEY")
+	if has "$RO_LIST" 'RO denied'; then
+		ro_denied=1
+	else
+		ro_denied=0
+	fi
+fi
 check "read-only key denied wp_create_page" $ro_denied "$ro_create"
 
 # 3. MCP handshake + tools/list.
@@ -291,8 +313,12 @@ GS=$(curl -s -m 30 "$URL/wp-json/mcpwp/v1/pages/$SEED_ID" -H "X-API-Key: $KEY")
 has "$GS" 'Smoke seed page'; check "baseline content readable after upgrade" $? "$GS"
 
 # 6. Action log records the MCP writes.
-AL=$(curl -s -m 30 "$URL/wp-json/mcpwp/v1/action-log?per_page=20" -H "X-API-Key: $KEY")
-echo "$AL" | jq -e '(.entries // .items // .data // .) | length > 0' >/dev/null 2>&1; check "action log has entries" $? "$AL"
+AL_RAW=$(curl -s -m 30 -w $'\n%{http_code}' "$URL/wp-json/mcpwp/v1/action-log?per_page=20" -H "X-API-Key: $KEY")
+AL_CODE="${AL_RAW##*$'\n'}"
+AL="${AL_RAW%$'\n'*}"
+al_ok=1
+[[ "$AL_CODE" == "200" ]] && echo "$AL" | jq -e '(.entries // .items // .data // .) | length > 0' >/dev/null 2>&1 && al_ok=0
+check "action log has entries" $al_ok "http=$AL_CODE body=${AL:0:200}"
 
 # 7. Approvals list answers.
 AP=$(curl -s -o /dev/null -w '%{http_code}' -m 30 "$URL/wp-json/mcpwp/v1/approvals" -H "X-API-Key: $KEY")
@@ -311,9 +337,13 @@ OB=$(tool wp_onboard '{}')
 LOG=$(docker exec "$WP" sh -c 'cat /var/www/html/wp-content/debug.log 2>/dev/null' | grep -E 'PHP (Fatal|Warning|Parse|Notice|Deprecated)' | grep -i 'mcpwp' || true)
 [[ -z "$LOG" ]]; check "debug.log clean of mcpwp PHP errors" $? "$LOG"
 
+if [[ "${SMOKE_INJECT_CHECK_FAIL:-}" == "1" ]]; then
+	check "harness inject check fail" 1 "SMOKE_INJECT_CHECK_FAIL"
+fi
+
 echo ""
 if [[ "$PRO_PATHS_EXERCISED" -eq 1 ]]; then
-	echo "PRO PATHS: exercised"
+	echo "PRO PATHS: Elementor Pro plugin activated (no MCPWP Pro or agency feature assertions in this harness)"
 else
 	echo "PRO PATHS: NOT EXERCISED"
 fi
