@@ -100,6 +100,8 @@ final class OAuthRevocation1101Test extends TestCase {
 		$GLOBALS['mcpwp_test_post_caps']    = array();
 		$GLOBALS['mcpwp_test_current_user'] = 0;
 		$GLOBALS['_mcpwp_test_posts']       = array();
+		$GLOBALS['mcpwp_test_user_meta']    = array();
+		unset( $GLOBALS['mcpwp_test_user_meta_read_hook'], $GLOBALS['mcpwp_test_user_meta_write_fails'] );
 		if ( null === $this->saved_remote_addr ) {
 			unset( $_SERVER['REMOTE_ADDR'] );
 		} else {

@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<phpunit bootstrap="bootstrap.php" colors="false">
+  <extensions>
+    <extension class="Mcpwp_Test_Raw_Option_Row_Reset"/>
+    <extension class="Mcpwp_Test_Approvals_Table_Reset"/>
+    <extension class="Mcpwp_Test_Process_State_Reset"/>
+  </extensions>
+  <testsuites>
+    <testsuite name="min">
+      <file>./ApiAuthTest.php</file>
+      <file>./RouteCapabilityMapTest.php</file>
+      <file>./OAuthRevocation1101Test.php</file>
+      <file>./Gate1103Round3BulkItemsTest.php</file>
+    </testsuite>
+  </testsuites>
+</phpunit>
