@@ -1076,6 +1076,11 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
             $GLOBALS['mcpwp_test_wpdb_options'] = array();
             $GLOBALS['_mcpwp_test_posts']       = array();
             $GLOBALS['_mcpwp_test_meta']        = array();
+            // Fake user meta (#1247): OAuthRevocation1101Test::test_an_epoch_can_never_be_lowered
+            // leaves a future revocation epoch on user 1; a later admin OAuth bearer then
+            // answers revoked/invalid_token under random order.
+            $GLOBALS['mcpwp_test_user_meta'] = array();
+            unset($GLOBALS['mcpwp_test_user_meta_read_hook'], $GLOBALS['mcpwp_test_user_meta_write_fails']);
             // The taxonomy registry and known terms (#1189): a product_cat one
             // test registered in setUp() and never removed became a viewable
             // taxonomy in a later graph-reader SQL assertion, by run order.
