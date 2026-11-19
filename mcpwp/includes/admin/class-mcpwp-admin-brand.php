@@ -52,7 +52,11 @@ class Mcpwp_Admin_Brand {
 		if ( class_exists( 'Mcpwp_White_Label' ) ) {
 			$s = Mcpwp_White_Label::get_settings();
 			if ( ! empty( $s['enabled'] ) && ! empty( $s['agency_name'] ) ) {
-				if ( ! empty( $s['hide_mcpwp_branding'] ) && empty( $s['logo_url'] ) ) {
+				$logo_esc = Mcpwp_White_Label::safe_logo_url( $s['logo_url'] ?? '' );
+				if ( '' !== $logo_esc ) {
+					return '';
+				}
+				if ( ! empty( $s['hide_mcpwp_branding'] ) && '' === $logo_esc ) {
 					return '<span class="dashicons dashicons-shield"></span>';
 				}
 			}

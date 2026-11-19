@@ -33,6 +33,49 @@ class Mcpwp_White_Label {
 	}
 
 	/**
+	 * Validate and normalize a logo URL for storage (http/https only).
+	 *
+	 * @param string $url Raw setting value.
+	 * @return string esc_url_raw() output or empty when unusable.
+	 */
+	public static function validate_logo_url_for_storage( $url ) {
+		$url = (string) $url;
+		if ( '' === $url || ! filter_var( $url, FILTER_VALIDATE_URL ) ) {
+			return '';
+		}
+		$scheme = wp_parse_url( $url, PHP_URL_SCHEME );
+		if ( ! is_string( $scheme ) || ! in_array( strtolower( $scheme ), array( 'http', 'https' ), true ) ) {
+			return '';
+		}
+		$raw = esc_url_raw( $url );
+		return '' !== $raw ? $raw : '';
+	}
+
+	/**
+	 * Whether a logo URL is allowed for output (same validation as storage).
+	 *
+	 * @param string $url Stored or raw logo URL.
+	 * @return string Normalized URL or empty when unusable.
+	 */
+	public static function safe_logo_url( $url ) {
+		return self::validate_logo_url_for_storage( $url );
+	}
+
+	/**
+	 * Escape a validated logo URL for a CSS url("...") value.
+	 *
+	 * @param string $url Stored logo URL.
+	 * @return string Escaped URL or empty when unusable.
+	 */
+	public static function logo_url_for_css( $url ) {
+		$url = self::validate_logo_url_for_storage( $url );
+		if ( '' === $url ) {
+			return '';
+		}
+		return addcslashes( $url, "\"\\\n\r\f" );
+	}
+
+	/**
 	 * Get white-label settings, merged with defaults.
 	 *
 	 * @return array
@@ -69,7 +112,11 @@ class Mcpwp_White_Label {
 			if ( is_bool( $default ) ) {
 				$value = (bool) $value;
 			} elseif ( is_string( $default ) ) {
-				$value = sanitize_text_field( (string) $value );
+				if ( 'logo_url' === $key ) {
+					$value = (string) $value;
+				} else {
+					$value = sanitize_text_field( (string) $value );
+				}
 			}
 
 			$merged[ $key ] = $value;
@@ -80,9 +127,9 @@ class Mcpwp_White_Label {
 			$merged['primary_color'] = '#7c3aed';
 		}
 
-		// Validate logo URL (must be https or empty).
-		if ( ! empty( $merged['logo_url'] ) && ! filter_var( $merged['logo_url'], FILTER_VALIDATE_URL ) ) {
-			$merged['logo_url'] = '';
+		// Validate logo URL: http(s) only; store esc_url_raw() so query strings keep &.
+		if ( ! empty( $merged['logo_url'] ) ) {
+			$merged['logo_url'] = self::validate_logo_url_for_storage( $merged['logo_url'] );
 		}
 
 		update_option( self::OPTION_KEY, $merged );
@@ -127,7 +174,7 @@ class Mcpwp_White_Label {
 		}
 
 		$primary = esc_attr( $s['primary_color'] );
-		$logo    = esc_url( $s['logo_url'] );
+		$logo    = self::logo_url_for_css( $s['logo_url'] );
 
 		echo '<style id="mcpwp-white-label-css">';
 		echo '.mcpwp-product-name { display: none !important; }';

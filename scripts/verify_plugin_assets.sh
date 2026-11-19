@@ -2,12 +2,10 @@
 # Fail if a built plugin zip ships PHP that points at an image file the zip
 # does not contain.
 #
-# Every build script strips the WordPress.org directory assets (banners,
-# screenshots, icons) from assets/, and .distignore excludes /assets/*.png and
-# /assets/*.svg. includes/freemius-init.php hands the Freemius SDK
-# MCPWP_PLUGIN_DIR . 'assets/mcpwp-mark-ochre-256.png' as the plugin icon, so the
-# premium package shipped a broken image on every opt-in, connect and pricing
-# screen: the bootstrap was in the zip, its icon was not.
+# #1188: WP.org icon files (assets/icon-128x128.png) were stripped from builds
+# while Freemius still referenced them, so premium opt-in screens showed a broken
+# image. Later builds also pin approved admin marks (SVG + 256px PNG) and scan
+# every PHP file for image paths that must exist in the same zip.
 #
 # This check reads the zip, not the tree. It scans every shipped PHP file for a
 # literal image path (png, svg, jpg, jpeg, gif, webp; any case; either quote
@@ -37,6 +35,17 @@ if [[ $# -eq 0 ]]; then
 fi
 
 command -v unzip >/dev/null 2>&1 || { echo "unzip is required" >&2; exit 1; }
+
+sha256_digest() {
+	if command -v sha256sum >/dev/null 2>&1 && printf 'x' | sha256sum >/dev/null 2>&1; then
+		sha256sum | awk '{print $1}'
+	elif command -v shasum >/dev/null 2>&1; then
+		shasum -a 256 | awk '{print $1}'
+	else
+		echo "FAIL: sha256sum or shasum -a 256 is required" >&2
+		return 1
+	fi
+}
 
 EXT='(png|svg|jpe?g|gif|webp)'
 Q="['\"]"
@@ -172,7 +181,7 @@ for zip in "$@"; do
 		fi
 		want_sha="$MARK_SVG_SHA"
 		[[ "$mark_rel" == "$MARK_PNG_REL" ]] && want_sha="$MARK_PNG_SHA"
-		got_sha="$(unzip -p "$zip" "$mark_path" | sha256sum | awk '{print $1}')"
+		got_sha="$(unzip -p "$zip" "$mark_path" | sha256_digest)"
 		if [[ "$got_sha" != "$want_sha" ]]; then
 			echo "FAIL: $name: $mark_rel sha256 is $got_sha (want $want_sha)" >&2
 			mark_failed=1

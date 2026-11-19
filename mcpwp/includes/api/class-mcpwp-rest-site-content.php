@@ -1508,11 +1508,18 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				return $this->get_rendered_html_via_elementor( $post_id, $selector, $max_bytes, $offset, '', $post );
 			} else {
 				// Draft/pending — WordPress preview link (not editor iframe param).
-				$url = Mcpwp_Elementor_Preview_Url::for_post( $post );
+				$url = Mcpwp_Elementor_Preview_Url::for_post( $post_id );
 			}
 		}
 
 		if ( empty( $url ) ) {
+			if ( $post instanceof WP_Post && 'trash' === $post->post_status ) {
+				return $this->error_response(
+					'post_in_trash',
+					__( 'Trashed content has no preview URL to fetch.', 'mcpwp' ),
+					400
+				);
+			}
 			return $this->error_response( 'missing_param', __( 'Either id or url is required.', 'mcpwp' ), 400 );
 		}
 
@@ -1949,8 +1956,8 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 
 		$window = $this->window_html_response( $html, $offset, $max_bytes );
 
-		$result = array(
-			'url'            => Mcpwp_Elementor_Preview_Url::for_post( $post_id ),
+		$preview_url = Mcpwp_Elementor_Preview_Url::for_post( $post_id );
+		$result      = array(
 			'status_code'    => 200,
 			'html'           => $window['html'],
 			'length'         => $window['length'],
@@ -1969,6 +1976,9 @@ class Mcpwp_REST_Site_Content extends Mcpwp_REST_API {
 				'This post is not published, so it was rendered in-process without the theme. Only the assigned templates are known; publish it (or fetch its public URL) to see which templates render.'
 			),
 		);
+		if ( '' !== $preview_url ) {
+			$result['url'] = $preview_url;
+		}
 
 		// This method exists BECAUSE host-level gates intercept a loopback
 		// fetch — the branch that chooses it says so. Working around a gate and

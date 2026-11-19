@@ -36,6 +36,11 @@ class Mcpwp_Elementor_Preview_Url {
 			return is_string( $url ) ? $url : '';
 		}
 
+		// Trashed posts: no safe browser-openable view (preview 404s; core edit screen 409s).
+		if ( 'trash' === $post->post_status ) {
+			return '';
+		}
+
 		$url = get_preview_post_link( $post );
 		return is_string( $url ) ? $url : '';
 	}

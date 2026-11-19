@@ -75,6 +75,22 @@ final class AdminBrandMark1232Test extends TestCase {
 		$this->assertStringContainsString( 'height="42"', $markup );
 	}
 
+	public function test_white_label_with_agency_logo_omits_hidden_product_img_markup() {
+		update_option(
+			Mcpwp_White_Label::OPTION_KEY,
+			array(
+				'enabled'     => true,
+				'agency_name' => 'Agency',
+				'logo_url'    => 'https://agency.test/logo.png',
+			)
+		);
+
+		$markup = Mcpwp_Admin_Brand::get_header_badge_markup();
+		$this->assertSame( '', $markup );
+
+		delete_option( Mcpwp_White_Label::OPTION_KEY );
+	}
+
 	public function test_white_label_with_agency_logo_hides_mark_and_resets_badge_container() {
 		if ( ! function_exists( 'esc_js' ) ) {
 			function esc_js( $text ) { // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
@@ -99,6 +115,80 @@ final class AdminBrandMark1232Test extends TestCase {
 		$this->assertStringContainsString( '.mcpwp-logo .mcpwp-logo-mark { display: none !important; }', $css );
 		$this->assertStringContainsString( 'background: none', $css );
 		$this->assertStringContainsString( 'https://agency.test/logo.png', $css );
+
+		delete_option( Mcpwp_White_Label::OPTION_KEY );
+	}
+
+	public function test_unsafe_logo_url_does_not_hide_default_mark_or_emit_css_logo() {
+		if ( ! function_exists( 'esc_js' ) ) {
+			function esc_js( $text ) { // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+				return (string) $text;
+			}
+		}
+
+		update_option(
+			Mcpwp_White_Label::OPTION_KEY,
+			array(
+				'enabled'     => true,
+				'agency_name' => 'Agency',
+				'logo_url'    => 'javascript:alert(1)',
+			)
+		);
+
+		$markup = Mcpwp_Admin_Brand::get_header_badge_markup();
+		$this->assertStringContainsString( 'dashicons-shield', $markup );
+		$this->assertStringNotContainsString( 'mcpwp-logo-mark', $markup );
+
+		ob_start();
+		Mcpwp_White_Label::inject_admin_branding_css();
+		$css = (string) ob_get_clean();
+		$this->assertStringNotContainsString( 'javascript:', $css );
+		$this->assertStringNotContainsString( '.mcpwp-logo::before', $css );
+
+		delete_option( Mcpwp_White_Label::OPTION_KEY );
+	}
+
+	public function test_save_settings_stores_logo_url_with_raw_ampersands_in_query() {
+		Mcpwp_White_Label::save_settings(
+			array(
+				'enabled'     => true,
+				'agency_name' => 'Agency',
+				'logo_url'    => 'https://cdn.example/l.png?w=64&h=64',
+			)
+		);
+
+		$stored = Mcpwp_White_Label::get_settings()['logo_url'];
+		$this->assertSame( 'https://cdn.example/l.png?w=64&h=64', $stored );
+		$this->assertStringNotContainsString( '&#038;', $stored );
+		$this->assertStringNotContainsString( '&amp;', $stored );
+
+		delete_option( Mcpwp_White_Label::OPTION_KEY );
+	}
+
+	public function test_css_logo_url_preserves_ampersand_and_escapes_quotes_for_url() {
+		if ( ! function_exists( 'esc_js' ) ) {
+			function esc_js( $text ) { // phpcs:ignore WordPress.NamingConventions.PrefixAllGlobals.NonPrefixedFunctionFound
+				return (string) $text;
+			}
+		}
+
+		$logo = 'https://cdn.example/logo.png?x=1&y="2"';
+		update_option(
+			Mcpwp_White_Label::OPTION_KEY,
+			array(
+				'enabled'     => true,
+				'agency_name' => 'Agency',
+				'logo_url'    => $logo,
+			)
+		);
+
+		ob_start();
+		Mcpwp_White_Label::inject_admin_branding_css();
+		$css = (string) ob_get_clean();
+
+		$this->assertStringContainsString( 'https://cdn.example/logo.png?x=1&y=', $css );
+		$this->assertStringContainsString( 'y=\\"2\\"', $css );
+		$this->assertStringNotContainsString( '&#038;', $css );
 
 		delete_option( Mcpwp_White_Label::OPTION_KEY );
 	}

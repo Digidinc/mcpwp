@@ -953,7 +953,9 @@ trait Mcpwp_Elementor_Reader_Trait {
 		// Build element statistics from the raw JSON structure.
 		$stats = $this->compute_element_stats( $elementor_data_raw );
 
-		// Preview URL.
+		// Preview URL (read-only: published pages use the plain permalink; we do not
+		// purge HTML page caches here — callers behind query-string-ignoring caches
+		// may see a stale public copy until the cache expires).
 		$preview_url = Mcpwp_Elementor_Preview_Url::for_post( $post_id );
 
 		// Use Elementor's frontend to render the content.
@@ -980,14 +982,16 @@ trait Mcpwp_Elementor_Reader_Trait {
 			$fallback_text = $this->extract_text_from_elementor_json( $elementor_data_raw );
 
 			$response = array(
-				'id'          => $post_id,
-				'title'       => get_the_title( $post_id ),
-				'format'      => $format,
-				'text'        => $fallback_text ? mb_substr( $fallback_text, 0, 500 ) : '',
-				'stats'       => $stats,
-				'preview_url' => $preview_url,
-				'message'     => __( 'Elementor returned empty HTML. Text extracted from raw data instead. The page may need to be saved in the Elementor editor first.', 'mcpwp' ),
+				'id'      => $post_id,
+				'title'   => get_the_title( $post_id ),
+				'format'  => $format,
+				'text'    => $fallback_text ? mb_substr( $fallback_text, 0, 500 ) : '',
+				'stats'   => $stats,
+				'message' => __( 'Elementor returned empty HTML. Text extracted from raw data instead. The page may need to be saved in the Elementor editor first.', 'mcpwp' ),
 			);
+			if ( '' !== $preview_url ) {
+				$response['preview_url'] = $preview_url;
+			}
 
 			return $response;
 		}
@@ -997,12 +1001,14 @@ trait Mcpwp_Elementor_Reader_Trait {
 
 		// Build response based on requested format.
 		$response = array(
-			'id'          => $post_id,
-			'title'       => get_the_title( $post_id ),
-			'format'      => $format,
-			'stats'       => $stats,
-			'preview_url' => $preview_url,
+			'id'     => $post_id,
+			'title'  => get_the_title( $post_id ),
+			'format' => $format,
+			'stats'  => $stats,
 		);
+		if ( '' !== $preview_url ) {
+			$response['preview_url'] = $preview_url;
+		}
 
 		switch ( $format ) {
 			case 'html':

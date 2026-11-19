@@ -2254,7 +2254,8 @@ trait Mcpwp_Elementor_Writer_Trait {
 
 		$widgets_after = $this->count_elementor_widgets( $post_validation_decoded );
 
-		$result = array(
+		$preview_url = Mcpwp_Elementor_Preview_Url::for_post( $page_id );
+		$result      = array(
 			'success'            => true,
 			'page_id'            => (int) $page_id,
 			'message'            => empty( $this->collect_render_errors( $save_debug ) )
@@ -2270,12 +2271,14 @@ trait Mcpwp_Elementor_Writer_Trait {
 				'widgets_after'   => $widgets_after,
 				'was_empty'       => 0 === $sections_before,
 			),
-			'preview_url'        => Mcpwp_Elementor_Preview_Url::for_post( $page_id ),
 			'css_regenerated'    => ! empty( $save_debug['css_regenerated'] ),
 			'debug'              => $save_debug,
 			'edit_url'           => admin_url( "post.php?post={$page_id}&action=elementor" ),
 			'next_step'          => sprintf( 'Call wp_get_elementor_summary(id=%d) to verify the page structure.', $page_id ),
 		);
+		if ( '' !== $preview_url ) {
+			$result['preview_url'] = $preview_url;
+		}
 
 		if ( isset( $save_debug['id_repair'] ) ) {
 			$result['id_repair'] = $save_debug['id_repair'];
