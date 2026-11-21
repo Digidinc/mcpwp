@@ -622,6 +622,9 @@ class Mcpwp_License {
 		if ( ! $stuck ) {
 			return '';
 		}
+		// Note: Freemius's connect screen honours require_license only on premium code
+		// (is_premium() true); on non-premium code the SDK shows a plain opt-in with no
+		// license option. A future generated Free build is out of scope here (#1253).
 		$url = $fs->get_reconnect_url( array( 'require_license' => 'true' ) );
 		return is_string( $url ) ? $url : '';
 	}

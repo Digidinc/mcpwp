@@ -231,7 +231,7 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 
 		<?php if ( 'sdk_unlicensed' === $license_state && '' !== $license_activation_url ) : ?>
 		<p><a href="<?php echo esc_url( $license_activation_url ); ?>" class="button"><?php esc_html_e( 'Activate existing license', 'mcpwp' ); ?></a>
-			<span class="description"><?php esc_html_e( 'Opens the Freemius screen. Choose "Have a license key? Activate License" there.', 'mcpwp' ); ?></span></p>
+			<span class="description"><?php esc_html_e( 'Opens Freemius\'s license screen. Enter your license key there.', 'mcpwp' ); ?></span></p>
 		<?php endif; ?>
 
 		<?php if ( 'direct_free' === $license_state || 'recovery' === $license_state ) : ?>

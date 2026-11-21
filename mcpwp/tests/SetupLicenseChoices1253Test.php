@@ -7,6 +7,17 @@
 
 use PHPUnit\Framework\TestCase;
 
+/** Anonymous SDK that has no get_reconnect_url(): the card must offer no link and not fatal (M14). */
+class Mcpwp_Test_Fs_1253_NoReconnect {
+	public function can_use_premium_code() { return false; }
+	public function is_paying() { return false; }
+	public function is_trial() { return false; }
+	public function is_anonymous() { return true; }
+	public function is_pending_activation() { return false; }
+	public function get_upgrade_url() { return 'https://site.test/wp-admin/admin.php?page=mcpwp-pricing'; }
+	public function get_account_url() { return 'https://site.test/wp-admin/admin.php?page=mcpwp-account'; }
+}
+
 class Mcpwp_Test_Fs_1253 {
 	public $f;
 	public function __construct( $f ) { $this->f = $f; }
@@ -18,6 +29,11 @@ class Mcpwp_Test_Fs_1253 {
 	public function get_reconnect_url( $params = array() ) { return 'https://site.test/wp-admin/admin.php?page=mcpwp-reconnect&fs_action=reset_anonymous_mode&require_license=' . ( $params['require_license'] ?? '' ); }
 	public function get_upgrade_url() { return 'https://site.test/wp-admin/admin.php?page=mcpwp-pricing'; }
 	public function get_account_url() { return 'https://site.test/wp-admin/admin.php?page=mcpwp-account'; }
+}
+
+/** Has both routes: the card must prefer get_reconnect_url() over get_activation_url() (M7b). */
+class Mcpwp_Test_Fs_1253_Both extends Mcpwp_Test_Fs_1253 {
+	public function get_activation_url( $params = array() ) { return 'https://site.test/WRONG-activation-route?require_license=' . ( $params['require_license'] ?? '' ); }
 }
 
 
@@ -83,6 +99,7 @@ final class SetupLicenseChoices1253Test extends TestCase {
 		$this->assertStringContainsString( '<details', $card );
 		$this->assertStringContainsString( 'Replace current with uploaded', $card );
 		$this->assertStringContainsString( 'href="' . self::PORTAL . '" target="_blank" rel="noopener noreferrer"', $card );
+		$this->assertStringContainsString( '(we cannot install it for you from this page)', $card );
 		$this->assertStringContainsString( 'href="https://mcpwp.net/pricing/" target="_blank" rel="noopener noreferrer"', $card );
 		$this->assertStringNotContainsString( 'users.freemius.com', $html );
 		$this->assertStringNotContainsString( '<form', $card );
@@ -160,7 +177,7 @@ final class SetupLicenseChoices1253Test extends TestCase {
 			$this->assertSame( 1, preg_match_all( '/\bdelet/i', $card ), 'delete appears only in the never-delete warning' );
 			$this->assertStringContainsString( 'open MCPWP. If Freemius shows its opt-in screen, choose "Have a license key? Activate License"', $card );
 			$this->assertStringContainsString( 'mcpwp-plan-cases', $card );
-			$this->assertDoesNotMatchRegularExpression( '/activate(s|d)? (it )?(immediately|instantly)|instant activation|activate (here|now|from this page)/i', $card );
+			$this->assertDoesNotMatchRegularExpression( '/activate(s|d)? (it )?(immediately|instantly)|instant activation|activate (license )?(here|now|from this page)|activate license now/i', $card );
 		}
 	}
 
@@ -212,12 +229,26 @@ final class SetupLicenseChoices1253Test extends TestCase {
 		$html = $this->render( array(), $this->sdk( array( 'anon' => true ) ) );
 		$card = $this->card( $html );
 		$this->assertStringContainsString( 'Activate existing license', $card );
-		$this->assertStringContainsString( 'Choose "Have a license key? Activate License" there.', $card );
+		$this->assertStringContainsString( "Opens Freemius's license screen. Enter your license key there.", html_entity_decode( $card, ENT_QUOTES ) );
+		$this->assertStringNotContainsString( 'Have a license key? Activate License" there', $card );
 		$this->assertStringContainsString( 'fs_action=reset_anonymous_mode', $card );
 		$this->assertStringContainsString( 'require_license=true', $card );
 		$this->assertStringNotContainsString( 'Manage pricing and license', $card );
 		$this->assertSame( 1, substr_count( $html, 'Manage pricing and license' ), 'only the banner carries it' );
 		$this->assertStringNotContainsString( '<input', $card );
+	}
+
+	public function test_anonymous_sdk_with_both_routes_prefers_reconnect(): void {
+		$card = $this->card( $this->render( array(), new Mcpwp_Test_Fs_1253_Both( array( 'anon' => true ) ) ) );
+		$this->assertStringContainsString( 'fs_action=reset_anonymous_mode', $card );
+		$this->assertStringNotContainsString( 'WRONG-activation-route', $card );
+	}
+
+	public function test_anonymous_sdk_without_reconnect_method_offers_no_link_and_does_not_fatal(): void {
+		$html = $this->render( array(), new Mcpwp_Test_Fs_1253_NoReconnect() );
+		$this->assertStringNotContainsString( 'Activate existing license', $html );
+		$this->assertStringNotContainsString( 'mcpwp-plan-card', $html );
+		$this->assertStringContainsString( 'Manage pricing and license', $html );
 	}
 
 	public function test_no_sdk_account_fallback_is_the_freemius_portal_not_a_404(): void {
