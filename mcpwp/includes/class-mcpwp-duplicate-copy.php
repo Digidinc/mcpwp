@@ -140,7 +140,7 @@ class Mcpwp_Duplicate_Copy {
 
 		return sprintf(
 			/* translators: 1: plugin basename of the ignored copy 2: version of the copy that is running */
-			__( 'MCPWP is installed twice. The copy at %1$s is being ignored and MCPWP %2$s is the one running. Delete the extra folder from Plugins so an update cannot switch which copy runs.', 'mcpwp' ),
+			__( 'MCPWP is installed twice. The copy at %1$s is being ignored and MCPWP %2$s is the one running. Leave the extra copy inactive; to switch, deactivate the running copy first. Avoid Delete during setup or recovery.', 'mcpwp' ),
 			$record['ignored_basename'],
 			'' !== $active ? $active : __( '(unknown version)', 'mcpwp' )
 		);
@@ -158,7 +158,7 @@ class Mcpwp_Duplicate_Copy {
 
 		return sprintf(
 			/* translators: 1: plugin basename 2: its version */
-			__( 'A second copy of MCPWP (%1$s, %2$s) was activated and has been deactivated again: only one copy can run. Delete the extra folder from Plugins.', 'mcpwp' ),
+			__( 'A second copy of MCPWP (%1$s, %2$s) was activated and has been deactivated again: only one copy can run. Leave the extra copy inactive; to switch, deactivate the running copy first. Avoid Delete during setup or recovery.', 'mcpwp' ),
 			$basename,
 			$version
 		);

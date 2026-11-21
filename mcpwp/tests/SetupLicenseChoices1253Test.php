@@ -106,7 +106,7 @@ final class SetupLicenseChoices1253Test extends TestCase {
 		$this->assertStringNotContainsString( '<input', $card );
 		$this->assertStringNotContainsString( '<script', $card );
 		$this->assertStringNotContainsString( 'Manage pricing and license', $html, 'no pricing-only link left in Direct Free' );
-		$this->assertStringNotContainsString( 'do not need to buy again', $card, 'no recovery claim without license evidence' );
+		$this->assertStringNotContainsString( 'check your existing license before buying again', $card, 'no recovery claim without license evidence' );
 	}
 
 	public function test_a_startup_only_fs_accounts_does_not_trigger_recovery(): void {
@@ -119,14 +119,14 @@ final class SetupLicenseChoices1253Test extends TestCase {
 			$html = $this->render( $opts );
 			$card = $this->card( $html );
 			$this->assertStringContainsString( 'Buy a license', $card );
-			$this->assertStringNotContainsString( 'do not need to buy again', $card );
+			$this->assertStringNotContainsString( 'check your existing license before buying again', $card );
 		}
 	}
 
 	public function test_recovery_leads_with_reinstall_and_never_offers_buy(): void {
 		$html = $this->render( $this->had_license() );
 		$card = $this->card( $html );
-		$this->assertStringContainsString( 'do not need to buy again', $card );
+		$this->assertStringContainsString( 'check your existing license before buying again', $card );
 		$this->assertStringContainsString( 'Replace current with uploaded', $card );
 		$this->assertStringContainsString( '<details class="mcpwp-plan-steps" open>', $card );
 		$this->assertStringNotContainsString( 'Buy a license', $html );
@@ -140,13 +140,13 @@ final class SetupLicenseChoices1253Test extends TestCase {
 		// The SDK class is absent in a Direct build, so core hands back __PHP_Incomplete_Class.
 		$site = unserialize( 'O:7:"FS_Site":2:{s:2:"id";s:3:"777";s:10:"license_id";s:4:"9001";}' );
 		$html = $this->render( array( 'fs_accounts' => array( 'sites' => array( 'mcpwp' => $site ) ) ) );
-		$this->assertStringContainsString( 'do not need to buy again', $this->card( $html ) );
+		$this->assertStringContainsString( 'check your existing license before buying again', $this->card( $html ) );
 	}
 
 	public function test_serialized_string_accounts_are_read_without_instantiating_classes(): void {
 		$raw  = serialize( array( 'sites' => array( 'mcpwp' => array( 'license_id' => '12' ) ) ) );
 		$html = $this->render( array( 'fs_accounts' => $raw ) );
-		$this->assertStringContainsString( 'do not need to buy again', $this->card( $html ) );
+		$this->assertStringContainsString( 'check your existing license before buying again', $this->card( $html ) );
 	}
 
 	/**
@@ -156,7 +156,7 @@ final class SetupLicenseChoices1253Test extends TestCase {
 	public function test_wporg_build_with_license_evidence_still_gets_recovery(): void {
 		define( 'MCPWP_WPORG_BUILD', true );
 		$html = $this->render( $this->had_license() );
-		$this->assertStringContainsString( 'do not need to buy again', $this->card( $html ) );
+		$this->assertStringContainsString( 'check your existing license before buying again', $this->card( $html ) );
 		$this->assertStringNotContainsString( 'Buy a license', $html );
 	}
 

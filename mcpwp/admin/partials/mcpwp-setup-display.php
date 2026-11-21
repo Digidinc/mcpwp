@@ -215,7 +215,7 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 
 		<?php if ( 'recovery' === $license_state ) : ?>
 		<p><strong><?php esc_html_e( 'This site had a license, but the licensing component is no longer installed.', 'mcpwp' ); ?></strong>
-			<?php esc_html_e( 'Your purchase is not lost and you do not need to buy again. Reinstall the paid package from your Freemius account, using the steps below.', 'mcpwp' ); ?></p>
+			<?php esc_html_e( 'Your purchase is not lost; check your existing license before buying again. Reinstall the paid package from your Freemius account, using the steps below.', 'mcpwp' ); ?></p>
 		<?php elseif ( 'direct_free' === $license_state ) : ?>
 		<ul class="mcpwp-plan-choices">
 			<li><strong><?php esc_html_e( 'Continue with Free', 'mcpwp' ); ?></strong> &mdash;
