@@ -2401,3 +2401,9 @@ details[open] .mcpwp-advanced-fields__toggle .dashicons {
 		justify-content: flex-start;
 	}
 }
+
+/* #1253: nested cases in the Setup plan card steps. */
+.mcpwp-plan-card .mcpwp-plan-cases {
+	list-style: disc;
+	margin: 6px 0 6px 20px;
+}

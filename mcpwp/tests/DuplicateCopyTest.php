@@ -168,4 +168,22 @@ final class DuplicateCopyTest extends TestCase {
 		$this->assertStringContainsString( 'mcpwp-1/mcpwp.php', $message );
 		$this->assertStringContainsString( 'deactivated', $message );
 	}
+
+	/** #1253: neither notice tells the admin to delete anything; both say how to switch safely. */
+	public function test_both_notices_say_leave_inactive_and_avoid_delete(): void {
+		$twice   = (string) Mcpwp_Duplicate_Copy::double_load_message(
+			array(
+				'ignored_basename' => 'mcpwp-premium/mcpwp.php',
+				'active_version'   => '3.10.8',
+				'last_seen'        => time() - 60,
+			),
+			time()
+		);
+		$refused = Mcpwp_Duplicate_Copy::refused_message( array( 'basename' => 'mcpwp-1/mcpwp.php', 'version' => '3.10.5' ) );
+
+		foreach ( array( $twice, $refused ) as $message ) {
+			$this->assertStringContainsString( 'Leave the extra copy inactive; to switch, deactivate the running copy first. Avoid Delete during setup or recovery.', $message );
+			$this->assertStringNotContainsString( 'Delete the extra folder', $message );
+		}
+	}
 }
