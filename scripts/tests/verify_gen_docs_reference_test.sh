@@ -5,8 +5,8 @@
 # stubs: a fake `docker` and `node` for the shell (no containers), a mock MCP endpoint for
 # `fetch`, and well-formed snapshot fixtures for `render`.
 #
-# --self-test applies known-bad mutations to copies of the scripts and requires the suite to
-# FAIL for each one.
+# --self-test first runs the suite against unmutated copies and fails unless it passes, then
+# applies known-bad mutations to copies of the scripts and requires the suite to FAIL for each.
 #
 # Usage: bash scripts/tests/verify_gen_docs_reference_test.sh [--self-test]
 # Exit:  0 contract holds, 1 it does not, 2 could not run
@@ -64,6 +64,9 @@ STUB
 # $1 = script, $2 = fetch|render
 echo "node $*" >>"$STUB_LOG"
 if [[ "$2" == fetch ]]; then
+	# The key must reach fetch through the environment (recorded apart from $STUB_LOG, which
+	# must never hold it), so the "key not in the log" check below is not vacuous.
+	[[ -n "${MCPWP_API_KEY:-}" && "${MCPWP_API_KEY:-}" == "$STUB_KEY" ]] && echo "fetch got the key from env" >>"$STUB_ENV_LOG"
 	ed=""; snap=""
 	while [[ $# -gt 0 ]]; do
 		case "$1" in --edition) ed="$2" ;; --snapshot) snap="$2" ;; esac
@@ -114,15 +117,34 @@ fs.writeFileSync(`${out}/pro_names.txt`, proGated.join('\n') + '\n');
 JS
 }
 
-# Mock MCP endpoint. MODE: unauthorized | empty | narrow | full. Prints its port.
+# The tool names the plugin shows every key whatever its role or scope, read straight from
+# get_key_exempt_tool_names() (independently of the generator's own parser). A real site lists
+# them for every key, so every mock catalog below carries them too.
+meta_tool_names() {
+	"$REAL_NODE" -e '
+const src = require("fs").readFileSync(process.argv[1], "utf8");
+const m = /function\s+get_key_exempt_tool_names\s*\(\s*\)\s*\{([\s\S]*?)\}/.exec(src);
+if (!m) process.exit(1);
+process.stdout.write([...m[1].matchAll(/\x27([a-z_]+)\x27/g)].map((x) => x[1]).join(","));' "$ROOT_DIR/mcpwp/includes/traits/trait-mcpwp-api-auth.php"
+}
+
+# Mock MCP endpoint. MODE: unauthorized | status | empty | metaonly | narrow | rolenarrow | full.
+# Writes its port to $1/port.
+#   metaonly    only the key-exempt meta tools (what a deny-all key sees)
+#   narrow      a read-only key: discovery + read tools + meta tools, no admin-scope tool
+#   rolenarrow  an editor/designer key with admin scope: admin-scope tools from its own
+#               categories (wp_list_content, wp_flush_cache), none from the admin category
+#   full        an admin-role, admin-scope key
 start_mock() {
 	local d="$1" mode="$2"
 	cat >"$d/mock.js" <<'JS'
 const http = require('http');
 const mode = process.env.MODE;
 const tool = (name) => ({ name, title: name, description: 'd', inputSchema: { type: 'object', properties: {} }, annotations: { category: 'content' } });
-const narrow = ['wp_site_info', 'wp_list_pages'].map(tool);
-const full = [...narrow, tool('wp_flush_cache')];
+const meta = process.env.META_TOOLS.split(',').filter(Boolean).map(tool);
+const narrow = [...['wp_site_info', 'wp_list_pages'].map(tool), ...meta];
+const rolenarrow = [...narrow, tool('wp_list_content'), tool('wp_flush_cache')];
+const full = [...rolenarrow, tool('wp_list_api_keys')];
 http.createServer((req, res) => {
   let b = '';
   req.on('data', (c) => (b += c));
@@ -131,7 +153,7 @@ http.createServer((req, res) => {
     const send = (code, o) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(o)); };
     if (mode === 'status') return send(503, { jsonrpc: '2.0', id: q.id, result: { tools: full } });
     if (mode === 'unauthorized') return send(401, { code: 'invalid_api_key', message: 'Invalid API key.', data: { status: 401 } });
-    const tools = mode === 'full' ? full : narrow;
+    const tools = { full, rolenarrow, metaonly: meta }[mode] || narrow;
     const ok = (result) => send(200, { jsonrpc: '2.0', id: q.id, result });
     switch (q.method) {
       case 'initialize': return ok({ serverInfo: { name: 'm', plugin_version: '0.0.0' } });
@@ -143,7 +165,7 @@ http.createServer((req, res) => {
   });
 }).listen(0, '127.0.0.1', function () { require('fs').writeFileSync(process.env.PORT_FILE, String(this.address().port)); });
 JS
-	MODE="$mode" PORT_FILE="$d/port" "$REAL_NODE" "$d/mock.js" >/dev/null 2>&1 &
+	MODE="$mode" META_TOOLS="$META_TOOLS" PORT_FILE="$d/port" "$REAL_NODE" "$d/mock.js" >/dev/null 2>&1 &
 	MOCK_PID=$!
 	for _ in $(seq 1 50); do [[ -s "$d/port" ]] && break; sleep 0.1; done
 }
@@ -170,12 +192,20 @@ run_suite() {
 	make_fixtures "$T/fx"
 	local L="$T/layout"
 	make_layout "$L" "$src"
-	local OUT="$T/out" LOG="$T/log"
-	export STUB_LOG="$LOG" STUB_KEY="$FAKE_KEY" STUB_FIXTURES="$T/fx" REAL_NODE
+	local OUT="$T/out" LOG="$T/log" ENVLOG="$T/envlog"
+	export STUB_LOG="$LOG" STUB_ENV_LOG="$ENVLOG" STUB_KEY="$FAKE_KEY" STUB_FIXTURES="$T/fx" REAL_NODE
+
+	# key_never_leaks LABEL : after a run_sh, the key is nowhere in what the run left behind
+	key_never_leaks() {
+		grep -qF -- "$FAKE_KEY" "$T/so" "$T/se" && bad "$1: the API key appears in the script's stdout/stderr" || ok "$1: the API key never appears in stdout/stderr"
+		grep -qF -- "$FAKE_KEY" "$LOG" && bad "$1: the API key appears in a logged docker/node command line" || ok "$1: the API key never appears in a logged command line"
+		grep -rqF -- "$FAKE_KEY" "$OUT" && bad "$1: the API key appears in a file under \$OUT" || ok "$1: the API key never appears in a file under \$OUT"
+		[[ "$(grep -c 'fetch got the key from env' "$ENVLOG" 2>/dev/null || true)" -eq 2 ]] && ok "$1: both fetches got the key from the environment (the leak checks are not vacuous)" || bad "$1: the fetches did not get the key from the environment"
+	}
 
 	run_sh() { # run_sh STUB_PRO [env...]  -> stdout $T/so, stderr $T/se, rc in $RC
 		local pro="$1"; shift
-		rm -rf "$OUT"; mkdir -p "$OUT"; : >"$LOG"
+		rm -rf "$OUT"; mkdir -p "$OUT"; : >"$LOG"; : >"$ENVLOG"
 		env PATH="$L/bin:$PATH" STUB_PRO="$pro" "$@" bash "$L/scripts/gen-docs-reference.sh" \
 			--candidate "$ROOT_DIR/scripts/tests/$(basename "$SELF")" --out "$OUT" --port 1 --name gf-test >"$T/so" 2>"$T/se"
 		RC=$?
@@ -198,6 +228,7 @@ run_suite() {
 	for f in "$OUT"/tools/*.md; do has "$f" 'INCOMPLETE reference' || missing_banner=1; done
 	[[ $missing_banner -eq 0 ]] && ok "allow-incomplete: banner on every tools/*.md" || bad "allow-incomplete: a tools/*.md has no banner"
 	has "$T/so" 'Done, but the output is INCOMPLETE' && ! has "$T/so" 'Review the diff' && ok "allow-incomplete: final line says INCOMPLETE" || bad "allow-incomplete: final line does not say INCOMPLETE"
+	key_never_leaks "allow-incomplete"
 
 	# F. Pro present: no --allow-incomplete, no banner, normal final line
 	run_sh 1
@@ -207,7 +238,7 @@ run_suite() {
 	has "$T/so" 'Review the diff' && ok "with Pro: normal final line" || bad "with Pro: no normal final line"
 
 	# G. key handling and memory flag (use the log of run F)
-	grep -q "$FAKE_KEY" "$T/so" "$T/se" && bad "the API key appears in the script's output" || ok "the API key never appears in stdout/stderr"
+	key_never_leaks "with Pro"
 	grep -q 'array( "read", "write", "admin" ), "admin" )' "$LOG" && ok "the eval sent to wp-cli asks for read,write,admin / admin" || bad "the eval sent to wp-cli has the wrong scopes"
 	local nomem
 	nomem="$(grep -E 'wordpress:cli| wp ' "$LOG" | grep -vc 'memory_limit=' || true)"
@@ -233,6 +264,34 @@ run_suite() {
 	"$REAL_NODE" "$R" render --free "$T/fx/free.json" --pro "$T/fx/pro_missing.json" --out "$OUT" --allow-incomplete >"$T/so" 2>"$T/se"; RC=$?
 	[[ $RC -eq 0 ]] && has "$OUT/tools.md" 'INCOMPLETE reference' && has "$OUT/reference/endpoints.md" 'INCOMPLETE reference' && ok "render --allow-incomplete: exit 0 with banners" || bad "render --allow-incomplete: rc=$RC"
 
+	# The docs tree mixes generated and hand-written pages in tools/ and reference/. The
+	# INCOMPLETE banner goes on generated pages only, exactly once, however often render runs.
+	rm -rf "$OUT"; mkdir -p "$OUT/tools" "$OUT/reference" "$T/hand"
+	local hw
+	for hw in reference/auth.md reference/rate-limits.md tools/approvals.md tools/menus.md; do
+		printf -- '---\ntitle: Hand-written %s\n---\n\nWritten by a person; the generator must not touch it.\n' "$hw" >"$OUT/$hw"
+		mkdir -p "$T/hand/$(dirname "$hw")"; cp "$OUT/$hw" "$T/hand/$hw"
+	done
+	# A generated page left by an earlier incomplete run, render does not rewrite it this time.
+	printf -- '---\ntitle: Old\n---\n\n:::caution[INCOMPLETE reference]\nold\n:::\n\n<!-- GENERATED by scripts/gen-docs-reference.mjs in Digidinc/mcpwp from MCPWP 0. -->\n' >"$OUT/reference/old-generated.md"
+	local pass
+	for pass in 1 2; do
+		"$REAL_NODE" "$R" render --free "$T/fx/free.json" --pro "$T/fx/pro_missing.json" --out "$OUT" --allow-incomplete >"$T/so" 2>"$T/se"; RC=$?
+		[[ $RC -eq 0 ]] && ok "render --allow-incomplete pass $pass: exit 0 with hand-written pages present" || bad "render --allow-incomplete pass $pass: rc=$RC ($(tail -1 "$T/se"))"
+		local untouched=1
+		for hw in reference/auth.md reference/rate-limits.md tools/approvals.md tools/menus.md; do
+			cmp -s "$OUT/$hw" "$T/hand/$hw" || { untouched=0; bad "render pass $pass: hand-written $hw was modified"; }
+		done
+		[[ $untouched -eq 1 ]] && ok "render pass $pass: every hand-written page is byte-identical"
+		local once=1 n
+		for f in "$OUT/tools.md" "$OUT"/tools/*.md "$OUT"/reference/*.md; do
+			[[ -f "$T/hand/${f#"$OUT"/}" ]] && continue
+			n="$(grep -c 'INCOMPLETE reference' "$f" || true)"
+			[[ "$n" -eq 1 ]] || { once=0; bad "render pass $pass: ${f#"$OUT"/} carries $n INCOMPLETE banners, expected 1"; }
+		done
+		[[ $once -eq 1 ]] && ok "render pass $pass: every generated page carries exactly one banner"
+	done
+
 	rm -rf "$OUT"; mkdir -p "$OUT"
 	"$REAL_NODE" "$R" render --free "$T/fx/free.json" --pro "$T/fx/pro.json" --out "$OUT" >"$T/so" 2>"$T/se"; RC=$?
 	[[ $RC -eq 1 ]] && ok "render: a snapshot whose flag is false is refused even with every Pro tool present" || bad "render: false flag exit $RC"
@@ -254,12 +313,21 @@ fs.writeFileSync(d+"/pro.json",JSON.stringify(pro));fs.writeFileSync(d+"/free.js
 	[[ $RC -ne 0 && -z "$(ls -A "$OUT")" ]] && has "$T/se" 'has no more tools than Free' && ok "render: a forged tool_count does not bypass the tool-count check" || bad "render: forged tool_count accepted (rc=$RC)"
 
 	# J. fetch against a mock endpoint
-	local mode port snap="$T/snap.json"
-	for mode in unauthorized status empty narrow full; do
+	local mode port snap="$T/snap.json" plug="$ROOT_DIR/mcpwp"
+	META_TOOLS="$(meta_tool_names)"
+	[[ ",$META_TOOLS," == *",mcpwp_call,"* && ",$META_TOOLS," == *",mcpwp_find_tools,"* ]] && ok "the plugin's key-exempt tools ($META_TOOLS) include mcpwp_call and mcpwp_find_tools" || bad "could not read the key-exempt tools from the plugin (got '$META_TOOLS')"
+	# A plugin tree whose get_key_exempt_tool_names() the generator cannot find: symlinks to the
+	# real files, except the auth trait, copied with the function renamed.
+	local broken="$T/plugin-noexempt"
+	cp -rs "$ROOT_DIR/mcpwp/." "$broken" 2>/dev/null
+	rm -f "$broken/includes/traits/trait-mcpwp-api-auth.php"
+	sed 's/function get_key_exempt_tool_names/function renamed_exempt_tool_names/' "$ROOT_DIR/mcpwp/includes/traits/trait-mcpwp-api-auth.php" >"$broken/includes/traits/trait-mcpwp-api-auth.php"
+	for mode in unauthorized status empty metaonly narrow rolenarrow full noexempt; do
 		rm -f "$T/port" "$snap"
-		start_mock "$T" "$mode"
+		plug="$ROOT_DIR/mcpwp"
+		if [[ "$mode" == noexempt ]]; then start_mock "$T" full; plug="$broken"; else start_mock "$T" "$mode"; fi
 		port="$(cat "$T/port")"
-		MCPWP_SITE_URL="http://127.0.0.1:$port" MCPWP_API_KEY="$FAKE_KEY" "$REAL_NODE" "$R" fetch --edition free --plugin-dir "$ROOT_DIR/mcpwp" --snapshot "$snap" >"$T/so" 2>"$T/se"; RC=$?
+		MCPWP_SITE_URL="http://127.0.0.1:$port" MCPWP_API_KEY="$FAKE_KEY" "$REAL_NODE" "$R" fetch --edition free --plugin-dir "$plug" --snapshot "$snap" >"$T/so" 2>"$T/se"; RC=$?
 		kill "$MOCK_PID" 2>/dev/null; wait "$MOCK_PID" 2>/dev/null
 		case "$mode" in
 			unauthorized)
@@ -268,10 +336,16 @@ fs.writeFileSync(d+"/pro.json",JSON.stringify(pro));fs.writeFileSync(d+"/free.js
 				[[ $RC -eq 2 ]] && has "$T/se" 'HTTP 503' && ok "fetch: a non-200 status is a failure even with a result body" || bad "fetch/503: rc=$RC $(tail -1 "$T/se")" ;;
 			empty)
 				[[ $RC -eq 2 ]] && has "$T/se" 'returned no tools and no error' && ok "fetch: an empty tools/list result is a clear failure" || bad "fetch/empty: rc=$RC $(tail -1 "$T/se")" ;;
+			metaonly)
+				[[ $RC -eq 2 ]] && has "$T/se" "scope is narrower than admin" && [[ ! -e "$snap" ]] && ok "fetch: a catalog of only the meta tools (mcpwp_call is in \$admin_tools) is refused" || bad "fetch/metaonly: rc=$RC $(tail -1 "$T/se")" ;;
 			narrow)
-				[[ $RC -eq 2 ]] && has "$T/se" 'narrower than admin' && [[ ! -e "$snap" ]] && ok "fetch: a catalog with no admin-scope tools is refused" || bad "fetch/narrow: rc=$RC $(tail -1 "$T/se")" ;;
+				[[ $RC -eq 2 ]] && has "$T/se" "scope is narrower than admin" && [[ ! -e "$snap" ]] && ok "fetch: a read-only catalog (meta tools included) is refused" || bad "fetch/narrow: rc=$RC $(tail -1 "$T/se")" ;;
+			rolenarrow)
+				[[ $RC -eq 2 ]] && has "$T/se" "role is narrower than admin" && [[ ! -e "$snap" ]] && ok "fetch: an editor/designer catalog with admin scope but no admin-category tool is refused" || bad "fetch/rolenarrow: rc=$RC $(tail -1 "$T/se")" ;;
 			full)
-				[[ $RC -eq 0 && -s "$snap" ]] && ! grep -q "$FAKE_KEY" "$snap" && ok "fetch: a full catalog is written, without the key" || bad "fetch/full: rc=$RC $(tail -1 "$T/se")" ;;
+				[[ $RC -eq 0 && -s "$snap" ]] && ! grep -qF -- "$FAKE_KEY" "$snap" && grep -q '"mcpwp_call"' "$snap" && ok "fetch: a full catalog is written, meta tools included, without the key" || bad "fetch/full: rc=$RC $(tail -1 "$T/se")" ;;
+			noexempt)
+				[[ $RC -eq 2 ]] && has "$T/se" 'could not parse get_key_exempt_tool_names' && [[ ! -e "$snap" ]] && ok "fetch: an unparseable key-exempt list fails closed" || bad "fetch/noexempt: rc=$RC $(tail -1 "$T/se")" ;;
 		esac
 	done
 
@@ -281,6 +355,21 @@ fs.writeFileSync(d+"/pro.json",JSON.stringify(pro));fs.writeFileSync(d+"/free.js
 # --- self-test: mutations that must each break the suite ------------------------------------
 self_test() {
 	local M="$(mktemp -d)" n=0 survived=0
+	# A suite that already fails "kills" every mutation; the results would mean nothing.
+	# Run it unmutated first, on a copy laid out exactly like the mutants.
+	local base nbad nok
+	mkdir -p "$M/base"
+	cp "$ROOT_DIR/scripts/gen-docs-reference.sh" "$ROOT_DIR/scripts/gen-docs-reference.mjs" "$M/base/"
+	base="$(FAIL=0; run_suite "$M/base" 2>&1)"
+	nbad="$(grep -c '^not ok' <<<"$base" || true)"
+	nok="$(grep -c '^ok: ' <<<"$base" || true)"
+	if [[ "$nbad" -ne 0 || "$nok" -eq 0 ]]; then
+		grep '^not ok' <<<"$base" >&2
+		echo "self-test: the unmutated suite does not pass ($nbad failing, $nok passing); not running mutations" >&2
+		rm -rf "$M"
+		return 1
+	fi
+	echo "baseline: the unmutated suite passes ($nok checks)"
 	mutate() { # mutate NAME FILE OLD NEW
 		local name="$1" file="$2" old="$3" new="$4" d="$M/m$((++n))"
 		mkdir -p "$d"
@@ -326,6 +415,14 @@ echo "==> Free catalog"'
 	mutate "forged tool_count accepted"                 $MJF "if (nPro <= nFree || pro.tool_count <= free.tool_count)" "if (pro.tool_count <= free.tool_count)"
 	mutate "admin-tool floor removed"                   $MJF "if (!adminSeen.length) {" "if (false) {"
 	mutate "HTTP error status ignored"                  $MJF "if (!res.ok) {" "if (false) {"
+	mutate "meta tools counted toward the admin floor"  $MJF "const everyKey = new Set([...facts.keyExempt, ...facts.discovery]);" "const everyKey = new Set();"
+	mutate "admin-category (role) floor removed"        $MJF "if (!roleFloor.some((n) => listedNames.has(n))) {" "if (false) {"
+	mutate "unparseable key-exempt list tolerated"      $MJF "if (!keyExempt.length) die('could not parse get_key_exempt_tool_names()');" ""
+	mutate "banner on hand-written pages"               $MJF "if (!body.includes(GENERATED_MARKER) || body.includes(bannerHead)) continue;" "if (body.includes(bannerHead)) continue;"
+	mutate "banner not idempotent"                      $MJF "if (!body.includes(GENERATED_MARKER) || body.includes(bannerHead)) continue;" "if (!body.includes(GENERATED_MARKER)) continue;"
+	mutate "key passed on the node command line"        $SHF 'node "$HERE/gen-docs-reference.mjs" fetch --edition free' 'node "$HERE/gen-docs-reference.mjs" fetch --key "$KEY" --edition free'
+	mutate "key written under the output dir"          $SHF 'echo "==> Render into $OUT"' 'echo "==> Render into $OUT"; echo "$KEY" >"$OUT/.k"'
+	mutate "key no longer passed through the env"       $SHF 'MCPWP_SITE_URL="$URL" MCPWP_API_KEY="$KEY" node "$HERE/gen-docs-reference.mjs" fetch --edition free' 'MCPWP_SITE_URL="$URL" node "$HERE/gen-docs-reference.mjs" fetch --edition free'
 	rm -rf "$M"
 	[[ $survived -eq 0 ]] && { echo "self-test: every mutation was caught"; return 0; }
 	echo "self-test: $survived mutation(s) survived" >&2
