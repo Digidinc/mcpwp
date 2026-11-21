@@ -249,7 +249,7 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 						<li><strong><?php esc_html_e( 'If WordPress offers "Replace current with uploaded":', 'mcpwp' ); ?></strong>
 							<?php esc_html_e( 'choose it. This keeps one copy of the plugin, not two.', 'mcpwp' ); ?></li>
 						<li><strong><?php esc_html_e( 'If WordPress installs it as a separate plugin instead:', 'mcpwp' ); ?></strong>
-							<?php esc_html_e( 'keep this copy active until the paid package is installed. Then deactivate this copy first, and only after that activate the paid copy (WordPress refuses to run two copies at once). If the paid copy fails to activate, deactivate it and activate this one again. Never click Delete on either copy.', 'mcpwp' ); ?></li>
+							<?php esc_html_e( 'keep this copy active until the paid package is installed. Then deactivate this copy first, and only after that activate the paid copy (MCPWP permits only one active copy). If the paid copy fails to activate, deactivate it and activate this one again. Never click Delete on either copy.', 'mcpwp' ); ?></li>
 					</ul></li>
 				<li><?php esc_html_e( 'After the paid package is installed and active, a screen follows. Choose "Activate License" and enter your license key there.', 'mcpwp' ); ?></li>
 			</ol>
