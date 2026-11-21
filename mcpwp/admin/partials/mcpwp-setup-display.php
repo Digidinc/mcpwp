@@ -244,9 +244,14 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 				<li><?php esc_html_e( 'Sign in to your Freemius account with your purchase email and download the paid package (we cannot install it for you from this page):', 'mcpwp' ); ?>
 					<a href="<?php echo esc_url( Mcpwp_License::CUSTOMER_PORTAL_URL ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Freemius account login', 'mcpwp' ); ?></a>.
 					<?php esc_html_e( 'The paid package is not on the public download page.', 'mcpwp' ); ?></li>
-				<li><?php esc_html_e( 'In WordPress, go to Plugins > Add New > Upload Plugin and upload that package.', 'mcpwp' ); ?></li>
-				<li><?php esc_html_e( 'Choose "Replace current with uploaded". This keeps one copy of the plugin, not two.', 'mcpwp' ); ?></li>
-				<li><?php esc_html_e( 'After the paid package is installed, a screen follows. Choose "Activate License" and enter your license key there.', 'mcpwp' ); ?></li>
+				<li><?php esc_html_e( 'In WordPress, go to Plugins > Add New > Upload Plugin and upload that package. What WordPress shows next decides the step after this:', 'mcpwp' ); ?>
+					<ul class="mcpwp-plan-cases">
+						<li><strong><?php esc_html_e( 'If WordPress offers "Replace current with uploaded":', 'mcpwp' ); ?></strong>
+							<?php esc_html_e( 'choose it. This keeps one copy of the plugin, not two.', 'mcpwp' ); ?></li>
+						<li><strong><?php esc_html_e( 'If WordPress installs it as a separate plugin instead:', 'mcpwp' ); ?></strong>
+							<?php esc_html_e( 'keep this copy active until the paid package is installed. Then deactivate this copy first, and only after that activate the paid copy (WordPress refuses to run two copies at once). If the paid copy fails to activate, deactivate it and activate this one again. Never click Delete on either copy.', 'mcpwp' ); ?></li>
+					</ul></li>
+				<li><?php esc_html_e( 'After the paid package is installed and active, a screen follows. Choose "Activate License" and enter your license key there.', 'mcpwp' ); ?></li>
 			</ol>
 			<p class="description"><?php esc_html_e( 'Your settings and API keys are kept. This page does not activate anything and never asks for or stores your license key.', 'mcpwp' ); ?></p>
 		</details>

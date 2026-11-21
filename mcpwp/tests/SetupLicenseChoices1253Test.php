@@ -54,7 +54,7 @@ final class SetupLicenseChoices1253Test extends TestCase {
 		$start = strpos( $html, 'mcpwp-plan-card' );
 		$this->assertNotFalse( $start, 'plan card renders' );
 		$end = strpos( $html, 'class="mcpwp-setup-page"', $start );
-		return substr( $html, $start, $end - $start );
+		return html_entity_decode( substr( $html, $start, $end - $start ) );
 	}
 
 	private function sdk( array $flags = array(), bool $activation = true ) {
@@ -76,6 +76,18 @@ final class SetupLicenseChoices1253Test extends TestCase {
 		$this->assertStringNotContainsString( '<input', $card );
 		$this->assertStringNotContainsString( '<script', $card );
 		$this->assertStringNotContainsString( 'Manage pricing and license', $html, 'no pricing-only link left in Direct Free' );
+	}
+
+	public function test_steps_cover_both_wordpress_prompts_and_never_promise_immediate_activation(): void {
+		foreach ( array( $this->card( $this->render() ), $this->card( $this->render( array( 'fs_accounts' => 'a:1:{s:3:"x";s:5:"23824";}' ) ) ) ) as $card ) {
+			$this->assertStringContainsString( 'If WordPress offers "Replace current with uploaded"', $card );
+			$this->assertStringContainsString( 'If WordPress installs it as a separate plugin instead', $card );
+			$this->assertStringContainsString( 'deactivate this copy first', $card );
+			$this->assertStringContainsString( 'activate this one again', $card );
+			$this->assertStringContainsString( 'Never click Delete on either copy', $card );
+			$this->assertStringContainsString( 'After the paid package is installed and active', $card );
+			$this->assertDoesNotMatchRegularExpression( '/activate(s|d)? (it )?(immediately|instantly)|instant activation|activate (here|now|from this page)/i', $card );
+		}
 	}
 
 	public function test_recovery_leads_with_reinstall_and_never_offers_buy(): void {
