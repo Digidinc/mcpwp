@@ -89,12 +89,15 @@ class Mcpwp_White_Label {
 	}
 
 	/**
-	 * Save white-label settings.
+	 * Merge, coerce types, and validate white-label settings for storage.
+	 *
+	 * Pure sanitizer — does not persist. Used by save_settings() and the
+	 * Settings API sanitize callback (register_setting / update_option).
 	 *
 	 * @param array $settings Partial or full settings array.
-	 * @return void
+	 * @return array Sanitized settings ready for get_option / update_option.
 	 */
-	public static function save_settings( array $settings ): void {
+	public static function prepare_settings_for_storage( array $settings ): array {
 		$current  = self::get_settings();
 		$defaults = self::defaults();
 		$merged   = array();
@@ -130,9 +133,21 @@ class Mcpwp_White_Label {
 		// Validate logo URL: http(s) only; store esc_url_raw() so query strings keep &.
 		if ( ! empty( $merged['logo_url'] ) ) {
 			$merged['logo_url'] = self::validate_logo_url_for_storage( $merged['logo_url'] );
+		} else {
+			$merged['logo_url'] = '';
 		}
 
-		update_option( self::OPTION_KEY, $merged );
+		return $merged;
+	}
+
+	/**
+	 * Save white-label settings.
+	 *
+	 * @param array $settings Partial or full settings array.
+	 * @return void
+	 */
+	public static function save_settings( array $settings ): void {
+		update_option( self::OPTION_KEY, self::prepare_settings_for_storage( $settings ) );
 	}
 
 	/**

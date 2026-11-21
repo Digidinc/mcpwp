@@ -1431,11 +1431,10 @@ class Mcpwp_Settings {
 	public function sanitize_white_label_settings( $input ): array {
 		if ( class_exists( 'Mcpwp_White_Label' ) ) {
 			$raw = is_array( $input ) ? $input : array();
-			// Normalize bool fields from form checkboxes.
+			// Normalize bool fields from form checkboxes (absent = unchecked).
 			$raw['enabled']             = ! empty( $raw['enabled'] );
 			$raw['hide_mcpwp_branding'] = ! empty( $raw['hide_mcpwp_branding'] );
-			Mcpwp_White_Label::save_settings( $raw );
-			return Mcpwp_White_Label::get_settings();
+			return Mcpwp_White_Label::prepare_settings_for_storage( $raw );
 		}
 		return is_array( $input ) ? $input : array();
 	}
