@@ -1081,6 +1081,13 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
             // answers revoked/invalid_token under random order.
             $GLOBALS['mcpwp_test_user_meta'] = array();
             unset($GLOBALS['mcpwp_test_user_meta_read_hook'], $GLOBALS['mcpwp_test_user_meta_write_fails']);
+            // Fake capabilities and current user (#1251): the user_can()/current_user_can()
+            // doubles read these. A test that left a per-user cap map or a current
+            // user behind changed what a later test rendered (the admin notice in
+            // AdminScopeRequiresWrite1210Test came out empty under random order).
+            // Back to the values set at the top of this file.
+            $GLOBALS['mcpwp_test_user_caps']    = array();
+            $GLOBALS['mcpwp_test_current_user'] = 0;
             // The taxonomy registry and known terms (#1189): a product_cat one
             // test registered in setUp() and never removed became a viewable
             // taxonomy in a later graph-reader SQL assertion, by run order.
