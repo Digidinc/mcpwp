@@ -2629,7 +2629,7 @@ class Mcpwp_Activator {
 			priority varchar(20) DEFAULT 'medium',
 			status varchar(20) DEFAULT 'open',
 			github_issue_url varchar(500) DEFAULT '',
-			meta longtext DEFAULT '',
+			meta longtext,
 			created_at datetime NOT NULL,
 			PRIMARY KEY (id),
 			KEY type_status (type, status)
@@ -2693,7 +2693,7 @@ class Mcpwp_Activator {
 			tool_name varchar(100) NOT NULL,
 			category varchar(50) NOT NULL DEFAULT '',
 			api_key_id varchar(100) NOT NULL DEFAULT '',
-			arguments longtext NOT NULL DEFAULT '',
+			arguments longtext NOT NULL,
 			before_snap longtext DEFAULT NULL,
 			after_snap longtext DEFAULT NULL,
 			resource_type varchar(50) NOT NULL DEFAULT '',
