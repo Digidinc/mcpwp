@@ -5,6 +5,17 @@ All notable changes to MCPWP will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.14.21](https://github.com/Digidinc/mcpwp/compare/v3.14.20...v3.14.21) (2026-11-21)
+
+
+### Bug Fixes
+
+* **activator:** drop TEXT literal defaults blocked on strict MySQL ([#1252](https://github.com/Digidinc/mcpwp/issues/1252)) ([#1255](https://github.com/Digidinc/mcpwp/issues/1255)) ([31c3dbc](https://github.com/Digidinc/mcpwp/commit/31c3dbc937d8e2871548b0bca655e261f7e605ad))
+* review follow-ups [#1230](https://github.com/Digidinc/mcpwp/issues/1230), [#1237](https://github.com/Digidinc/mcpwp/issues/1237), [#1238](https://github.com/Digidinc/mcpwp/issues/1238) ([#1242](https://github.com/Digidinc/mcpwp/issues/1242)) ([11478bb](https://github.com/Digidinc/mcpwp/commit/11478bbd879598cc91fa9b3578947c09b4b9ddae))
+* **scripts:** docs reference generator authenticates with a scoped key and never reads the shared rig ([#1273](https://github.com/Digidinc/mcpwp/issues/1273)) ([48bbb5a](https://github.com/Digidinc/mcpwp/commit/48bbb5a09098f56365890def8bc7617d15ff60f9))
+* warn when Elementor optimized controls skew widget schema ([#1240](https://github.com/Digidinc/mcpwp/issues/1240)) ([d036d94](https://github.com/Digidinc/mcpwp/commit/d036d946c8b0ce3679bb4a2ace3c6fcf88b07963))
+* white-label settings form save loop ([#1248](https://github.com/Digidinc/mcpwp/issues/1248)) ([#1250](https://github.com/Digidinc/mcpwp/issues/1250)) ([f59ea17](https://github.com/Digidinc/mcpwp/commit/f59ea179142a70497508e10485c523af30c4aafb))
+
 ## [3.14.20](https://github.com/Digidinc/mcpwp/compare/v3.14.19...v3.14.20) (2026-11-16)
 
 
