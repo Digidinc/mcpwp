@@ -144,6 +144,11 @@ If Actions still can't run (billing), record "Freemius X pending: Actions billin
   cd ../wt-docs-X && npm ci && npm run build   # also regenerates public/llms.txt, dist/llms-full.txt and the .md copies
   ```
   The script stands up its own throwaway site (containers `docsref-*`, port 9196) and removes it.
+  It authenticates with a scoped admin key minted by the plugin's own creator (the legacy
+  `mcpwp_api_key` option is ignored once a scoped key exists, 3.14.11+). It never reads the shared
+  rig. Elementor-Pro-gated tools need `GEN_ELEMENTOR_PRO_DIR=/path/to/elementor-pro` (a copy kept
+  outside any rig); without it the script warns that those tools are MISSING and refuses to render,
+  because the result is not a complete reference. Do not publish a reference made without it.
   It reads the catalog with `wp_introspect {"full": true}` (`--source introspect`, the default),
   which carries the full descriptions and schemas. Once #1064 trims `tools/list`, do not use
   `--source tools-list`; if #1064 also moves the long descriptions out of `wp_introspect`, use

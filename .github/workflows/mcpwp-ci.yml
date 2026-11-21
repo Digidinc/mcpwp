@@ -10,6 +10,9 @@ on:
       - "scripts/verify_distignore_refs.sh"
       - "scripts/tests/verify_plugin_assets_test.sh"
       - "scripts/tests/verify_release_smoke_test.sh"
+      - "scripts/tests/verify_gen_docs_reference_test.sh"
+      - "scripts/gen-docs-reference.sh"
+      - "scripts/gen-docs-reference.mjs"
       - "scripts/release_smoke.sh"
       - ".github/workflows/mcpwp-ci.yml"
   push:
@@ -21,6 +24,9 @@ on:
       - "scripts/verify_distignore_refs.sh"
       - "scripts/tests/verify_plugin_assets_test.sh"
       - "scripts/tests/verify_release_smoke_test.sh"
+      - "scripts/tests/verify_gen_docs_reference_test.sh"
+      - "scripts/gen-docs-reference.sh"
+      - "scripts/gen-docs-reference.mjs"
       - "scripts/release_smoke.sh"
       - ".github/workflows/mcpwp-ci.yml"
 
@@ -103,6 +109,8 @@ jobs:
       - name: Distribution Asset Check
         run: |
           bash scripts/tests/verify_release_smoke_test.sh
+          bash scripts/tests/verify_gen_docs_reference_test.sh
+          bash scripts/tests/verify_gen_docs_reference_test.sh --self-test
           bash scripts/tests/verify_plugin_assets_test.sh
           bash mcpwp/scripts/build-all.sh
           bash mcpwp/scripts/build-selfhosted.sh
