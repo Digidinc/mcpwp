@@ -110,6 +110,7 @@ jobs:
         run: |
           bash scripts/tests/verify_release_smoke_test.sh
           bash scripts/tests/verify_gen_docs_reference_test.sh
+          bash scripts/tests/verify_gen_docs_reference_test.sh --self-test
           bash scripts/tests/verify_plugin_assets_test.sh
           bash mcpwp/scripts/build-all.sh
           bash mcpwp/scripts/build-selfhosted.sh

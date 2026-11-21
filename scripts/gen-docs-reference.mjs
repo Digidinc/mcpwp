@@ -13,6 +13,8 @@
 //             --edition free|pro    label for this snapshot
 //             --snapshot FILE       where to write it
 //             --source introspect|tools-list|find-tools   (default introspect)
+//             --plugin-dir DIR      the plugin's mcpwp/ directory (default: ../mcpwp); fetch uses it to
+//                                   refuse a catalog narrower than an admin key would see
 //
 //   render  Merges a Free and a Pro snapshot with facts parsed statically from the plugin
 //           source (role → category map, scope table, error hints) and writes Markdown.
@@ -79,8 +81,18 @@ async function rpc(url, key, method, params, id = 1) {
   } catch {
     throw new Error(`${method}: HTTP ${res.status}, not JSON: ${text.slice(0, 200)}`);
   }
-  if (body.error) {
+  if (body && body.error) {
     throw new Error(`${method}: ${body.error.code} ${body.error.message}`);
+  }
+  // A WordPress-style error body ({code, message, data.status}) is not a JSON-RPC error.
+  if (body && typeof body.code === 'string' && !('result' in body)) {
+    throw new Error(`${method}: HTTP ${res.status} ${body.code}: ${body.message || ''} (is the API key a scoped admin key?)`);
+  }
+  if (!res.ok) {
+    throw new Error(`${method}: HTTP ${res.status}: ${text.slice(0, 200)}`);
+  }
+  if (body === null || typeof body !== 'object' || body.result === undefined) {
+    throw new Error(`${method}: HTTP ${res.status} with no result and no error`);
   }
   return body.result;
 }
@@ -136,6 +148,14 @@ async function fetchSnapshot() {
     die('tools/list returned no tools and no error; the key was probably not accepted (a legacy mcpwp_api_key option is ignored once a scoped key exists). Use a scoped admin key.');
   }
   const listed = listResult.tools;
+  // A key narrower than admin silently drops tools. The plugin source names the tools that
+  // need admin scope; a full catalog always carries some of them.
+  const facts = staticFacts(arg('--plugin-dir', join(ROOT, 'mcpwp')));
+  const listedNames = new Set(listed.map((t) => t.name));
+  const adminSeen = [...facts.adminTools].filter((n) => listedNames.has(n));
+  if (!adminSeen.length) {
+    die(`tools/list carries none of the ${facts.adminTools.size} admin-scope tools the plugin source names (${listed.length} tools listed); the key is narrower than admin, so the catalog would be partial. Use an admin-role key with read,write,admin scopes.`);
+  }
   let tools;
 
   if (source === 'tools-list') {
@@ -176,10 +196,10 @@ async function fetchSnapshot() {
     }
   }
 
-  const resources = (await rpc(endpoint, key, 'resources/list', {}).catch(() => ({}))).resources || [];
+  const resources = ((await rpc(endpoint, key, 'resources/list', {}).catch(() => null)) || {}).resources || [];
   const templates =
-    (await rpc(endpoint, key, 'resources/templates/list', {}).catch(() => ({}))).resourceTemplates || [];
-  const prompts = (await rpc(endpoint, key, 'prompts/list', {}).catch(() => ({}))).prompts || [];
+    ((await rpc(endpoint, key, 'resources/templates/list', {}).catch(() => null)) || {}).resourceTemplates || [];
+  const prompts = ((await rpc(endpoint, key, 'prompts/list', {}).catch(() => null)) || {}).prompts || [];
 
   // A site URL inside a resource URI is this throwaway site's, not the reader's.
   const scrub = (s) => (typeof s === 'string' ? s.split(base).join('https://YOUR-SITE.com') : s);
@@ -910,14 +930,21 @@ function render() {
   const free = JSON.parse(read(freeFile));
   const pro = JSON.parse(read(proFile));
   if (free.edition !== 'free' || pro.edition !== 'pro') die('--free must be a free snapshot and --pro a pro snapshot');
-  if (pro.tool_count <= free.tool_count) die(`the Pro snapshot (${pro.tool_count}) has no more tools than Free (${free.tool_count}); was the agency marker in place?`);
+  // Compare real lengths: tool_count is a number the snapshot says about itself.
+  const nFree = Array.isArray(free.tools) ? free.tools.length : 0;
+  const nPro = Array.isArray(pro.tools) ? pro.tools.length : 0;
+  if (nPro <= nFree || pro.tool_count <= free.tool_count) die(`the Pro snapshot (${nPro} tools) has no more tools than Free (${nFree}); was the agency marker in place?`);
+  const facts = staticFacts(pluginDir);
+  // Completeness is judged from the tools actually present, never from the flag the fetch step
+  // wrote: every tool the plugin source says needs Elementor Pro must be in the Pro snapshot.
+  const proHave = new Set(pro.tools.map((x) => x.name));
+  const missingPro = Object.entries(facts.requires).filter(([n, c]) => c === 'elementor_pro' && !proHave.has(n)).map(([n]) => n);
+  const incomplete = missingPro.length > 0 || pro.elementor_pro !== true;
   const allowIncomplete = process.argv.includes('--allow-incomplete');
-  const incomplete = !(pro.elementor_pro === true);
   if (incomplete) {
-    process.stderr.write('!!! WARNING: the Pro snapshot was taken without Elementor Pro; Elementor-Pro-gated tools are MISSING. This is NOT a complete reference.\n');
+    process.stderr.write(`!!! WARNING: Elementor-Pro-gated tools are MISSING from the Pro snapshot${missingPro.length ? ` (${missingPro.join(', ')})` : ''}. This is NOT a complete reference.\n`);
     if (!allowIncomplete) die('refusing to render an incomplete reference (pass --allow-incomplete to render it labelled INCOMPLETE)', 1);
   }
-  const facts = staticFacts(pluginDir);
   if (facts.version && pro.plugin_version && facts.version !== pro.plugin_version) {
     process.stderr.write(`warning: plugin source is ${facts.version} but the site ran ${pro.plugin_version}\n`);
   }
@@ -928,16 +955,22 @@ function render() {
   const nReleases = renderChangelog(facts, free, pro, pluginDir, out);
   if (incomplete) {
     const banner = ':::caution[INCOMPLETE reference]\nGenerated without Elementor Pro: Elementor-Pro-gated tools are missing. Do not publish.\n:::\n\n';
-    const tp = join(out, 'tools.md');
-    const body = read(tp);
-    const m = body.match(/^---\n[\s\S]*?\n---\n/);
-    writeFileSync(tp, m ? m[0] + '\n' + banner + body.slice(m[0].length) : banner + body);
+    const files = [join(out, 'tools.md')];
+    for (const dir of [join(out, 'tools'), join(out, 'reference')]) {
+      for (const f of readdirSync(dir)) if (f.endsWith('.md')) files.push(join(dir, f));
+    }
+    for (const f of files) {
+      const body = read(f);
+      const m = body.match(/^---\n[\s\S]*?\n---\n/);
+      writeFileSync(f, m ? m[0] + '\n' + banner + body.slice(m[0].length) : banner + body);
+    }
   }
   process.stdout.write(
     `tools: ${t.total} (${t.free} Free, ${t.pro} Pro) in ${t.categories.length} categories: ${t.categories.map(([c, n]) => `${c} ${n}`).join(', ')}\n` +
       `errors: ${e.hinted} hinted codes, ${facts.codes.length} codes scanned\n` +
       `endpoints: ${nRoutes} tool routes; changelog: ${nReleases} releases\n` +
-      `wrote ${join(out, 'tools.md')}, ${join(out, 'tools')}/*.md, ${join(out, 'reference/errors.md')}, ${join(out, 'reference/mcp-surface.md')}\n`
+      `wrote ${join(out, 'tools.md')}, ${join(out, 'tools')}/*.md, ${join(out, 'reference/errors.md')}, ${join(out, 'reference/mcp-surface.md')}\n` +
+      (incomplete ? 'INCOMPLETE: every page carries an INCOMPLETE banner; do not publish this output.\n' : '')
   );
 }
 

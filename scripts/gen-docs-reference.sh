@@ -5,8 +5,8 @@
 # Stands up a throwaway site with scripts/release_smoke.sh --keep, adds the plugins whose
 # tools are capability-gated (Yoast SEO, Contact Form 7, LearnPress, WP Events Manager; the
 # smoke site already has Elementor and WooCommerce; Elementor Pro only when
-# GEN_ELEMENTOR_PRO_DIR points at a copy), reads the catalog once without and once with the agency marker (Free, then Pro), renders the
-# Markdown into the docs checkout, and removes the containers.
+# GEN_ELEMENTOR_PRO_DIR points at a copy), reads the catalog once without and once with the
+# agency marker (Free, then Pro), renders the Markdown into the docs checkout, and removes the containers.
 #
 # Usage:
 #   bash scripts/gen-docs-reference.sh --candidate mcpwp/scripts/mcpwp-selfhosted-X.zip \
@@ -117,6 +117,10 @@ wpcli plugin is-active elementor-pro >/dev/null 2>&1 && PRO_ACTIVE=1
 if [[ "$PRO_ACTIVE" -ne 1 ]]; then
 	echo "!!! WARNING: Elementor Pro is NOT installed (set GEN_ELEMENTOR_PRO_DIR to a copy outside the rig)." >&2
 	echo "!!! Elementor-Pro-gated tools will be MISSING from the snapshot; the output is NOT a complete reference." >&2
+	if [[ "$GEN_ALLOW_INCOMPLETE" != "1" ]]; then
+		echo "Refusing to continue: no Elementor Pro, so the reference would be missing Pro-gated tools. Re-run with GEN_ELEMENTOR_PRO_DIR=/path/to/elementor-pro, or GEN_ALLOW_INCOMPLETE=1 to render pages labelled INCOMPLETE." >&2
+		exit 1
+	fi
 fi
 
 # A scoped key through the supported creator. The activation-created key store is kept: no
@@ -131,29 +135,33 @@ $r = $c->create_scoped_api_key( "Docs reference generator", array( "read", "writ
 wp_set_current_user( 0 );
 if ( isset( $r["error"] ) || empty( $r["key"] ) ) { echo "GEN:ERROR:" . wp_json_encode( $r ); return; }
 echo $r["key"];'
-KEY="$(wpcli eval "$KEYPHP" 2>/dev/null | grep -E '^mcpwp_' | tail -1)"
-[[ -n "$KEY" ]] || { echo "could not create a scoped API key" >&2; exit 2; }
+MINT_OUT="$(wpcli eval "$KEYPHP" 2>"$WORK/mint-err.log")"
+KEY="$(grep -E '^mcpwp_' <<<"$MINT_OUT" | tail -1)"
+if [[ -z "$KEY" ]]; then
+	echo "could not create a scoped API key" >&2
+	grep 'GEN:ERROR' <<<"$MINT_OUT" >&2
+	grep -v '^mcpwp_' "$WORK/mint-err.log" | tail -5 >&2
+	exit 2
+fi
 
 MARKER=/var/www/html/wp-content/plugins/mcpwp/includes/agency-license.php
 docker exec "$WP" rm -f "$MARKER"
 
 echo "==> Free catalog"
-MCPWP_ELEMENTOR_PRO="$PRO_ACTIVE" MCPWP_SITE_URL="$URL" MCPWP_API_KEY="$KEY" node "$HERE/gen-docs-reference.mjs" fetch --edition free --source "$SOURCE" --snapshot "$WORK/free.json" || exit 1
+MCPWP_ELEMENTOR_PRO="$PRO_ACTIVE" MCPWP_SITE_URL="$URL" MCPWP_API_KEY="$KEY" node "$HERE/gen-docs-reference.mjs" fetch --edition free --source "$SOURCE" --plugin-dir "$ROOT/mcpwp" --snapshot "$WORK/free.json" || exit 1
 
 echo "==> Pro catalog (agency marker inside the container only)"
 docker exec "$WP" sh -c "printf '<?php\nreturn '\''MCPWP_AGENCY_LICENSE_V1'\'';\n' > $MARKER && chown 33:33 $MARKER" || { echo "could not write the marker" >&2; exit 2; }
-MCPWP_ELEMENTOR_PRO="$PRO_ACTIVE" MCPWP_SITE_URL="$URL" MCPWP_API_KEY="$KEY" node "$HERE/gen-docs-reference.mjs" fetch --edition pro --source "$SOURCE" --snapshot "$WORK/pro.json" || exit 1
+MCPWP_ELEMENTOR_PRO="$PRO_ACTIVE" MCPWP_SITE_URL="$URL" MCPWP_API_KEY="$KEY" node "$HERE/gen-docs-reference.mjs" fetch --edition pro --source "$SOURCE" --plugin-dir "$ROOT/mcpwp" --snapshot "$WORK/pro.json" || exit 1
 docker exec "$WP" rm -f "$MARKER"
 
 echo "==> Render into $OUT"
 RENDER_FLAGS=()
-if [[ "$PRO_ACTIVE" -ne 1 ]]; then
-	if [[ "$GEN_ALLOW_INCOMPLETE" == "1" ]]; then
-		RENDER_FLAGS+=(--allow-incomplete)
-	else
-		echo "Refusing to render: no Elementor Pro, so the reference would be missing Pro-gated tools. Re-run with GEN_ELEMENTOR_PRO_DIR=/path/to/elementor-pro, or GEN_ALLOW_INCOMPLETE=1 to render a page labelled INCOMPLETE." >&2
-		exit 1
-	fi
-fi
+# Only reachable without Elementor Pro when GEN_ALLOW_INCOMPLETE=1 (the check above exits otherwise).
+[[ "$PRO_ACTIVE" -ne 1 ]] && RENDER_FLAGS+=(--allow-incomplete)
 node "$HERE/gen-docs-reference.mjs" render "${RENDER_FLAGS[@]}" --free "$WORK/free.json" --pro "$WORK/pro.json" --plugin-dir "$ROOT/mcpwp" --out "$OUT" || exit 1
-echo "Done. Review the diff in the docs repo, then build it (npm run build) and open a PR."
+if [[ "$PRO_ACTIVE" -ne 1 ]]; then
+	echo "Done, but the output is INCOMPLETE (no Elementor Pro) and every page is labelled so. Do NOT build or open a PR from it."
+else
+	echo "Done. Review the diff in the docs repo, then build it (npm run build) and open a PR."
+fi
