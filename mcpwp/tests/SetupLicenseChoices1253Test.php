@@ -152,8 +152,12 @@ final class SetupLicenseChoices1253Test extends TestCase {
 			$this->assertStringContainsString( 'MCPWP permits only one active copy', $card );
 			$this->assertStringNotContainsString( 'WordPress refuses', $card );
 			$this->assertStringContainsString( 'activate this one again', $card );
-			$this->assertStringContainsString( 'Do not delete the copy you are keeping; remove the extra folder only after the paid copy works.', $card );
-			$this->assertStringNotContainsString( 'Never click Delete', $card );
+			$this->assertStringContainsString( 'Leave the copy you are not using inactive, and do not delete either copy.', $card );
+			// No cleanup step of any kind: the only delete/remove/uninstall words are that warning.
+			$this->assertStringNotContainsString( 'remove the extra folder', $card );
+			$this->assertStringNotContainsString( 'uninstall', strtolower( $card ) );
+			$this->assertSame( 0, preg_match( '/\b(remove|clean ?up)\b/i', $card ), 'no remove/cleanup guidance' );
+			$this->assertSame( 1, preg_match_all( '/\bdelet/i', $card ), 'delete appears only in the never-delete warning' );
 			$this->assertStringContainsString( 'open MCPWP. If Freemius shows its opt-in screen, choose "Have a license key? Activate License"', $card );
 			$this->assertStringContainsString( 'mcpwp-plan-cases', $card );
 			$this->assertDoesNotMatchRegularExpression( '/activate(s|d)? (it )?(immediately|instantly)|instant activation|activate (here|now|from this page)/i', $card );

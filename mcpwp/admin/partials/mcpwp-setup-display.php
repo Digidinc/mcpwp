@@ -249,7 +249,7 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 						<li><strong><?php esc_html_e( 'If WordPress offers "Replace current with uploaded":', 'mcpwp' ); ?></strong>
 							<?php esc_html_e( 'choose it. This keeps one copy of the plugin, not two.', 'mcpwp' ); ?></li>
 						<li><strong><?php esc_html_e( 'If WordPress installs it as a separate plugin instead:', 'mcpwp' ); ?></strong>
-							<?php esc_html_e( 'keep this copy active until the paid package is installed. Then deactivate this copy first, and only after that activate the paid copy (MCPWP permits only one active copy). If the paid copy fails to activate, deactivate it and activate this one again. Do not delete the copy you are keeping; remove the extra folder only after the paid copy works.', 'mcpwp' ); ?></li>
+							<?php esc_html_e( 'keep this copy active until the paid package is installed. Then deactivate this copy first, and only after that activate the paid copy (MCPWP permits only one active copy). If the paid copy fails to activate, deactivate it and activate this one again. Leave the copy you are not using inactive, and do not delete either copy.', 'mcpwp' ); ?></li>
 					</ul></li>
 				<li><?php esc_html_e( 'After the paid package is installed and active, open MCPWP. If Freemius shows its opt-in screen, choose "Have a license key? Activate License" and enter your key there. If it shows no screen, your license may already be restored.', 'mcpwp' ); ?></li>
 			</ol>

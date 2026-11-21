@@ -4,7 +4,7 @@
  *
  * Hop 1: the URL built by the REAL Freemius::get_reconnect_url() /
  * get_activation_url() passes the plugin's REAL connect_url filter
- * (mcpwp_fs_soften_connect_gate, extracted from includes/freemius-init.php)
+ * (mcpwp_fs_soften_connect_gate, a hash-checked verbatim copy of includes/freemius-init.php)
  * with require_license still true.
  * Hop 2: the follow-up redirect Freemius::connect_again() builds is run through
  * the same filter with the REAL reconnect-intent marker function.
@@ -16,17 +16,6 @@
  */
 
 use PHPUnit\Framework\TestCase;
-
-if ( ! class_exists( 'Mcpwp_Test_Menu_1253' ) ) {
-	class Mcpwp_Test_Menu_1253 {
-		public function get_slug( $page = '' ) { return 'mcpwp' . ( '' === $page ? '' : '-' . $page ); }
-		public function is_top_level() { return true; }
-		public function is_cpt() { return false; }
-	}
-	class Mcpwp_Test_Logger_1253 {
-		public function entrance( ...$a ) {}
-	}
-}
 
 /**
  * @runTestsInSeparateProcesses
@@ -41,22 +30,8 @@ final class SetupLicenseSdkHops1253Test extends TestCase {
 		}
 		require_once $dir . '/freemius/includes/class-freemius-abstract.php';
 		require_once $dir . '/freemius/includes/class-freemius.php';
-		if ( ! class_exists( 'Mcpwp_Test_Real_Fs_1253', false ) ) {
-			eval( 'class Mcpwp_Test_Real_Fs_1253 extends Freemius {
-				public function has_settings_menu() { return true; }
-				public function show_opt_in_on_themes_page() { return false; }
-				public function is_activation_mode( $and_on = true ) { return true; }
-			}' );
-		}
-		// fs_apply_filter exactly as the SDK defines it (fs-core-functions.php).
-		if ( ! function_exists( 'fs_apply_filter' ) ) {
-			eval( 'function fs_apply_filter( $module_unique_affix, $tag, $value ) {
-				$args = func_get_args();
-				return call_user_func_array( "apply_filters", array_merge( array( "fs_{$tag}_{$module_unique_affix}" ), array_slice( $args, 2 ) ) );
-			}' );
-		}
-		$this->load_real_function( 'mcpwp_fs_soften_connect_gate' );
-		$this->load_real_function( 'mcpwp_fs_mark_reconnect_intent' );
+		require_once __DIR__ . '/fixtures/freemius-hops-1253.php';
+		$this->assert_gate_copies_match_shipped_source();
 		// The plugin registers it with $fs->add_filter( 'connect_url', ... ), which is fs_{tag}_{affix}.
 		add_filter( 'fs_connect_url_mcpwp', 'mcpwp_fs_soften_connect_gate' );
 
@@ -87,11 +62,16 @@ final class SetupLicenseSdkHops1253Test extends TestCase {
 		return $fs;
 	}
 
-	/** Pull a function's real source out of freemius-init.php (it cannot be included without the SDK). */
-	private function load_real_function( string $name ): void {
-		$src = (string) file_get_contents( dirname( __DIR__ ) . '/includes/freemius-init.php' );
-		$this->assertSame( 1, preg_match( '/^function ' . preg_quote( $name, '/' ) . '\(.*?^}$/ms', $src, $m ), "$name is in freemius-init.php" );
-		eval( $m[0] );
+	/** The fixture's gate functions must be byte-identical to the ones that ship in freemius-init.php. */
+	private function assert_gate_copies_match_shipped_source(): void {
+		$shipped = (string) file_get_contents( dirname( __DIR__ ) . '/includes/freemius-init.php' );
+		$copy    = (string) file_get_contents( __DIR__ . '/fixtures/freemius-hops-1253.php' );
+		foreach ( array( 'mcpwp_fs_soften_connect_gate', 'mcpwp_fs_mark_reconnect_intent' ) as $name ) {
+			$pattern = '/^function ' . preg_quote( $name, '/' ) . '\(.*?^}$/ms';
+			$this->assertSame( 1, preg_match( $pattern, $shipped, $a ), "$name is in freemius-init.php" );
+			$this->assertSame( 1, preg_match( $pattern, $copy, $b ), "$name is in the fixture" );
+			$this->assertSame( hash( 'sha256', $a[0] ), hash( 'sha256', $b[0] ), "$name fixture copy drifted from freemius-init.php" );
+		}
 	}
 
 	public function test_hop1_real_reconnect_url_survives_the_real_filter_with_require_license_true(): void {
