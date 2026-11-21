@@ -98,6 +98,16 @@ class Mcpwp_License {
 	private static $instance = null;
 
 	/**
+	 * Freemius customer portal, store-scoped: where a buyer signs in to find the paid package.
+	 *
+	 * Cairn read store 11467 on the signed-in MCPWP Freemius dashboard and the URL answers 200
+	 * signed out (format: freemius.com/help/documentation/users-account-management/embedding-customer-portal/).
+	 * Nothing in this repo ties store 11467 to product 23824, and a purchased MCPWP download has
+	 * not yet been verified with a test account. Not a deep link to the package.
+	 */
+	const CUSTOMER_PORTAL_URL = 'https://customers.freemius.com/store/11467';
+
+	/**
 	 * Get singleton instance.
 	 *
 	 * @return Mcpwp_License
@@ -532,6 +542,45 @@ class Mcpwp_License {
 	}
 
 	/**
+	 * Which "Your plan" card the Setup page shows (#1253).
+	 *
+	 * Pure read of existing state: no network call, nothing stored or sent.
+	 *
+	 * @return string 'licensed' | 'direct_free' | 'recovery' | 'sdk_unlicensed'.
+	 */
+	public function get_setup_license_state() {
+		$reason = $this->get_unlicensed_reason();
+		if ( '' === $reason ) {
+			return 'licensed';
+		}
+		if ( 'freemius_removed_had_license' === $reason ) {
+			return 'recovery';
+		}
+		if ( 'no_freemius_sdk' === $reason || 'wporg_build' === $reason ) {
+			return 'direct_free';
+		}
+		return 'sdk_unlicensed';
+	}
+
+	/**
+	 * The Freemius SDK's own "I have a license key" screen, or '' when the SDK
+	 * (or that method) is not present. Never guessed: no SDK, no URL.
+	 *
+	 * @return string
+	 */
+	public function get_activation_url() {
+		if ( ! function_exists( 'mcpwp_get_fs_instance' ) ) {
+			return '';
+		}
+		$fs = mcpwp_get_fs_instance();
+		if ( is_object( $fs ) && method_exists( $fs, 'get_activation_url' ) ) {
+			$url = $fs->get_activation_url( array( 'require_license' => 'true' ) );
+			return is_string( $url ) ? $url : '';
+		}
+		return '';
+	}
+
+	/**
 	 * Account URL.
 	 *
 	 * Same install-linked preference as get_upgrade_url() — see there.
@@ -545,7 +594,8 @@ class Mcpwp_License {
 				return $fs->get_account_url();
 			}
 		}
-		return 'https://mcpwp.net/account/';
+		// mcpwp.net/account/ is a 404; Freemius's customer dashboard is where buyers sign in and download.
+		return self::CUSTOMER_PORTAL_URL;
 	}
 
 	/**
