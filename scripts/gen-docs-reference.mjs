@@ -131,7 +131,11 @@ async function fetchSnapshot() {
   });
   const pluginVersion = init?.serverInfo?.plugin_version || init?.serverInfo?.version || '';
 
-  const listed = (await rpc(fullEndpoint, key, 'tools/list', {})).tools || [];
+  const listResult = await rpc(fullEndpoint, key, 'tools/list', {});
+  if (!listResult || !Array.isArray(listResult.tools) || !listResult.tools.length) {
+    die('tools/list returned no tools and no error; the key was probably not accepted (a legacy mcpwp_api_key option is ignored once a scoped key exists). Use a scoped admin key.');
+  }
+  const listed = listResult.tools;
   let tools;
 
   if (source === 'tools-list') {
@@ -183,6 +187,9 @@ async function fetchSnapshot() {
   const snapshot = {
     edition,
     source,
+    // Set by gen-docs-reference.sh. Anything but "1" means the Elementor-Pro-gated tools
+    // are absent from this snapshot.
+    elementor_pro: process.env.MCPWP_ELEMENTOR_PRO === '1',
     plugin_version: pluginVersion,
     fetched_at: new Date().toISOString(),
     tool_count: tools.length,
@@ -904,6 +911,12 @@ function render() {
   const pro = JSON.parse(read(proFile));
   if (free.edition !== 'free' || pro.edition !== 'pro') die('--free must be a free snapshot and --pro a pro snapshot');
   if (pro.tool_count <= free.tool_count) die(`the Pro snapshot (${pro.tool_count}) has no more tools than Free (${free.tool_count}); was the agency marker in place?`);
+  const allowIncomplete = process.argv.includes('--allow-incomplete');
+  const incomplete = !(pro.elementor_pro === true);
+  if (incomplete) {
+    process.stderr.write('!!! WARNING: the Pro snapshot was taken without Elementor Pro; Elementor-Pro-gated tools are MISSING. This is NOT a complete reference.\n');
+    if (!allowIncomplete) die('refusing to render an incomplete reference (pass --allow-incomplete to render it labelled INCOMPLETE)', 1);
+  }
   const facts = staticFacts(pluginDir);
   if (facts.version && pro.plugin_version && facts.version !== pro.plugin_version) {
     process.stderr.write(`warning: plugin source is ${facts.version} but the site ran ${pro.plugin_version}\n`);
@@ -913,6 +926,13 @@ function render() {
   renderMcpSurface(facts, free, pro, out);
   const nRoutes = renderEndpoints(facts, free, pro, out);
   const nReleases = renderChangelog(facts, free, pro, pluginDir, out);
+  if (incomplete) {
+    const banner = ':::caution[INCOMPLETE reference]\nGenerated without Elementor Pro: Elementor-Pro-gated tools are missing. Do not publish.\n:::\n\n';
+    const tp = join(out, 'tools.md');
+    const body = read(tp);
+    const m = body.match(/^---\n[\s\S]*?\n---\n/);
+    writeFileSync(tp, m ? m[0] + '\n' + banner + body.slice(m[0].length) : banner + body);
+  }
   process.stdout.write(
     `tools: ${t.total} (${t.free} Free, ${t.pro} Pro) in ${t.categories.length} categories: ${t.categories.map(([c, n]) => `${c} ${n}`).join(', ')}\n` +
       `errors: ${e.hinted} hinted codes, ${facts.codes.length} codes scanned\n` +

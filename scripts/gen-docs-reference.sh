@@ -4,8 +4,8 @@
 #
 # Stands up a throwaway site with scripts/release_smoke.sh --keep, adds the plugins whose
 # tools are capability-gated (Yoast SEO, Contact Form 7, LearnPress, WP Events Manager; the
-# smoke site already has Elementor, WooCommerce and, if wp-rig-wp-dev is up, Elementor Pro),
-# reads the catalog once without and once with the agency marker (Free, then Pro), renders the
+# smoke site already has Elementor and WooCommerce; Elementor Pro only when
+# GEN_ELEMENTOR_PRO_DIR points at a copy), reads the catalog once without and once with the agency marker (Free, then Pro), renders the
 # Markdown into the docs checkout, and removes the containers.
 #
 # Usage:
@@ -20,7 +20,17 @@
 #   --name PREFIX      container prefix (default docsref)
 #   --keep             leave the site up afterwards
 #
-# The API key lives only in this shell and the generator's environment; it is never written to
+# Environment:
+#   GEN_ELEMENTOR_PRO_DIR   host path to an elementor-pro plugin directory OUTSIDE any shared
+#                           rig. Without it the Elementor-Pro-gated tools are MISSING from the
+#                           snapshot, a loud warning is printed, and the render step refuses
+#                           (the output would not be a complete reference) unless
+#                           GEN_ALLOW_INCOMPLETE=1, which renders it labelled INCOMPLETE.
+#   GEN_WPCLI_MEMORY        PHP memory_limit for every WP-CLI call (default 512M), set with
+#                           `php -d` before WordPress boots.
+#
+# The API key is a scoped key made through the plugin's own creator; the legacy single-key
+# option is never written (since 3.14.11 it is ignored once any scoped key exists). The key lives only in this shell and the generator's environment; it is never written to
 # disk or into the output. The agency marker is created inside the throwaway container only.
 #
 # Exit: 0 generated; 1 generation failed; 2 could not run (site never came up, bad args).
@@ -33,6 +43,9 @@ SOURCE="introspect"
 PORT=9196
 NAME=docsref
 KEEP=0
+GEN_WPCLI_MEMORY="${GEN_WPCLI_MEMORY:-512M}"
+GEN_ELEMENTOR_PRO_DIR="${GEN_ELEMENTOR_PRO_DIR:-}"
+GEN_ALLOW_INCOMPLETE="${GEN_ALLOW_INCOMPLETE:-0}"
 
 while [[ $# -gt 0 ]]; do
 	case "$1" in
@@ -42,7 +55,7 @@ while [[ $# -gt 0 ]]; do
 		--port) PORT="${2:-}"; shift 2 ;;
 		--name) NAME="${2:-}"; shift 2 ;;
 		--keep) KEEP=1; shift ;;
-		-h|--help) sed -n 2,26p "$0"; exit 0 ;;
+		-h|--help) sed -n 2,40p "$0"; exit 0 ;;
 		*) echo "Unknown option: $1" >&2; exit 2 ;;
 	esac
 done
@@ -71,11 +84,12 @@ wpcli() {
 	docker run --rm -i --network "$NET" --volumes-from "$WP" --user 33:33 \
 		-e WORDPRESS_DB_HOST="$DB:3306" -e WORDPRESS_DB_USER=smk -e WORDPRESS_DB_PASSWORD=smkpass \
 		-e WORDPRESS_DB_NAME=smk_wp -e HOME=/tmp \
-		wordpress:cli wp "$@"
+		wordpress:cli php -d "memory_limit=${GEN_WPCLI_MEMORY}" /usr/local/bin/wp "$@"
 }
 
 echo "==> Throwaway site (release_smoke.sh --keep)"
-bash "$ROOT/scripts/release_smoke.sh" --candidate "$CANDIDATE" --name "$NAME" --port "$PORT" --keep > "$WORK/smoke.log" 2>&1
+SMOKE_ELEMENTOR_PRO_DIR="$GEN_ELEMENTOR_PRO_DIR" SMOKE_WPCLI_MEMORY="$GEN_WPCLI_MEMORY" \
+	bash "$ROOT/scripts/release_smoke.sh" --candidate "$CANDIDATE" --name "$NAME" --port "$PORT" --keep > "$WORK/smoke.log" 2>&1
 smoke=$?
 tail -4 "$WORK/smoke.log"
 if [[ "$smoke" -ne 0 ]]; then
@@ -98,20 +112,48 @@ for p in wordpress-seo contact-form-7 learnpress wp-events-manager; do
 done
 wpcli plugin list --status=active --field=name 2>/dev/null | tr '\n' ' '; echo
 
-KEY="mcpwp_$(openssl rand -hex 24)"
-wpcli eval "update_option('mcpwp_api_key', wp_hash_password('$KEY'));" >/dev/null || { echo "could not create an API key" >&2; exit 2; }
+PRO_ACTIVE=0
+wpcli plugin is-active elementor-pro >/dev/null 2>&1 && PRO_ACTIVE=1
+if [[ "$PRO_ACTIVE" -ne 1 ]]; then
+	echo "!!! WARNING: Elementor Pro is NOT installed (set GEN_ELEMENTOR_PRO_DIR to a copy outside the rig)." >&2
+	echo "!!! Elementor-Pro-gated tools will be MISSING from the snapshot; the output is NOT a complete reference." >&2
+fi
+
+# A scoped key through the supported creator. The activation-created key store is kept: no
+# delete_option, no legacy fallback. Admin role + read,write,admin scopes (the generator needs
+# tools/list ?profile=full and wp_introspect, which the admin role ceiling covers).
+KEYPHP='$a = get_user_by( "login", "admin" );
+if ( ! $a ) { echo "GEN:ERROR:no_admin"; return; }
+wp_set_current_user( $a->ID );
+$c = new Mcpwp_REST_MCP();
+if ( ! method_exists( $c, "create_scoped_api_key" ) ) { echo "GEN:ERROR:no_creator"; return; }
+$r = $c->create_scoped_api_key( "Docs reference generator", array( "read", "write", "admin" ), "admin" );
+wp_set_current_user( 0 );
+if ( isset( $r["error"] ) || empty( $r["key"] ) ) { echo "GEN:ERROR:" . wp_json_encode( $r ); return; }
+echo $r["key"];'
+KEY="$(wpcli eval "$KEYPHP" 2>/dev/null | grep -E '^mcpwp_' | tail -1)"
+[[ -n "$KEY" ]] || { echo "could not create a scoped API key" >&2; exit 2; }
 
 MARKER=/var/www/html/wp-content/plugins/mcpwp/includes/agency-license.php
 docker exec "$WP" rm -f "$MARKER"
 
 echo "==> Free catalog"
-MCPWP_SITE_URL="$URL" MCPWP_API_KEY="$KEY" node "$HERE/gen-docs-reference.mjs" fetch --edition free --source "$SOURCE" --snapshot "$WORK/free.json" || exit 1
+MCPWP_ELEMENTOR_PRO="$PRO_ACTIVE" MCPWP_SITE_URL="$URL" MCPWP_API_KEY="$KEY" node "$HERE/gen-docs-reference.mjs" fetch --edition free --source "$SOURCE" --snapshot "$WORK/free.json" || exit 1
 
 echo "==> Pro catalog (agency marker inside the container only)"
 docker exec "$WP" sh -c "printf '<?php\nreturn '\''MCPWP_AGENCY_LICENSE_V1'\'';\n' > $MARKER && chown 33:33 $MARKER" || { echo "could not write the marker" >&2; exit 2; }
-MCPWP_SITE_URL="$URL" MCPWP_API_KEY="$KEY" node "$HERE/gen-docs-reference.mjs" fetch --edition pro --source "$SOURCE" --snapshot "$WORK/pro.json" || exit 1
+MCPWP_ELEMENTOR_PRO="$PRO_ACTIVE" MCPWP_SITE_URL="$URL" MCPWP_API_KEY="$KEY" node "$HERE/gen-docs-reference.mjs" fetch --edition pro --source "$SOURCE" --snapshot "$WORK/pro.json" || exit 1
 docker exec "$WP" rm -f "$MARKER"
 
 echo "==> Render into $OUT"
-node "$HERE/gen-docs-reference.mjs" render --free "$WORK/free.json" --pro "$WORK/pro.json" --plugin-dir "$ROOT/mcpwp" --out "$OUT" || exit 1
+RENDER_FLAGS=()
+if [[ "$PRO_ACTIVE" -ne 1 ]]; then
+	if [[ "$GEN_ALLOW_INCOMPLETE" == "1" ]]; then
+		RENDER_FLAGS+=(--allow-incomplete)
+	else
+		echo "Refusing to render: no Elementor Pro, so the reference would be missing Pro-gated tools. Re-run with GEN_ELEMENTOR_PRO_DIR=/path/to/elementor-pro, or GEN_ALLOW_INCOMPLETE=1 to render a page labelled INCOMPLETE." >&2
+		exit 1
+	fi
+fi
+node "$HERE/gen-docs-reference.mjs" render "${RENDER_FLAGS[@]}" --free "$WORK/free.json" --pro "$WORK/pro.json" --plugin-dir "$ROOT/mcpwp" --out "$OUT" || exit 1
 echo "Done. Review the diff in the docs repo, then build it (npm run build) and open a PR."
