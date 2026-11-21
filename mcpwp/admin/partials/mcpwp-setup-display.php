@@ -57,9 +57,9 @@ if ( is_object( $mcpwp_fs_obj ) ) {
 // #1253: which license card to show; neutral = white-label hides MCPWP branding,
 // so no marketing/purchase prompt, but the recovery path always renders.
 $license_state          = $license ? $license->get_setup_license_state() : 'direct_free';
-$license_activation_url = $license ? $license->get_activation_url() : '';
+$license_activation_url = $license ? $license->get_setup_activation_url() : '';
 $mcpwp_wl_settings      = class_exists( 'Mcpwp_White_Label' ) ? Mcpwp_White_Label::get_settings() : array();
-$license_neutral        = ! empty( $mcpwp_wl_settings['enabled'] ) && ! empty( $mcpwp_wl_settings['hide_mcpwp_branding'] );
+$license_neutral        = class_exists( 'Mcpwp_White_Label' ) && Mcpwp_White_Label::is_enabled() && ! empty( $mcpwp_wl_settings['hide_mcpwp_branding'] );
 
 // Non-Latin site names (Persian, Arabic, CJK) produce URL-encoded slugs — fall back to hostname.
 if ( empty( $site_slug ) || false !== strpos( $site_slug, '%' ) ) {
@@ -209,7 +209,7 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 		</div>
 	</div>
 
-	<?php if ( 'direct_free' === $license_state || 'recovery' === $license_state || 'sdk_unlicensed' === $license_state ) : ?>
+	<?php if ( 'direct_free' === $license_state || 'recovery' === $license_state || ( 'sdk_unlicensed' === $license_state && '' !== $license_activation_url ) ) : ?>
 	<div class="mcpwp-card mcpwp-plan-card" id="mcpwp-plan-card">
 		<h2><span class="dashicons dashicons-admin-network"></span> <?php esc_html_e( 'Your plan', 'mcpwp' ); ?></h2>
 
@@ -227,19 +227,19 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 			<li><strong><?php esc_html_e( 'I already have a license', 'mcpwp' ); ?></strong> &mdash;
 				<?php esc_html_e( 'see the next steps below.', 'mcpwp' ); ?></li>
 		</ul>
-		<?php elseif ( ! $license_neutral ) : ?>
-		<p>
-			<a href="<?php echo esc_url( $license_manage_url ); ?>" class="button"<?php echo ( false !== strpos( $license_manage_url, 'mcpwp.net' ) ) ? ' target="_blank" rel="noopener"' : ''; ?>><?php esc_html_e( 'Manage pricing and license', 'mcpwp' ); ?></a>
-		</p>
 		<?php endif; ?>
 
 		<?php if ( 'sdk_unlicensed' === $license_state && '' !== $license_activation_url ) : ?>
-		<p><a href="<?php echo esc_url( $license_activation_url ); ?>" class="button"><?php esc_html_e( 'Activate existing license', 'mcpwp' ); ?></a></p>
+		<p><a href="<?php echo esc_url( $license_activation_url ); ?>" class="button"><?php esc_html_e( 'Activate existing license', 'mcpwp' ); ?></a>
+			<span class="description"><?php esc_html_e( 'Opens the Freemius screen. Choose "Have a license key? Activate License" there.', 'mcpwp' ); ?></span></p>
 		<?php endif; ?>
 
 		<?php if ( 'direct_free' === $license_state || 'recovery' === $license_state ) : ?>
 		<details class="mcpwp-plan-steps"<?php echo 'recovery' === $license_state ? ' open' : ''; ?>>
 			<summary><?php echo 'recovery' === $license_state ? esc_html__( 'Next steps: restore your license', 'mcpwp' ) : esc_html__( 'I already have a license: next steps', 'mcpwp' ); ?></summary>
+			<?php if ( 'direct_free' === $license_state ) : ?>
+			<p class="description"><?php esc_html_e( 'If you bought a license, these steps move this site onto the paid package.', 'mcpwp' ); ?></p>
+			<?php endif; ?>
 			<ol>
 				<li><?php esc_html_e( 'Sign in to your Freemius account with your purchase email and download the paid package (we cannot install it for you from this page):', 'mcpwp' ); ?>
 					<a href="<?php echo esc_url( Mcpwp_License::CUSTOMER_PORTAL_URL ); ?>" target="_blank" rel="noopener noreferrer"><?php esc_html_e( 'Freemius account login', 'mcpwp' ); ?></a>.
@@ -249,9 +249,9 @@ $claude_desktop_key_label = __( 'Claude Desktop', 'mcpwp' );
 						<li><strong><?php esc_html_e( 'If WordPress offers "Replace current with uploaded":', 'mcpwp' ); ?></strong>
 							<?php esc_html_e( 'choose it. This keeps one copy of the plugin, not two.', 'mcpwp' ); ?></li>
 						<li><strong><?php esc_html_e( 'If WordPress installs it as a separate plugin instead:', 'mcpwp' ); ?></strong>
-							<?php esc_html_e( 'keep this copy active until the paid package is installed. Then deactivate this copy first, and only after that activate the paid copy (MCPWP permits only one active copy). If the paid copy fails to activate, deactivate it and activate this one again. Never click Delete on either copy.', 'mcpwp' ); ?></li>
+							<?php esc_html_e( 'keep this copy active until the paid package is installed. Then deactivate this copy first, and only after that activate the paid copy (MCPWP permits only one active copy). If the paid copy fails to activate, deactivate it and activate this one again. Do not delete the copy you are keeping; remove the extra folder only after the paid copy works.', 'mcpwp' ); ?></li>
 					</ul></li>
-				<li><?php esc_html_e( 'After the paid package is installed and active, a screen follows. Choose "Activate License" and enter your license key there.', 'mcpwp' ); ?></li>
+				<li><?php esc_html_e( 'After the paid package is installed and active, open MCPWP. If Freemius shows its opt-in screen, choose "Have a license key? Activate License" and enter your key there. If it shows no screen, your license may already be restored.', 'mcpwp' ); ?></li>
 			</ol>
 			<p class="description"><?php esc_html_e( 'Your settings and API keys are kept. This page does not activate anything and never asks for or stores your license key.', 'mcpwp' ); ?></p>
 		</details>

@@ -542,9 +542,48 @@ class Mcpwp_License {
 	}
 
 	/**
+	 * Real evidence that this site once held a Freemius LICENSE (#1253).
+	 *
+	 * get_unlicensed_reason() matches the product id anywhere in fs_accounts, but
+	 * the SDK writes that id on every startup, so it proves only "a Freemius build
+	 * ran here". A license shows as a non-empty license_id on this product's FS_Site
+	 * entry (fs_accounts['sites'][<slug>]). The option is read without trusting it:
+	 * objects are cast to arrays (the SDK class may be absent, leaving an
+	 * incomplete-class object), strings are unserialized with allowed_classes off.
+	 *
+	 * @return bool
+	 */
+	public function had_freemius_license_evidence() {
+		$accounts = get_option( 'fs_accounts', array() );
+		if ( is_string( $accounts ) ) {
+			$accounts = @unserialize( $accounts, array( 'allowed_classes' => false ) ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged -- untrusted stored string.
+		}
+		$accounts = is_object( $accounts ) ? (array) $accounts : $accounts;
+		if ( ! is_array( $accounts ) || empty( $accounts['sites'] ) ) {
+			return false;
+		}
+		$sites = is_object( $accounts['sites'] ) ? (array) $accounts['sites'] : $accounts['sites'];
+		if ( ! is_array( $sites ) ) {
+			return false;
+		}
+		foreach ( array( 'mcpwp', self::FREEMIUS_PRODUCT_ID ) as $key ) {
+			if ( ! isset( $sites[ $key ] ) ) {
+				continue;
+			}
+			$site = is_object( $sites[ $key ] ) ? (array) $sites[ $key ] : $sites[ $key ];
+			if ( is_array( $site ) && ! empty( $site['license_id'] ) && is_numeric( $site['license_id'] ) && (int) $site['license_id'] > 0 ) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	/**
 	 * Which "Your plan" card the Setup page shows (#1253).
 	 *
-	 * Pure read of existing state: no network call, nothing stored or sent.
+	 * Pure read of existing state: no network call, nothing stored or sent. Does not
+	 * change get_unlicensed_reason(); recovery needs license evidence, not just the
+	 * reason code (see had_freemius_license_evidence()).
 	 *
 	 * @return string 'licensed' | 'direct_free' | 'recovery' | 'sdk_unlicensed'.
 	 */
@@ -553,31 +592,38 @@ class Mcpwp_License {
 		if ( '' === $reason ) {
 			return 'licensed';
 		}
-		if ( 'freemius_removed_had_license' === $reason ) {
-			return 'recovery';
-		}
-		if ( 'no_freemius_sdk' === $reason || 'wporg_build' === $reason ) {
-			return 'direct_free';
+		if ( 'wporg_build' === $reason || 'no_freemius_sdk' === $reason || 'freemius_removed_had_license' === $reason ) {
+			return $this->had_freemius_license_evidence() ? 'recovery' : 'direct_free';
 		}
 		return 'sdk_unlicensed';
 	}
 
 	/**
-	 * The Freemius SDK's own "I have a license key" screen, or '' when the SDK
-	 * (or that method) is not present. Never guessed: no SDK, no URL.
+	 * URL that opens the Freemius opt-in screen on its license-key entry, or ''.
+	 *
+	 * Only for an anonymous or pending-activation install: the plugin's connect_url
+	 * filter (mcpwp_fs_soften_connect_gate) forces require_license=false unless the
+	 * URL carries fs_action=reset_anonymous_mode, which get_reconnect_url() adds.
+	 * A registered Free install has no license-entry screen in the SDK, so no link
+	 * is offered. Never guessed: no SDK, no method, no URL.
 	 *
 	 * @return string
 	 */
-	public function get_activation_url() {
+	public function get_setup_activation_url() {
 		if ( ! function_exists( 'mcpwp_get_fs_instance' ) ) {
 			return '';
 		}
 		$fs = mcpwp_get_fs_instance();
-		if ( is_object( $fs ) && method_exists( $fs, 'get_activation_url' ) ) {
-			$url = $fs->get_activation_url( array( 'require_license' => 'true' ) );
-			return is_string( $url ) ? $url : '';
+		if ( ! is_object( $fs ) || ! method_exists( $fs, 'get_reconnect_url' ) ) {
+			return '';
 		}
-		return '';
+		$stuck = ( method_exists( $fs, 'is_anonymous' ) && $fs->is_anonymous() )
+			|| ( method_exists( $fs, 'is_pending_activation' ) && $fs->is_pending_activation() );
+		if ( ! $stuck ) {
+			return '';
+		}
+		$url = $fs->get_reconnect_url( array( 'require_license' => 'true' ) );
+		return is_string( $url ) ? $url : '';
 	}
 
 	/**
