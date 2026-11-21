@@ -161,7 +161,7 @@ RENDER_FLAGS=()
 [[ "$PRO_ACTIVE" -ne 1 ]] && RENDER_FLAGS+=(--allow-incomplete)
 node "$HERE/gen-docs-reference.mjs" render "${RENDER_FLAGS[@]}" --free "$WORK/free.json" --pro "$WORK/pro.json" --plugin-dir "$ROOT/mcpwp" --out "$OUT" || exit 1
 if [[ "$PRO_ACTIVE" -ne 1 ]]; then
-	echo "Done, but the output is INCOMPLETE (no Elementor Pro) and every page is labelled so. Do NOT build or open a PR from it."
+	echo "Done, but the output is INCOMPLETE (no Elementor Pro) and every generated page is labelled so. Do NOT build or open a PR from it."
 else
 	echo "Done. Review the diff in the docs repo, then build it (npm run build) and open a PR."
 fi
