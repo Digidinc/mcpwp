@@ -1081,12 +1081,15 @@ if (interface_exists('PHPUnit\Runner\AfterTestHook')) {
             // answers revoked/invalid_token under random order.
             $GLOBALS['mcpwp_test_user_meta'] = array();
             unset($GLOBALS['mcpwp_test_user_meta_read_hook'], $GLOBALS['mcpwp_test_user_meta_write_fails']);
-            // Fake capabilities and current user (#1251): the user_can()/current_user_can()
-            // doubles read these. A test that left a per-user cap map or a current
-            // user behind changed what a later test rendered (the admin notice in
-            // AdminScopeRequiresWrite1210Test came out empty under random order).
-            // Back to the values set at the top of this file.
+            // Capability / current-user doubles (#1251): current_user_can() and
+            // get_current_user_id() read mcpwp_test_user_caps, mcpwp_test_post_caps,
+            // and mcpwp_test_current_user. A leaked per-user cap map (manage_options
+            // denied for user 1) made AdminScopeRequiresWrite1210Test::test_render_notice_escapes_hostile_label_and_skips_revoked
+            // render an empty string instead of notice-warning under seed 31337 on
+            // the PR #1250 tree. Reset to the same defaults the bootstrap sets
+            // initially (post_caps is isset()-gated and starts unset / empty).
             $GLOBALS['mcpwp_test_user_caps']    = array();
+            $GLOBALS['mcpwp_test_post_caps']    = array();
             $GLOBALS['mcpwp_test_current_user'] = 0;
             // The taxonomy registry and known terms (#1189): a product_cat one
             // test registered in setUp() and never removed became a viewable
