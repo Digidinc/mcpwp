@@ -1,0 +1,63 @@
+# Cloud-adapted MCPWP test rig (single WordPress + MariaDB).
+# The committed test-rig/docker-compose.yml bind-mounts a host-specific path
+# that only exists on the maintainer's server; this variant bind-mounts the
+# in-repo plugin source (../mcpwp, relative to this file) instead.
+services:
+  db:
+    image: mariadb:lts
+    container_name: wp-rig-db
+    mem_limit: 512m
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rigroot
+      MYSQL_DATABASE: wp_dev
+      MYSQL_USER: wpuser
+      MYSQL_PASSWORD: wppass
+    command: >
+      --innodb-buffer-pool-size=128M
+      --innodb-log-file-size=32M
+      --max_connections=100
+      --skip-name-resolve
+    volumes:
+      - db-data:/var/lib/mysql
+    networks:
+      - rignet
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  wp-dev:
+    image: wordpress:latest
+    container_name: wp-rig-wp-dev
+    depends_on:
+      db:
+        condition: service_healthy
+    mem_limit: 512m
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8086:80"
+    environment:
+      WORDPRESS_DB_HOST: db:3306
+      WORDPRESS_DB_NAME: wp_dev
+      WORDPRESS_DB_USER: wpuser
+      WORDPRESS_DB_PASSWORD: wppass
+      WORDPRESS_DEBUG: "1"
+      WORDPRESS_CONFIG_EXTRA: |
+        define('WP_DEBUG_DISPLAY', false);
+        define('WP_DEBUG_LOG', true);
+    volumes:
+      - ../mcpwp:/var/www/html/wp-content/plugins/mcpwp:ro
+      - dev-uploads:/var/www/html/wp-content/uploads
+    networks:
+      - rignet
+
+volumes:
+  db-data:
+  dev-uploads:
+
+networks:
+  rignet:
+    driver: bridge
